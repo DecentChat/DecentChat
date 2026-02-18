@@ -183,6 +183,7 @@ export class ChatController {
         if (data?.type === 'handshake') {
           await this.messageProtocol!.processHandshake(peerId, data);
           this.state.readyPeers.add(peerId);
+          this.ensurePeerInActiveWorkspace(peerId, data.publicKey);
 
           // Persist peer — PersistentStore is the single source of truth for peers.
           await this.persistentStore.savePeer({
@@ -313,7 +314,18 @@ export class ChatController {
           return;
         }
 
-        const channelId = data.channelId || this.state.activeChannelId || 'default';
+        let channelId = data.channelId || this.state.activeChannelId || 'default';
+        const wsForChannel = this.state.activeWorkspaceId
+          ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+          : null;
+        if (
+          wsForChannel &&
+          data.channelId &&
+          !this.workspaceManager.getChannel(wsForChannel.id, data.channelId) &&
+          wsForChannel.channels.length === 1
+        ) {
+          channelId = wsForChannel.channels[0].id;
+        }
         const msg = await this.messageStore.createMessage(channelId, peerId, content);
         msg.timestamp = data.timestamp;
         (msg as any).vectorClock = data.vectorClock;
@@ -593,14 +605,7 @@ export class ChatController {
     }
 
     // Deliver to workspace peers (or queue if offline)
-    const ws = this.state.activeWorkspaceId
-      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-      : null;
-    const workspacePeers = ws
-      ? ws.members.map((m: any) => m.peerId).filter((p: string) => p !== this.state.myPeerId)
-      : [];
-
-    for (const peerId of workspacePeers) {
+    for (const peerId of this.getWorkspaceRecipientPeerIds()) {
       try {
         const envelope = await this.messageProtocol!.encryptMessage(peerId, content.trim(), 'text');
         (envelope as any).channelId = this.state.activeChannelId;
@@ -671,6 +676,15 @@ export class ChatController {
     }
 
     this.startPEXBroadcasts();
+
+    // Bootstrap local member list so outbound messages can target inviter
+    this.workspaceManager.addMember(ws.id, {
+      peerId,
+      alias: peerId.slice(0, 8),
+      publicKey: inviteData?.publicKey || '',
+      joinedAt: Date.now(),
+      role: 'member',
+    });
 
     // Set as active workspace
     this.state.activeWorkspaceId = ws.id;
@@ -902,14 +916,9 @@ export class ChatController {
 
   /** Send a message to all workspace peers */
   private broadcastToWorkspacePeers(data: any): void {
-    const ws = this.state.activeWorkspaceId
-      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-      : null;
-    if (!ws) return;
-
-    for (const member of ws.members) {
-      if (member.peerId !== this.state.myPeerId && this.state.readyPeers.has(member.peerId)) {
-        try { this.transport.send(member.peerId, data); } catch {}
+    for (const peerId of this.getWorkspaceRecipientPeerIds()) {
+      if (this.state.readyPeers.has(peerId)) {
+        try { this.transport.send(peerId, data); } catch {}
       }
     }
   }
@@ -986,14 +995,7 @@ export class ChatController {
     this.ui?.appendMessageToDOM(msg);
 
     // Send to workspace peers
-    const ws = this.state.activeWorkspaceId
-      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-      : null;
-    const workspacePeers = ws
-      ? ws.members.map((m: any) => m.peerId).filter((p: string) => p !== this.state.myPeerId)
-      : [];
-
-    for (const peerId of workspacePeers) {
+    for (const peerId of this.getWorkspaceRecipientPeerIds()) {
       try {
         const envelope = await this.messageProtocol!.encryptMessage(peerId, content, 'text');
         (envelope as any).channelId = this.state.activeChannelId;
@@ -1147,5 +1149,35 @@ export class ChatController {
         'success',
       );
     }
+  }
+
+  private getWorkspaceRecipientPeerIds(): string[] {
+    const ws = this.state.activeWorkspaceId
+      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+      : null;
+    const workspacePeers = ws
+      ? ws.members.map((m: any) => m.peerId).filter((p: string) => p !== this.state.myPeerId)
+      : [];
+
+    if (workspacePeers.length > 0) return workspacePeers;
+    return Array.from(this.state.readyPeers).filter(p => p !== this.state.myPeerId);
+  }
+
+  private ensurePeerInActiveWorkspace(peerId: string, publicKey = ''): void {
+    const wsId = this.state.activeWorkspaceId;
+    if (!wsId) return;
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws || ws.members.some(m => m.peerId === peerId)) return;
+
+    this.workspaceManager.addMember(ws.id, {
+      peerId,
+      alias: peerId.slice(0, 8),
+      publicKey,
+      joinedAt: Date.now(),
+      role: 'member',
+    });
+
+    this.persistWorkspace(ws.id).catch(() => {});
+    this.ui?.updateSidebar();
   }
 }
