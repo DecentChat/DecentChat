@@ -1,0 +1,75 @@
+import { test, expect, Page } from '@playwright/test';
+import { clearStorage, waitForApp, createWorkspace, sendMessage } from './helpers';
+
+function buildContactURI(name: string, peerId: string, signaling = 'wss://signal.example'): string {
+  const params = new URLSearchParams();
+  params.set('pub', `pk-${peerId}`);
+  params.set('name', name);
+  params.set('peer', peerId);
+  params.append('sig', signaling);
+  return `decent://contact?${params.toString()}`;
+}
+
+async function enterDMView(page: Page): Promise<void> {
+  await page.click('#ws-rail-dms');
+  await expect(page.locator('#nav-dms-btn')).toHaveClass(/active/);
+}
+
+async function addContactViaURI(page: Page, name: string, peerId: string): Promise<void> {
+  await page.click('#add-contact-btn');
+  await page.waitForSelector('.modal');
+  await page.locator('#contact-uri-input').fill(buildContactURI(name, peerId));
+  await page.click('.modal .btn-primary');
+  await expect(page.locator('[data-testid="contact-card"]').filter({ hasText: name })).toBeVisible();
+}
+
+async function startDM(page: Page, name: string, peerId: string): Promise<void> {
+  await page.click('#start-dm-btn');
+  await page.waitForSelector('.modal');
+  await page.locator(`#contact-list [data-peer-id="${peerId}"]`).click();
+  await page.click('.modal .btn-primary');
+  await expect(page.locator('.channel-header h2')).toContainText(name);
+  await expect(page.locator('[data-testid="direct-conversation-item"]').filter({ hasText: name })).toBeVisible();
+}
+
+test.describe('Direct Messages', () => {
+  test.beforeEach(async ({ page }) => {
+    await clearStorage(page);
+    await page.goto('/');
+    await waitForApp(page);
+    await createWorkspace(page, 'DM Test Workspace', 'Alice');
+    await enterDMView(page);
+  });
+
+  test('add contact via ContactURI', async ({ page }) => {
+    await addContactViaURI(page, 'Bob', 'bob-peer-id');
+    await expect(page.locator('[data-testid="contact-card"]').filter({ hasText: 'pk-bob-peer-id' })).toBeVisible();
+    await expect(page.locator('[data-testid="contact-card"]').filter({ hasText: 'wss://signal.example' })).toBeVisible();
+  });
+
+  test('start direct message conversation from contact', async ({ page }) => {
+    await addContactViaURI(page, 'Bob', 'bob-peer-id');
+    await startDM(page, 'Bob', 'bob-peer-id');
+  });
+
+  test('send direct message in active conversation', async ({ page }) => {
+    await addContactViaURI(page, 'Bob', 'bob-peer-id');
+    await startDM(page, 'Bob', 'bob-peer-id');
+    await sendMessage(page, 'hello bob');
+    await expect(page.locator('.message-content')).toContainText('hello bob');
+  });
+
+  test('direct message list sorts by most recent conversation', async ({ page }) => {
+    await addContactViaURI(page, 'Alice Contact', 'alice-peer-id');
+    await addContactViaURI(page, 'Bob Contact', 'bob-peer-id');
+
+    await startDM(page, 'Alice Contact', 'alice-peer-id');
+    await sendMessage(page, 'older dm');
+
+    await startDM(page, 'Bob Contact', 'bob-peer-id');
+    await sendMessage(page, 'newer dm');
+
+    await expect(page.locator('[data-testid="direct-conversation-item"]')).toHaveCount(2);
+    await expect(page.locator('[data-testid="direct-conversation-item"]').first()).toContainText('Bob Contact');
+  });
+});

@@ -11,7 +11,7 @@ import { MessageSearch } from './MessageSearch';
 import { SettingsPanel } from './SettingsPanel';
 import { QRCodeManager } from './QRCodeManager';
 import { QUICK_REACTIONS } from './ReactionManager';
-import { InviteURI } from 'decent-protocol';
+import { ContactURI, InviteURI } from 'decent-protocol';
 import type { PlaintextMessage, Contact, ContactURIData, DirectConversation } from 'decent-protocol';
 import type { AppState } from '../main';
 
@@ -100,9 +100,15 @@ export class UIRenderer {
   }
 
   /** Refresh the cached contacts/conversations from the async stores */
-  refreshContactsCache(): void {
-    this.callbacks.getContacts?.().then(c => { this.cachedContacts = c; });
-    this.callbacks.getDirectConversations?.().then(c => { this.cachedDirectConversations = c; });
+  async refreshContactsCache(): Promise<void> {
+    const [contacts, conversations] = await Promise.all([
+      this.callbacks.getContacts?.() || Promise.resolve([]),
+      this.callbacks.getDirectConversations?.() || Promise.resolve([]),
+    ]);
+    this.cachedContacts = contacts;
+    this.cachedDirectConversations = conversations
+      .slice()
+      .sort((a, b) => b.lastMessageAt - a.lastMessageAt);
   }
 
   // =========================================================================
@@ -202,7 +208,7 @@ export class UIRenderer {
 
   renderWorkspaceRailHTML(): string {
     const allWorkspaces = this.callbacks.getAllWorkspaces?.() || [];
-    const isInDMs = this.state.activeDirectConversationId !== null && this.state.activeWorkspaceId === null;
+    const isInDMs = this.state.activeWorkspaceId === null;
 
     const dmIcon = `
       <div class="ws-rail-icon ${isInDMs ? 'active' : ''}" id="ws-rail-dms" title="Direct Messages">
@@ -232,9 +238,10 @@ export class UIRenderer {
   private bindWorkspaceRailEvents(): void {
     document.getElementById('ws-rail-dms')?.addEventListener('click', () => {
       this.state.activeWorkspaceId = null;
-      this.state.activeChannelId = null;
-      this.state.activeDirectConversationId = null;
-      this.refreshContactsCache();
+      if (!this.state.activeDirectConversationId) {
+        this.state.activeChannelId = null;
+      }
+      this.refreshContactsCache().catch(() => {});
       this.updateSidebar();
       this.updateWorkspaceRail();
       this.updateChannelHeader();
@@ -281,6 +288,7 @@ export class UIRenderer {
   // =========================================================================
 
   renderSidebarHTML(): string {
+    const isDMView = this.state.activeWorkspaceId === null;
     const ws = this.state.activeWorkspaceId
       ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
       : null;
@@ -290,31 +298,48 @@ export class UIRenderer {
     // Build contacts section
     const contactsHTML = this.cachedContacts.map(c => {
       const isOnline = this.state.readyPeers.has(c.peerId);
+      const signaling = c.signalingServers.length > 0 ? c.signalingServers.join(', ') : 'None';
       return `
-        <div class="sidebar-item" data-contact-peer-id="${c.peerId}" style="font-size:13px;">
-          <span class="dm-status ${isOnline ? 'online' : ''}"></span>
-          ${this.escapeHtml(c.displayName)}
+        <div class="contact-card" data-contact-peer-id="${c.peerId}" data-testid="contact-card">
+          <div class="contact-card-title-row">
+            <span class="dm-status ${isOnline ? 'online' : ''}"></span>
+            <strong>${this.escapeHtml(c.displayName)}</strong>
+          </div>
+          <div class="contact-card-row">Peer: <code>${this.escapeHtml(c.peerId)}</code></div>
+          <div class="contact-card-row">Public Key: <code>${this.escapeHtml(c.publicKey.slice(0, 24))}...</code></div>
+          <div class="contact-card-row">Signals: ${this.escapeHtml(signaling)}</div>
         </div>`;
     }).join('');
 
     // Build standalone direct messages section
-    const directDMsHTML = this.cachedDirectConversations.map(conv => {
+    const sortedDirectConversations = this.cachedDirectConversations
+      .slice()
+      .sort((a, b) => b.lastMessageAt - a.lastMessageAt);
+    const directDMsHTML = sortedDirectConversations.map(conv => {
       const contact = this.cachedContacts.find(c => c.peerId === conv.contactPeerId);
       const name = contact?.displayName || conv.contactPeerId.slice(0, 12);
       const isOnline = this.state.readyPeers.has(conv.contactPeerId);
       const isActive = this.state.activeDirectConversationId === conv.id;
+      const meta = conv.lastMessageAt
+        ? new Date(conv.lastMessageAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : 'No messages';
       return `
-        <div class="sidebar-item ${isActive ? 'active' : ''}" data-direct-conv-id="${conv.id}">
+        <div class="sidebar-item ${isActive ? 'active' : ''}" data-direct-conv-id="${conv.id}" data-testid="direct-conversation-item">
           <span class="dm-status ${isOnline ? 'online' : ''}"></span>
-          ${this.escapeHtml(name)}
+          <span>${this.escapeHtml(name)}</span>
+          <span class="sidebar-item-meta">${this.escapeHtml(meta)}</span>
         </div>`;
     }).join('');
 
     return `
       <div class="sidebar-header">
         <img src="/icons/icon-32.png" alt="" class="sidebar-logo" />
-        <h1>${ws ? this.escapeHtml(ws.name) : 'DecentChat'}</h1>
+        <h1>${ws ? this.escapeHtml(ws.name) : 'Direct Messages'}</h1>
         <span class="status-dot"></span>
+      </div>
+      <div class="sidebar-tabs">
+        <button id="nav-workspaces-btn" class="${!isDMView ? 'active' : ''}" data-testid="workspaces-tab">Workspaces</button>
+        <button id="nav-dms-btn" class="${isDMView ? 'active' : ''}" data-testid="dms-tab">DMs</button>
       </div>
       <div class="sidebar-nav" id="sidebar-nav">
         <div class="sidebar-section">
@@ -329,8 +354,10 @@ export class UIRenderer {
             Direct Messages
             <button class="add-btn" id="start-dm-btn" title="Start DM">+</button>
           </div>
-          ${directDMsHTML}
-          ${dms.map(dm => {
+          <div id="direct-conversation-list" data-testid="direct-conversation-list">
+            ${directDMsHTML || '<div class="sidebar-item" style="font-size:12px; opacity:0.5;">No direct messages yet</div>'}
+          </div>
+          ${!isDMView ? dms.map(dm => {
             const otherPeerId = dm.members.find((m: string) => m !== this.state.myPeerId) || '???';
             const isOnline = this.state.readyPeers.has(otherPeerId);
             return `
@@ -339,9 +366,9 @@ export class UIRenderer {
                 ${this.escapeHtml(otherPeerId.slice(0, 12))}
               </div>
             `;
-          }).join('')}
+          }).join('') : ''}
         </div>
-        ${ws ? `
+        ${ws && !isDMView ? `
         <div class="sidebar-section">
           <div class="sidebar-section-header">
             Channels
@@ -658,9 +685,12 @@ export class UIRenderer {
   updateSidebar(): void {
     const sidebar = document.getElementById('sidebar');
     if (!sidebar) return;
-    this.refreshContactsCache();
-    sidebar.innerHTML = this.renderSidebarHTML();
-    this.bindSidebarEvents();
+    this.refreshContactsCache()
+      .catch(() => {})
+      .finally(() => {
+        sidebar.innerHTML = this.renderSidebarHTML();
+        this.bindSidebarEvents();
+      });
   }
 
   updateChannelHeader(): void {
@@ -814,6 +844,26 @@ export class UIRenderer {
   }
 
   private bindSidebarActionEvents(): void {
+    document.getElementById('nav-dms-btn')?.addEventListener('click', () => {
+      this.state.activeWorkspaceId = null;
+      this.updateWorkspaceRail();
+      this.updateSidebar();
+      this.updateChannelHeader();
+      this.renderMessages();
+      this.updateComposePlaceholder();
+    });
+    document.getElementById('nav-workspaces-btn')?.addEventListener('click', () => {
+      if (this.state.activeWorkspaceId) {
+        this.switchWorkspace(this.state.activeWorkspaceId);
+        return;
+      }
+      const firstWorkspace = this.callbacks.getAllWorkspaces?.()[0];
+      if (!firstWorkspace) {
+        this.showToast('Create or join a workspace first', 'error');
+        return;
+      }
+      this.switchWorkspace(firstWorkspace.id);
+    });
     document.getElementById('connect-peer-btn')?.addEventListener('click', () =>
       this.showConnectPeerModal(),
     );
@@ -868,7 +918,7 @@ export class UIRenderer {
   showModal(
     title: string,
     bodyHTML: string,
-    onSubmit: (form: HTMLFormElement) => void,
+    onSubmit: (form: HTMLFormElement) => boolean | void | Promise<boolean | void>,
   ): void {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -894,10 +944,12 @@ export class UIRenderer {
       if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); }
     };
     document.addEventListener('keydown', escHandler);
-    overlay.querySelector('#modal-form')!.addEventListener('submit', (e) => {
+    overlay.querySelector('#modal-form')!.addEventListener('submit', async (e) => {
       e.preventDefault();
-      onSubmit(e.target as HTMLFormElement);
-      overlay.remove();
+      const shouldClose = await onSubmit(e.target as HTMLFormElement);
+      if (shouldClose !== false) {
+        overlay.remove();
+      }
     });
     setTimeout(() => (overlay.querySelector('input') as HTMLInputElement)?.focus(), 50);
   }
@@ -1139,47 +1191,39 @@ export class UIRenderer {
       'Add Contact',
       `
       <div class="form-group">
-        <label>Display Name</label>
-        <input type="text" name="displayName" placeholder="Contact's name" required />
+        <label>Contact URI</label>
+        <textarea name="contactUri" id="contact-uri-input" placeholder="Paste decent://contact?... URI" rows="4" required></textarea>
       </div>
       <div class="form-group">
-        <label>Public Key (base64)</label>
-        <input type="text" name="publicKey" placeholder="Paste their public key" required />
-      </div>
-      <div class="form-group">
-        <label>Peer ID</label>
-        <input type="text" name="peerId" placeholder="Paste their Peer ID" required />
-      </div>
-      <div class="form-group">
-        <label>Signaling Server (optional)</label>
-        <input type="text" name="signalingServer" placeholder="wss://..." />
+        <label>Display Name Override (optional)</label>
+        <input type="text" name="displayNameOverride" placeholder="Override contact name" />
       </div>
     `,
-      (form) => {
-        const displayName = (form.elements.namedItem('displayName') as HTMLInputElement).value.trim();
-        const publicKey = (form.elements.namedItem('publicKey') as HTMLInputElement).value.trim();
-        const peerId = (form.elements.namedItem('peerId') as HTMLInputElement).value.trim();
-        const signalingServer = (form.elements.namedItem('signalingServer') as HTMLInputElement).value.trim();
+      async (form) => {
+        const uri = (form.elements.namedItem('contactUri') as HTMLTextAreaElement).value.trim();
+        const displayNameOverride = (form.elements.namedItem('displayNameOverride') as HTMLInputElement).value.trim();
 
-        if (!displayName || !publicKey || !peerId) {
-          this.showToast('Name, public key, and peer ID are required', 'error');
-          return;
+        if (!ContactURI.isValid(uri)) {
+          this.showToast('Invalid Contact URI', 'error');
+          return false;
         }
 
+        const parsed = ContactURI.decode(uri);
+
         const contact: Contact = {
-          peerId,
-          publicKey,
-          displayName,
-          signalingServers: signalingServer ? [signalingServer] : [],
+          peerId: parsed.peerId || `contact-${Date.now()}`,
+          publicKey: parsed.publicKey,
+          displayName: displayNameOverride || parsed.displayName,
+          signalingServers: parsed.signalingServers || [],
           addedAt: Date.now(),
           lastSeen: 0,
         };
 
-        this.callbacks.addContact?.(contact).then(() => {
-          this.refreshContactsCache();
-          this.updateSidebar();
-          this.showToast(`Added ${displayName} to contacts`, 'success');
-        });
+        await this.callbacks.addContact?.(contact);
+        await this.refreshContactsCache();
+        this.updateSidebar();
+        this.showToast(`Added ${contact.displayName} to contacts`, 'success');
+        return true;
       },
     );
   }
@@ -1213,8 +1257,8 @@ export class UIRenderer {
         const peerId = (form.elements.namedItem('peerId') as HTMLInputElement).value;
         if (!peerId) return;
 
-        this.callbacks.startDirectMessage?.(peerId).then((conv) => {
-          this.refreshContactsCache();
+        this.callbacks.startDirectMessage?.(peerId).then(async (conv) => {
+          await this.refreshContactsCache();
           this.switchToDirectConversation(conv.id);
         });
       },

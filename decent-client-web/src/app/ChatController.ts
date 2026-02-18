@@ -296,6 +296,10 @@ export class ChatController {
             });
             await this.persistMessage(msg);
             await this.directConversationStore.updateLastMessage(channelId, msg.timestamp);
+            const updatedConv = await this.directConversationStore.get(channelId);
+            if (updatedConv) {
+              await this.persistentStore.saveDirectConversation(updatedConv);
+            }
 
             if (channelId === this.state.activeChannelId) {
               this.ui?.appendMessageToDOM(msg);
@@ -736,7 +740,8 @@ export class ChatController {
   }
 
   async getDirectConversations(): Promise<DirectConversation[]> {
-    return this.directConversationStore.list();
+    const conversations = await this.directConversationStore.list();
+    return conversations.sort((a, b) => b.lastMessageAt - a.lastMessageAt);
   }
 
   async sendDirectMessage(conversationId: string, content: string, threadId?: string): Promise<void> {
@@ -765,7 +770,13 @@ export class ChatController {
 
     await this.persistMessage(msg);
     await this.directConversationStore.updateLastMessage(conversationId, msg.timestamp);
-    await this.persistentStore.saveDirectConversation(conv);
+    const updatedConv = await this.directConversationStore.get(conversationId);
+    if (updatedConv) {
+      await this.persistentStore.saveDirectConversation(updatedConv);
+    } else {
+      await this.persistentStore.saveDirectConversation(conv);
+    }
+    this.ui?.updateSidebar();
 
     if (conversationId === this.state.activeChannelId) {
       if (threadId && this.state.threadOpen) {

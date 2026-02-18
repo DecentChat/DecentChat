@@ -87,15 +87,27 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   const input = page.locator('#compose-input');
   await input.fill(text);
   await input.press('Enter');
+  await waitForMessageInUI(page, text, 5000);
+}
+
+async function waitForMessageInUI(page: Page, text: string, timeoutMs = 15000): Promise<void> {
   await page.waitForFunction(
-    (t) => document.querySelector('.messages-list')?.textContent?.includes(t),
+    (t) => Array.from(document.querySelectorAll('.message-content')).some((m) => m.textContent?.includes(t)),
     text,
-    { timeout: 5000 },
+    { timeout: timeoutMs },
   );
 }
 
 async function getMessages(page: Page): Promise<string[]> {
   return page.locator('.message-content').allTextContents();
+}
+
+async function joinViaInviteUrl(page: Page, inviteUrl: string, alias: string): Promise<void> {
+  await page.goto(inviteUrl);
+  await page.waitForSelector('.modal', { timeout: 10000 });
+  await page.locator('input[name="alias"]').fill(alias);
+  await page.click('.modal .btn-primary');
+  await page.waitForSelector('.sidebar-header', { timeout: 15000 });
 }
 
 // ─── Connection Helpers ────────────────────────────────────────────────────────
@@ -326,6 +338,109 @@ test.describe('Multi-User P2P Integration', () => {
       // Isolation still holds after reload
       expect(aliceMsgs).not.toContain('Bob before reload');
       expect(bobMsgs).not.toContain('Alice before reload');
+    } finally {
+      await closeUser(alice);
+      await closeUser(bob);
+    }
+  });
+
+  // ─── Test 6: P2P message delivery from inviter to joiner ─────────────
+
+  test('Alice sends a message and Bob receives it via P2P', async ({ browser }) => {
+    const alice = await createUser(browser, 'Alice');
+    const bob = await createUser(browser, 'Bob');
+
+    try {
+      await createWorkspace(alice.page, 'P2P Delivery', 'Alice');
+      const inviteUrl = await getInviteUrl(alice.page);
+      await joinViaInviteUrl(bob.page, inviteUrl, 'Bob');
+
+      const msg = `alice-to-bob-${Date.now()}`;
+      await sendMessage(alice.page, msg);
+      await waitForMessageInUI(bob.page, msg, 20000);
+
+      await expect(bob.page.locator('.messages-list')).toContainText(msg);
+    } finally {
+      await closeUser(alice);
+      await closeUser(bob);
+    }
+  });
+
+  // ─── Test 7: Bi-directional multi-message exchange over P2P ──────────
+
+  test('bi-directional messaging delivers multiple messages between Alice and Bob', async ({ browser }) => {
+    const alice = await createUser(browser, 'Alice');
+    const bob = await createUser(browser, 'Bob');
+
+    try {
+      await createWorkspace(alice.page, 'P2P Bi-Directional', 'Alice');
+      const inviteUrl = await getInviteUrl(alice.page);
+      await joinViaInviteUrl(bob.page, inviteUrl, 'Bob');
+
+      const chat = [
+        { from: alice.page, to: bob.page, text: `A1-${Date.now()}` },
+        { from: bob.page, to: alice.page, text: `B1-${Date.now()}` },
+        { from: alice.page, to: bob.page, text: `A2-${Date.now()}` },
+        { from: bob.page, to: alice.page, text: `B2-${Date.now()}` },
+      ];
+
+      for (const turn of chat) {
+        await sendMessage(turn.from, turn.text);
+        await waitForMessageInUI(turn.to, turn.text, 20000);
+      }
+
+      const aliceMsgs = await getMessages(alice.page);
+      const bobMsgs = await getMessages(bob.page);
+      for (const turn of chat) {
+        expect(aliceMsgs).toContain(turn.text);
+        expect(bobMsgs).toContain(turn.text);
+      }
+    } finally {
+      await closeUser(alice);
+      await closeUser(bob);
+    }
+  });
+
+  // ─── Test 8: Message ordering consistency (CRDT) ─────────────────────
+
+  test('message ordering is consistent across peers during alternating sends', async ({ browser }) => {
+    const alice = await createUser(browser, 'Alice');
+    const bob = await createUser(browser, 'Bob');
+
+    try {
+      await createWorkspace(alice.page, 'P2P Ordering', 'Alice');
+      const inviteUrl = await getInviteUrl(alice.page);
+      await joinViaInviteUrl(bob.page, inviteUrl, 'Bob');
+
+      const suffix = Date.now();
+      const expectedOrder = [
+        `A-1-${suffix}`,
+        `B-1-${suffix}`,
+        `A-2-${suffix}`,
+        `B-2-${suffix}`,
+        `A-3-${suffix}`,
+      ];
+
+      await sendMessage(alice.page, expectedOrder[0]);
+      await waitForMessageInUI(bob.page, expectedOrder[0], 20000);
+
+      await sendMessage(bob.page, expectedOrder[1]);
+      await waitForMessageInUI(alice.page, expectedOrder[1], 20000);
+
+      await sendMessage(alice.page, expectedOrder[2]);
+      await waitForMessageInUI(bob.page, expectedOrder[2], 20000);
+
+      await sendMessage(bob.page, expectedOrder[3]);
+      await waitForMessageInUI(alice.page, expectedOrder[3], 20000);
+
+      await sendMessage(alice.page, expectedOrder[4]);
+      await waitForMessageInUI(bob.page, expectedOrder[4], 20000);
+
+      const aliceOrdered = (await getMessages(alice.page)).filter((m) => expectedOrder.includes(m));
+      const bobOrdered = (await getMessages(bob.page)).filter((m) => expectedOrder.includes(m));
+
+      expect(aliceOrdered).toEqual(expectedOrder);
+      expect(bobOrdered).toEqual(expectedOrder);
     } finally {
       await closeUser(alice);
       await closeUser(bob);
