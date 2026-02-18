@@ -37,14 +37,25 @@ export interface WorkspaceInvite {
   invitedBy: string;
 }
 
+/**
+ * Signaling server info for Peer Exchange (PEX) - DEP-002
+ */
+export interface PEXServer {
+  url: string;
+  lastSeen: number;
+  successRate: number;
+  latency?: number;
+}
+
 // P2P sync messages
 export type SyncMessage =
-  | { type: 'join-request'; inviteCode: string; member: WorkspaceMember }
-  | { type: 'join-accepted'; workspace: Workspace; messageHistory: Record<string, any[]> }
+  | { type: 'join-request'; inviteCode: string; member: WorkspaceMember; pexServers?: PEXServer[] }
+  | { type: 'join-accepted'; workspace: Workspace; messageHistory: Record<string, any[]>; pexServers?: PEXServer[] }
   | { type: 'join-rejected'; reason: string }
   | { type: 'member-joined'; member: WorkspaceMember }
   | { type: 'member-left'; peerId: string }
   | { type: 'channel-created'; channel: Channel }
   | { type: 'channel-message'; channelId: string; message: any }
   | { type: 'sync-request'; workspaceId: string }
-  | { type: 'sync-response'; workspace: Workspace; messageHistory: Record<string, any[]> };
+  | { type: 'sync-response'; workspace: Workspace; messageHistory: Record<string, any[]> }
+  | { type: 'peer-exchange'; servers: PEXServer[] };

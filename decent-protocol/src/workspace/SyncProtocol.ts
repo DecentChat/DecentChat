@@ -6,10 +6,11 @@
  * and message history sync.
  */
 
-import type { Workspace, WorkspaceMember, Channel, SyncMessage } from './types';
+import type { Workspace, WorkspaceMember, Channel, SyncMessage, PEXServer } from './types';
 import type { PlaintextMessage } from '../messages/types';
 import { WorkspaceManager } from './WorkspaceManager';
 import { MessageStore } from '../messages/MessageStore';
+import type { ServerDiscovery } from './ServerDiscovery';
 
 export type SendFn = (peerId: string, data: any) => boolean;
 export type OnEvent = (event: SyncEvent) => void;
@@ -29,6 +30,7 @@ export class SyncProtocol {
   private sendFn: SendFn;
   private onEvent: OnEvent;
   private myPeerId: string;
+  private serverDiscovery?: ServerDiscovery; // DEP-002: Optional PEX support
 
   // Track pending join requests
   private pendingJoins = new Map<string, { inviteCode: string; member: WorkspaceMember }>();
@@ -38,13 +40,15 @@ export class SyncProtocol {
     messageStore: MessageStore,
     sendFn: SendFn,
     onEvent: OnEvent,
-    myPeerId: string
+    myPeerId: string,
+    serverDiscovery?: ServerDiscovery
   ) {
     this.workspaceManager = workspaceManager;
     this.messageStore = messageStore;
     this.sendFn = sendFn;
     this.onEvent = onEvent;
     this.myPeerId = myPeerId;
+    this.serverDiscovery = serverDiscovery;
   }
 
   /**
@@ -79,6 +83,9 @@ export class SyncProtocol {
       case 'sync-response':
         await this.handleSyncResponse(msg);
         break;
+      case 'peer-exchange':
+        this.handlePeerExchange(msg);
+        break;
     }
   }
 
@@ -92,6 +99,7 @@ export class SyncProtocol {
       type: 'join-request',
       inviteCode,
       member: myMember,
+      pexServers: this.serverDiscovery?.getHandshakeServers(),
     };
     this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
   }
@@ -143,6 +151,11 @@ export class SyncProtocol {
   // === Incoming Handlers ===
 
   private handleJoinRequest(fromPeerId: string, msg: Extract<SyncMessage, { type: 'join-request' }>): void {
+    // DEP-002: Merge received PEX servers
+    if (msg.pexServers && this.serverDiscovery) {
+      this.serverDiscovery.mergeReceivedServers(msg.pexServers);
+    }
+
     // Validate invite code
     const workspace = this.workspaceManager.validateInviteCode(msg.inviteCode);
 
@@ -178,6 +191,7 @@ export class SyncProtocol {
       type: 'join-accepted',
       workspace: this.workspaceManager.exportWorkspace(workspace.id)!,
       messageHistory,
+      pexServers: this.serverDiscovery?.getHandshakeServers(),
     };
 
     this.sendFn(fromPeerId, { type: 'workspace-sync', sync: acceptMsg });
@@ -187,6 +201,11 @@ export class SyncProtocol {
   }
 
   private async handleJoinAccepted(msg: Extract<SyncMessage, { type: 'join-accepted' }>): Promise<void> {
+    // DEP-002: Merge received PEX servers
+    if (msg.pexServers && this.serverDiscovery) {
+      this.serverDiscovery.mergeReceivedServers(msg.pexServers);
+    }
+
     // Import workspace
     this.workspaceManager.importWorkspace(msg.workspace);
 
@@ -280,5 +299,40 @@ export class SyncProtocol {
     }
 
     this.onEvent({ type: 'sync-complete', workspaceId: msg.workspace.id });
+  }
+
+  /**
+   * DEP-002: Handle peer exchange message
+   */
+  private handlePeerExchange(msg: Extract<SyncMessage, { type: 'peer-exchange' }>): void {
+    if (this.serverDiscovery && msg.servers) {
+      this.serverDiscovery.mergeReceivedServers(msg.servers);
+    }
+  }
+
+  /**
+   * DEP-002: Broadcast PEX update to all connected peers
+   * Call this periodically (e.g. every 5 minutes) or when servers change
+   */
+  broadcastPeerExchange(connectedPeerIds: string[]): void {
+    if (!this.serverDiscovery) return;
+
+    const msg: SyncMessage = {
+      type: 'peer-exchange',
+      servers: this.serverDiscovery.getHandshakeServers(),
+    };
+
+    for (const peerId of connectedPeerIds) {
+      if (peerId !== this.myPeerId) {
+        this.sendFn(peerId, { type: 'workspace-sync', sync: msg });
+      }
+    }
+  }
+
+  /**
+   * DEP-002: Get server discovery instance (for external integration)
+   */
+  getServerDiscovery(): ServerDiscovery | undefined {
+    return this.serverDiscovery;
   }
 }

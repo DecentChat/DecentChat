@@ -20,6 +20,8 @@ export { MerkleTree } from './crdt/MerkleTree';
 // ─── Workspace ──────────────────────────────────────────────────────────────
 export { WorkspaceManager } from './workspace/WorkspaceManager';
 export { SyncProtocol } from './workspace/SyncProtocol';
+export { ServerDiscovery } from './workspace/ServerDiscovery';
+export type { ServerStats } from './workspace/ServerDiscovery';
 
 // ─── Messages ───────────────────────────────────────────────────────────────
 export { MessageStore } from './messages/MessageStore';
@@ -31,6 +33,7 @@ export { PersistentStore } from './storage/PersistentStore';
 // ─── Identity ───────────────────────────────────────────────────────────────
 export { IdentityManager } from './identity/Identity';
 export { SeedPhraseManager } from './identity/SeedPhrase';
+export { HDKeyDerivation, HDPurpose } from './identity/HDKeyDerivation';
 export { WORDLIST } from './identity/wordlist';
 
 // ─── Media ──────────────────────────────────────────────────────────────────
@@ -66,8 +69,8 @@ export type {
 } from './security';
 
 // ─── Double Ratchet ─────────────────────────────────────────────────────────
-export { DoubleRatchet } from './crypto/DoubleRatchet';
-export type { RatchetState, RatchetHeader, RatchetMessage } from './crypto/DoubleRatchet';
+export { DoubleRatchet, serializeRatchetState, deserializeRatchetState } from './crypto/DoubleRatchet';
+export type { RatchetState, RatchetHeader, RatchetMessage, SerializedRatchetState } from './crypto/DoubleRatchet';
 
 // ─── Migrations ─────────────────────────────────────────────────────────────
 export { MigrationRunner } from './storage/Migration';
@@ -75,6 +78,13 @@ export type { Migration, MigrationContext, MigrationResult } from './storage/Mig
 export { ALL_MIGRATIONS, CURRENT_SCHEMA_VERSION } from './storage/migrations';
 
 export type { Transport } from './transport/Transport';
+
+// ─── Contacts ──────────────────────────────────────────────────────────────
+export { MemoryContactStore, MemoryDirectConversationStore, ContactURI } from './contacts';
+export type {
+  Contact, ContactStore, ContactURIData,
+  DirectConversation, DirectConversationStore,
+} from './contacts';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 export type { KeyPair, SerializedKeyPair, EncryptedData, SignedMessage } from './crypto/types';
@@ -87,6 +97,7 @@ export type {
   Channel,
   WorkspaceInvite,
   SyncMessage,
+  PEXServer,
 } from './workspace/types';
 export type { SyncEvent, SendFn, OnEvent } from './workspace/SyncProtocol';
 export type { ChatMessage, PlaintextMessage } from './messages/types';
@@ -97,3 +108,4 @@ export type {
   SafetyNumber,
 } from './identity/Identity';
 export type { SeedPhraseResult, DerivedKeys } from './identity/SeedPhrase';
+export type { HDDerivedKeys } from './identity/HDKeyDerivation';
