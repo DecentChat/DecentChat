@@ -578,8 +578,8 @@ body {
 }
 
 .compose-inner:focus-within {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.12);
+  border-color: rgba(108, 92, 231, 0.3);
+  box-shadow: 0 0 0 1px rgba(108, 92, 231, 0.08);
 }
 
 .compose-input {
