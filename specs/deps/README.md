@@ -14,7 +14,7 @@ DEPs are design documents that describe new features, protocol changes, or proce
 |--------|-------|------|--------|
 | [000](DEP-000.md) | Decent Enhancement Proposals (Process) | Process | Final |
 | [001](DEP-001.md) | Negentropy Set Reconciliation | Core | Draft |
-| [002](DEP-002.md) | Peer Exchange (PEX) for Signaling Server Discovery | Transport | Draft |
+| [002](DEP-002.md) | Peer Exchange (PEX) for Signaling Server Discovery | Transport | Active |
 
 ## How to Submit a DEP
 
