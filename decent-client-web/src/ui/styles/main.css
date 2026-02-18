@@ -575,11 +575,13 @@ body {
   align-items: flex-end;
   position: relative;
   transition: border-color 0.15s, box-shadow 0.15s;
+  outline: none !important; /* Remove any browser default outline */
 }
 
 .compose-inner:focus-within {
-  border-color: rgba(108, 92, 231, 0.3);
-  box-shadow: 0 0 0 1px rgba(108, 92, 231, 0.08);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px rgba(108, 92, 231, 0.15);
+  outline: none; /* Remove browser default outline */
 }
 
 .compose-input {
@@ -594,7 +596,12 @@ body {
   min-height: 22px;
   max-height: 200px;
   line-height: 1.5;
-  outline: none;
+  outline: none !important; /* Force remove browser default outline */
+}
+
+.compose-input:focus {
+  outline: none !important;
+  border: none;
 }
 
 .compose-input::placeholder { color: var(--text-light); }
