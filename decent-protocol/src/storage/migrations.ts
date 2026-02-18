@@ -1,103 +1,153 @@
 /**
- * Storage Migrations — Versioned schema upgrades
+ * Migration Registry — All schema migrations for DecentChat
  * 
- * Each migration is a function that transforms data from version N to N+1.
- * Migrations run sequentially when the stored version is older than code version.
+ * Add new migrations here as the protocol evolves.
+ * Each migration must have a unique, sequential version number.
+ * 
+ * RULES:
+ * 1. NEVER modify an existing migration
+ * 2. ALWAYS add new migrations with incrementing version numbers
+ * 3. Test migrations with both fresh installs and upgrades
+ * 4. Include down() for reversible migrations
  */
 
-export const CURRENT_STORAGE_VERSION = 4;
-export const CURRENT_SCHEMA_VERSION = CURRENT_STORAGE_VERSION; // Alias for compatibility
-
-export interface MigrationContext {
-  db: IDBDatabase;
-  transaction: IDBTransaction;
-  oldVersion: number;
-  newVersion: number;
-}
+import type { Migration } from './Migration';
 
 /**
- * Migration from v3 to v4 (Feb 2026)
- * - Add PEX server discovery data
- * - No schema changes, just version bump for compatibility check
+ * v1: Initial schema
+ * This migration establishes the baseline schema.
+ * For fresh installs, this is a no-op (stores are created by PersistentStore.init).
+ * For existing installs from before versioning, this sets the baseline.
  */
-async function migrateV3toV4(ctx: MigrationContext): Promise<void> {
-  console.log('[Migration] v3 → v4: Adding PEX support');
-  
-  // PEX data is stored in settings with key pattern "pex:workspaceId"
-  // No migration needed, just version bump
-  
-  // Create a marker to indicate this migration ran
-  const settingsStore = ctx.transaction.objectStore('settings');
-  settingsStore.put({
-    key: 'migration:v4',
-    value: { timestamp: Date.now(), note: 'PEX support added' }
-  });
-}
-
-/**
- * All available migrations (exported for introspection)
- */
-export const ALL_MIGRATIONS: Record<number, (ctx: MigrationContext) => Promise<void>> = {
-  4: migrateV3toV4,
-  // Add future migrations here:
-  // 5: migrateV4toV5,
+const v1_initialSchema: Migration = {
+  version: 1,
+  description: 'Establish baseline schema (workspaces, messages, peers, identity, outbox, settings)',
+  up: async (ctx) => {
+    // Set version marker — existing data is already in correct format
+    ctx.log('Setting baseline schema version');
+    await ctx.setSetting('_schemaVersion', 1);
+    await ctx.setSetting('_protocolVersion', '0.1.0');
+  },
 };
 
 /**
- * Run all necessary migrations to bring storage from oldVersion to newVersion
+ * v2: Add vectorClock field to messages
+ * Early messages might not have vectorClock. This backfills them.
  */
-export async function runMigrations(db: IDBDatabase, oldVersion: number, newVersion: number): Promise<void> {
-  console.log(`[Storage] Migrating from v${oldVersion} to v${newVersion}`);
-  
-  // Create a transaction for migrations
-  const transaction = db.transaction(
-    Array.from(db.objectStoreNames), 
-    'readwrite'
-  );
-  
-  const ctx: MigrationContext = { db, transaction, oldVersion, newVersion };
-  
-  // Run migrations sequentially
-  for (let v = oldVersion + 1; v <= newVersion; v++) {
-    if (ALL_MIGRATIONS[v]) {
-      await ALL_MIGRATIONS[v](ctx);
+const v2_addVectorClocks: Migration = {
+  version: 2,
+  description: 'Backfill vectorClock on messages that lack it',
+  up: async (ctx) => {
+    const messages = await ctx.getAll('messages');
+    let updated = 0;
+    for (const msg of messages) {
+      if (!msg.vectorClock) {
+        msg.vectorClock = {};
+        await ctx.put('messages', msg);
+        updated++;
+      }
     }
-  }
-  
-  // Store the new version
-  const settingsStore = transaction.objectStore('settings');
-  settingsStore.put({
-    key: 'storage_version',
-    value: newVersion
-  });
-  
-  // Wait for transaction to complete
-  await new Promise<void>((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-  });
-  
-  console.log(`[Storage] Migration complete: v${oldVersion} → v${newVersion}`);
-}
+    ctx.log(`Updated ${updated}/${messages.length} messages with vectorClock`);
+  },
+  down: async (ctx) => {
+    // No need to remove vectorClock — it's additive
+    ctx.log('No rollback needed for vectorClock addition');
+  },
+};
 
 /**
- * Get stored version from settings
+ * v3: Add attachment metadata support to messages
  */
-export async function getStoredVersion(db: IDBDatabase): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction('settings', 'readonly');
-    const store = transaction.objectStore('settings');
-    const request = store.get('storage_version');
-    
-    request.onsuccess = () => {
-      const result = request.result;
-      // If no version stored, assume v3 (first versioned release)
-      resolve(result?.value || 3);
-    };
-    
-    request.onerror = () => {
-      // If settings store doesn't exist yet, we're at v0
-      resolve(0);
-    };
-  });
-}
+const v3_addAttachments: Migration = {
+  version: 3,
+  description: 'Add attachments array to messages schema',
+  up: async (ctx) => {
+    const messages = await ctx.getAll('messages');
+    let updated = 0;
+    for (const msg of messages) {
+      if (!msg.attachments) {
+        msg.attachments = [];
+        await ctx.put('messages', msg);
+        updated++;
+      }
+    }
+    ctx.log(`Updated ${updated}/${messages.length} messages with attachments field`);
+  },
+};
+
+/**
+ * v4: Add workspace settings (per-workspace preferences)
+ */
+const v4_workspaceSettings: Migration = {
+  version: 4,
+  description: 'Add settings field to workspace objects',
+  up: async (ctx) => {
+    const workspaces = await ctx.getAll('workspaces');
+    for (const ws of workspaces) {
+      if (!ws.settings) {
+        ws.settings = {
+          autoDownloadImages: true,
+          autoDownloadVoice: true,
+          maxStorageBytes: 500 * 1024 * 1024,
+        };
+        await ctx.put('workspaces', ws);
+      }
+    }
+    ctx.log(`Updated ${workspaces.length} workspaces with settings`);
+  },
+};
+
+/**
+ * v5: Add ratchetStates store for Double Ratchet forward secrecy
+ * The IndexedDB object store is created by PersistentStore.init() (version bump).
+ * This migration just marks the schema version.
+ */
+const v5_doubleRatchet: Migration = {
+  version: 5,
+  description: 'Add ratchetStates store for Double Ratchet forward secrecy',
+  up: async (ctx) => {
+    ctx.log('Double Ratchet ratchetStates store added (created by IndexedDB upgrade)');
+  },
+  down: async (ctx) => {
+    // Clearing ratchet states on rollback — peers will re-handshake
+    try {
+      await ctx.clear('ratchetStates');
+    } catch {}
+    ctx.log('Cleared ratchetStates store');
+  },
+};
+
+/**
+ * v6: Add contacts and directConversations stores
+ * The IndexedDB object stores are created by PersistentStore.init() (version bump).
+ * This migration just marks the schema version.
+ */
+const v6_contacts: Migration = {
+  version: 6,
+  description: 'Add contacts and directConversations stores for standalone DMs',
+  up: async (ctx) => {
+    ctx.log('Contacts and directConversations stores added (created by IndexedDB upgrade)');
+  },
+  down: async (ctx) => {
+    try {
+      await ctx.clear('contacts');
+      await ctx.clear('directConversations');
+    } catch {}
+    ctx.log('Cleared contacts and directConversations stores');
+  },
+};
+
+/**
+ * All migrations in order
+ */
+export const ALL_MIGRATIONS: Migration[] = [
+  v1_initialSchema,
+  v2_addVectorClocks,
+  v3_addAttachments,
+  v4_workspaceSettings,
+  v5_doubleRatchet,
+  v6_contacts,
+];
+
+/** Current schema version */
+export const CURRENT_SCHEMA_VERSION = 6;
