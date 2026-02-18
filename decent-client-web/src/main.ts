@@ -201,18 +201,25 @@ async function init(): Promise<void> {
 
     // Check for /join/CODE invite URL
     const joinMatch = window.location.pathname.match(/^\/join\/([A-Za-z0-9]+)/);
-    if (joinMatch) {
-      const inviteCode = joinMatch[1];
-      const params = new URLSearchParams(window.location.search);
-      const peerId = params.get('peer') || '';
-      const workspaceName = params.get('name') || '';
+    const pendingInvite = joinMatch ? {
+      code: joinMatch[1],
+      peerId: new URLSearchParams(window.location.search).get('peer') || '',
+      name: new URLSearchParams(window.location.search).get('name') || '',
+    } : null;
 
-      // Clean URL without reloading
+    if (pendingInvite) {
+      // Clean URL immediately
       window.history.replaceState({}, '', '/');
+      console.log('[DecentChat] Invite link detected:', pendingInvite.code, pendingInvite.name);
+    }
 
-      // Show welcome + auto-open join modal with pre-filled data
+    if (pendingInvite) {
+      // Invite link — show welcome screen with join modal
       ui.renderWelcome();
-      ui.showJoinWithInvite(inviteCode, peerId, workspaceName);
+      // Small delay to ensure DOM is ready
+      setTimeout(() => {
+        ui.showJoinWithInvite(pendingInvite.code, pendingInvite.peerId, pendingInvite.name);
+      }, 100);
     } else if (ctrl.workspaceManager.getAllWorkspaces().length === 0) {
       ui.renderWelcome();
     } else {

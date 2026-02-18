@@ -715,12 +715,8 @@ export class UIRenderer {
     this.showModal(
       `Join ${workspaceName || 'Workspace'}`,
       `
-      <div class="form-group">
-        <label>Invite Code</label>
-        <input type="text" name="invite" value="${inviteCode}" readonly style="opacity:0.7" />
-        <input type="hidden" name="peerId" value="${peerId}" />
-      </div>
-      ${workspaceName ? `<p style="color: var(--text-muted); margin-bottom: 12px;">You've been invited to <strong>${this.escapeHtml(workspaceName)}</strong></p>` : ''}
+      <input type="hidden" name="peerId" value="${peerId}" />
+      ${workspaceName ? `<p style="color: var(--text-muted); margin-bottom: 16px; font-size: 15px;">You've been invited to <strong>${this.escapeHtml(workspaceName)}</strong></p>` : ''}
       <div class="form-group">
         <label>Your Display Name</label>
         <input type="text" name="alias" placeholder="Enter your name" required autofocus />
