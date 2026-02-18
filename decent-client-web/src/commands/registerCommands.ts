@@ -106,7 +106,8 @@ export function registerCommands(parser: CommandParser, ctrl: ChatController, st
       if (!ws) return { handled: true, error: 'Workspace not found' };
 
       const code = ws.inviteCode || 'NONE';
-      const uri = `decent://localhost:9000/${code}?peer=${state.myPeerId}&name=${encodeURIComponent(ws.name)}`;
+      // Generate web URL instead of decent:// protocol
+      const uri = `https://decentchat.app/join/${code}?signal=localhost:9000&peer=${state.myPeerId}&name=${encodeURIComponent(ws.name)}`;
 
       return {
         handled: true,

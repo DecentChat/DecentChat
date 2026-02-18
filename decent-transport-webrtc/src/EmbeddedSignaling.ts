@@ -11,7 +11,7 @@
  * Usage:
  *   const server = new EmbeddedSignaling({ port: 9000 });
  *   await server.start();
- *   // Share: decent://YOUR_IP:9000/INVITE_CODE
+ *   // Share: https://decentchat.app/join/INVITE_CODE?signal=YOUR_IP:9000
  *   // Other peers connect to your signaling server
  *   await server.stop();
  * 

@@ -247,7 +247,7 @@ export class QRCodeManager {
         <div class="qr-content">
           <div class="form-group">
             <label>Paste Contact URI</label>
-            <input type="text" id="qr-paste-input" placeholder="decent://contact?pub=...&name=..." style="width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius); background:var(--bg-secondary); color:var(--text); font-size:14px; font-family:monospace;" />
+            <input type="text" id="qr-paste-input" placeholder="https://decentchat.app/contact?pub=...&name=..." style="width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius); background:var(--bg-secondary); color:var(--text); font-size:14px; font-family:monospace;" />
             <small style="color:var(--text-muted); margin-top:4px; display:block;">
               Ask your contact to share their URI from the "My QR Code" screen
             </small>

@@ -964,7 +964,7 @@ export class UIRenderer {
       `
       <div class="form-group">
         <label>Invite Link or Code</label>
-        <input type="text" name="invite" placeholder="decent://... or paste invite link" required />
+        <input type="text" name="invite" placeholder="https://decentchat.app/join/... or paste invite link" required />
         <small style="color: var(--text-muted); margin-top: 4px; display: block;">
           Paste the full invite link you received
         </small>

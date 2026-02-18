@@ -6,14 +6,15 @@ import { describe, test, expect } from 'bun:test';
 import { InviteURI } from '../../src/invite/InviteURI';
 
 describe('InviteURI - Encode', () => {
-  test('encodes basic LAN invite', () => {
+  test('encodes basic LAN invite as web URL', () => {
     const uri = InviteURI.create({
       host: '192.168.1.50',
       port: 9000,
       inviteCode: 'ABCD1234',
     });
 
-    expect(uri).toContain('decent://192.168.1.50:9000/ABCD1234');
+    expect(uri).toContain('https://decentchat.app/join/ABCD1234');
+    expect(decodeURIComponent(uri)).toContain('signal=192.168.1.50:9000');
   });
 
   test('encodes invite with peer ID and workspace name', () => {
@@ -25,9 +26,11 @@ describe('InviteURI - Encode', () => {
       workspaceName: 'My Team',
     });
 
-    expect(uri).toContain('decent://85.237.42.100:9000/WXYZ5678');
-    expect(uri).toContain('peer=alice-peer-id');
-    expect(uri).toContain('name=My+Team');
+    expect(uri).toContain('https://decentchat.app/join/WXYZ5678');
+    const decoded = decodeURIComponent(uri);
+    expect(decoded).toContain('signal=85.237.42.100:9000');
+    expect(decoded).toContain('peer=alice-peer-id');
+    expect(uri).toContain('name=My+Team'); // URL-encoded space
   });
 
   test('encodes secure invite (port 443)', () => {
@@ -174,7 +177,7 @@ describe('InviteURI - Validation', () => {
 });
 
 describe('InviteURI - Share Text', () => {
-  test('generates shareable text', () => {
+  test('generates shareable text with web URL', () => {
     const text = InviteURI.toShareText({
       host: '192.168.1.50',
       port: 9000,
@@ -187,7 +190,7 @@ describe('InviteURI - Share Text', () => {
     });
 
     expect(text).toContain('Join My Team on DecentChat');
-    expect(text).toContain('decent://');
+    expect(text).toContain('https://decentchat.app/join/');
     expect(text).toContain('SHARE001');
   });
 });

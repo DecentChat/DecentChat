@@ -7,12 +7,14 @@
  * Format:
  *   decent://HOST:PORT/INVITE_CODE?fallback=wss://public.server&turn=turn:relay.com&pk=PUBLIC_KEY
  * 
- * Examples:
+ * Examples (web URL format - recommended):
+ *   https://decentchat.app/join/ABCD1234?signal=192.168.1.50:9000                   (LAN)
+ *   https://decentchat.app/join/ABCD1234?signal=signal.alice.com:443&secure=1       (domain)
+ *   https://decentchat.app/join/ABCD1234?signal=localhost:9000                      (local dev)
+ * 
+ * Legacy decent:// protocol (still supported for decode):
  *   decent://192.168.1.50:9000/ABCD1234                          (LAN)
- *   decent://85.237.42.100:9000/ABCD1234?fallback=wss://signal.decentchat.org  (public IP + fallback)
  *   decent://signal.alice.com:443/ABCD1234                       (domain)
- *   decent://[2001:db8::1]:9000/ABCD1234                         (IPv6)
- *   decent://localhost:9000/ABCD1234                              (local dev)
  */
 
 export interface InviteData {
@@ -46,8 +48,42 @@ export const DEFAULT_PUBLIC_SERVERS = [
 export class InviteURI {
   /**
    * Create an invite URI from invite data
+   * 
+   * Generates a web URL format (https://...) for easier sharing.
+   * Use encodeNative() for the decent:// protocol format.
    */
-  static encode(data: InviteData): string {
+  static encode(data: InviteData, webDomain = 'decentchat.app'): string {
+    const { host, port, inviteCode, secure, peerId, publicKey, workspaceName, path } = data;
+
+    // Build web URL: https://decentchat.app/join/CODE?signal=host:port&...
+    const params = new URLSearchParams();
+    params.set('signal', `${host}:${port}`);
+    
+    if (peerId) params.set('peer', peerId);
+    if (publicKey) params.set('pk', publicKey);
+    if (workspaceName) params.set('name', workspaceName);
+    if (secure) params.set('secure', '1');
+    if (path && path !== '/peerjs') params.set('path', path);
+
+    if (data.fallbackServers && data.fallbackServers.length > 0) {
+      for (const server of data.fallbackServers) {
+        params.append('fallback', server);
+      }
+    }
+
+    if (data.turnServers && data.turnServers.length > 0) {
+      for (const server of data.turnServers) {
+        params.append('turn', server);
+      }
+    }
+
+    return `https://${webDomain}/join/${inviteCode}?${params.toString()}`;
+  }
+
+  /**
+   * Create a native decent:// protocol URI (for advanced use)
+   */
+  static encodeNative(data: InviteData): string {
     const { host, port, inviteCode, secure } = data;
 
     // Build host string (wrap IPv6 in brackets)
@@ -57,13 +93,13 @@ export class InviteURI {
     // Build query params
     const params = new URLSearchParams();
 
-    if (data.fallbackServers.length > 0) {
+    if (data.fallbackServers && data.fallbackServers.length > 0) {
       for (const server of data.fallbackServers) {
         params.append('fallback', server);
       }
     }
 
-    if (data.turnServers.length > 0) {
+    if (data.turnServers && data.turnServers.length > 0) {
       for (const server of data.turnServers) {
         params.append('turn', server);
       }
