@@ -183,7 +183,9 @@ export class Negentropy {
       }
 
       // If range is small enough, send all our items in this range
-      if (localItems.length <= MIN_RANGE_SIZE && remoteRange.count <= MIN_RANGE_SIZE) {
+      // Use a slightly larger threshold for enumeration to avoid infinite subdivision
+      const ENUMERATE_THRESHOLD = MIN_RANGE_SIZE * 2;
+      if (localItems.length <= ENUMERATE_THRESHOLD || remoteRange.count <= ENUMERATE_THRESHOLD) {
         for (const item of localItems) {
           have.add(item.id);
         }
