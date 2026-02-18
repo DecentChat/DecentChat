@@ -88,7 +88,8 @@ export class UIRenderer {
     const app = document.getElementById('app')!;
     app.innerHTML = `
       <div class="welcome-screen">
-        <h1>⚡ DecentChat</h1>
+        <img src="/icons/logo-light.png" alt="DecentChat" class="welcome-logo" />
+        <h1>DecentChat</h1>
         <p>End-to-end encrypted, serverless, peer-to-peer messaging</p>
         <div class="welcome-actions">
           <button class="btn-primary" id="create-ws-btn">Create Workspace</button>
@@ -171,7 +172,8 @@ export class UIRenderer {
 
     return `
       <div class="sidebar-header">
-        <h1>${ws ? this.escapeHtml(ws.name) : 'P2P Chat'}</h1>
+        <img src="/icons/icon-32.png" alt="" class="sidebar-logo" />
+        <h1>${ws ? this.escapeHtml(ws.name) : 'DecentChat'}</h1>
         <span class="status-dot"></span>
       </div>
       <div class="sidebar-nav" id="sidebar-nav">

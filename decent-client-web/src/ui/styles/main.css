@@ -1109,6 +1109,33 @@ body.compact .message-avatar { width: 28px; height: 28px; font-size: 11px; }
 body.compact .message-content { font-size: 14px; }
 body.compact .messages-list { gap: 0; }
 
+/* === Welcome Logo === */
+.welcome-logo {
+  width: 120px;
+  height: 120px;
+  margin-bottom: 8px;
+  filter: drop-shadow(0 4px 12px rgba(108, 92, 231, 0.3));
+}
+
+[data-theme="dark"] .welcome-logo { content: url('/icons/logo-dark.png'); }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .welcome-logo { content: url('/icons/logo-dark.png'); }
+}
+
+/* === Sidebar Logo === */
+.sidebar-logo {
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+}
+
 /* === Command Autocomplete === */
 .command-autocomplete {
   position: absolute;

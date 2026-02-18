@@ -2,7 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/icon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/icons/icon-16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="End-to-end encrypted, serverless P2P chat" />
     <meta name="theme-color" content="#6c5ce7" />
@@ -14,6 +16,9 @@
         display: flex; flex-direction: column; align-items: center; justify-content: center;
         height: 100vh; gap: 16px; transition: opacity 0.3s;
       }
+      #loading .loading-logo { width: 80px; height: 80px; animation: pulse 2s ease-in-out infinite; }
+      @keyframes pulse { 0%, 100% { transform: scale(1); opacity: 0.9; } 50% { transform: scale(1.05); opacity: 1; } }
+      @media (prefers-color-scheme: dark) { #loading .loading-logo { content: url('/icons/logo-dark.png'); width: 80px; height: 80px; } }
       #loading .logo { font-size: 32px; font-weight: 700; }
       #loading .spinner {
         width: 32px; height: 32px; border: 3px solid rgba(108, 92, 231, 0.2);
@@ -26,7 +31,8 @@
   </head>
   <body>
     <div id="loading">
-      <div class="logo">⚡ DecentChat</div>
+      <img src="/icons/logo-light.png" alt="DecentChat" class="loading-logo" />
+      <div class="logo">DecentChat</div>
       <div class="spinner"></div>
       <div class="hint">Initializing encryption...</div>
     </div>
