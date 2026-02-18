@@ -333,7 +333,7 @@ export class ChatController {
     };
   }
 
-  private handleSyncMessage(_peerId: string, msg: any): void {
+  private async handleSyncMessage(_peerId: string, msg: any): Promise<void> {
     console.log('Sync message from', _peerId, msg);
 
     // DEP-002: Handle peer-exchange messages
@@ -343,7 +343,37 @@ export class ChatController {
         discovery.mergeReceivedServers(msg.sync.servers);
         this.saveServerDiscovery(msg.workspaceId); // Persist updated state
         console.log(`[PEX] Merged ${msg.sync.servers.length} servers from ${_peerId.slice(0, 8)}`);
+
+        // Try to connect to new high-ranked servers
+        await this.connectToDiscoveredServers(discovery);
       }
+    }
+  }
+
+  /**
+   * DEP-002: Try to connect to high-ranked servers we're not yet connected to
+   */
+  private async connectToDiscoveredServers(discovery: ServerDiscovery): Promise<void> {
+    const ranked = discovery.getRankedServers();
+    const currentServers = this.transport.getSignalingStatus().map(s => s.url);
+
+    // Try to connect to top 3 servers we're not connected to
+    let attempted = 0;
+    for (const server of ranked) {
+      if (attempted >= 3) break;
+      if (currentServers.includes(server.url)) continue;
+
+      attempted++;
+      // Don't await - connect in background
+      this.transport.addSignalingServer(server.url, `PEX:${server.url}`).then(success => {
+        if (success) {
+          discovery.recordSuccess(server.url, 100); // Assume 100ms latency for now
+          this.saveServerDiscovery(discovery.toJSON().workspaceId);
+        } else {
+          discovery.recordFailure(server.url);
+          this.saveServerDiscovery(discovery.toJSON().workspaceId);
+        }
+      });
     }
   }
 

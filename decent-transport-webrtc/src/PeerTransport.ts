@@ -231,6 +231,34 @@ export class PeerTransport implements Transport {
     return this.signalingInstances.filter(i => i.connected).length;
   }
 
+  /**
+   * DEP-002: Add a signaling server discovered via PEX.
+   * Connects to the new server and registers the same peer ID.
+   * Returns true if connection succeeds, false otherwise.
+   */
+  async addSignalingServer(serverUrl: string, label?: string): Promise<boolean> {
+    if (!this.myPeerId) {
+      console.warn('[PeerTransport] Cannot add signaling server before init()');
+      return false;
+    }
+
+    // Check if already connected to this server
+    if (this.signalingInstances.some(i => i.url === serverUrl)) {
+      console.log(`[PeerTransport] Already connected to ${serverUrl}`);
+      return true;
+    }
+
+    try {
+      console.log(`[PEX] Connecting to discovered server: ${serverUrl}`);
+      await this._initServer({ url: serverUrl, label: label || serverUrl }, this.myPeerId);
+      console.log(`[PEX] Successfully connected to ${serverUrl}`);
+      return true;
+    } catch (err) {
+      console.warn(`[PEX] Failed to connect to ${serverUrl}:`, (err as Error).message);
+      return false;
+    }
+  }
+
   // ── Internal: signaling server management ─────────────────────────────────
 
   private _resolveSignalingServers(): { url: string; label: string }[] {
