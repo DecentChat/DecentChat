@@ -23,11 +23,15 @@ import {
   createAttachmentMeta,
   CHUNK_SIZE,
   InviteURI,
+  MemoryContactStore,
+  MemoryDirectConversationStore,
+  ServerDiscovery,
 } from 'decent-protocol';
 import type {
   PlaintextMessage, Workspace, Channel,
   AttachmentMeta, Attachment, MediaChunk, MediaRequest, MediaResponse,
   TimeSyncRequest, TimeSyncResponse,
+  Contact, DirectConversation,
 } from 'decent-protocol';
 
 import { PeerTransport } from 'decent-transport-webrtc';
@@ -52,6 +56,7 @@ export interface UIUpdater {
   appendMessageToDOM: (msg: PlaintextMessage) => void;
   showToast: (message: string, type?: 'info' | 'error' | 'success') => void;
   renderThreadMessages: () => void;
+  renderApp: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +80,12 @@ export class ChatController {
   readonly presence: PresenceManager;
   readonly reactions: ReactionManager;
   readonly notifications: NotificationManager;
+  readonly contactStore: MemoryContactStore;
+  readonly directConversationStore: MemoryDirectConversationStore;
+
+  /** DEP-002: Peer Exchange for signaling server discovery */
+  private serverDiscovery: Map<string, ServerDiscovery> = new Map();
+  private pexBroadcastInterval: number | null = null;
 
   /** Active chunked transfers (receiving) */
   private activeTransfers = new Map<string, ChunkedReceiver>();
@@ -112,6 +123,8 @@ export class ChatController {
         });
       }
     };
+    this.contactStore = new MemoryContactStore();
+    this.directConversationStore = new MemoryDirectConversationStore();
     this.notifications = new NotificationManager();
     this.messageGuard.rateLimiter.onViolation = (v) => {
       console.warn(`[Guard] ${v.severity} violation from ${v.peerId.slice(0, 8)}: ${v.action}`);
@@ -176,8 +189,11 @@ export class ChatController {
 
           this.state.connectedPeers.add(peerId);
           this.ui?.updateSidebar();
+          const ratchetActive = this.messageProtocol!.hasRatchetState(peerId);
           this.ui?.showToast(
-            `🔐 Encrypted connection with ${peerId.slice(0, 8)}...`,
+            ratchetActive
+              ? `🔐 Forward-secret connection with ${peerId.slice(0, 8)}...`
+              : `🔐 Encrypted connection with ${peerId.slice(0, 8)}...`,
             'success',
           );
 
@@ -247,6 +263,38 @@ export class ChatController {
         const content = await this.messageProtocol!.decryptMessage(peerId, data, peerPublicKey);
         if (!content) return;
 
+        // Direct message from a contact (outside workspace)
+        if (data.isDirect) {
+          let conv = await this.directConversationStore.getByContact(peerId);
+          if (!conv) {
+            conv = await this.directConversationStore.create(peerId);
+            await this.persistentStore.saveDirectConversation(conv);
+          }
+
+          const channelId = conv.id;
+          const msg = await this.messageStore.createMessage(channelId, peerId, content);
+          msg.timestamp = data.timestamp;
+          (msg as any).vectorClock = data.vectorClock;
+          const result = await this.messageStore.addMessage(msg);
+
+          if (result.success) {
+            const crdt = this.getOrCreateCRDT(channelId);
+            crdt.addReceived(msg, new VectorClock(data.vectorClock || {}));
+            await this.persistMessage(msg);
+            await this.directConversationStore.updateLastMessage(channelId, msg.timestamp);
+
+            if (channelId === this.state.activeChannelId) {
+              this.ui?.appendMessageToDOM(msg);
+            }
+
+            const contactInfo = await this.contactStore.get(peerId);
+            const senderName = contactInfo?.displayName || peerId.slice(0, 8);
+            this.notifications.notify(channelId, senderName, senderName, content);
+            this.ui?.updateSidebar();
+          }
+          return;
+        }
+
         const channelId = data.channelId || this.state.activeChannelId || 'default';
         const msg = await this.messageStore.createMessage(channelId, peerId, content);
         msg.timestamp = data.timestamp;
@@ -284,8 +332,107 @@ export class ChatController {
     };
   }
 
-  private handleSyncMessage(_peerId: string, _msg: unknown): void {
-    console.log('Sync message from', _peerId, _msg);
+  private handleSyncMessage(_peerId: string, msg: any): void {
+    console.log('Sync message from', _peerId, msg);
+
+    // DEP-002: Handle peer-exchange messages
+    if (msg.sync?.type === 'peer-exchange' && msg.workspaceId) {
+      const discovery = this.serverDiscovery.get(msg.workspaceId);
+      if (discovery && msg.sync.servers) {
+        discovery.mergeReceivedServers(msg.sync.servers);
+        this.saveServerDiscovery(msg.workspaceId); // Persist updated state
+        console.log(`[PEX] Merged ${msg.sync.servers.length} servers from ${_peerId.slice(0, 8)}`);
+      }
+    }
+  }
+
+  // =========================================================================
+  // DEP-002: Peer Exchange (PEX)
+  // =========================================================================
+
+  /**
+   * Get or create ServerDiscovery for a workspace
+   */
+  private getServerDiscovery(workspaceId: string, primaryServer: string): ServerDiscovery {
+    if (!this.serverDiscovery.has(workspaceId)) {
+      const discovery = new ServerDiscovery(workspaceId, primaryServer);
+      this.serverDiscovery.set(workspaceId, discovery);
+    }
+    return this.serverDiscovery.get(workspaceId)!;
+  }
+
+  /**
+   * Start periodic PEX broadcasts (every 5 minutes)
+   */
+  startPEXBroadcasts(): void {
+    if (this.pexBroadcastInterval) return;
+
+    const broadcastPEX = () => {
+      for (const [workspaceId, discovery] of this.serverDiscovery) {
+        const servers = discovery.getHandshakeServers();
+        if (servers.length === 0) continue;
+
+        // Broadcast to all connected peers in this workspace
+        const connectedPeers = Array.from(this.state.connectedPeers);
+        for (const peerId of connectedPeers) {
+          this.transport.send(peerId, {
+            type: 'workspace-sync',
+            workspaceId,
+            sync: {
+              type: 'peer-exchange',
+              servers,
+            },
+          });
+        }
+      }
+    };
+
+    // Broadcast every 5 minutes
+    this.pexBroadcastInterval = window.setInterval(broadcastPEX, 5 * 60 * 1000);
+    console.log('[PEX] Started periodic broadcasts (every 5 minutes)');
+  }
+
+  /**
+   * Stop periodic PEX broadcasts
+   */
+  stopPEXBroadcasts(): void {
+    if (this.pexBroadcastInterval) {
+      clearInterval(this.pexBroadcastInterval);
+      this.pexBroadcastInterval = null;
+    }
+  }
+
+  /**
+   * Save ServerDiscovery state to IndexedDB
+   */
+  private async saveServerDiscovery(workspaceId: string): Promise<void> {
+    const discovery = this.serverDiscovery.get(workspaceId);
+    if (!discovery) return;
+
+    const json = discovery.toJSON();
+    await this.persistentStore.saveSetting(`pex:${workspaceId}`, JSON.stringify(json));
+  }
+
+  /**
+   * Restore ServerDiscovery state from IndexedDB
+   */
+  private async restoreServerDiscovery(workspaceId: string, primaryServer: string): Promise<void> {
+    const saved = await this.persistentStore.getSetting(`pex:${workspaceId}`);
+    if (!saved) {
+      // No saved state, create new
+      this.getServerDiscovery(workspaceId, primaryServer);
+      return;
+    }
+
+    try {
+      const json = JSON.parse(saved);
+      const discovery = ServerDiscovery.fromJSON(json, primaryServer);
+      this.serverDiscovery.set(workspaceId, discovery);
+      console.log(`[PEX] Restored ${discovery.getRankedServers().length} servers for workspace ${workspaceId}`);
+    } catch (err) {
+      console.error('[PEX] Failed to restore server discovery:', err);
+      this.getServerDiscovery(workspaceId, primaryServer);
+    }
   }
 
   // =========================================================================
@@ -300,6 +447,10 @@ export class ChatController {
     console.log('[DecentChat] restoreFromStorage: found', workspaces.length, 'workspaces');
     for (const ws of workspaces) {
       this.workspaceManager.importWorkspace(ws);
+
+      // DEP-002: Restore server discovery for this workspace
+      // TODO: Get primary server from workspace metadata
+      await this.restoreServerDiscovery(ws.id, 'wss://localhost:9000');
 
       for (const channel of ws.channels) {
         const messages = await this.persistentStore.getChannelMessages(channel.id);
@@ -324,6 +475,11 @@ export class ChatController {
 
         }
       }
+    }
+
+    // DEP-002: Start periodic PEX broadcasts
+    if (workspaces.length > 0) {
+      this.startPEXBroadcasts();
     }
   }
 
@@ -410,15 +566,47 @@ export class ChatController {
   // =========================================================================
 
   createWorkspace(name: string, alias: string): Workspace {
-    return this.workspaceManager.createWorkspace(
+    const ws = this.workspaceManager.createWorkspace(
       name,
       this.state.myPeerId,
       alias,
       this.myPublicKey,
     );
+
+    // DEP-002: Initialize server discovery for new workspace
+    // TODO: Get primary server from config
+    this.getServerDiscovery(ws.id, 'wss://localhost:9000');
+    this.startPEXBroadcasts();
+
+    return ws;
   }
 
-  joinWorkspace(_code: string, _alias: string, peerId: string): void {
+  joinWorkspace(code: string, alias: string, peerId: string): void {
+    console.log('[DecentChat] joinWorkspace called:', { code, alias, peerId, hasUI: !!this.ui });
+    // Create the workspace locally for the joining user
+    const ws = this.workspaceManager.createWorkspace(
+      code, // use invite code as workspace name (will be updated from peer)
+      this.state.myPeerId,
+      alias,
+      this.myPublicKey,
+    );
+
+    // DEP-002: Initialize server discovery for joined workspace
+    // TODO: Get primary server from invite URI
+    this.getServerDiscovery(ws.id, 'wss://localhost:9000');
+    this.startPEXBroadcasts();
+
+    // Set as active workspace
+    this.state.activeWorkspaceId = ws.id;
+    this.state.activeChannelId = ws.channels[0]?.id || null;
+
+    // Persist the workspace
+    this.persistWorkspace(ws.id);
+
+    // Render the app UI
+    this.ui?.renderApp();
+
+    // Connect to the peer who invited us
     this.transport.connect(peerId);
   }
 
@@ -442,6 +630,138 @@ export class ChatController {
       this.state.myPeerId,
       peerId,
     );
+  }
+
+  // =========================================================================
+  // Contacts
+  // =========================================================================
+
+  async addContact(contact: Contact): Promise<void> {
+    await this.contactStore.add(contact);
+    await this.persistentStore.saveContact(contact);
+    this.ui?.updateSidebar();
+  }
+
+  async removeContact(peerId: string): Promise<void> {
+    await this.contactStore.remove(peerId);
+    await this.persistentStore.deleteContact(peerId);
+    this.ui?.updateSidebar();
+  }
+
+  async getContacts(): Promise<Contact[]> {
+    return this.contactStore.list();
+  }
+
+  // =========================================================================
+  // Standalone Direct Messages
+  // =========================================================================
+
+  async startDirectMessage(contactPeerId: string): Promise<DirectConversation> {
+    const conv = await this.directConversationStore.create(contactPeerId);
+    await this.persistentStore.saveDirectConversation(conv);
+    this.ui?.updateSidebar();
+    return conv;
+  }
+
+  async getDirectConversations(): Promise<DirectConversation[]> {
+    return this.directConversationStore.list();
+  }
+
+  async sendDirectMessage(conversationId: string, content: string, threadId?: string): Promise<void> {
+    if (!content.trim()) return;
+
+    const conv = await this.directConversationStore.get(conversationId);
+    if (!conv) return;
+
+    const msg = await this.messageStore.createMessage(
+      conversationId,
+      this.state.myPeerId,
+      content.trim(),
+      'text',
+      threadId,
+    );
+
+    const result = await this.messageStore.addMessage(msg);
+    if (!result.success) {
+      this.ui?.showToast('Failed to create message: ' + result.error, 'error');
+      return;
+    }
+
+    const crdt = this.getOrCreateCRDT(conversationId);
+    const crdtMsg = crdt.createMessage(conversationId, content.trim(), 'text', threadId);
+    (msg as any).vectorClock = crdtMsg.vectorClock;
+
+    await this.persistMessage(msg);
+    await this.directConversationStore.updateLastMessage(conversationId, msg.timestamp);
+    await this.persistentStore.saveDirectConversation(conv);
+
+    if (conversationId === this.state.activeChannelId) {
+      if (threadId && this.state.threadOpen) {
+        this.ui?.renderThreadMessages();
+      } else if (!threadId) {
+        this.ui?.appendMessageToDOM(msg);
+      }
+    }
+
+    // Encrypt and send to the contact
+    const peerId = conv.contactPeerId;
+    try {
+      const envelope = await this.messageProtocol!.encryptMessage(peerId, content.trim(), 'text');
+      (envelope as any).channelId = conversationId;
+      (envelope as any).threadId = threadId;
+      (envelope as any).vectorClock = (msg as any).vectorClock;
+      (envelope as any).isDirect = true;
+
+      if (this.state.readyPeers.has(peerId)) {
+        this.transport.send(peerId, envelope);
+      } else {
+        await this.offlineQueue.enqueue(peerId, envelope);
+      }
+    } catch (err) {
+      console.error('Direct message send failed:', err);
+    }
+  }
+
+  async restoreContacts(): Promise<void> {
+    const contacts = await this.persistentStore.getAllContacts();
+    for (const c of contacts) {
+      await this.contactStore.add(c);
+    }
+
+    const conversations = await this.persistentStore.getAllDirectConversations();
+    for (const conv of conversations) {
+      await this.directConversationStore.create(conv.contactPeerId);
+      // Restore the actual conversation object with its ID
+      const existing = await this.directConversationStore.getByContact(conv.contactPeerId);
+      if (existing && existing.id !== conv.id) {
+        // The in-memory store generated a new ID; we need the persisted one
+        await this.directConversationStore.remove(existing.id);
+      }
+    }
+
+    // Re-import persisted conversations directly to preserve IDs
+    for (const conv of conversations) {
+      (this.directConversationStore as any).conversations?.set(conv.id, conv);
+      // Restore messages for this conversation
+      const messages = await this.persistentStore.getChannelMessages(conv.id);
+      const crdt = this.getOrCreateCRDT(conv.id);
+      for (const msg of messages) {
+        try { await this.messageStore.addMessage(msg); } catch {}
+        try {
+          const crdtMsg = {
+            id: msg.id,
+            channelId: msg.channelId,
+            senderId: msg.senderId,
+            content: msg.content,
+            type: (msg.type || 'text') as any,
+            vectorClock: msg.vectorClock || {},
+            wallTime: msg.timestamp,
+            prevHash: msg.prevHash || '',
+          };
+          crdt.addMessage(crdtMsg);
+        } catch {}
+      }
+    }
   }
 
   // =========================================================================
