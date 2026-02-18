@@ -156,8 +156,9 @@ async function init(): Promise<void> {
     ui.updateTypingIndicator(text);
   };
 
-  // Request notification permission
-  ctrl.notifications.requestPermission();
+  // Don't request notification permission automatically (browser security restriction)
+  // User can enable via Settings or we'll ask on first message
+  // ctrl.notifications.requestPermission();
 
   try {
     // Initialize storage — PersistentStore is the primary store.

@@ -233,7 +233,14 @@ export class SettingsPanel {
   /**
    * Apply setting that has immediate visual effect
    */
-  private applySettingImmediately(key: string, value: any): void {
+  private async applySettingImmediately(key: string, value: any): Promise<void> {
+    if (key === 'notifications' && value === true) {
+      // Request notification permission when user enables notifications
+      if ('Notification' in window && Notification.permission === 'default') {
+        await Notification.requestPermission();
+      }
+    }
+    
     if (key === 'theme') {
       if (value === 'auto') {
         document.documentElement.removeAttribute('data-theme');
