@@ -144,6 +144,13 @@ export class ChatController {
     this.ui = ui;
   }
 
+  private tracePrefix(): string {
+    const alias = (this.state.myAlias || '').trim();
+    if (/^alice$/i.test(alias)) return '[TRACE Alice]';
+    if (/^bob$/i.test(alias)) return '[TRACE Bob]';
+    return `[TRACE ${alias || this.state.myPeerId.slice(0, 8)}]`;
+  }
+
   // =========================================================================
   // Transport event wiring
   // =========================================================================
@@ -170,6 +177,11 @@ export class ChatController {
 
     this.transport.onMessage = async (peerId, rawData) => {
       const data = rawData as any;
+      console.log(this.tracePrefix(), 'onMessage inbound', {
+        fromPeerId: peerId,
+        type: data?.type,
+        channelId: data?.channelId,
+      });
 
       // Rate limit + validate before any processing
       const guardResult = this.messageGuard.check(peerId, data);
@@ -574,6 +586,12 @@ export class ChatController {
   // =========================================================================
 
   async sendMessage(content: string, threadId?: string): Promise<void> {
+    const workspacePeers = this.getWorkspaceRecipientPeerIds();
+    console.log(this.tracePrefix(), 'sendMessage entry', {
+      content: content.slice(0, 200),
+      activeChannelId: this.state.activeChannelId,
+      workspacePeers,
+    });
     console.log('[DecentChat] sendMessage called:', { content: content.slice(0, 50), channelId: this.state.activeChannelId, threadId });
     if (!content.trim() || !this.state.activeChannelId) return;
 
@@ -613,6 +631,10 @@ export class ChatController {
         (envelope as any).vectorClock = (msg as any).vectorClock;
 
         if (this.state.readyPeers.has(peerId)) {
+          console.log(this.tracePrefix(), 'before transport.send', {
+            peerId,
+            envelope,
+          });
           this.transport.send(peerId, envelope);
         } else {
           await this.offlineQueue.enqueue(peerId, envelope);
@@ -916,7 +938,14 @@ export class ChatController {
 
   /** Send a message to all workspace peers */
   private broadcastToWorkspacePeers(data: any): void {
-    for (const peerId of this.getWorkspaceRecipientPeerIds()) {
+    const recipients = this.getWorkspaceRecipientPeerIds();
+    console.log(this.tracePrefix(), 'broadcastToWorkspacePeers', {
+      recipients,
+      readyPeers: Array.from(this.state.readyPeers),
+      type: data?.type,
+      channelId: data?.channelId,
+    });
+    for (const peerId of recipients) {
       if (this.state.readyPeers.has(peerId)) {
         try { this.transport.send(peerId, data); } catch {}
       }

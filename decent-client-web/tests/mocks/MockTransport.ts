@@ -31,6 +31,13 @@ export function getMockTransportScript(relayUrl: string): string {
       this._pendingConnects = new Map();
     }
 
+    _tracePrefix() {
+      const id = String(this._myPeerId || '');
+      if (/alice/i.test(id)) return '[TRACE Alice]';
+      if (/bob/i.test(id)) return '[TRACE Bob]';
+      return '[TRACE ' + (id ? id.slice(0, 8) : 'unknown') + ']';
+    }
+
     async init(peerId) {
       const id = peerId || crypto.randomUUID();
       this._myPeerId = id;
@@ -48,6 +55,12 @@ export function getMockTransportScript(relayUrl: string): string {
 
         this._ws.onmessage = (event) => {
           const msg = JSON.parse(event.data);
+          console.log(this._tracePrefix(), 'WS relay onmessage', {
+            relayType: msg && msg.type,
+            from: msg && msg.from,
+            targetPeerId: msg && msg.targetPeerId,
+            innerType: msg && msg.data && msg.data.type,
+          });
           this._handleRelayMessage(msg);
         };
 
@@ -102,8 +115,19 @@ export function getMockTransportScript(relayUrl: string): string {
           break;
 
         case '__data':
+          console.log(this._tracePrefix(), 'WebSocket __data relay', {
+            from: msg.from,
+            type: msg.data && msg.data.type,
+            channelId: msg.data && msg.data.channelId,
+          });
           console.log('[MockTransport] Data from ' + msg.from + ', type=' + (msg.data && msg.data.type));
-          if (this.onMessage) this.onMessage(msg.from, msg.data);
+          if (this.onMessage) {
+            console.log(this._tracePrefix(), 'onMessage callback', {
+              from: msg.from,
+              type: msg.data && msg.data.type,
+            });
+            this.onMessage(msg.from, msg.data);
+          }
           break;
 
         case '__error':
@@ -157,6 +181,11 @@ export function getMockTransportScript(relayUrl: string): string {
     send(peerId, data) {
       if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return false;
       if (!this._connectedPeers.has(peerId)) return false;
+      console.log(this._tracePrefix(), 'send()', {
+        targetPeerId: peerId,
+        type: data && data.type,
+        channelId: data && data.channelId,
+      });
 
       this._ws.send(JSON.stringify({
         type: '__data',

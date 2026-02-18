@@ -7,6 +7,7 @@
  */
 
 import './ui/styles/main.css';
+import './ui/styles/tooltips.css';
 
 import { ChatController } from './app/ChatController';
 import { UIRenderer } from './ui/UIRenderer';

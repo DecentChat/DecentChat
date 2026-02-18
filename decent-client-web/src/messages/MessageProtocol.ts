@@ -99,6 +99,12 @@ export class MessageProtocol {
     this.myPeerId = myPeerId;
   }
 
+  private tracePrefix(): string {
+    if (/alice/i.test(this.myPeerId)) return '[TRACE Alice]';
+    if (/bob/i.test(this.myPeerId)) return '[TRACE Bob]';
+    return `[TRACE ${this.myPeerId.slice(0, 8)}]`;
+  }
+
   async init(signingKeyPair: KeyPair): Promise<void> {
     this._signingKeyPair = signingKeyPair;
     // Pre-generate a DH key pair for ratchet init (Bob's role)
@@ -205,6 +211,7 @@ export class MessageProtocol {
     type: 'text' | 'file' | 'system' | 'handshake' = 'text',
     metadata?: { fileName?: string; fileSize?: number; mimeType?: string }
   ): Promise<MessageEnvelope> {
+    console.log(this.tracePrefix(), 'encryptMessage input', { peerId, content, type });
     if (!this._signingKeyPair) throw new Error('Signing key pair not initialized');
     const signature = await this.cipher.sign(content, this._signingKeyPair.privateKey);
 
@@ -214,7 +221,7 @@ export class MessageProtocol {
       const ratchetMsg = await DoubleRatchet.encrypt(ratchetState, content);
       await this.persistState(peerId);
 
-      return {
+      const envelope = {
         id: this.generateMessageId(),
         timestamp: Date.now(),
         sender: this.myPeerId,
@@ -224,10 +231,14 @@ export class MessageProtocol {
         protocolVersion: 2,
         metadata,
       };
+      console.log(this.tracePrefix(), 'encryptMessage envelope created', { peerId, envelope });
+      return envelope;
     }
 
     // Fallback to legacy (Bob before first ratchet message, or old peers)
-    return this.encryptLegacy(peerId, content, type, signature, metadata);
+    const envelope = await this.encryptLegacy(peerId, content, type, signature, metadata);
+    console.log(this.tracePrefix(), 'encryptMessage envelope created', { peerId, envelope });
+    return envelope;
   }
 
   private async encryptLegacy(
@@ -258,19 +269,26 @@ export class MessageProtocol {
     envelope: MessageEnvelope | any,
     peerPublicKey: CryptoKey
   ): Promise<string | null> {
+    console.log(this.tracePrefix(), 'decryptMessage envelope received', { peerId, envelope });
     try {
       // Detect protocol version
       if (envelope.protocolVersion === 2 && envelope.ratchet) {
-        return await this.decryptRatchet(peerId, envelope as RatchetEnvelope, peerPublicKey);
+        const content = await this.decryptRatchet(peerId, envelope as RatchetEnvelope, peerPublicKey);
+        console.log(this.tracePrefix(), 'decryptMessage content', { peerId, content });
+        return content;
       }
 
       // Legacy path
-      return await this.decryptLegacy(peerId, envelope as LegacyEnvelope, peerPublicKey);
+      const content = await this.decryptLegacy(peerId, envelope as LegacyEnvelope, peerPublicKey);
+      console.log(this.tracePrefix(), 'decryptMessage content', { peerId, content });
+      return content;
     } catch (e) {
       // If ratchet decrypt fails, try legacy as final fallback
       if (envelope.encrypted) {
         try {
-          return await this.decryptLegacy(peerId, envelope as any, peerPublicKey);
+          const content = await this.decryptLegacy(peerId, envelope as any, peerPublicKey);
+          console.log(this.tracePrefix(), 'decryptMessage content (legacy fallback)', { peerId, content });
+          return content;
         } catch {}
       }
       console.error(`[Ratchet] Decrypt failed for ${peerId.slice(0, 8)}:`, e);

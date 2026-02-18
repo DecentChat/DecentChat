@@ -99,6 +99,13 @@ export class UIRenderer {
     this.refreshContactsCache();
   }
 
+  private tracePrefix(): string {
+    const alias = (this.state.myAlias || '').trim();
+    if (/^alice$/i.test(alias)) return '[TRACE Alice]';
+    if (/^bob$/i.test(alias)) return '[TRACE Bob]';
+    return `[TRACE ${alias || this.state.myPeerId.slice(0, 8)}]`;
+  }
+
   /** Refresh the cached contacts/conversations from the async stores */
   async refreshContactsCache(): Promise<void> {
     const [contacts, conversations] = await Promise.all([
@@ -514,6 +521,11 @@ export class UIRenderer {
   }
 
   appendMessageToDOM(msg: PlaintextMessage, container?: HTMLElement): void {
+    console.log(this.tracePrefix(), 'appendMessageToDOM', {
+      id: msg.id,
+      content: msg.content,
+      channelId: msg.channelId,
+    });
     const list = container || document.getElementById('messages-list');
     if (!list) {
       console.error('[DecentChat] messages-list element not found! Cannot render message:', msg.id);

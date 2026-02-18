@@ -1098,10 +1098,16 @@ body {
   border-radius: 100px;
   cursor: pointer;
   transition: all 0.15s;
+  color: var(--text); /* Make count more visible */
+  font-weight: 500; /* Slightly bolder for better contrast */
 }
 
 .reaction-pill:hover { background: var(--bg-hover); border-color: var(--border); }
-.reaction-pill.mine { background: rgba(108, 92, 231, 0.12); border-color: var(--primary); }
+.reaction-pill.mine { 
+  background: rgba(108, 92, 231, 0.12); 
+  border-color: var(--primary);
+  color: var(--text); /* Ensure count is visible even when highlighted */
+}
 
 /* === Search Panel === */
 .search-panel {
