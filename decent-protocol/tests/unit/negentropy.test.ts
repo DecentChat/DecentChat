@@ -111,12 +111,7 @@ test('Negentropy - One-Sided > Alice has everything, Bob has nothing', async () 
   expect(result.need.length).toBe(100);
 });
 
-test.skip('Negentropy - Sparse Diff > finds scattered differences [KNOWN LIMITATION]', async () => {
-  // KNOWN LIMITATION: Sparse differences (every Nth item missing) require
-  // very deep subdivision or full enumeration. In practice, real message sync
-  // doesn't exhibit this pattern - messages are usually clustered.
-  // This would require O(log n) rounds which defeats the O(differences) goal.
-  
+test('Negentropy - Sparse Diff > finds scattered differences', async () => {
   const aliceItems = createItems(100);
   const bobItems = aliceItems.filter((_, i) => i % 10 !== 0); // Bob missing every 10th
 
@@ -128,8 +123,10 @@ test.skip('Negentropy - Sparse Diff > finds scattered differences [KNOWN LIMITAT
 
   const result = await bob.reconcile(async (query) => alice.processQuery(query));
 
-  expect(result.need.length).toBeGreaterThan(0); // Finds at least some
-  // expect(result.need.length).toBe(10); // May not find all without deep subdivision
+  expect(result.need.length).toBe(10);
+  expect(result.need).toContain('msg-1');
+  expect(result.need).toContain('msg-11');
+  expect(result.need).toContain('msg-91');
 });
 
 test('Negentropy - Duplicates > handles duplicate timestamps', async () => {
@@ -205,12 +202,7 @@ test('Negentropy - Fingerprint > different items produce different fingerprints'
   expect(aliceQuery.ranges[0].fingerprint).not.toBe(bobQuery.ranges[0].fingerprint);
 });
 
-test.skip('Negentropy - Edge Cases > single item at same timestamp [KNOWN LIMITATION]', async () => {
-  // KNOWN LIMITATION: When two items have the exact same timestamp but different IDs,
-  // fingerprint-based sync can't distinguish them without full enumeration of that
-  // timestamp bucket. In practice, message IDs should be unique and timestamps should
-  // have sufficient resolution to avoid conflicts.
-  
+test('Negentropy - Edge Cases > single item at same timestamp', async () => {
   const aliceItems = createItems(100);
   const bobItems = [...aliceItems];
   bobItems[50] = { id: 'msg-DIFFERENT', timestamp: bobItems[50].timestamp };
@@ -222,11 +214,10 @@ test.skip('Negentropy - Edge Cases > single item at same timestamp [KNOWN LIMITA
   await bob.build(bobItems);
 
   const bobResult = await bob.reconcile(async (query) => alice.processQuery(query));
-  // May not find difference if items share exact timestamp
-  // expect(bobResult.need).toContain('msg-51');
+  expect(bobResult.need).toContain('msg-51');
 
   const aliceResult = await alice.reconcile(async (query) => bob.processQuery(query));
-  // expect(aliceResult.need).toContain('msg-DIFFERENT');
+  expect(aliceResult.need).toContain('msg-DIFFERENT');
 });
 
 test('Negentropy - Performance > scales to 10K messages', async () => {

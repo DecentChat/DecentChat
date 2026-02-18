@@ -185,7 +185,12 @@ export class Negentropy {
       // If range is small enough, send all our items in this range
       // Use a slightly larger threshold for enumeration to avoid infinite subdivision
       const ENUMERATE_THRESHOLD = MIN_RANGE_SIZE * 2;
-      if (localItems.length <= ENUMERATE_THRESHOLD || remoteRange.count <= ENUMERATE_THRESHOLD) {
+      const canSubdivide = remoteRange.end - remoteRange.start > 1;
+      if (
+        !canSubdivide ||
+        localItems.length <= ENUMERATE_THRESHOLD ||
+        remoteRange.count <= ENUMERATE_THRESHOLD
+      ) {
         for (const item of localItems) {
           have.add(item.id);
         }
@@ -294,7 +299,21 @@ export class Negentropy {
         break;
       }
 
-      query = { ranges: response.continueWith };
+      // Build next query from our local view of the requested sub-ranges.
+      // We must never reuse remote fingerprints directly, or all subsequent
+      // comparisons will appear to match and reconciliation terminates early.
+      const nextRanges: NegentropyRange[] = [];
+      for (const requestedRange of response.continueWith) {
+        const localItems = this.getItemsInRange(requestedRange.start, requestedRange.end);
+        const localFingerprint = await this.fingerprintItems(localItems);
+        nextRanges.push({
+          start: requestedRange.start,
+          end: requestedRange.end,
+          fingerprint: localFingerprint,
+          count: localItems.length,
+        });
+      }
+      query = { ranges: nextRanges };
     }
 
     return {
