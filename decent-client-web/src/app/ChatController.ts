@@ -453,53 +453,17 @@ export class ChatController {
     const ws = this.workspaceManager.getWorkspace(workspaceId);
     if (!ws) return '';
 
-    // Detect actual connected signaling server
-    let host = '0.peerjs.com'; // Default PeerJS cloud
-    let port = 443;
-    let secure = true;
+    // Build a clickable web URL: https://decentchat.app/join/CODE?params
+    const baseUrl = window.location.hostname === 'localhost'
+      ? `http://localhost:${window.location.port}`
+      : 'https://decentchat.app';
 
-    const servers = this.transport.getSignalingStatus?.() || [];
-    const connected = servers.find(s => s.connected);
-    if (connected && connected.url !== 'default') {
-      try {
-        const url = new URL(connected.url);
-        host = url.hostname;
-        port = parseInt(url.port) || (url.protocol === 'wss:' ? 443 : 80);
-        secure = url.protocol === 'wss:';
-      } catch {}
-    } else if (connected?.url === 'default') {
-      // _initSingleServer was used — check if we're on localhost with local server
-      const localServerConnected = servers.some(s => s.connected);
-      if (typeof window !== 'undefined' &&
-          (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-        // Check if local server (port 9000) actually worked
-        const peerConnected = this.transport.getConnectedServerCount?.() > 0;
-        if (peerConnected) {
-          // PeerJS reconnected — could be local or cloud
-          // Use the app URL as hint for local dev
-          host = window.location.hostname;
-          port = 9000;
-          secure = false;
-        }
-      }
-    }
+    const params = new URLSearchParams();
+    params.set('peer', this.state.myPeerId);
+    if (ws.name) params.set('name', ws.name);
+    if (this.myPublicKey) params.set('pk', this.myPublicKey);
 
-    const fallbackServers = host === '0.peerjs.com'
-      ? []
-      : ['wss://0.peerjs.com/peerjs'];
-
-    return InviteURI.encode({
-      host,
-      port,
-      inviteCode: ws.inviteCode,
-      secure,
-      path: '/peerjs',
-      fallbackServers,
-      turnServers: [],
-      peerId: this.state.myPeerId,
-      publicKey: this.myPublicKey,
-      workspaceName: ws.name,
-    });
+    return `${baseUrl}/join/${ws.inviteCode}?${params.toString()}`;
   }
 
   /** Toggle a reaction on a message and broadcast to peers */

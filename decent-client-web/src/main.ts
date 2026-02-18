@@ -199,8 +199,21 @@ async function init(): Promise<void> {
     // Wire transport event handlers
     ctrl.setupTransportHandlers();
 
-    // Render initial view
-    if (ctrl.workspaceManager.getAllWorkspaces().length === 0) {
+    // Check for /join/CODE invite URL
+    const joinMatch = window.location.pathname.match(/^\/join\/([A-Za-z0-9]+)/);
+    if (joinMatch) {
+      const inviteCode = joinMatch[1];
+      const params = new URLSearchParams(window.location.search);
+      const peerId = params.get('peer') || '';
+      const workspaceName = params.get('name') || '';
+
+      // Clean URL without reloading
+      window.history.replaceState({}, '', '/');
+
+      // Show welcome + auto-open join modal with pre-filled data
+      ui.renderWelcome();
+      ui.showJoinWithInvite(inviteCode, peerId, workspaceName);
+    } else if (ctrl.workspaceManager.getAllWorkspaces().length === 0) {
       ui.renderWelcome();
     } else {
       state.activeWorkspaceId = ctrl.workspaceManager.getAllWorkspaces()[0].id;

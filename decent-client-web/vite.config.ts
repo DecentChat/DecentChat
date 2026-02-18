@@ -25,6 +25,7 @@ export default defineConfig({
     '__BUILD_TIME__': JSON.stringify(new Date().toISOString()),
     '__COMMIT_HASH__': JSON.stringify(commitHash),
   },
+  appType: 'spa',  // All routes → index.html
   plugins: [
     // Generate version.json in dist
     {
