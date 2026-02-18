@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./decent-protocol" },
+    { "path": "./decent-transport-webrtc" },
+    { "path": "./decent-client-web" }
+  ]
+}

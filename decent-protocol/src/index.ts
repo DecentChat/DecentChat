@@ -1,0 +1,99 @@
+/**
+ * decent-protocol — Public API
+ *
+ * An embeddable, transport-agnostic protocol SDK for serverless,
+ * E2E-encrypted, CRDT-based peer-to-peer messaging.
+ *
+ * @packageDocumentation
+ */
+
+// ─── Crypto ────────────────────────────────────────────────────────────────
+export { HashChain, GENESIS_HASH } from './crypto/HashChain';
+export { CryptoManager } from './crypto/CryptoManager';
+export { MessageCipher } from './crypto/MessageCipher';
+
+// ─── CRDT ───────────────────────────────────────────────────────────────────
+export { VectorClock } from './crdt/VectorClock';
+export { MessageCRDT } from './crdt/MessageCRDT';
+export { MerkleTree } from './crdt/MerkleTree';
+
+// ─── Workspace ──────────────────────────────────────────────────────────────
+export { WorkspaceManager } from './workspace/WorkspaceManager';
+export { SyncProtocol } from './workspace/SyncProtocol';
+
+// ─── Messages ───────────────────────────────────────────────────────────────
+export { MessageStore } from './messages/MessageStore';
+export { OfflineQueue } from './messages/OfflineQueue';
+
+// ─── Storage ────────────────────────────────────────────────────────────────
+export { PersistentStore } from './storage/PersistentStore';
+
+// ─── Identity ───────────────────────────────────────────────────────────────
+export { IdentityManager } from './identity/Identity';
+export { SeedPhraseManager } from './identity/SeedPhrase';
+export { WORDLIST } from './identity/wordlist';
+
+// ─── Media ──────────────────────────────────────────────────────────────────
+export {
+  inferAttachmentType, calculateChunkCount, createAttachmentMeta, hashBlob,
+  CHUNK_SIZE, MAX_THUMBNAIL_SIZE,
+  MediaStore, MemoryBlobStorage,
+  ChunkedSender, ChunkedReceiver,
+  generateWaveform, encodeWaveform, decodeWaveform, waveformToSVG, getFileTypeIcon,
+} from './media';
+export type {
+  AttachmentType, AttachmentStatus, AttachmentMeta, Attachment,
+  MediaChunk, MediaRequest, MediaResponse,
+  BlobStorage, MediaStoreConfig, AutoDownloadConfig, StorageStats, WorkspaceStorageStats,
+  TransferProgress, ThumbnailResult,
+} from './media';
+
+// ─── Time ───────────────────────────────────────────────────────────────────
+export { ClockSync } from './time/ClockSync';
+export type { TimeSyncRequest, TimeSyncResponse, PeerClockInfo } from './time/ClockSync';
+
+// ─── Invite ─────────────────────────────────────────────────────────────────
+export { InviteURI, DEFAULT_PUBLIC_SERVERS } from './invite/InviteURI';
+export type { InviteData } from './invite/InviteURI';
+
+// ─── Transport ──────────────────────────────────────────────────────────────
+// ─── Security ───────────────────────────────────────────────────────────────
+export { RateLimiter, DEFAULT_LIMITS, MessageGuard } from './security';
+export type {
+  RateLimitAction, BucketConfig, ViolationSeverity,
+  Violation, PeerReputation, RateLimitResult,
+  SizeLimits, GuardResult,
+} from './security';
+
+// ─── Double Ratchet ─────────────────────────────────────────────────────────
+export { DoubleRatchet } from './crypto/DoubleRatchet';
+export type { RatchetState, RatchetHeader, RatchetMessage } from './crypto/DoubleRatchet';
+
+// ─── Migrations ─────────────────────────────────────────────────────────────
+export { MigrationRunner } from './storage/Migration';
+export type { Migration, MigrationContext, MigrationResult } from './storage/Migration';
+export { ALL_MIGRATIONS, CURRENT_SCHEMA_VERSION } from './storage/migrations';
+
+export type { Transport } from './transport/Transport';
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+export type { KeyPair, SerializedKeyPair, EncryptedData, SignedMessage } from './crypto/types';
+export type { HashableMessage, ChainVerificationResult } from './crypto/HashChain';
+export type { CRDTMessage } from './crdt/MessageCRDT';
+export type { MerkleNode } from './crdt/MerkleTree';
+export type {
+  Workspace,
+  WorkspaceMember,
+  Channel,
+  WorkspaceInvite,
+  SyncMessage,
+} from './workspace/types';
+export type { SyncEvent, SendFn, OnEvent } from './workspace/SyncProtocol';
+export type { ChatMessage, PlaintextMessage } from './messages/types';
+export type {
+  DecentIdentity,
+  IdentityBundle,
+  DeviceLinkChallenge,
+  SafetyNumber,
+} from './identity/Identity';
+export type { SeedPhraseResult, DerivedKeys } from './identity/SeedPhrase';

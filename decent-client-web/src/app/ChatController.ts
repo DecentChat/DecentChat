@@ -1,0 +1,784 @@
+/**
+ * ChatController — Business logic for the P2P Chat app.
+ *
+ * Owns the protocol instances (transport, messageProtocol, offlineQueue, CRDTs)
+ * and handles message send/receive, workspace persistence, and transport events.
+ */
+
+import {
+  CryptoManager,
+  MessageStore,
+  WorkspaceManager,
+  PersistentStore,
+  OfflineQueue,
+  MessageCRDT,
+  VectorClock,
+  MediaStore,
+  MemoryBlobStorage,
+  ChunkedSender,
+  ChunkedReceiver,
+  ClockSync,
+  MessageGuard,
+  hashBlob,
+  createAttachmentMeta,
+  CHUNK_SIZE,
+  InviteURI,
+} from 'decent-protocol';
+import type {
+  PlaintextMessage, Workspace, Channel,
+  AttachmentMeta, Attachment, MediaChunk, MediaRequest, MediaResponse,
+  TimeSyncRequest, TimeSyncResponse,
+} from 'decent-protocol';
+
+import { PeerTransport } from 'decent-transport-webrtc';
+import { KeyStore } from '../crypto/KeyStore';
+// Database.ts is kept on disk (task #8 — not deleted yet) but is no longer
+// instantiated here; PersistentStore is the single source of truth.
+import { MessageProtocol } from '../messages/MessageProtocol';
+import { PresenceManager } from '../ui/PresenceManager';
+import { ReactionManager } from '../ui/ReactionManager';
+import type { ReactionEvent } from '../ui/ReactionManager';
+import type { TypingEvent, ReadReceipt } from '../ui/PresenceManager';
+import { NotificationManager } from '../ui/NotificationManager';
+import type { AppState } from '../main';
+
+// ---------------------------------------------------------------------------
+// Interface for UI callbacks that ChatController drives
+// ---------------------------------------------------------------------------
+
+export interface UIUpdater {
+  updateSidebar: () => void;
+  updateChannelHeader: () => void;
+  appendMessageToDOM: (msg: PlaintextMessage) => void;
+  showToast: (message: string, type?: 'info' | 'error' | 'success') => void;
+  renderThreadMessages: () => void;
+}
+
+// ---------------------------------------------------------------------------
+// ChatController
+// ---------------------------------------------------------------------------
+
+export class ChatController {
+  // Protocol instances
+  readonly cryptoManager: CryptoManager;
+  readonly keyStore: KeyStore;
+  readonly transport: PeerTransport;
+  messageProtocol: MessageProtocol | null = null;
+  readonly messageStore: MessageStore;
+  readonly workspaceManager: WorkspaceManager;
+  readonly persistentStore: PersistentStore;
+  readonly offlineQueue: OfflineQueue;
+  readonly messageCRDTs: Map<string, MessageCRDT> = new Map();
+  readonly mediaStore: MediaStore;
+  readonly clockSync: ClockSync;
+  readonly messageGuard: MessageGuard;
+  readonly presence: PresenceManager;
+  readonly reactions: ReactionManager;
+  readonly notifications: NotificationManager;
+
+  /** Active chunked transfers (receiving) */
+  private activeTransfers = new Map<string, ChunkedReceiver>();
+  /** Active chunked transfers (sending) */
+  private activeSenders = new Map<string, ChunkedSender>();
+
+  myPublicKey: string = '';
+
+  private ui: UIUpdater | null = null;
+
+  constructor(private state: AppState) {
+    this.cryptoManager = new CryptoManager();
+    this.keyStore = new KeyStore(this.cryptoManager);
+    this.transport = new PeerTransport();
+    this.messageStore = new MessageStore();
+    this.workspaceManager = new WorkspaceManager();
+    this.persistentStore = new PersistentStore();
+    this.offlineQueue = new OfflineQueue({ maxAgeMs: 7 * 24 * 60 * 60 * 1000 });
+    // TODO: Replace MemoryBlobStorage with IndexedDB-backed storage for production
+    this.mediaStore = new MediaStore(new MemoryBlobStorage());
+    this.clockSync = new ClockSync();
+    this.messageGuard = new MessageGuard();
+    this.presence = new PresenceManager();
+    this.reactions = new ReactionManager();
+    this.reactions.onReactionsChanged = (messageId) => {
+      const el = document.getElementById(`reactions-${messageId}`);
+      if (el) {
+        el.innerHTML = this.reactions.renderReactions(messageId, this.state.myPeerId);
+        // Re-wire reaction pill clicks
+        el.querySelectorAll('.reaction-pill').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const emoji = (btn as HTMLElement).dataset.emoji!;
+            this.toggleReaction(messageId, emoji);
+          });
+        });
+      }
+    };
+    this.notifications = new NotificationManager();
+    this.messageGuard.rateLimiter.onViolation = (v) => {
+      console.warn(`[Guard] ${v.severity} violation from ${v.peerId.slice(0, 8)}: ${v.action}`);
+      if (v.severity === 'ban') {
+        this.ui?.showToast(`⚠️ Peer ${v.peerId.slice(0, 8)} temporarily banned (rate limit abuse)`, 'error');
+      }
+    };
+  }
+
+  /** Inject UI callbacks after construction (breaks circular dep). */
+  setUI(ui: UIUpdater): void {
+    this.ui = ui;
+  }
+
+  // =========================================================================
+  // Transport event wiring
+  // =========================================================================
+
+  setupTransportHandlers(): void {
+    this.transport.onConnect = async (peerId) => {
+      this.state.connectedPeers.add(peerId);
+      this.ui?.updateSidebar();
+
+      try {
+        const handshake = await this.messageProtocol!.createHandshake();
+        this.transport.send(peerId, { type: 'handshake', ...handshake });
+      } catch (err) {
+        console.error('Handshake failed:', err);
+      }
+    };
+
+    this.transport.onDisconnect = (peerId) => {
+      this.state.connectedPeers.delete(peerId);
+      this.state.readyPeers.delete(peerId);
+      this.messageProtocol?.clearSharedSecret(peerId);
+      this.ui?.updateSidebar();
+    };
+
+    this.transport.onMessage = async (peerId, rawData) => {
+      const data = rawData as any;
+
+      // Rate limit + validate before any processing
+      const guardResult = this.messageGuard.check(peerId, data);
+      if (!guardResult.allowed) {
+        console.warn(`[Guard] Blocked message from ${peerId.slice(0, 8)}: ${guardResult.reason}`);
+        return;
+      }
+
+      try {
+        // --- Handshake ---
+        if (data?.type === 'handshake') {
+          await this.messageProtocol!.processHandshake(peerId, data);
+          this.state.readyPeers.add(peerId);
+
+          // Persist peer — PersistentStore is the single source of truth for peers.
+          await this.persistentStore.savePeer({
+            peerId,
+            publicKey: data.publicKey,
+            lastSeen: Date.now(),
+          });
+          await this.keyStore.storePeerPublicKey(peerId, data.publicKey);
+
+          this.state.connectedPeers.add(peerId);
+          this.ui?.updateSidebar();
+          this.ui?.showToast(
+            `🔐 Encrypted connection with ${peerId.slice(0, 8)}...`,
+            'success',
+          );
+
+          await this.flushOfflineQueue(peerId);
+
+          // Start clock sync with new peer
+          const syncReq = this.clockSync.startSync(peerId);
+          this.transport.send(peerId, syncReq);
+          return;
+        }
+
+        // --- Clock sync ---
+        if (data?.type === 'time-sync-request') {
+          const response = this.clockSync.handleRequest(data as TimeSyncRequest);
+          this.transport.send(peerId, response);
+          return;
+        }
+        if (data?.type === 'time-sync-response') {
+          this.clockSync.handleResponse(peerId, data as TimeSyncResponse);
+          return;
+        }
+
+        // --- Media requests ---
+        if (data?.type === 'media-request') {
+          await this.handleMediaRequest(peerId, data as MediaRequest);
+          return;
+        }
+        if (data?.type === 'media-response') {
+          await this.handleMediaResponse(peerId, data as MediaResponse);
+          return;
+        }
+        if (data?.type === 'media-chunk') {
+          await this.handleMediaChunk(peerId, data as MediaChunk);
+          return;
+        }
+
+        // --- Reactions ---
+        if (data?.type === 'reaction') {
+          this.reactions.handleReactionEvent(data as ReactionEvent);
+          return;
+        }
+
+        // --- Typing indicators ---
+        if (data?.type === 'typing') {
+          this.presence.handleTypingEvent(data as TypingEvent);
+          return;
+        }
+
+        // --- Read receipts ---
+        if (data?.type === 'read-receipt') {
+          this.presence.handleReadReceipt(data as ReadReceipt);
+          return;
+        }
+
+        // --- Workspace sync ---
+        if (data?.type === 'workspace-sync') {
+          this.handleSyncMessage(peerId, data);
+          return;
+        }
+
+        // --- Encrypted chat message ---
+        // Use persistentStore as the single source of truth for peer public keys.
+        const peerData = await this.persistentStore.getPeer(peerId);
+        if (!peerData) return;
+
+        const peerPublicKey = await this.cryptoManager.importPublicKey(peerData.publicKey);
+        const content = await this.messageProtocol!.decryptMessage(peerId, data, peerPublicKey);
+        if (!content) return;
+
+        const channelId = data.channelId || this.state.activeChannelId || 'default';
+        const msg = await this.messageStore.createMessage(channelId, peerId, content);
+        msg.timestamp = data.timestamp;
+        (msg as any).vectorClock = data.vectorClock;
+        const result = await this.messageStore.addMessage(msg);
+
+        if (result.success) {
+          const crdt = this.getOrCreateCRDT(channelId);
+          crdt.addReceived(msg, new VectorClock(data.vectorClock || {}));
+
+          await this.persistMessage(msg);
+
+          if (channelId === this.state.activeChannelId) {
+            this.ui?.appendMessageToDOM(msg);
+          }
+
+          // Notify
+          const ws = this.state.activeWorkspaceId
+            ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId) : null;
+          const ch = ws ? this.workspaceManager.getChannel(ws.id, channelId) : null;
+          this.notifications.notify(
+            channelId,
+            ch ? (ch.type === 'dm' ? ch.name : '#' + ch.name) : 'channel',
+            peerId.slice(0, 8),
+            content,
+          );
+        }
+      } catch (error) {
+        console.error('Message processing failed:', error);
+      }
+    };
+
+    this.transport.onError = (error) => {
+      this.ui?.showToast(error.message, 'error');
+    };
+  }
+
+  private handleSyncMessage(_peerId: string, _msg: unknown): void {
+    console.log('Sync message from', _peerId, _msg);
+  }
+
+  // =========================================================================
+  // Persistence
+  // =========================================================================
+
+  async restoreFromStorage(): Promise<void> {
+    const savedAlias = await this.persistentStore.getSetting('myAlias');
+    if (savedAlias) this.state.myAlias = savedAlias;
+
+    const workspaces = await this.persistentStore.getAllWorkspaces();
+    console.log('[DecentChat] restoreFromStorage: found', workspaces.length, 'workspaces');
+    for (const ws of workspaces) {
+      this.workspaceManager.importWorkspace(ws);
+
+      for (const channel of ws.channels) {
+        const messages = await this.persistentStore.getChannelMessages(channel.id);
+        const crdt = this.getOrCreateCRDT(channel.id);
+        for (const msg of messages) {
+          try {
+            await this.messageStore.addMessage(msg);
+          } catch {}
+          try {
+            const crdtMsg = {
+              id: msg.id,
+              channelId: msg.channelId,
+              senderId: msg.senderId,
+              content: msg.content,
+              type: (msg.type || 'text') as any,
+              vectorClock: msg.vectorClock || {},
+              wallTime: msg.timestamp,
+              prevHash: msg.prevHash || '',
+            };
+            crdt.addMessage(crdtMsg);
+          } catch {}
+
+        }
+      }
+    }
+  }
+
+  async persistWorkspace(workspaceId: string): Promise<void> {
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (ws) {
+      await this.persistentStore.saveWorkspace(
+        this.workspaceManager.exportWorkspace(workspaceId),
+      );
+    }
+  }
+
+  async persistMessage(msg: PlaintextMessage): Promise<void> {
+    await this.persistentStore.saveMessage(msg);
+  }
+
+  async persistSetting(key: string, value: unknown): Promise<void> {
+    await this.persistentStore.saveSetting(key, value);
+  }
+
+  // =========================================================================
+  // Send
+  // =========================================================================
+
+  async sendMessage(content: string, threadId?: string): Promise<void> {
+    console.log('[DecentChat] sendMessage called:', { content: content.slice(0, 50), channelId: this.state.activeChannelId, threadId });
+    if (!content.trim() || !this.state.activeChannelId) return;
+
+    const msg = await this.messageStore.createMessage(
+      this.state.activeChannelId,
+      this.state.myPeerId,
+      content.trim(),
+      'text',
+      threadId,
+    );
+
+    const result = await this.messageStore.addMessage(msg);
+    console.log('[DecentChat] addMessage result:', JSON.stringify(result), 'msgId:', msg.id);
+    if (!result.success) {
+      this.ui?.showToast('Failed to create message: ' + result.error, 'error');
+      return;
+    }
+
+    const crdt = this.getOrCreateCRDT(this.state.activeChannelId);
+    const crdtMsg = crdt.createMessage(this.state.activeChannelId, content.trim(), 'text', threadId);
+    (msg as any).vectorClock = crdtMsg.vectorClock;
+
+    await this.persistMessage(msg);
+
+    if (threadId && this.state.threadOpen) {
+      this.ui?.renderThreadMessages();
+    } else if (!threadId) {
+      this.ui?.appendMessageToDOM(msg);
+    }
+
+    // Deliver to workspace peers (or queue if offline)
+    const ws = this.state.activeWorkspaceId
+      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+      : null;
+    const workspacePeers = ws
+      ? ws.members.map((m: any) => m.peerId).filter((p: string) => p !== this.state.myPeerId)
+      : [];
+
+    for (const peerId of workspacePeers) {
+      try {
+        const envelope = await this.messageProtocol!.encryptMessage(peerId, content.trim(), 'text');
+        (envelope as any).channelId = this.state.activeChannelId;
+        (envelope as any).threadId = threadId;
+        (envelope as any).vectorClock = (msg as any).vectorClock;
+
+        if (this.state.readyPeers.has(peerId)) {
+          this.transport.send(peerId, envelope);
+        } else {
+          await this.offlineQueue.enqueue(peerId, envelope);
+        }
+      } catch (err) {
+        console.error('Send to', peerId, 'failed:', err);
+      }
+    }
+  }
+
+  // =========================================================================
+  // Workspace / channel helpers (delegated to by UIRenderer callbacks)
+  // =========================================================================
+
+  createWorkspace(name: string, alias: string): Workspace {
+    return this.workspaceManager.createWorkspace(
+      name,
+      this.state.myPeerId,
+      alias,
+      this.myPublicKey,
+    );
+  }
+
+  joinWorkspace(_code: string, _alias: string, peerId: string): void {
+    this.transport.connect(peerId);
+  }
+
+  connectPeer(peerId: string): void {
+    this.transport.connect(peerId);
+  }
+
+  createChannel(name: string): { success: boolean; channel?: Channel; error?: string } {
+    if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
+    return this.workspaceManager.createChannel(
+      this.state.activeWorkspaceId,
+      name,
+      this.state.myPeerId,
+    );
+  }
+
+  createDM(peerId: string): { success: boolean; channel?: Channel } {
+    if (!this.state.activeWorkspaceId) return { success: false };
+    return this.workspaceManager.createDM(
+      this.state.activeWorkspaceId,
+      this.state.myPeerId,
+      peerId,
+    );
+  }
+
+  // =========================================================================
+  // Typing / Presence
+  // =========================================================================
+
+  /** Generate a full invite URL for a workspace */
+  generateInviteURL(workspaceId: string): string {
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (!ws) return '';
+
+    // Detect actual connected signaling server
+    let host = '0.peerjs.com'; // Default PeerJS cloud
+    let port = 443;
+    let secure = true;
+
+    const servers = this.transport.getSignalingStatus?.() || [];
+    const connected = servers.find(s => s.connected);
+    if (connected && connected.url !== 'default') {
+      try {
+        const url = new URL(connected.url);
+        host = url.hostname;
+        port = parseInt(url.port) || (url.protocol === 'wss:' ? 443 : 80);
+        secure = url.protocol === 'wss:';
+      } catch {}
+    } else if (connected?.url === 'default') {
+      // _initSingleServer was used — check if we're on localhost with local server
+      const localServerConnected = servers.some(s => s.connected);
+      if (typeof window !== 'undefined' &&
+          (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+        // Check if local server (port 9000) actually worked
+        const peerConnected = this.transport.getConnectedServerCount?.() > 0;
+        if (peerConnected) {
+          // PeerJS reconnected — could be local or cloud
+          // Use the app URL as hint for local dev
+          host = window.location.hostname;
+          port = 9000;
+          secure = false;
+        }
+      }
+    }
+
+    const fallbackServers = host === '0.peerjs.com'
+      ? []
+      : ['wss://0.peerjs.com/peerjs'];
+
+    return InviteURI.encode({
+      host,
+      port,
+      inviteCode: ws.inviteCode,
+      secure,
+      path: '/peerjs',
+      fallbackServers,
+      turnServers: [],
+      peerId: this.state.myPeerId,
+      publicKey: this.myPublicKey,
+      workspaceName: ws.name,
+    });
+  }
+
+  /** Toggle a reaction on a message and broadcast to peers */
+  toggleReaction(messageId: string, emoji: string): void {
+    const event = this.reactions.toggleReaction(messageId, emoji, this.state.myPeerId);
+    if (event && this.state.activeChannelId) {
+      event.channelId = this.state.activeChannelId;
+      this.broadcastToWorkspacePeers(event);
+    }
+  }
+
+  /** Broadcast typing indicator to workspace peers */
+  broadcastTyping(): void {
+    if (!this.state.activeChannelId) return;
+    const event = this.presence.createTypingEvent(this.state.activeChannelId, this.state.myPeerId);
+    if (!event) return; // Throttled
+
+    this.broadcastToWorkspacePeers(event);
+  }
+
+  /** Broadcast stop typing */
+  broadcastStopTyping(): void {
+    if (!this.state.activeChannelId) return;
+    const event = this.presence.createStopTypingEvent(this.state.activeChannelId, this.state.myPeerId);
+    this.broadcastToWorkspacePeers(event);
+  }
+
+  /** Send read receipt for a message */
+  sendReadReceipt(channelId: string, messageId: string): void {
+    const receipt = this.presence.createReadReceipt(channelId, messageId, this.state.myPeerId);
+    this.broadcastToWorkspacePeers(receipt);
+  }
+
+  /** Send a message to all workspace peers */
+  private broadcastToWorkspacePeers(data: any): void {
+    const ws = this.state.activeWorkspaceId
+      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+      : null;
+    if (!ws) return;
+
+    for (const member of ws.members) {
+      if (member.peerId !== this.state.myPeerId && this.state.readyPeers.has(member.peerId)) {
+        try { this.transport.send(member.peerId, data); } catch {}
+      }
+    }
+  }
+
+  // =========================================================================
+  // Media / Attachments
+  // =========================================================================
+
+  /**
+   * Send a message with a file attachment.
+   * Encrypts blob, creates metadata + thumbnail, sends message,
+   * then streams chunks to peers on demand.
+   */
+  async sendAttachment(file: File, text?: string): Promise<void> {
+    if (!this.state.activeChannelId) return;
+
+    // Read file
+    const arrayBuffer = await file.arrayBuffer();
+    const hash = await hashBlob(arrayBuffer);
+
+    // Generate thumbnail (browser-only, async)
+    let thumbnail: string | undefined;
+    let width: number | undefined;
+    let height: number | undefined;
+
+    if (file.type.startsWith('image/')) {
+      try {
+        const { generateImageThumbnail } = await import('decent-protocol');
+        const result = await generateImageThumbnail(file);
+        if (result) {
+          thumbnail = result.data;
+          width = result.width;
+          height = result.height;
+        }
+      } catch {}
+    }
+
+    // Create attachment metadata
+    const meta = await createAttachmentMeta(
+      { name: file.name, size: file.size, type: file.type },
+      hash,
+      { thumbnail, width, height },
+    );
+
+    // Encrypt blob with workspace key (for now, using self-encryption)
+    // TODO: Use workspace shared key for proper E2E
+    const encryptedBlob = arrayBuffer; // Placeholder — encrypt in production
+
+    // Store locally
+    const wsId = this.state.activeWorkspaceId || 'default';
+    await this.mediaStore.store(wsId, meta, encryptedBlob);
+
+    // Create chunked sender for when peers request it
+    this.activeSenders.set(meta.id, new ChunkedSender(meta.id, encryptedBlob));
+
+    // Send message with attachment metadata
+    const content = text || `📎 ${file.name}`;
+    const msg = await this.messageStore.createMessage(
+      this.state.activeChannelId,
+      this.state.myPeerId,
+      content,
+      'text',
+    );
+    (msg as any).attachments = [meta];
+
+    const result = await this.messageStore.addMessage(msg);
+    if (!result.success) return;
+
+    const crdt = this.getOrCreateCRDT(this.state.activeChannelId);
+    const crdtResult = crdt.createMessage(this.state.myPeerId, content);
+    (msg as any).vectorClock = crdtResult.clock.toJSON();
+
+    await this.persistMessage(msg);
+    this.ui?.appendMessageToDOM(msg);
+
+    // Send to workspace peers
+    const ws = this.state.activeWorkspaceId
+      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+      : null;
+    const workspacePeers = ws
+      ? ws.members.map((m: any) => m.peerId).filter((p: string) => p !== this.state.myPeerId)
+      : [];
+
+    for (const peerId of workspacePeers) {
+      try {
+        const envelope = await this.messageProtocol!.encryptMessage(peerId, content, 'text');
+        (envelope as any).channelId = this.state.activeChannelId;
+        (envelope as any).vectorClock = (msg as any).vectorClock;
+        (envelope as any).attachments = [meta]; // Metadata travels with message
+
+        if (this.state.readyPeers.has(peerId)) {
+          this.transport.send(peerId, envelope);
+        } else {
+          await this.offlineQueue.enqueue(peerId, envelope);
+        }
+      } catch (err) {
+        console.error('Send attachment to', peerId, 'failed:', err);
+      }
+    }
+  }
+
+  /**
+   * Request a media blob from a peer
+   */
+  requestMedia(peerId: string, attachmentId: string): void {
+    const request: MediaRequest = { type: 'media-request', attachmentId };
+    this.transport.send(peerId, request);
+  }
+
+  /** Handle incoming media request — start sending chunks */
+  private async handleMediaRequest(peerId: string, request: MediaRequest): Promise<void> {
+    const blob = await this.mediaStore.getBlob(request.attachmentId);
+
+    if (!blob) {
+      // We don't have this blob — tell the requester
+      const response: MediaResponse = {
+        type: 'media-response',
+        attachmentId: request.attachmentId,
+        available: false,
+      };
+      this.transport.send(peerId, response);
+      return;
+    }
+
+    // Create sender if needed
+    if (!this.activeSenders.has(request.attachmentId)) {
+      this.activeSenders.set(request.attachmentId, new ChunkedSender(request.attachmentId, blob));
+    }
+    const sender = this.activeSenders.get(request.attachmentId)!;
+
+    // Send availability response
+    const response: MediaResponse = {
+      type: 'media-response',
+      attachmentId: request.attachmentId,
+      available: true,
+      totalChunks: sender.totalChunks,
+    };
+    this.transport.send(peerId, response);
+
+    // Stream all chunks
+    const fromChunk = request.fromChunk ?? 0;
+    for await (const chunk of sender.chunks(fromChunk)) {
+      this.transport.send(peerId, { type: 'media-chunk', ...chunk });
+    }
+  }
+
+  /** Handle media availability response */
+  private async handleMediaResponse(peerId: string, response: MediaResponse): Promise<void> {
+    if (!response.available) {
+      this.ui?.showToast(`Media not available from ${peerId.slice(0, 8)}`, 'error');
+      return;
+    }
+
+    // Create receiver
+    const att = this.mediaStore.getAttachment(response.attachmentId);
+    if (!att) return;
+
+    const receiver = new ChunkedReceiver(
+      response.attachmentId,
+      response.totalChunks!,
+      att.hash,
+    );
+    this.activeTransfers.set(response.attachmentId, receiver);
+  }
+
+  /** Handle incoming media chunk */
+  private async handleMediaChunk(_peerId: string, chunk: MediaChunk): Promise<void> {
+    const receiver = this.activeTransfers.get(chunk.attachmentId);
+    if (!receiver) return;
+
+    try {
+      const progress = await receiver.addChunk(chunk);
+
+      // Update UI with progress
+      // TODO: show progress bar in message attachment
+
+      if (receiver.isComplete()) {
+        const blob = await receiver.assemble();
+        const wsId = this.state.activeWorkspaceId || 'default';
+        const att = this.mediaStore.getAttachment(chunk.attachmentId);
+        if (att) {
+          await this.mediaStore.store(wsId, att, blob);
+        }
+        this.activeTransfers.delete(chunk.attachmentId);
+        this.ui?.showToast(`📥 Downloaded ${att?.name || 'attachment'}`, 'success');
+      }
+    } catch (err) {
+      this.ui?.showToast(`Download failed: ${(err as Error).message}`, 'error');
+      this.activeTransfers.delete(chunk.attachmentId);
+    }
+  }
+
+  /**
+   * Get storage stats for display
+   */
+  getStorageStats() {
+    return this.mediaStore.getStats();
+  }
+
+  getWorkspaceStorageStats(workspaceId: string) {
+    return this.mediaStore.getWorkspaceStats(workspaceId);
+  }
+
+  async pruneWorkspaceMedia(workspaceId: string): Promise<number> {
+    return this.mediaStore.pruneWorkspace(workspaceId);
+  }
+
+  async pruneOldMedia(ageMs: number): Promise<number> {
+    return this.mediaStore.pruneOlderThan(ageMs);
+  }
+
+  // =========================================================================
+  // CRDT / offline queue
+  // =========================================================================
+
+  getOrCreateCRDT(channelId: string): MessageCRDT {
+    if (!this.messageCRDTs.has(channelId)) {
+      this.messageCRDTs.set(channelId, new MessageCRDT(this.state.myPeerId));
+    }
+    return this.messageCRDTs.get(channelId)!;
+  }
+
+  private async flushOfflineQueue(peerId: string): Promise<void> {
+    const queued = await this.offlineQueue.flush(peerId);
+    for (const envelope of queued) {
+      try {
+        this.transport.send(peerId, envelope);
+      } catch (err) {
+        console.error('Failed to deliver queued message to', peerId, err);
+      }
+    }
+    if (queued.length > 0) {
+      this.ui?.showToast(
+        `📬 Delivered ${queued.length} queued message${queued.length > 1 ? 's' : ''} to ${peerId.slice(0, 8)}`,
+        'success',
+      );
+    }
+  }
+}

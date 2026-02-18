@@ -1,0 +1,175 @@
+/**
+ * CryptoManager - Handles key generation, ECDH key exchange, and shared secret derivation
+ */
+
+import type { KeyPair, SerializedKeyPair } from './types';
+
+export class CryptoManager {
+  private keyPair: KeyPair | null = null;
+
+  /**
+   * Generate an ECDH key pair for key exchange
+   */
+  async generateKeyPair(): Promise<KeyPair> {
+    const keyPair = await crypto.subtle.generateKey(
+      {
+        name: 'ECDH',
+        namedCurve: 'P-256',
+      },
+      true, // extractable
+      ['deriveKey', 'deriveBits']
+    );
+
+    this.keyPair = keyPair;
+    return keyPair;
+  }
+
+  /**
+   * Get current key pair (or generate if not exists)
+   */
+  async getKeyPair(): Promise<KeyPair> {
+    if (!this.keyPair) {
+      return await this.generateKeyPair();
+    }
+    return this.keyPair;
+  }
+
+  /**
+   * Export public key to JWK format (for sharing)
+   */
+  async exportPublicKey(publicKey: CryptoKey): Promise<string> {
+    const jwk = await crypto.subtle.exportKey('jwk', publicKey);
+    return btoa(JSON.stringify(jwk));
+  }
+
+  /**
+   * Import public key from JWK format
+   */
+  async importPublicKey(publicKeyBase64: string): Promise<CryptoKey> {
+    const jwk = JSON.parse(atob(publicKeyBase64));
+    return await crypto.subtle.importKey(
+      'jwk',
+      jwk,
+      {
+        name: 'ECDH',
+        namedCurve: 'P-256',
+      },
+      true,
+      []
+    );
+  }
+
+  /**
+   * Derive shared secret from our private key and peer's public key
+   * Uses ECDH + HKDF to create AES-GCM key
+   */
+  async deriveSharedSecret(
+    peerPublicKey: CryptoKey,
+    privateKey?: CryptoKey
+  ): Promise<CryptoKey> {
+    const keyPair = await this.getKeyPair();
+    const privKey = privateKey || keyPair.privateKey;
+
+    // Derive raw bits using ECDH
+    const sharedSecret = await crypto.subtle.deriveBits(
+      {
+        name: 'ECDH',
+        public: peerPublicKey,
+      },
+      privKey,
+      256
+    );
+
+    // Import as raw key for HKDF
+    const importedSecret = await crypto.subtle.importKey(
+      'raw',
+      sharedSecret,
+      'HKDF',
+      false,
+      ['deriveKey']
+    );
+
+    // Derive AES-GCM key from shared secret using HKDF
+    return await crypto.subtle.deriveKey(
+      {
+        name: 'HKDF',
+        hash: 'SHA-256',
+        salt: new TextEncoder().encode('decent-protocol-v1'),
+        info: new TextEncoder().encode('p2p-chat-aes-gcm'),
+      },
+      importedSecret,
+      {
+        name: 'AES-GCM',
+        length: 256,
+      },
+      false, // not extractable
+      ['encrypt', 'decrypt']
+    );
+  }
+
+  /**
+   * Generate signing key pair (ECDSA)
+   */
+  async generateSigningKeyPair(): Promise<KeyPair> {
+    return await crypto.subtle.generateKey(
+      {
+        name: 'ECDSA',
+        namedCurve: 'P-256',
+      },
+      true,
+      ['sign', 'verify']
+    ) as KeyPair;
+  }
+
+  /**
+   * Serialize key pair to storable format
+   */
+  async serializeKeyPair(keyPair: KeyPair): Promise<SerializedKeyPair> {
+    const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+    const privateJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
+
+    return {
+      publicKey: btoa(JSON.stringify(publicJwk)),
+      privateKey: btoa(JSON.stringify(privateJwk)),
+    };
+  }
+
+  /**
+   * Deserialize key pair from storage
+   */
+  async deserializeKeyPair(
+    serialized: SerializedKeyPair,
+    algorithm: 'ECDH' | 'ECDSA',
+    usages: KeyUsage[]
+  ): Promise<KeyPair> {
+    const publicJwk = JSON.parse(atob(serialized.publicKey));
+    const privateJwk = JSON.parse(atob(serialized.privateKey));
+
+    const alg = algorithm === 'ECDH' 
+      ? { name: 'ECDH', namedCurve: 'P-256' }
+      : { name: 'ECDSA', namedCurve: 'P-256' };
+
+    const publicUsages = algorithm === 'ECDH' ? [] : ['verify'];
+    const privateUsages = algorithm === 'ECDH' 
+      ? ['deriveKey', 'deriveBits'] 
+      : ['sign'];
+
+    const publicKey = await crypto.subtle.importKey(
+      'jwk',
+      publicJwk,
+      alg,
+      true,
+      publicUsages as any
+    );
+
+    const privateKey = await crypto.subtle.importKey(
+      'jwk',
+      privateJwk,
+      alg,
+      true,
+      privateUsages as any
+    );
+
+    return { publicKey, privateKey };
+  }
+}

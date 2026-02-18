@@ -1,0 +1,29 @@
+{
+  "name": "decent-client-web",
+  "version": "0.1.0",
+  "description": "Reference web client for decent-protocol — serverless P2P chat PWA",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "decent-protocol": "workspace:*",
+    "decent-transport-webrtc": "workspace:*",
+    "peerjs": "^1.5.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/bun": "latest",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0",
+    "vite-plugin-pwa": "^0.20.0",
+    "workbox-window": "^7.1.0"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "decent-chat",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Monorepo for decent-protocol SDK and decent-client-web reference implementation",
+  "workspaces": [
+    "decent-protocol",
+    "decent-transport-webrtc",
+    "decent-client-web"
+  ],
+  "scripts": {
+    "test": "cd decent-protocol && bun test",
+    "test:protocol": "cd decent-protocol && bun test",
+    "build:client": "cd decent-client-web && bun run build",
+    "dev:client": "cd decent-client-web && bun run dev",
+    "dev:signal": "bun run scripts/signaling-server.ts",
+    "dev": "bun run dev:signal & bun run dev:client",
+    "test:e2e": "cd decent-client-web && bun run test:e2e",
+    "typecheck": "tsc --build tsconfig.json"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "peer": "^1.0.2",
+    "typescript": "^5.6.0"
+  }
+}
