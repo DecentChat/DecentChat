@@ -91,6 +91,16 @@ Detailed protocol specifications in `decent-protocol/spec/`:
 - `CRYPTO.md` — Cryptographic primitives and flows
 - `SYNC.md` — Vector clocks, CRDT properties, Merkle sync
 
+### DEPs (Decent Enhancement Proposals)
+
+Formal evolution process for the protocol (inspired by Bitcoin BIPs, Nostr NIPs):
+
+- **[DEP-000](specs/deps/DEP-000.md)** — DEP Process (Final)
+- **[DEP-001](specs/deps/DEP-001.md)** — Negentropy Set Reconciliation (Draft)
+- **[DEP-002](specs/deps/DEP-002.md)** — Peer Exchange for Signaling Server Discovery (Draft)
+
+See [specs/deps/](specs/deps/) for all proposals and submission process.
+
 ## Tests
 
 ```
