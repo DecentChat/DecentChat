@@ -2,6 +2,7 @@
  * Crypto layer unit tests
  */
 
+import '../setup';
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { CryptoManager, MessageCipher, KeyStore } from '../../src/crypto';
 

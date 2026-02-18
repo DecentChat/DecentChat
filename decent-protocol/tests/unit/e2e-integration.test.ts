@@ -2,6 +2,7 @@
  * End-to-end integration tests — Full flows using all protocol layers
  */
 
+import '../setup';
 import { describe, test, expect, beforeEach } from 'bun:test';
 import {
   CryptoManager, MessageCipher, MessageStore, WorkspaceManager,

@@ -3,6 +3,7 @@
  * Uses fake-indexeddb for Node/Bun environment
  */
 
+import '../setup';
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { PersistentStore } from '../../src/storage/PersistentStore';
 import { OfflineQueue } from '../../src/messages/OfflineQueue';
