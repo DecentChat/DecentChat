@@ -3,6 +3,8 @@
  */
 import { test, expect } from '@playwright/test';
 
+const SIGNAL_PORT = Number(process.env.PW_SIGNAL_PORT || '19090');
+
 test.setTimeout(60000);
 
 test('two PeerJS peers can connect via signaling server', async ({ browser }) => {
@@ -27,7 +29,7 @@ test('two PeerJS peers can connect via signaling server', async ({ browser }) =>
   page2.on('console', msg => console.log(`[P2] ${msg.text()}`));
 
   // Create raw PeerJS connections in each page
-  const peer1Id = await page1.evaluate(() => {
+  const peer1Id = await page1.evaluate((signalPort) => {
     return new Promise<string>((resolve, reject) => {
       // @ts-ignore - PeerJS should be available as import
       const Peer = (window as any).Peer;
@@ -37,14 +39,14 @@ test('two PeerJS peers can connect via signaling server', async ({ browser }) =>
         resolve(el?.textContent || 'no-peer-id');
         return;
       }
-      const peer = new Peer({ host: 'localhost', port: 9000, path: '/peerjs', secure: false, debug: 3 });
+      const peer = new Peer({ host: 'localhost', port: signalPort, path: '/peerjs', secure: false, debug: 3 });
       peer.on('open', (id: string) => resolve(id));
       peer.on('error', (err: Error) => reject(err));
     });
-  });
+  }, SIGNAL_PORT);
   console.log(`[TEST] Peer1 ID: ${peer1Id}`);
 
-  const peer2Id = await page2.evaluate(() => {
+  const peer2Id = await page2.evaluate((signalPort) => {
     return new Promise<string>((resolve, reject) => {
       const Peer = (window as any).Peer;
       if (!Peer) {
@@ -52,11 +54,11 @@ test('two PeerJS peers can connect via signaling server', async ({ browser }) =>
         resolve(el?.textContent || 'no-peer-id');
         return;
       }
-      const peer = new Peer({ host: 'localhost', port: 9000, path: '/peerjs', secure: false, debug: 3 });
+      const peer = new Peer({ host: 'localhost', port: signalPort, path: '/peerjs', secure: false, debug: 3 });
       peer.on('open', (id: string) => resolve(id));
       peer.on('error', (err: Error) => reject(err));
     });
-  });
+  }, SIGNAL_PORT);
   console.log(`[TEST] Peer2 ID: ${peer2Id}`);
 
   // Now try connecting page2 to page1 using the app's transport
@@ -82,18 +84,18 @@ test('two PeerJS peers can connect via signaling server', async ({ browser }) =>
   console.log(`[TEST] P2 status: ${p2Status}`);
 
   // Try a direct PeerJS connection test
-  const connectionResult = await page2.evaluate(async (targetPeerId) => {
+  const connectionResult = await page2.evaluate(async ({ targetPeerId, signalPort }) => {
     // We need to test the raw PeerJS connection
     // The app already has a PeerJS instance, but it's not exposed globally
     // Let's create our own to test
     try {
-      const resp = await fetch(`http://localhost:9000/peerjs/peers`);
+      const resp = await fetch(`http://localhost:${signalPort}/peerjs/peers`);
       const peers = await resp.json();
       return JSON.stringify({ connectedPeers: peers });
     } catch (e) {
       return JSON.stringify({ error: (e as Error).message });
     }
-  }, peer1Id);
+  }, { targetPeerId: peer1Id, signalPort: SIGNAL_PORT });
   
   console.log(`[TEST] Connected peers on signaling server: ${connectionResult}`);
 

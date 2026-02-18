@@ -1,0 +1,3 @@
+[test]
+root = "./decent-protocol/tests"
+preload = ["./decent-protocol/tests/setup.ts"]

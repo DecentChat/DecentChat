@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 
+const SIGNAL_PORT = Number(process.env.PW_SIGNAL_PORT || '19090');
+
 test.setTimeout(30000);
 
 test('check transport signaling connection state', async ({ browser }) => {
@@ -20,10 +22,10 @@ test('check transport signaling connection state', async ({ browser }) => {
   await page1.waitForTimeout(3000);
 
   // Check signaling server state
-  const signalingState = await page1.evaluate(() => {
+  const signalingState = await page1.evaluate((signalPort) => {
     // Try to access the signaling server list endpoint
-    return fetch('http://localhost:9000/peerjs').then(r => r.status).catch(e => -1);
-  });
+    return fetch(`http://localhost:${signalPort}/peerjs`).then(r => r.status).catch(e => -1);
+  }, SIGNAL_PORT);
   console.log(`[TEST] Signaling server HTTP status: ${signalingState}`);
 
   // Try to check the Peer object state from browser console

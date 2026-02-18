@@ -47,6 +47,9 @@ import type { TypingEvent, ReadReceipt } from '../ui/PresenceManager';
 import { NotificationManager } from '../ui/NotificationManager';
 import type { AppState } from '../main';
 
+const DEV_SIGNAL_PORT = Number((import.meta as any).env?.VITE_SIGNAL_PORT || 9000);
+const DEV_SIGNAL_WS = `ws://localhost:${DEV_SIGNAL_PORT}`;
+
 // ---------------------------------------------------------------------------
 // Interface for UI callbacks that ChatController drives
 // ---------------------------------------------------------------------------
@@ -500,7 +503,7 @@ export class ChatController {
 
       // DEP-002: Restore server discovery for this workspace
       // TODO: Get primary server from workspace metadata
-      await this.restoreServerDiscovery(ws.id, 'wss://localhost:9000');
+      await this.restoreServerDiscovery(ws.id, DEV_SIGNAL_WS);
 
       for (const channel of ws.channels) {
         const messages = await this.persistentStore.getChannelMessages(channel.id);
@@ -625,7 +628,7 @@ export class ChatController {
 
     // DEP-002: Initialize server discovery for new workspace
     // TODO: Get primary server from config
-    this.getServerDiscovery(ws.id, 'wss://localhost:9000');
+    this.getServerDiscovery(ws.id, DEV_SIGNAL_WS);
     this.startPEXBroadcasts();
 
     return ws;
@@ -645,7 +648,7 @@ export class ChatController {
     // Extract primary signaling server from invite data
     const primaryServer = inviteData
       ? `${inviteData.secure ? 'wss' : 'ws'}://${inviteData.host}:${inviteData.port}${inviteData.path || ''}`
-      : 'wss://localhost:9000'; // Fallback for dev
+      : DEV_SIGNAL_WS; // Fallback for dev
 
     console.log(`[PEX] Initializing server discovery with primary: ${primaryServer}`);
     this.getServerDiscovery(ws.id, primaryServer);

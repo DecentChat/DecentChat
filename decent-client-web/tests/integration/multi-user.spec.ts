@@ -11,6 +11,8 @@
 
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 
+const SIGNAL_PORT = Number(process.env.PW_SIGNAL_PORT || '19090');
+
 // ─── Test User Abstraction ─────────────────────────────────────────────────────
 
 interface TestUser {
@@ -152,7 +154,7 @@ test.describe('Multi-User P2P Integration', () => {
       await expect(alice.page.locator('.sidebar-header')).toContainText('Signaling Test');
 
       // Signaling server should be reachable (proves server fixture works)
-      const response = await fetch('http://localhost:9000/peerjs');
+      const response = await fetch(`http://localhost:${SIGNAL_PORT}/peerjs`);
       expect(response.status).toBeLessThan(500);
     } finally {
       await closeUser(alice);
@@ -265,7 +267,7 @@ test.describe('Multi-User P2P Integration', () => {
       expect(messages).toContain('Signaling test message');
 
       // Verify signaling server is reachable from the test process
-      const response = await fetch('http://localhost:9000/peerjs');
+      const response = await fetch(`http://localhost:${SIGNAL_PORT}/peerjs`);
       expect(response.status).toBeLessThan(500);
     } finally {
       await closeUser(alice);

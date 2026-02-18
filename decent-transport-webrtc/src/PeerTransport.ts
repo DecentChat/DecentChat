@@ -286,6 +286,9 @@ export class PeerTransport implements Transport {
 
   private _initSingleServer(peerId?: string): Promise<string> {
     return new Promise((resolve, reject) => {
+      const configuredPort = Number(
+        (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SIGNAL_PORT) || 9000,
+      );
       const peerConfig: Record<string, unknown> = {
         debug: this.config.debug ?? 1,
       };
@@ -296,7 +299,7 @@ export class PeerTransport implements Transport {
         (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
       ) {
         peerConfig.host = 'localhost';
-        peerConfig.port = 9000;
+        peerConfig.port = configuredPort;
         peerConfig.path = '/peerjs';
         peerConfig.secure = false;
       }

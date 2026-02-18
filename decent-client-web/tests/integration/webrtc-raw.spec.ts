@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 
+const SIGNAL_PORT = Number(process.env.PW_SIGNAL_PORT || '19090');
+
 test.setTimeout(60000);
 
 test('raw PeerJS connection between two browser contexts', async ({ browser }) => {
@@ -32,7 +34,7 @@ test('raw PeerJS connection between two browser contexts', async ({ browser }) =
   console.log(`[TEST] P1=${p1Id}, P2=${p2Id}`);
 
   // Set up P1 to listen for incoming data connections
-  await page1.evaluate(() => {
+  await page1.evaluate((signalPort) => {
     (window as any).__receivedData = [];
     (window as any).__connState = 'waiting';
     
@@ -42,7 +44,7 @@ test('raw PeerJS connection between two browser contexts', async ({ browser }) =
       console.log('[P1] Creating fresh PeerJS peer for test...');
       const peer = new Peer('test-p1-' + Date.now(), {
         host: 'localhost',
-        port: 9000,
+        port: signalPort,
         path: '/peerjs',
         secure: false,
         debug: 2,
@@ -71,7 +73,7 @@ test('raw PeerJS connection between two browser contexts', async ({ browser }) =
         console.log(`[P1] Peer error: ${err.type} - ${err.message}`);
       });
     });
-  });
+  }, SIGNAL_PORT);
 
   // Wait for P1's test peer to be ready
   await page1.waitForFunction(() => (window as any).__connState === 'open', { timeout: 10000 });
@@ -79,14 +81,14 @@ test('raw PeerJS connection between two browser contexts', async ({ browser }) =
   console.log(`[TEST] P1 test peer ID: ${testP1Id}`);
 
   // P2 connects to P1's test peer
-  const connectResult = await page2.evaluate(async (targetId: string) => {
+  const connectResult = await page2.evaluate(async ({ targetId, signalPort }: { targetId: string; signalPort: number }) => {
     const { Peer } = await import('peerjs');
     console.log(`[P2] Creating peer and connecting to ${targetId}...`);
     
     return new Promise<string>((resolve) => {
       const peer = new Peer('test-p2-' + Date.now(), {
         host: 'localhost',
-        port: 9000,
+        port: signalPort,
         path: '/peerjs',
         secure: false,
         debug: 2,
@@ -117,7 +119,7 @@ test('raw PeerJS connection between two browser contexts', async ({ browser }) =
         resolve(`peer-error: ${err.message}`);
       });
     });
-  }, testP1Id);
+  }, { targetId: testP1Id, signalPort: SIGNAL_PORT });
 
   console.log(`[TEST] Connect result: ${connectResult}`);
 

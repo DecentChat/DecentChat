@@ -6,6 +6,8 @@ import type { CommandParser, CommandResult } from './CommandParser';
 import type { ChatController } from '../app/ChatController';
 import type { AppState } from '../main';
 
+const DEV_SIGNAL_PORT = Number((import.meta as any).env?.VITE_SIGNAL_PORT || 9000);
+
 export function registerCommands(parser: CommandParser, ctrl: ChatController, state: AppState): void {
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -107,7 +109,7 @@ export function registerCommands(parser: CommandParser, ctrl: ChatController, st
 
       const code = ws.inviteCode || 'NONE';
       // Generate web URL instead of decent:// protocol
-      const uri = `https://decentchat.app/join/${code}?signal=localhost:9000&peer=${state.myPeerId}&name=${encodeURIComponent(ws.name)}`;
+      const uri = `https://decentchat.app/join/${code}?signal=localhost:${DEV_SIGNAL_PORT}&peer=${state.myPeerId}&name=${encodeURIComponent(ws.name)}`;
 
       return {
         handled: true,
