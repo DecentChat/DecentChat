@@ -166,12 +166,19 @@ async function init(): Promise<void> {
     
     // Update loading hint
     const loadingHint = document.querySelector('#loading .hint') as HTMLElement;
-    if (loadingHint) loadingHint.textContent = 'Loading storage...';
+    const updateHint = (text: string) => {
+      if (loadingHint) loadingHint.textContent = text;
+      console.log(`[Init] ${text}`);
+    };
     
+    updateHint('Initializing key store...');
     await ctrl.keyStore.init();
+    
+    updateHint('Opening database...');
     await ctrl.persistentStore.init();
 
     // Wire offline queue → persistent storage
+    updateHint('Connecting storage layers...');
     ctrl.offlineQueue.setPersistence(
       (peerId, data) => ctrl.persistentStore.enqueueMessage(peerId, data),
       (peerId) => ctrl.persistentStore.getQueuedMessages(peerId),
@@ -180,14 +187,17 @@ async function init(): Promise<void> {
     );
 
     // Generate / load crypto keys
+    updateHint('Loading encryption keys...');
     let ecdhKeyPair = await ctrl.keyStore.getECDHKeyPair();
     if (!ecdhKeyPair) {
+      updateHint('Generating new encryption keys...');
       ecdhKeyPair = await ctrl.cryptoManager.generateKeyPair();
       await ctrl.keyStore.storeECDHKeyPair(ecdhKeyPair);
     }
 
     let ecdsaKeyPair = await ctrl.keyStore.getECDSAKeyPair();
     if (!ecdsaKeyPair) {
+      updateHint('Generating signing keys...');
       ecdsaKeyPair = await ctrl.cryptoManager.generateSigningKeyPair();
       await ctrl.keyStore.storeECDSAKeyPair(ecdsaKeyPair);
     }
@@ -195,6 +205,7 @@ async function init(): Promise<void> {
     ctrl.myPublicKey = await ctrl.cryptoManager.exportPublicKey(ecdhKeyPair.publicKey);
 
     // Bootstrap transport + peer ID
+    updateHint('Loading settings...');
     const settingsDefaults: AppSettings = { theme: 'auto', notifications: true };
     const settings = await ctrl.persistentStore.getSettings<AppSettings>(settingsDefaults);
 

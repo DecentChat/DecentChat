@@ -5,6 +5,8 @@
  * All data stays local (no server).
  */
 
+import { CURRENT_STORAGE_VERSION, runMigrations, getStoredVersion } from './migrations';
+
 export interface PersistentStoreConfig {
   dbName?: string;
   version?: number;
@@ -17,10 +19,12 @@ export class PersistentStore {
 
   constructor(config: PersistentStoreConfig = {}) {
     this.dbName = config.dbName || 'decent-protocol';
-    this.version = config.version || 3;
+    this.version = config.version || CURRENT_STORAGE_VERSION;
   }
 
   async init(): Promise<void> {
+    console.log(`[PersistentStore] Opening database "${this.dbName}" v${this.version}`);
+    
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName, this.version);
 
@@ -77,12 +81,31 @@ export class PersistentStore {
         }
       };
 
-      request.onsuccess = (event) => {
+      request.onsuccess = async (event) => {
         this.db = (event.target as IDBOpenDBRequest).result;
-        resolve();
+        
+        try {
+          // Check if we need to run migrations
+          const storedVersion = await getStoredVersion(this.db);
+          
+          if (storedVersion < this.version) {
+            console.log(`[PersistentStore] Running migrations from v${storedVersion} to v${this.version}`);
+            await runMigrations(this.db, storedVersion, this.version);
+          } else {
+            console.log(`[PersistentStore] Storage up to date (v${storedVersion})`);
+          }
+          
+          resolve();
+        } catch (migrationError) {
+          console.error('[PersistentStore] Migration failed:', migrationError);
+          reject(new Error(`Storage migration failed: ${(migrationError as Error).message}`));
+        }
       };
 
-      request.onerror = () => reject(new Error(`Failed to open IndexedDB: ${request.error?.message}`));
+      request.onerror = () => {
+        console.error('[PersistentStore] IndexedDB open failed:', request.error);
+        reject(new Error(`Failed to open IndexedDB: ${request.error?.message}`));
+      };
     });
   }
 
