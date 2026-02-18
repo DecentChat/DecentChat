@@ -220,3 +220,34 @@ async function init(): Promise<void> {
 document.addEventListener('DOMContentLoaded', () => {
   init().catch(console.error);
 });
+
+// Service Worker update detection — auto-reload on new version
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.ready.then(registration => {
+    registration.addEventListener('updatefound', () => {
+      const newWorker = registration.installing;
+      if (!newWorker) return;
+
+      newWorker.addEventListener('statechange', () => {
+        if (newWorker.state === 'activated') {
+          // New version installed and activated — show toast + reload
+          const toast = document.createElement('div');
+          toast.className = 'toast success';
+          toast.innerHTML = '🐙 Update available! Reloading...';
+          toast.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:9999;padding:12px 20px;background:#6c5ce7;color:#fff;border-radius:8px;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+          document.body.appendChild(toast);
+          setTimeout(() => window.location.reload(), 1500);
+        }
+      });
+    });
+  });
+
+  // Also handle controller change (when skipWaiting fires)
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!refreshing) {
+      refreshing = true;
+      window.location.reload();
+    }
+  });
+}

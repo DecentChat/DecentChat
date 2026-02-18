@@ -1111,10 +1111,11 @@ body.compact .messages-list { gap: 0; }
 
 /* === Welcome Logo === */
 .welcome-logo {
-  width: 120px;
-  height: 120px;
+  width: 180px;
+  height: auto;
   margin-bottom: 8px;
   filter: drop-shadow(0 4px 12px rgba(108, 92, 231, 0.3));
+  object-fit: contain;
 }
 
 [data-theme="dark"] .welcome-logo { content: url('/icons/logo-dark.png'); }
