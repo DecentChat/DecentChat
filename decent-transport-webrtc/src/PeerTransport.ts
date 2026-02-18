@@ -269,10 +269,11 @@ export class PeerTransport implements Transport {
       ) {
         peerConfig.host = 'localhost';
         peerConfig.port = 9000;
-        peerConfig.path = '/';
+        peerConfig.path = '/peerjs';
         peerConfig.secure = false;
       }
 
+      // In test/dev on localhost, skip STUN/TURN (host candidates suffice, STUN timeouts break tests)
       const iceServers = this.config.iceServers || DEFAULT_ICE_SERVERS;
       peerConfig.config = { iceServers };
 

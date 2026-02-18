@@ -9,9 +9,10 @@ import type { WorkspaceManager, MessageStore } from 'decent-protocol';
 import { EmojiPicker } from './EmojiPicker';
 import { MessageSearch } from './MessageSearch';
 import { SettingsPanel } from './SettingsPanel';
+import { QRCodeManager } from './QRCodeManager';
 import { QUICK_REACTIONS } from './ReactionManager';
 import { InviteURI } from 'decent-protocol';
-import type { PlaintextMessage } from 'decent-protocol';
+import type { PlaintextMessage, Contact, ContactURIData, DirectConversation } from 'decent-protocol';
 import type { AppState } from '../main';
 
 // ---------------------------------------------------------------------------
@@ -28,7 +29,7 @@ export interface UICallbacks {
   /** Create a new workspace and return it */
   createWorkspace: (name: string, alias: string) => import('decent-protocol').Workspace;
   /** Initiate join flow (connect to a peer with invite code) */
-  joinWorkspace: (code: string, alias: string, peerId: string) => void;
+  joinWorkspace: (code: string, alias: string, peerId: string, inviteData?: import('decent-protocol').InviteData) => void;
   /** Create a channel inside the active workspace */
   createChannel: (name: string) => { success: boolean; channel?: import('decent-protocol').Channel; error?: string };
   /** Open a DM channel */
@@ -51,6 +52,22 @@ export interface UICallbacks {
   generateInviteURL?: (workspaceId: string) => string;
   /** Settings panel action (e.g. generateSeed) */
   onSettingsAction?: (action: string) => void;
+  /** Handle scanned QR contact — add to contacts and optionally connect */
+  onQRContactScanned?: (data: ContactURIData) => void;
+  /** Get user's public key for QR code generation */
+  getMyPublicKey?: () => string;
+  /** Add a contact */
+  addContact?: (contact: Contact) => Promise<void>;
+  /** Remove a contact */
+  removeContact?: (peerId: string) => Promise<void>;
+  /** Get all contacts */
+  getContacts?: () => Promise<Contact[]>;
+  /** Start a standalone DM with a contact */
+  startDirectMessage?: (contactPeerId: string) => Promise<DirectConversation>;
+  /** Get all standalone direct conversations */
+  getDirectConversations?: () => Promise<DirectConversation[]>;
+  /** Get all workspaces for the workspace switcher */
+  getAllWorkspaces?: () => Array<import('decent-protocol').Workspace>;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,6 +78,12 @@ export class UIRenderer {
   private emojiPicker = new EmojiPicker();
   private messageSearch: MessageSearch;
   private settingsPanel: SettingsPanel | null = null;
+  private qrCodeManager: QRCodeManager;
+
+  /** Cached contacts for synchronous sidebar rendering */
+  private cachedContacts: Contact[] = [];
+  /** Cached direct conversations for synchronous sidebar rendering */
+  private cachedDirectConversations: DirectConversation[] = [];
 
   constructor(
     private state: AppState,
@@ -69,6 +92,17 @@ export class UIRenderer {
     private callbacks: UICallbacks,
   ) {
     this.messageSearch = new MessageSearch(messageStore);
+    this.qrCodeManager = new QRCodeManager({
+      onContactScanned: (data) => this.callbacks.onQRContactScanned?.(data),
+      showToast: (msg, type) => this.showToast(msg, type),
+    });
+    this.refreshContactsCache();
+  }
+
+  /** Refresh the cached contacts/conversations from the async stores */
+  refreshContactsCache(): void {
+    this.callbacks.getContacts?.().then(c => { this.cachedContacts = c; });
+    this.callbacks.getDirectConversations?.().then(c => { this.cachedDirectConversations = c; });
   }
 
   // =========================================================================
@@ -118,6 +152,9 @@ export class UIRenderer {
     const app = document.getElementById('app')!;
     app.innerHTML = `
       <div class="app-layout">
+        <div class="workspace-rail" id="workspace-rail">
+          ${this.renderWorkspaceRailHTML()}
+        </div>
         <div class="sidebar" id="sidebar">
           ${this.renderSidebarHTML()}
         </div>
@@ -160,6 +197,86 @@ export class UIRenderer {
   }
 
   // =========================================================================
+  // Workspace rail (left icon strip like Discord/Slack)
+  // =========================================================================
+
+  renderWorkspaceRailHTML(): string {
+    const allWorkspaces = this.callbacks.getAllWorkspaces?.() || [];
+    const isInDMs = this.state.activeDirectConversationId !== null && this.state.activeWorkspaceId === null;
+
+    const dmIcon = `
+      <div class="ws-rail-icon ${isInDMs ? 'active' : ''}" id="ws-rail-dms" title="Direct Messages">
+        DM
+      </div>
+      <div class="ws-rail-divider"></div>
+    `;
+
+    const wsIcons = allWorkspaces.map(ws => {
+      const isActive = ws.id === this.state.activeWorkspaceId && !isInDMs;
+      const initial = ws.name.slice(0, 2).toUpperCase();
+      return `
+        <div class="ws-rail-icon ${isActive ? 'active' : ''}" data-ws-id="${ws.id}" title="${this.escapeHtml(ws.name)}">
+          ${this.escapeHtml(initial)}
+        </div>`;
+    }).join('');
+
+    return `
+      ${dmIcon}
+      ${wsIcons}
+      <div class="ws-rail-icon ws-rail-add" id="ws-rail-add" title="Create or join workspace">
+        +
+      </div>
+    `;
+  }
+
+  private bindWorkspaceRailEvents(): void {
+    document.getElementById('ws-rail-dms')?.addEventListener('click', () => {
+      this.state.activeWorkspaceId = null;
+      this.state.activeChannelId = null;
+      this.state.activeDirectConversationId = null;
+      this.refreshContactsCache();
+      this.updateSidebar();
+      this.updateWorkspaceRail();
+      this.updateChannelHeader();
+      this.renderMessages();
+    });
+
+    document.querySelectorAll('.ws-rail-icon[data-ws-id]').forEach(el => {
+      el.addEventListener('click', () => {
+        const wsId = (el as HTMLElement).dataset.wsId!;
+        this.switchWorkspace(wsId);
+      });
+    });
+
+    document.getElementById('ws-rail-add')?.addEventListener('click', () => {
+      this.showCreateWorkspaceModal();
+    });
+  }
+
+  switchWorkspace(workspaceId: string): void {
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (!ws) return;
+
+    this.state.activeWorkspaceId = workspaceId;
+    this.state.activeDirectConversationId = null;
+    this.state.activeChannelId = ws.channels[0]?.id || null;
+    this.closeThread();
+    this.refreshContactsCache();
+    this.updateSidebar();
+    this.updateWorkspaceRail();
+    this.updateChannelHeader();
+    this.renderMessages();
+    this.updateComposePlaceholder();
+  }
+
+  updateWorkspaceRail(): void {
+    const rail = document.getElementById('workspace-rail');
+    if (!rail) return;
+    rail.innerHTML = this.renderWorkspaceRailHTML();
+    this.bindWorkspaceRailEvents();
+  }
+
+  // =========================================================================
   // Sidebar & channel header HTML generators
   // =========================================================================
 
@@ -170,6 +287,29 @@ export class UIRenderer {
     const channels = ws ? this.workspaceManager.getChannels(ws.id) : [];
     const dms = ws ? this.workspaceManager.getDMs(ws.id, this.state.myPeerId) : [];
 
+    // Build contacts section
+    const contactsHTML = this.cachedContacts.map(c => {
+      const isOnline = this.state.readyPeers.has(c.peerId);
+      return `
+        <div class="sidebar-item" data-contact-peer-id="${c.peerId}" style="font-size:13px;">
+          <span class="dm-status ${isOnline ? 'online' : ''}"></span>
+          ${this.escapeHtml(c.displayName)}
+        </div>`;
+    }).join('');
+
+    // Build standalone direct messages section
+    const directDMsHTML = this.cachedDirectConversations.map(conv => {
+      const contact = this.cachedContacts.find(c => c.peerId === conv.contactPeerId);
+      const name = contact?.displayName || conv.contactPeerId.slice(0, 12);
+      const isOnline = this.state.readyPeers.has(conv.contactPeerId);
+      const isActive = this.state.activeDirectConversationId === conv.id;
+      return `
+        <div class="sidebar-item ${isActive ? 'active' : ''}" data-direct-conv-id="${conv.id}">
+          <span class="dm-status ${isOnline ? 'online' : ''}"></span>
+          ${this.escapeHtml(name)}
+        </div>`;
+    }).join('');
+
     return `
       <div class="sidebar-header">
         <img src="/icons/icon-32.png" alt="" class="sidebar-logo" />
@@ -179,35 +319,45 @@ export class UIRenderer {
       <div class="sidebar-nav" id="sidebar-nav">
         <div class="sidebar-section">
           <div class="sidebar-section-header">
-            Channels
-            <button class="add-btn" id="add-channel-btn" title="Create channel">+</button>
+            Contacts
+            <button class="add-btn" id="add-contact-btn" title="Add contact">+</button>
           </div>
-          ${channels.map(ch => `
-            <div class="sidebar-item ${ch.id === this.state.activeChannelId ? 'active' : ''}" data-channel-id="${ch.id}">
-              <span class="channel-hash">#</span> ${this.escapeHtml(ch.name)}
-            </div>
-          `).join('')}
+          ${contactsHTML || '<div class="sidebar-item" style="font-size:12px; opacity:0.5;">No contacts yet</div>'}
         </div>
         <div class="sidebar-section">
           <div class="sidebar-section-header">
             Direct Messages
-            <button class="add-btn" id="add-dm-btn" title="New DM">+</button>
+            <button class="add-btn" id="start-dm-btn" title="Start DM">+</button>
           </div>
+          ${directDMsHTML}
           ${dms.map(dm => {
             const otherPeerId = dm.members.find((m: string) => m !== this.state.myPeerId) || '???';
             const isOnline = this.state.readyPeers.has(otherPeerId);
             return `
-              <div class="sidebar-item ${dm.id === this.state.activeChannelId ? 'active' : ''}" data-channel-id="${dm.id}">
+              <div class="sidebar-item ${dm.id === this.state.activeChannelId && !this.state.activeDirectConversationId ? 'active' : ''}" data-channel-id="${dm.id}">
                 <span class="dm-status ${isOnline ? 'online' : ''}"></span>
                 ${this.escapeHtml(otherPeerId.slice(0, 12))}
               </div>
             `;
           }).join('')}
         </div>
+        ${ws ? `
+        <div class="sidebar-section">
+          <div class="sidebar-section-header">
+            Channels
+            <button class="add-btn" id="add-channel-btn" title="Create channel">+</button>
+          </div>
+          ${channels.map(ch => `
+            <div class="sidebar-item ${ch.id === this.state.activeChannelId && !this.state.activeDirectConversationId ? 'active' : ''}" data-channel-id="${ch.id}">
+              <span class="channel-hash">#</span> ${this.escapeHtml(ch.name)}
+            </div>
+          `).join('')}
+        </div>
+        ` : ''}
         <div class="sidebar-section">
           <div class="sidebar-section-header">Peers</div>
           <div class="sidebar-item" id="connect-peer-btn" style="color: var(--sidebar-text); opacity: 0.8;">
-            ＋ Connect to peer...
+            + Connect to peer...
           </div>
           ${Array.from(this.state.connectedPeers).map(peerId => `
             <div class="sidebar-item" style="font-size:13px;">
@@ -219,9 +369,12 @@ export class UIRenderer {
       </div>
       ${ws ? `
         <div class="invite-banner" id="copy-invite" title="Click to copy invite link">
-          🔗 Copy invite link
+          Copy invite link
         </div>
       ` : ''}
+      <div class="invite-banner" id="sidebar-qr-btn" title="Show or scan QR code" style="background: rgba(9, 132, 227, 0.12);">
+        📱 QR Code
+      </div>
       <div class="sidebar-footer">
         <span class="dm-status online"></span>
         <code id="copy-peer-id" title="Click to copy Peer ID">${this.state.myPeerId.slice(0, 20)}...</code>
@@ -230,6 +383,26 @@ export class UIRenderer {
   }
 
   renderChannelHeaderHTML(): string {
+    // Check if we're in a standalone direct conversation
+    if (this.state.activeDirectConversationId) {
+      const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
+      const contact = conv ? this.cachedContacts.find(c => c.peerId === conv.contactPeerId) : null;
+      const name = contact?.displayName || conv?.contactPeerId.slice(0, 12) || 'Direct Message';
+
+      return `
+        <div class="channel-header">
+          <div class="channel-header-left">
+            <button class="icon-btn hamburger" id="hamburger-btn">☰</button>
+            <h2>${this.escapeHtml(name)}</h2>
+          </div>
+          <div class="channel-header-right">
+            <button class="icon-btn" id="search-btn" title="Search messages (Ctrl+F)">🔍</button>
+            <button class="icon-btn" id="settings-btn" title="Settings">⚙️</button>
+          </div>
+        </div>
+      `;
+    }
+
     const ws = this.state.activeWorkspaceId
       ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
       : null;
@@ -253,6 +426,7 @@ export class UIRenderer {
           ${memberCount > 0 ? `<span class="member-count">👥 ${memberCount}</span>` : ''}
         </div>
         <div class="channel-header-right">
+          <button class="icon-btn" id="qr-btn" title="QR Code">📱</button>
           <button class="icon-btn" id="search-btn" title="Search messages (Ctrl+F)">🔍</button>
           <button class="icon-btn" id="invite-btn" title="Invite code">🔗</button>
           <button class="icon-btn" id="settings-btn" title="Settings">⚙️</button>
@@ -282,13 +456,20 @@ export class UIRenderer {
     const messages = this.messageStore.getMessages(this.state.activeChannelId);
 
     if (messages.length === 0) {
-      const ws = this.state.activeWorkspaceId
-        ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-        : null;
-      const channel = ws
-        ? this.workspaceManager.getChannel(ws.id, this.state.activeChannelId!)
-        : null;
-      const channelName = channel ? (channel.type === 'dm' ? channel.name : '#' + channel.name) : 'the channel';
+      let channelName = 'the channel';
+      if (this.state.activeDirectConversationId) {
+        const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
+        const contact = conv ? this.cachedContacts.find(c => c.peerId === conv.contactPeerId) : null;
+        channelName = contact?.displayName || 'this conversation';
+      } else {
+        const ws = this.state.activeWorkspaceId
+          ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+          : null;
+        const channel = ws
+          ? this.workspaceManager.getChannel(ws.id, this.state.activeChannelId!)
+          : null;
+        channelName = channel ? (channel.type === 'dm' ? channel.name : '#' + channel.name) : 'the channel';
+      }
       list.innerHTML = `
         <div class="empty-state">
           <div class="emoji">✨</div>
@@ -422,6 +603,20 @@ export class UIRenderer {
 
   switchChannel(channelId: string): void {
     this.state.activeChannelId = channelId;
+    this.state.activeDirectConversationId = null;
+    this.closeThread();
+    this.updateSidebar();
+    this.updateChannelHeader();
+    this.renderMessages();
+    this.updateComposePlaceholder();
+    document.getElementById('sidebar')?.classList.remove('open');
+  }
+
+  /** Switch to a standalone direct conversation */
+  switchToDirectConversation(conversationId: string): void {
+    this.state.activeDirectConversationId = conversationId;
+    this.state.activeChannelId = conversationId; // channelId = conversationId for message routing
+    this.state.activeWorkspaceId = null;
     this.closeThread();
     this.updateSidebar();
     this.updateChannelHeader();
@@ -431,6 +626,17 @@ export class UIRenderer {
   }
 
   private updateComposePlaceholder(): void {
+    const input = document.getElementById('compose-input') as HTMLTextAreaElement;
+    if (!input) return;
+
+    // Standalone direct conversation
+    if (this.state.activeDirectConversationId) {
+      const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
+      const contact = conv ? this.cachedContacts.find(c => c.peerId === conv.contactPeerId) : null;
+      input.placeholder = `Message ${contact?.displayName || 'contact'}`;
+      return;
+    }
+
     const ws = this.state.activeWorkspaceId
       ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
       : null;
@@ -439,8 +645,7 @@ export class UIRenderer {
         ? this.workspaceManager.getChannel(ws.id, this.state.activeChannelId)
         : null;
 
-    const input = document.getElementById('compose-input') as HTMLTextAreaElement;
-    if (input && channel) {
+    if (channel) {
       input.placeholder =
         channel.type === 'dm' ? `Message ${channel.name}` : `Message #${channel.name}`;
     }
@@ -453,6 +658,7 @@ export class UIRenderer {
   updateSidebar(): void {
     const sidebar = document.getElementById('sidebar');
     if (!sidebar) return;
+    this.refreshContactsCache();
     sidebar.innerHTML = this.renderSidebarHTML();
     this.bindSidebarEvents();
   }
@@ -578,16 +784,27 @@ export class UIRenderer {
     });
 
     document.getElementById('sidebar-nav')?.addEventListener('click', (e) => {
+      const directConvItem = (e.target as HTMLElement).closest('.sidebar-item[data-direct-conv-id]') as HTMLElement;
+      if (directConvItem) {
+        this.switchToDirectConversation(directConvItem.dataset.directConvId!);
+        return;
+      }
       const item = (e.target as HTMLElement).closest('.sidebar-item[data-channel-id]') as HTMLElement;
       if (item) this.switchChannel(item.dataset.channelId!);
     });
 
     this.bindSidebarActionEvents();
     this.bindChannelHeaderEvents();
+    this.bindWorkspaceRailEvents();
   }
 
   private bindSidebarEvents(): void {
     document.getElementById('sidebar-nav')?.addEventListener('click', (e) => {
+      const directConvItem = (e.target as HTMLElement).closest('.sidebar-item[data-direct-conv-id]') as HTMLElement;
+      if (directConvItem) {
+        this.switchToDirectConversation(directConvItem.dataset.directConvId!);
+        return;
+      }
       const item = (e.target as HTMLElement).closest(
         '.sidebar-item[data-channel-id]',
       ) as HTMLElement;
@@ -606,6 +823,12 @@ export class UIRenderer {
     document.getElementById('add-dm-btn')?.addEventListener('click', () =>
       this.showCreateDMModal(),
     );
+    document.getElementById('add-contact-btn')?.addEventListener('click', () =>
+      this.showAddContactModal(),
+    );
+    document.getElementById('start-dm-btn')?.addEventListener('click', () =>
+      this.showStartDirectMessageModal(),
+    );
     document.getElementById('copy-peer-id')?.addEventListener('click', () => {
       navigator.clipboard.writeText(this.state.myPeerId);
       this.showToast('Peer ID copied!');
@@ -618,6 +841,7 @@ export class UIRenderer {
         this.showToast('Invite link copied!', 'success');
       }
     });
+    document.getElementById('sidebar-qr-btn')?.addEventListener('click', () => this.showMyQR());
   }
 
   private bindChannelHeaderEvents(): void {
@@ -629,6 +853,7 @@ export class UIRenderer {
         this.showToast('Invite link copied! Share it with anyone.', 'success');
       }
     });
+    document.getElementById('qr-btn')?.addEventListener('click', () => this.showMyQR());
     document.getElementById('search-btn')?.addEventListener('click', () => this.showSearchPanel());
     document.getElementById('settings-btn')?.addEventListener('click', () => this.showSettings());
     document.getElementById('hamburger-btn')?.addEventListener('click', () => {
@@ -727,7 +952,7 @@ export class UIRenderer {
         if (!alias) return;
 
         this.state.myAlias = alias;
-        this.callbacks.joinWorkspace(inviteCode, alias, peerId);
+        this.callbacks.joinWorkspace(workspaceName || inviteCode, alias, peerId);
         this.showToast(`Joining ${workspaceName || 'workspace'}...`);
       },
     );
@@ -786,8 +1011,12 @@ export class UIRenderer {
         }
 
         this.state.myAlias = alias;
-        this.callbacks.joinWorkspace(code, alias, peerId);
-        this.showToast(`Joining workspace... connecting to ${peerId.slice(0, 8)}`);
+        // Use decoded workspace name if available, otherwise use invite code
+        const wsName = (invite.includes('://') || invite.includes('/'))
+          ? ((() => { try { return InviteURI.decode(invite).workspaceName; } catch { return undefined; } })())
+          : undefined;
+        this.callbacks.joinWorkspace(wsName || code, alias, peerId!);
+        this.showToast(`Joining workspace... connecting to ${peerId!.slice(0, 8)}`);
       },
     );
   }
@@ -902,6 +1131,111 @@ export class UIRenderer {
   }
 
   // =========================================================================
+  // Contact modals
+  // =========================================================================
+
+  showAddContactModal(): void {
+    this.showModal(
+      'Add Contact',
+      `
+      <div class="form-group">
+        <label>Display Name</label>
+        <input type="text" name="displayName" placeholder="Contact's name" required />
+      </div>
+      <div class="form-group">
+        <label>Public Key (base64)</label>
+        <input type="text" name="publicKey" placeholder="Paste their public key" required />
+      </div>
+      <div class="form-group">
+        <label>Peer ID</label>
+        <input type="text" name="peerId" placeholder="Paste their Peer ID" required />
+      </div>
+      <div class="form-group">
+        <label>Signaling Server (optional)</label>
+        <input type="text" name="signalingServer" placeholder="wss://..." />
+      </div>
+    `,
+      (form) => {
+        const displayName = (form.elements.namedItem('displayName') as HTMLInputElement).value.trim();
+        const publicKey = (form.elements.namedItem('publicKey') as HTMLInputElement).value.trim();
+        const peerId = (form.elements.namedItem('peerId') as HTMLInputElement).value.trim();
+        const signalingServer = (form.elements.namedItem('signalingServer') as HTMLInputElement).value.trim();
+
+        if (!displayName || !publicKey || !peerId) {
+          this.showToast('Name, public key, and peer ID are required', 'error');
+          return;
+        }
+
+        const contact: Contact = {
+          peerId,
+          publicKey,
+          displayName,
+          signalingServers: signalingServer ? [signalingServer] : [],
+          addedAt: Date.now(),
+          lastSeen: 0,
+        };
+
+        this.callbacks.addContact?.(contact).then(() => {
+          this.refreshContactsCache();
+          this.updateSidebar();
+          this.showToast(`Added ${displayName} to contacts`, 'success');
+        });
+      },
+    );
+  }
+
+  showStartDirectMessageModal(): void {
+    if (this.cachedContacts.length === 0) {
+      this.showToast('Add a contact first to start a DM', 'error');
+      return;
+    }
+
+    const contactOptions = this.cachedContacts
+      .map(c => {
+        const isOnline = this.state.readyPeers.has(c.peerId);
+        return `<div class="sidebar-item" data-peer-id="${c.peerId}" style="background: var(--surface); margin: 4px 0; border-radius: 6px; color: var(--text); padding: 10px 12px; cursor: pointer;">
+          <span class="dm-status ${isOnline ? 'online' : ''}"></span>
+          ${this.escapeHtml(c.displayName)} (${c.peerId.slice(0, 8)})
+        </div>`;
+      })
+      .join('');
+
+    this.showModal(
+      'Start Direct Message',
+      `
+      <div class="form-group">
+        <label>Select a contact</label>
+        <div id="contact-list">${contactOptions}</div>
+        <input type="hidden" name="peerId" id="dm-contact-select" />
+      </div>
+    `,
+      (form) => {
+        const peerId = (form.elements.namedItem('peerId') as HTMLInputElement).value;
+        if (!peerId) return;
+
+        this.callbacks.startDirectMessage?.(peerId).then((conv) => {
+          this.refreshContactsCache();
+          this.switchToDirectConversation(conv.id);
+        });
+      },
+    );
+
+    setTimeout(() => {
+      document.getElementById('contact-list')?.addEventListener('click', (e) => {
+        const item = (e.target as HTMLElement).closest('[data-peer-id]') as HTMLElement;
+        if (item) {
+          (document.getElementById('dm-contact-select') as HTMLInputElement).value =
+            item.dataset.peerId!;
+          document
+            .querySelectorAll('#contact-list .sidebar-item')
+            .forEach((el) => ((el as HTMLElement).style.border = 'none'));
+          item.style.border = '2px solid var(--accent)';
+        }
+      });
+    }, 50);
+  }
+
+  // =========================================================================
   // Toast notifications
   // =========================================================================
 
@@ -994,6 +1328,25 @@ export class UIRenderer {
     overlay.querySelector('#search-close')?.addEventListener('click', () => overlay.remove());
   }
 
+  /** Show QR code with user's identity */
+  showMyQR(): void {
+    const publicKey = this.callbacks.getMyPublicKey?.();
+    if (!publicKey) {
+      this.showToast('Public key not available yet', 'error');
+      return;
+    }
+    this.qrCodeManager.showMyQR({
+      publicKey,
+      displayName: this.state.myAlias || this.state.myPeerId.slice(0, 8),
+      peerId: this.state.myPeerId,
+    });
+  }
+
+  /** Show QR scanner to add a contact */
+  showScanQR(): void {
+    this.qrCodeManager.showScanQR();
+  }
+
   /** Show settings panel */
   showSettings(): void {
     this.settingsPanel = new SettingsPanel(
@@ -1022,6 +1375,11 @@ export class UIRenderer {
 
   /** Get placeholder text for compose input */
   private getComposePlaceholder(): string {
+    if (this.state.activeDirectConversationId) {
+      const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
+      const contact = conv ? this.cachedContacts.find(c => c.peerId === conv.contactPeerId) : null;
+      return `Message ${contact?.displayName || 'contact'}`;
+    }
     if (!this.state.activeChannelId || !this.state.activeWorkspaceId) {
       return 'Message...';
     }
@@ -1145,6 +1503,10 @@ export class UIRenderer {
   }
 
   private getPeerAlias(peerId: string): string {
+    // Check contacts first
+    const contact = this.cachedContacts.find(c => c.peerId === peerId);
+    if (contact) return contact.displayName;
+
     if (!this.state.activeWorkspaceId) return peerId.slice(0, 12);
     const member = this.workspaceManager.getMember(this.state.activeWorkspaceId, peerId);
     return member?.alias || peerId.slice(0, 12);

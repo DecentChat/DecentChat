@@ -98,6 +98,46 @@ const v4_workspaceSettings: Migration = {
 };
 
 /**
+ * v5: Add ratchetStates store for Double Ratchet forward secrecy
+ * The IndexedDB object store is created by PersistentStore.init() (version bump).
+ * This migration just marks the schema version.
+ */
+const v5_doubleRatchet: Migration = {
+  version: 5,
+  description: 'Add ratchetStates store for Double Ratchet forward secrecy',
+  up: async (ctx) => {
+    ctx.log('Double Ratchet ratchetStates store added (created by IndexedDB upgrade)');
+  },
+  down: async (ctx) => {
+    // Clearing ratchet states on rollback — peers will re-handshake
+    try {
+      await ctx.clear('ratchetStates');
+    } catch {}
+    ctx.log('Cleared ratchetStates store');
+  },
+};
+
+/**
+ * v6: Add contacts and directConversations stores
+ * The IndexedDB object stores are created by PersistentStore.init() (version bump).
+ * This migration just marks the schema version.
+ */
+const v6_contacts: Migration = {
+  version: 6,
+  description: 'Add contacts and directConversations stores for standalone DMs',
+  up: async (ctx) => {
+    ctx.log('Contacts and directConversations stores added (created by IndexedDB upgrade)');
+  },
+  down: async (ctx) => {
+    try {
+      await ctx.clear('contacts');
+      await ctx.clear('directConversations');
+    } catch {}
+    ctx.log('Cleared contacts and directConversations stores');
+  },
+};
+
+/**
  * All migrations in order
  */
 export const ALL_MIGRATIONS: Migration[] = [
@@ -105,7 +145,9 @@ export const ALL_MIGRATIONS: Migration[] = [
   v2_addVectorClocks,
   v3_addAttachments,
   v4_workspaceSettings,
+  v5_doubleRatchet,
+  v6_contacts,
 ];
 
 /** Current schema version */
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 6;

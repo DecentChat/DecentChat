@@ -28,6 +28,8 @@ export interface AppState {
   activeThreadId: string | null;
   threadOpen: boolean;
   sidebarOpen: boolean;
+  /** When viewing a standalone DM (not a workspace DM), this is set */
+  activeDirectConversationId: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -45,6 +47,7 @@ async function init(): Promise<void> {
     activeThreadId: null,
     threadOpen: false,
     sidebarOpen: false,
+    activeDirectConversationId: null,
   };
 
   // Create controller (owns all protocol instances)
@@ -75,6 +78,10 @@ async function init(): Promise<void> {
           return;
         }
       }
+      // If we're in a standalone direct conversation, use the direct message path
+      if (state.activeDirectConversationId) {
+        return ctrl.sendDirectMessage(state.activeDirectConversationId, content, threadId);
+      }
       return ctrl.sendMessage(content, threadId);
     },
     sendAttachment: (file, text) => ctrl.sendAttachment(file, text),
@@ -94,13 +101,39 @@ async function init(): Promise<void> {
     toggleReaction: (msgId, emoji) => ctrl.toggleReaction(msgId, emoji),
     getSettings: async () => ctrl.persistentStore.getSettings({}),
     generateInviteURL: (wsId) => ctrl.generateInviteURL(wsId),
+    addContact: (contact) => ctrl.addContact(contact),
+    removeContact: (peerId) => ctrl.removeContact(peerId),
+    getContacts: () => ctrl.getContacts(),
+    startDirectMessage: (contactPeerId) => ctrl.startDirectMessage(contactPeerId),
+    getDirectConversations: () => ctrl.getDirectConversations(),
     onSettingsAction: async (action) => {
       if (action === 'generateSeed') {
-        const { SeedPhrase } = await import('decent-protocol');
-        const mnemonic = SeedPhrase.generate();
+        const { SeedPhraseManager } = await import('decent-protocol');
+        const seedPhrase = new SeedPhraseManager();
+        const { mnemonic } = seedPhrase.generate();
         await ctrl.persistentStore.saveSetting('seedPhrase', mnemonic);
       }
     },
+    onQRContactScanned: async (data) => {
+      // Add the contact
+      await ctrl.addContact({
+        peerId: data.peerId || `qr-${Date.now()}`,
+        publicKey: data.publicKey,
+        displayName: data.displayName,
+        signalingServers: data.signalingServers || [],
+        addedAt: Date.now(),
+        lastSeen: 0,
+      });
+      ui.refreshContactsCache();
+      ui.updateSidebar();
+      // Auto-connect if we have a peer ID
+      if (data.peerId) {
+        ctrl.connectPeer(data.peerId);
+        ui.showToast(`Connecting to ${data.displayName}...`);
+      }
+    },
+    getMyPublicKey: () => ctrl.myPublicKey,
+    getAllWorkspaces: () => ctrl.workspaceManager.getAllWorkspaces(),
   });
 
   // Give the controller a handle to the UI for push updates
@@ -110,6 +143,7 @@ async function init(): Promise<void> {
     appendMessageToDOM: (msg) => ui.appendMessageToDOM(msg),
     showToast: (message, type) => ui.showToast(message, type),
     renderThreadMessages: () => ui.renderThreadMessages(),
+    renderApp: () => ui.renderApp(),
   });
 
   // Wire typing indicator
@@ -181,6 +215,13 @@ async function init(): Promise<void> {
     state.myPeerId = myPeerId;
     state.myAlias = myPeerId.slice(0, 8);
 
+    // Expose for testing
+    if (typeof window !== 'undefined') {
+      (window as any).__ctrl = ctrl;
+      (window as any).__transport = ctrl.transport;
+      (window as any).__state = state;
+    }
+
     if (settings.myPeerId !== myPeerId) {
       settings.myPeerId = myPeerId;
       await ctrl.persistentStore.saveSettings(settings);
@@ -193,32 +234,57 @@ async function init(): Promise<void> {
     );
     await ctrl.messageProtocol.init(ecdsaKeyPair);
 
+    // Wire Double Ratchet state persistence via PersistentStore
+    ctrl.messageProtocol.setPersistence({
+      save: (peerId, state) => ctrl.persistentStore.saveRatchetState(peerId, state),
+      load: (peerId) => ctrl.persistentStore.getRatchetState(peerId),
+      delete: (peerId) => ctrl.persistentStore.deleteRatchetState(peerId),
+    });
+
     // Restore persisted workspaces / messages
     await ctrl.restoreFromStorage();
+
+    // Restore contacts and direct conversations
+    await ctrl.restoreContacts();
 
     // Wire transport event handlers
     ctrl.setupTransportHandlers();
 
     // Check for /join/CODE invite URL
     const joinMatch = window.location.pathname.match(/^\/join\/([A-Za-z0-9]+)/);
-    const pendingInvite = joinMatch ? {
+    let pendingInvite = joinMatch ? {
       code: joinMatch[1],
       peerId: new URLSearchParams(window.location.search).get('peer') || '',
       name: new URLSearchParams(window.location.search).get('name') || '',
     } : null;
 
     if (pendingInvite) {
-      // Clean URL immediately
+      // Store invite in sessionStorage BEFORE clearing URL (survives reload)
+      sessionStorage.setItem('pendingInvite', JSON.stringify(pendingInvite));
       window.history.replaceState({}, '', '/');
       console.log('[DecentChat] Invite link detected:', pendingInvite.code, pendingInvite.name);
+    } else {
+      // Check if we have a stored invite from a previous reload
+      const stored = sessionStorage.getItem('pendingInvite');
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (parsed.code) {
+            (pendingInvite as any) = parsed;
+            console.log('[DecentChat] Restored invite from session:', parsed.code);
+          }
+        } catch {}
+      }
     }
 
     if (pendingInvite) {
+      // Clear stored invite
+      sessionStorage.removeItem('pendingInvite');
       // Invite link — show welcome screen with join modal
       ui.renderWelcome();
       // Small delay to ensure DOM is ready
       setTimeout(() => {
-        ui.showJoinWithInvite(pendingInvite.code, pendingInvite.peerId, pendingInvite.name);
+        ui.showJoinWithInvite(pendingInvite!.code, pendingInvite!.peerId, pendingInvite!.name);
       }, 100);
     } else if (ctrl.workspaceManager.getAllWorkspaces().length === 0) {
       ui.renderWelcome();
@@ -241,7 +307,7 @@ document.addEventListener('DOMContentLoaded', () => {
   init().catch(console.error);
 });
 
-// Service Worker update detection — auto-reload on new version
+// Service Worker update detection — show non-intrusive toast
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.ready.then(registration => {
     registration.addEventListener('updatefound', () => {
@@ -249,25 +315,17 @@ if ('serviceWorker' in navigator) {
       if (!newWorker) return;
 
       newWorker.addEventListener('statechange', () => {
-        if (newWorker.state === 'activated') {
-          // New version installed and activated — show toast + reload
+        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+          // New version ready — show toast with reload button (don't auto-reload!)
           const toast = document.createElement('div');
-          toast.className = 'toast success';
-          toast.innerHTML = '🐙 Update available! Reloading...';
-          toast.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:9999;padding:12px 20px;background:#6c5ce7;color:#fff;border-radius:8px;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+          toast.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:9999;padding:12px 20px;background:#6c5ce7;color:#fff;border-radius:8px;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,0.3);cursor:pointer;display:flex;align-items:center;gap:8px;';
+          toast.innerHTML = '🐙 Update available! <u>Click to reload</u>';
+          toast.addEventListener('click', () => window.location.reload());
           document.body.appendChild(toast);
-          setTimeout(() => window.location.reload(), 1500);
+          // Auto-dismiss after 30s
+          setTimeout(() => toast.remove(), 30000);
         }
       });
     });
-  });
-
-  // Also handle controller change (when skipWaiting fires)
-  let refreshing = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (!refreshing) {
-      refreshing = true;
-      window.location.reload();
-    }
   });
 }

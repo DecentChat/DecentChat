@@ -1,7 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
-  testDir: './tests/e2e',
+  testDir: './tests',
   timeout: 30000,
   retries: 0,
   use: {
@@ -10,12 +10,21 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },
-  webServer: {
-    command: 'bun run dev',
-    port: 5173,
-    reuseExistingServer: true,
-    timeout: 15000,
-  },
+  webServer: [
+    {
+      command: 'bun run scripts/signaling-server.ts',
+      port: 9000,
+      reuseExistingServer: true,
+      timeout: 10000,
+      cwd: '..',
+    },
+    {
+      command: 'bun run dev',
+      port: 5173,
+      reuseExistingServer: true,
+      timeout: 15000,
+    },
+  ],
   projects: [
     {
       name: 'chromium',

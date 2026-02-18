@@ -17,7 +17,7 @@ export class PersistentStore {
 
   constructor(config: PersistentStoreConfig = {}) {
     this.dbName = config.dbName || 'decent-protocol';
-    this.version = config.version || 1;
+    this.version = config.version || 3;
   }
 
   async init(): Promise<void> {
@@ -58,6 +58,22 @@ export class PersistentStore {
         // Settings
         if (!db.objectStoreNames.contains('settings')) {
           db.createObjectStore('settings', { keyPath: 'key' });
+        }
+
+        // Ratchet states (per-peer Double Ratchet state for forward secrecy)
+        if (!db.objectStoreNames.contains('ratchetStates')) {
+          db.createObjectStore('ratchetStates', { keyPath: 'peerId' });
+        }
+
+        // Contacts (standalone, independent of workspaces)
+        if (!db.objectStoreNames.contains('contacts')) {
+          db.createObjectStore('contacts', { keyPath: 'peerId' });
+        }
+
+        // Direct conversations (standalone DMs with contacts)
+        if (!db.objectStoreNames.contains('directConversations')) {
+          const dcStore = db.createObjectStore('directConversations', { keyPath: 'id' });
+          dcStore.createIndex('contactPeerId', 'contactPeerId', { unique: true });
         }
       };
 
@@ -194,6 +210,25 @@ export class PersistentStore {
     return messages;
   }
 
+  // === Ratchet States ===
+
+  async saveRatchetState(peerId: string, state: any): Promise<void> {
+    await this.put('ratchetStates', { peerId, state, updatedAt: Date.now() });
+  }
+
+  async getRatchetState(peerId: string): Promise<any | undefined> {
+    const result = await this.get('ratchetStates', peerId);
+    return result?.state;
+  }
+
+  async deleteRatchetState(peerId: string): Promise<void> {
+    await this.delete('ratchetStates', peerId);
+  }
+
+  async getAllRatchetStates(): Promise<any[]> {
+    return this.getAll('ratchetStates');
+  }
+
   // === Settings ===
 
   async saveSetting(key: string, value: any): Promise<void> {
@@ -223,11 +258,59 @@ export class PersistentStore {
     await this.saveSetting('app-settings', settings);
   }
 
+  // === Contacts ===
+
+  async saveContact(contact: any): Promise<void> {
+    await this.put('contacts', contact);
+  }
+
+  async getContact(peerId: string): Promise<any | undefined> {
+    return this.get('contacts', peerId);
+  }
+
+  async getAllContacts(): Promise<any[]> {
+    return this.getAll('contacts');
+  }
+
+  async deleteContact(peerId: string): Promise<void> {
+    await this.delete('contacts', peerId);
+  }
+
+  // === Direct Conversations ===
+
+  async saveDirectConversation(conversation: any): Promise<void> {
+    await this.put('directConversations', conversation);
+  }
+
+  async getDirectConversation(id: string): Promise<any | undefined> {
+    return this.get('directConversations', id);
+  }
+
+  async getDirectConversationByContact(contactPeerId: string): Promise<any | undefined> {
+    return new Promise((resolve, reject) => {
+      const tx = this.getDB().transaction('directConversations', 'readonly');
+      const index = tx.objectStore('directConversations').index('contactPeerId');
+      const request = index.get(contactPeerId);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async getAllDirectConversations(): Promise<any[]> {
+    return this.getAll('directConversations');
+  }
+
+  async deleteDirectConversation(id: string): Promise<void> {
+    await this.delete('directConversations', id);
+  }
+
   // === Clear ===
 
   async clearAll(): Promise<void> {
-    const storeNames = ['workspaces', 'messages', 'identity', 'peers', 'outbox', 'settings'];
-    const tx = this.getDB().transaction(storeNames, 'readwrite');
+    const db = this.getDB();
+    const allStores = ['workspaces', 'messages', 'identity', 'peers', 'outbox', 'settings', 'ratchetStates', 'contacts', 'directConversations'];
+    const storeNames = allStores.filter(s => db.objectStoreNames.contains(s));
+    const tx = db.transaction(storeNames, 'readwrite');
     for (const name of storeNames) {
       tx.objectStore(name).clear();
     }

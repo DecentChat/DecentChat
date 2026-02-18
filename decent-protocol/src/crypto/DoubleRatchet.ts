@@ -250,7 +250,7 @@ async function trySkippedKeys(state: RatchetState, message: RatchetMessage): Pro
 async function generateDHKeyPair(): Promise<CryptoKeyPair> {
   return crypto.subtle.generateKey(
     { name: 'ECDH', namedCurve: 'P-256' },
-    false,
+    true,
     ['deriveBits'],
   );
 }
@@ -350,6 +350,93 @@ async function aesDecrypt(
     base64ToArrayBuffer(ciphertext),
   );
   return new TextDecoder().decode(decrypted);
+}
+
+// ── State Serialization (for IndexedDB persistence) ─────────────────────────
+
+/** Serialized form of RatchetState (all CryptoKey/ArrayBuffer → base64 strings) */
+export interface SerializedRatchetState {
+  dhKeyPair: { publicKey: string; privateKey: string };
+  peerDHPublicKey: string | null;
+  rootKey: string;
+  sendChainKey: string | null;
+  recvChainKey: string | null;
+  sendCount: number;
+  recvCount: number;
+  previousSendCount: number;
+  skippedKeys: Array<[string, string]>;
+}
+
+/** Serialize RatchetState for storage */
+export async function serializeRatchetState(state: RatchetState): Promise<SerializedRatchetState> {
+  const pubRaw = await crypto.subtle.exportKey('raw', state.dhKeyPair.publicKey);
+  const privJwk = await crypto.subtle.exportKey('jwk', state.dhKeyPair.privateKey);
+
+  let peerPubB64: string | null = null;
+  if (state.peerDHPublicKey) {
+    const peerRaw = await crypto.subtle.exportKey('raw', state.peerDHPublicKey);
+    peerPubB64 = arrayBufferToBase64(peerRaw);
+  }
+
+  const skipped: Array<[string, string]> = [];
+  for (const [k, v] of state.skippedKeys) {
+    skipped.push([k, arrayBufferToBase64(v)]);
+  }
+
+  return {
+    dhKeyPair: {
+      publicKey: arrayBufferToBase64(pubRaw),
+      privateKey: JSON.stringify(privJwk),
+    },
+    peerDHPublicKey: peerPubB64,
+    rootKey: arrayBufferToBase64(state.rootKey),
+    sendChainKey: state.sendChainKey ? arrayBufferToBase64(state.sendChainKey) : null,
+    recvChainKey: state.recvChainKey ? arrayBufferToBase64(state.recvChainKey) : null,
+    sendCount: state.sendCount,
+    recvCount: state.recvCount,
+    previousSendCount: state.previousSendCount,
+    skippedKeys: skipped,
+  };
+}
+
+/** Deserialize RatchetState from storage */
+export async function deserializeRatchetState(data: SerializedRatchetState): Promise<RatchetState> {
+  const publicKey = await crypto.subtle.importKey(
+    'raw',
+    base64ToArrayBuffer(data.dhKeyPair.publicKey),
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    [],
+  );
+  const privateKey = await crypto.subtle.importKey(
+    'jwk',
+    JSON.parse(data.dhKeyPair.privateKey),
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    ['deriveBits'],
+  );
+
+  let peerDHPublicKey: CryptoKey | null = null;
+  if (data.peerDHPublicKey) {
+    peerDHPublicKey = await importDHPublicKey(data.peerDHPublicKey);
+  }
+
+  const skippedKeys = new Map<string, ArrayBuffer>();
+  for (const [k, v] of data.skippedKeys) {
+    skippedKeys.set(k, base64ToArrayBuffer(v));
+  }
+
+  return {
+    dhKeyPair: { publicKey, privateKey },
+    peerDHPublicKey,
+    rootKey: base64ToArrayBuffer(data.rootKey),
+    sendChainKey: data.sendChainKey ? base64ToArrayBuffer(data.sendChainKey) : null,
+    recvChainKey: data.recvChainKey ? base64ToArrayBuffer(data.recvChainKey) : null,
+    sendCount: data.sendCount,
+    recvCount: data.recvCount,
+    previousSendCount: data.previousSendCount,
+    skippedKeys,
+  };
 }
 
 // ── Base64 Utilities ────────────────────────────────────────────────────────

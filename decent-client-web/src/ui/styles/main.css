@@ -99,6 +99,67 @@ body {
   width: 100vw;
 }
 
+/* === Workspace Rail (left icon strip) === */
+.workspace-rail {
+  width: 56px;
+  min-width: 56px;
+  background: color-mix(in srgb, var(--sidebar-bg) 85%, black);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.ws-rail-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--sidebar-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-radius 0.2s, background 0.2s;
+  flex-shrink: 0;
+}
+
+.ws-rail-icon:hover {
+  border-radius: 12px;
+  background: rgba(108, 92, 231, 0.4);
+  color: var(--sidebar-text-active);
+}
+
+.ws-rail-icon.active {
+  border-radius: 12px;
+  background: var(--primary);
+  color: #fff;
+}
+
+.ws-rail-add {
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--primary-light);
+}
+
+.ws-rail-add:hover {
+  background: rgba(108, 92, 231, 0.25);
+  color: #fff;
+}
+
+.ws-rail-divider {
+  width: 28px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 4px 0;
+  border-radius: 1px;
+}
+
 /* === Sidebar === */
 .sidebar {
   width: var(--sidebar-width);
@@ -1258,6 +1319,8 @@ body.compact .messages-list { gap: 0; }
 @media (max-width: 768px) {
   :root { --sidebar-width: 280px; --thread-width: 100%; }
 
+  .workspace-rail { display: none; }
+
   .sidebar {
     position: fixed;
     left: -100%;
@@ -1296,6 +1359,170 @@ body.compact .messages-list { gap: 0; }
 @media (min-width: 769px) {
   .mobile-overlay { display: none !important; }
   .hamburger { display: none !important; }
+}
+
+/* === QR Code Modals === */
+.qr-modal { max-width: 400px; }
+
+.qr-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.qr-image-container {
+  background: #ffffff;
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qr-image {
+  width: 280px;
+  height: 280px;
+  border-radius: var(--radius);
+}
+
+.qr-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.qr-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+  text-align: center;
+}
+
+.qr-hint.qr-error { color: var(--error); }
+
+.qr-uri-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+.qr-uri {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: all;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.qr-copy-btn {
+  padding: 4px 12px !important;
+  font-size: 12px !important;
+  flex-shrink: 0;
+}
+
+.qr-actions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.qr-actions .btn-primary,
+.qr-actions .btn-secondary { flex: 1; text-align: center; }
+
+/* QR scanner */
+.qr-video-container {
+  width: 100%;
+  aspect-ratio: 1;
+  max-width: 320px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  position: relative;
+  background: #000;
+}
+
+.qr-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.qr-scan-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.qr-scan-frame {
+  width: 200px;
+  height: 200px;
+  border: 2px solid rgba(108, 92, 231, 0.7);
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.3);
+  animation: qrPulse 2s ease-in-out infinite;
+}
+
+@keyframes qrPulse {
+  0%, 100% { border-color: rgba(108, 92, 231, 0.5); }
+  50% { border-color: rgba(108, 92, 231, 1); }
+}
+
+/* Contact confirmation card */
+.qr-contact-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
+  width: 100%;
+}
+
+.qr-contact-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.qr-contact-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.qr-contact-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.qr-contact-peer {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: 'SF Mono', 'Fira Code', monospace;
 }
 
 /* === Print === */

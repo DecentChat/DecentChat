@@ -17,6 +17,8 @@
 // BIP39 English wordlist (2048 words)
 // Using a minimal curated list for portability — no external deps
 import { WORDLIST } from './wordlist';
+import { HDKeyDerivation, HDPurpose } from './HDKeyDerivation';
+import type { HDDerivedKeys } from './HDKeyDerivation';
 
 export interface SeedPhraseResult {
   /** 12 mnemonic words */
@@ -196,6 +198,59 @@ export class SeedPhraseManager {
     } catch {
       return false;
     }
+  }
+
+  // === HD Key Derivation ===
+
+  private hd = new HDKeyDerivation();
+
+  /**
+   * Derive the HD master key from a mnemonic.
+   * This is the root of the HD tree — all purpose-specific keys derive from it.
+   */
+  async deriveHDMasterKey(mnemonic: string): Promise<ArrayBuffer> {
+    const validation = this.validate(mnemonic);
+    if (!validation.valid) {
+      throw new Error(`Invalid seed phrase: ${validation.error}`);
+    }
+    const seed = this.mnemonicToEntropy(mnemonic);
+    return this.hd.deriveMasterKey(seed);
+  }
+
+  /**
+   * Derive identity key pair from mnemonic.
+   * Path: m/0'/identity/<index>
+   */
+  async deriveHDIdentityKey(mnemonic: string, index: number = 0): Promise<HDDerivedKeys> {
+    const masterKey = await this.deriveHDMasterKey(mnemonic);
+    return this.hd.deriveIdentityKey(masterKey, index);
+  }
+
+  /**
+   * Derive workspace-specific key pair from mnemonic.
+   * Path: m/1'/workspace/<index>
+   */
+  async deriveHDWorkspaceKey(mnemonic: string, workspaceIndex: number): Promise<HDDerivedKeys> {
+    const masterKey = await this.deriveHDMasterKey(mnemonic);
+    return this.hd.deriveWorkspaceKey(masterKey, workspaceIndex);
+  }
+
+  /**
+   * Derive contact-specific DM key pair from mnemonic.
+   * Path: m/2'/contact/<index>
+   */
+  async deriveHDContactKey(mnemonic: string, contactIndex: number): Promise<HDDerivedKeys> {
+    const masterKey = await this.deriveHDMasterKey(mnemonic);
+    return this.hd.deriveContactKey(masterKey, contactIndex);
+  }
+
+  /**
+   * Derive device-specific key pair from mnemonic.
+   * Path: m/3'/device/<index>
+   */
+  async deriveHDDeviceKey(mnemonic: string, deviceIndex: number): Promise<HDDerivedKeys> {
+    const masterKey = await this.deriveHDMasterKey(mnemonic);
+    return this.hd.deriveDeviceKey(masterKey, deviceIndex);
   }
 
   // === Internal: Mnemonic ↔ Entropy ===

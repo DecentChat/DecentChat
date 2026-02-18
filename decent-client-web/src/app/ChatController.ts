@@ -27,6 +27,7 @@ import {
   MemoryDirectConversationStore,
   ServerDiscovery,
 } from 'decent-protocol';
+import type { InviteData } from 'decent-protocol';
 import type {
   PlaintextMessage, Workspace, Channel,
   AttachmentMeta, Attachment, MediaChunk, MediaRequest, MediaResponse,
@@ -581,7 +582,7 @@ export class ChatController {
     return ws;
   }
 
-  joinWorkspace(code: string, alias: string, peerId: string): void {
+  joinWorkspace(code: string, alias: string, peerId: string, inviteData?: InviteData): void {
     console.log('[DecentChat] joinWorkspace called:', { code, alias, peerId, hasUI: !!this.ui });
     // Create the workspace locally for the joining user
     const ws = this.workspaceManager.createWorkspace(
@@ -592,8 +593,27 @@ export class ChatController {
     );
 
     // DEP-002: Initialize server discovery for joined workspace
-    // TODO: Get primary server from invite URI
-    this.getServerDiscovery(ws.id, 'wss://localhost:9000');
+    // Extract primary signaling server from invite data
+    const primaryServer = inviteData
+      ? `${inviteData.secure ? 'wss' : 'ws'}://${inviteData.host}:${inviteData.port}${inviteData.path || ''}`
+      : 'wss://localhost:9000'; // Fallback for dev
+
+    console.log(`[PEX] Initializing server discovery with primary: ${primaryServer}`);
+    this.getServerDiscovery(ws.id, primaryServer);
+    
+    // Add fallback servers from invite
+    if (inviteData?.fallbackServers && inviteData.fallbackServers.length > 0) {
+      const discovery = this.serverDiscovery.get(ws.id)!;
+      discovery.mergeReceivedServers(
+        inviteData.fallbackServers.map(url => ({
+          url,
+          lastSeen: Date.now(),
+          successRate: 0.9, // Assume good until proven otherwise
+        }))
+      );
+      this.saveServerDiscovery(ws.id);
+    }
+
     this.startPEXBroadcasts();
 
     // Set as active workspace
