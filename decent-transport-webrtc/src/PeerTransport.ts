@@ -274,7 +274,10 @@ export class PeerTransport implements Transport {
       }
 
       // In test/dev on localhost, skip STUN/TURN (host candidates suffice, STUN timeouts break tests)
-      const iceServers = this.config.iceServers || DEFAULT_ICE_SERVERS;
+      // Auto-detect localhost for testing (skip STUN since host candidates suffice and DNS failures block negotiation)
+      const isLocalhost = typeof window !== 'undefined' && 
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+      const iceServers = isLocalhost ? [] : (this.config.iceServers || DEFAULT_ICE_SERVERS);
       peerConfig.config = { iceServers };
 
       const peer = peerId ? new Peer(peerId, peerConfig as any) : new Peer(peerConfig as any);
@@ -297,7 +300,10 @@ export class PeerTransport implements Transport {
   private _initServer(server: { url: string; label: string }, peerId?: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const url = new URL(server.url);
-      const iceServers = this.config.iceServers || DEFAULT_ICE_SERVERS;
+      // Auto-detect localhost for testing
+      const isLocalhost = typeof window !== 'undefined' && 
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+      const iceServers = isLocalhost ? [] : (this.config.iceServers || DEFAULT_ICE_SERVERS);
 
       const peerConfig: any = {
         host: url.hostname,

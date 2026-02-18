@@ -87,7 +87,7 @@ async function init(): Promise<void> {
     sendAttachment: (file, text) => ctrl.sendAttachment(file, text),
     connectPeer: (peerId) => ctrl.connectPeer(peerId),
     createWorkspace: (name, alias) => ctrl.createWorkspace(name, alias),
-    joinWorkspace: (code, alias, peerId) => ctrl.joinWorkspace(code, alias, peerId),
+    joinWorkspace: (code, alias, peerId, inviteData) => ctrl.joinWorkspace(code, alias, peerId, inviteData),
     createChannel: (name) => ctrl.createChannel(name),
     createDM: (peerId) => ctrl.createDM(peerId),
     persistWorkspace: (wsId) => ctrl.persistWorkspace(wsId),
@@ -252,13 +252,29 @@ async function init(): Promise<void> {
 
     // Check for /join/CODE invite URL
     const joinMatch = window.location.pathname.match(/^\/join\/([A-Za-z0-9]+)/);
-    let pendingInvite = joinMatch ? {
-      code: joinMatch[1],
-      peerId: new URLSearchParams(window.location.search).get('peer') || '',
-      name: new URLSearchParams(window.location.search).get('name') || '',
-    } : null;
+    let pendingInvite: { code: string; peerId: string; name: string; inviteData?: import('decent-protocol').InviteData } | null = null;
 
-    if (pendingInvite) {
+    if (joinMatch) {
+      // Try to parse as full web invite URL
+      try {
+        const { InviteURI } = await import('decent-protocol');
+        const fullUrl = window.location.href;
+        const inviteData = InviteURI.decode(fullUrl);
+        pendingInvite = {
+          code: inviteData.inviteCode,
+          peerId: inviteData.peerId || '',
+          name: inviteData.workspaceName || '',
+          inviteData, // DEP-002: Include full invite data
+        };
+      } catch {
+        // Fallback to manual parsing
+        pendingInvite = {
+          code: joinMatch[1],
+          peerId: new URLSearchParams(window.location.search).get('peer') || '',
+          name: new URLSearchParams(window.location.search).get('name') || '',
+        };
+      }
+
       // Store invite in sessionStorage BEFORE clearing URL (survives reload)
       sessionStorage.setItem('pendingInvite', JSON.stringify(pendingInvite));
       window.history.replaceState({}, '', '/');
@@ -270,7 +286,7 @@ async function init(): Promise<void> {
         try {
           const parsed = JSON.parse(stored);
           if (parsed.code) {
-            (pendingInvite as any) = parsed;
+            pendingInvite = parsed;
             console.log('[DecentChat] Restored invite from session:', parsed.code);
           }
         } catch {}
@@ -284,7 +300,7 @@ async function init(): Promise<void> {
       ui.renderWelcome();
       // Small delay to ensure DOM is ready
       setTimeout(() => {
-        ui.showJoinWithInvite(pendingInvite!.code, pendingInvite!.peerId, pendingInvite!.name);
+        ui.showJoinWithInvite(pendingInvite!.code, pendingInvite!.peerId, pendingInvite!.name, pendingInvite!.inviteData);
       }, 100);
     } else if (ctrl.workspaceManager.getAllWorkspaces().length === 0) {
       ui.renderWelcome();

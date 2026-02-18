@@ -936,7 +936,7 @@ export class UIRenderer {
   }
 
   /** Show join modal pre-filled from an invite URL */
-  showJoinWithInvite(inviteCode: string, peerId: string, workspaceName: string): void {
+  showJoinWithInvite(inviteCode: string, peerId: string, workspaceName: string, inviteData?: import('decent-protocol').InviteData): void {
     this.showModal(
       `Join ${workspaceName || 'Workspace'}`,
       `
@@ -952,7 +952,7 @@ export class UIRenderer {
         if (!alias) return;
 
         this.state.myAlias = alias;
-        this.callbacks.joinWorkspace(workspaceName || inviteCode, alias, peerId);
+        this.callbacks.joinWorkspace(workspaceName || inviteCode, alias, peerId, inviteData);
         this.showToast(`Joining ${workspaceName || 'workspace'}...`);
       },
     );
@@ -981,6 +981,7 @@ export class UIRenderer {
 
         let code: string;
         let peerId: string | undefined;
+        let inviteData: import('decent-protocol').InviteData | undefined;
 
         // Try parsing as invite URL first
         if (invite.includes('://') || invite.includes('/')) {
@@ -988,6 +989,7 @@ export class UIRenderer {
             const data = InviteURI.decode(invite);
             code = data.inviteCode;
             peerId = data.peerId;
+            inviteData = data; // DEP-002: Pass full invite data for server discovery
 
             // Auto-connect to signaling server from invite
             if (data.host && data.port) {
@@ -1012,10 +1014,8 @@ export class UIRenderer {
 
         this.state.myAlias = alias;
         // Use decoded workspace name if available, otherwise use invite code
-        const wsName = (invite.includes('://') || invite.includes('/'))
-          ? ((() => { try { return InviteURI.decode(invite).workspaceName; } catch { return undefined; } })())
-          : undefined;
-        this.callbacks.joinWorkspace(wsName || code, alias, peerId!);
+        const wsName = inviteData?.workspaceName || code;
+        this.callbacks.joinWorkspace(wsName, alias, peerId!, inviteData);
         this.showToast(`Joining workspace... connecting to ${peerId!.slice(0, 8)}`);
       },
     );
