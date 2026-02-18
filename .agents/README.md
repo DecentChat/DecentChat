@@ -17,6 +17,7 @@ These workflows capture institutional knowledge and ensure consistency.
 | File | Purpose | When to Use |
 |------|---------|-------------|
 | [protocol-changes.md](protocol-changes.md) | DEP creation & maintenance | Changing message types, sync, crypto, transport |
+| [storage-migrations.md](storage-migrations.md) | Storage migration strategy | Changing IndexedDB schema or data format |
 | testing.md | Test coverage checklist | Adding features, refactoring |
 | deployment.md | Build + deploy workflow | Shipping to production |
 | code-review.md | Review checklist | Before merging PRs |
