@@ -320,9 +320,21 @@ async function init(): Promise<void> {
   }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  init().catch(console.error);
-});
+// Wait for both DOM and stylesheets to load before initializing
+// This prevents "Layout was forced before page was fully loaded" warning
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    // Small delay to ensure CSS is applied before layout calculations
+    requestAnimationFrame(() => {
+      init().catch(console.error);
+    });
+  });
+} else {
+  // DOM already loaded
+  requestAnimationFrame(() => {
+    init().catch(console.error);
+  });
+}
 
 // Service Worker update detection — show non-intrusive toast
 if ('serviceWorker' in navigator) {
