@@ -84,26 +84,60 @@ export class Negentropy {
   }
 
   /**
-   * Create initial query (full range)
+   * Create initial query
+   * 
+   * Split items into ranges based on timestamp gaps.
+   * This allows efficient sync when there are large gaps in the dataset.
    */
   async createQuery(): Promise<NegentropyQuery> {
     if (this.items.length === 0) {
       return { ranges: [] };
     }
 
-    const start = this.items[0].timestamp;
-    const end = this.items[this.items.length - 1].timestamp + 1;
+    // Detect gaps in timestamps and split into multiple ranges
+    const ranges: NegentropyRange[] = [];
+    let rangeStart = this.items[0].timestamp;
+    let rangeItems: NegentropyItem[] = [this.items[0]];
 
-    const fingerprint = await this.fingerprintRange(start, end);
+    // Gap threshold: if items are more than MIN_RANGE_SIZE * 1000ms apart, split
+    const GAP_THRESHOLD = MIN_RANGE_SIZE * 1000;
 
-    return {
-      ranges: [{
-        start,
-        end,
-        fingerprint,
-        count: this.items.length,
-      }],
-    };
+    for (let i = 1; i < this.items.length; i++) {
+      const prev = this.items[i - 1];
+      const curr = this.items[i];
+
+      // Check if there's a significant gap
+      if (curr.timestamp - prev.timestamp > GAP_THRESHOLD) {
+        // Finalize current range
+        const rangeEnd = prev.timestamp + 1;
+        const fingerprint = await this.fingerprintItems(rangeItems);
+        ranges.push({
+          start: rangeStart,
+          end: rangeEnd,
+          fingerprint,
+          count: rangeItems.length,
+        });
+
+        // Start new range
+        rangeStart = curr.timestamp;
+        rangeItems = [curr];
+      } else {
+        rangeItems.push(curr);
+      }
+    }
+
+    // Finalize last range
+    const lastItem = this.items[this.items.length - 1];
+    const rangeEnd = lastItem.timestamp + 1;
+    const fingerprint = await this.fingerprintItems(rangeItems);
+    ranges.push({
+      start: rangeStart,
+      end: rangeEnd,
+      fingerprint,
+      count: rangeItems.length,
+    });
+
+    return { ranges };
   }
 
   /**
@@ -186,16 +220,31 @@ export class Negentropy {
     // Also send items we have that are OUTSIDE the queried ranges
     // (items the remote doesn't even know to ask about)
     if (queriedRanges.length > 0) {
-      const minQueried = Math.min(...queriedRanges.map(r => r[0]));
-      const maxQueried = Math.max(...queriedRanges.map(r => r[1]));
-
+      // Sort ranges by start time
+      const sortedRanges = [...queriedRanges].sort((a, b) => a[0] - b[0]);
+      
       // Items before the first queried range
+      const minQueried = sortedRanges[0][0];
       const beforeItems = this.items.filter(item => item.timestamp < minQueried);
       for (const item of beforeItems) {
         have.add(item.id);
       }
 
+      // Items in gaps between queried ranges
+      for (let i = 0; i < sortedRanges.length - 1; i++) {
+        const gapStart = sortedRanges[i][1]; // End of current range
+        const gapEnd = sortedRanges[i + 1][0]; // Start of next range
+        
+        const gapItems = this.items.filter(
+          item => item.timestamp >= gapStart && item.timestamp < gapEnd
+        );
+        for (const item of gapItems) {
+          have.add(item.id);
+        }
+      }
+
       // Items after the last queried range
+      const maxQueried = sortedRanges[sortedRanges.length - 1][1];
       const afterItems = this.items.filter(item => item.timestamp >= maxQueried);
       for (const item of afterItems) {
         have.add(item.id);
