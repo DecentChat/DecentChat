@@ -163,6 +163,11 @@ async function init(): Promise<void> {
   try {
     // Initialize storage — PersistentStore is the primary store.
     // Database is kept but no longer initialized here (see task #8 consolidation).
+    
+    // Update loading hint
+    const loadingHint = document.querySelector('#loading .hint') as HTMLElement;
+    if (loadingHint) loadingHint.textContent = 'Loading storage...';
+    
     await ctrl.keyStore.init();
     await ctrl.persistentStore.init();
 
@@ -312,11 +317,76 @@ async function init(): Promise<void> {
       ui.renderApp();
     }
   } catch (error) {
-    document.getElementById('app')!.innerHTML = `
-      <div class="welcome-screen">
-        <h1>⚠️ Error</h1>
-        <p>${(error as Error).message}</p>
-      </div>`;
+    console.error('[DecentChat] Initialization failed:', error);
+    
+    // Show error screen with storage reset option
+    const loading = document.getElementById('loading');
+    if (loading) loading.style.display = 'none';
+    
+    const app = document.getElementById('app')!;
+    app.innerHTML = `
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;padding:20px;text-align:center;gap:20px;">
+        <div style="font-size:64px;">⚠️</div>
+        <h1 style="font-size:24px;font-weight:600;margin:0;">Failed to initialize</h1>
+        <p style="max-width:500px;opacity:0.7;margin:0;">
+          ${(error as Error).message || 'Unknown error'}
+        </p>
+        <p style="max-width:500px;font-size:14px;opacity:0.6;margin:0;">
+          This usually happens after an update when storage format changes. 
+          Clearing local data will reset the app to a fresh state.
+        </p>
+        <div style="display:flex;gap:12px;margin-top:12px;">
+          <button id="clear-storage-btn" style="padding:12px 24px;background:#e74c3c;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">
+            Clear Local Data & Reload
+          </button>
+          <button onclick="location.reload()" style="padding:12px 24px;background:#6c5ce7;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">
+            Retry
+          </button>
+        </div>
+        <details style="max-width:600px;margin-top:20px;opacity:0.5;font-size:12px;text-align:left;">
+          <summary style="cursor:pointer;user-select:none;">Technical details</summary>
+          <pre style="margin-top:10px;padding:10px;background:rgba(0,0,0,0.2);border-radius:4px;overflow:auto;white-space:pre-wrap;">${(error as Error).stack || error}</pre>
+        </details>
+      </div>
+    `;
+    
+    // Clear storage handler
+    document.getElementById('clear-storage-btn')?.addEventListener('click', async () => {
+      try {
+        // Clear IndexedDB
+        const dbs = await indexedDB.databases();
+        for (const db of dbs) {
+          if (db.name) indexedDB.deleteDatabase(db.name);
+        }
+        
+        // Clear localStorage
+        localStorage.clear();
+        
+        // Clear sessionStorage
+        sessionStorage.clear();
+        
+        // Unregister service workers
+        if ('serviceWorker' in navigator) {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          for (const registration of registrations) {
+            await registration.unregister();
+          }
+        }
+        
+        // Clear cache
+        if ('caches' in window) {
+          const cacheNames = await caches.keys();
+          for (const name of cacheNames) {
+            await caches.delete(name);
+          }
+        }
+        
+        // Reload
+        location.reload();
+      } catch (err) {
+        alert('Failed to clear storage: ' + (err as Error).message);
+      }
+    });
   }
 }
 
@@ -326,14 +396,53 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     // Small delay to ensure CSS is applied before layout calculations
     requestAnimationFrame(() => {
-      init().catch(console.error);
+      initWithTimeout();
     });
   });
 } else {
   // DOM already loaded
   requestAnimationFrame(() => {
-    init().catch(console.error);
+    initWithTimeout();
   });
+}
+
+// Wrapper that adds a timeout to detect stuck initialization
+async function initWithTimeout() {
+  const INIT_TIMEOUT = 30000; // 30 seconds
+  
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error('Initialization timed out after 30 seconds. This usually means storage is corrupted or a background operation is stuck.'));
+    }, INIT_TIMEOUT);
+  });
+  
+  try {
+    await Promise.race([init(), timeoutPromise]);
+  } catch (error) {
+    console.error('[DecentChat] Init failed or timed out:', error);
+    
+    // The error handler in init() will show the UI, but if we timeout
+    // before init() catches the error, we need to handle it here
+    const loading = document.getElementById('loading');
+    if (loading && loading.style.display !== 'none') {
+      // Still showing loading screen, manually trigger error UI
+      const event = new CustomEvent('init-error', { detail: error });
+      window.dispatchEvent(event);
+      
+      // Show error inline
+      const hint = loading.querySelector('.hint') as HTMLElement;
+      if (hint) {
+        hint.innerHTML = `
+          <div style="color:#e74c3c;margin-top:20px;">
+            ⚠️ ${(error as Error).message}
+            <br><br>
+            <button onclick="location.reload()" style="padding:8px 16px;background:#6c5ce7;color:#fff;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Retry</button>
+            <button onclick="if(confirm('Clear all local data and start fresh?')){indexedDB.databases().then(dbs=>dbs.forEach(db=>db.name&&indexedDB.deleteDatabase(db.name)));localStorage.clear();location.reload();}" style="padding:8px 16px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;">Clear Data</button>
+          </div>
+        `;
+      }
+    }
+  }
 }
 
 // Service Worker update detection — show non-intrusive toast
