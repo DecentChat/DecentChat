@@ -12,7 +12,7 @@ import {
   PersistentStore,
   OfflineQueue,
   MessageCRDT,
-  VectorClock,
+
   MediaStore,
   MemoryBlobStorage,
   ChunkedSender,
@@ -68,7 +68,7 @@ export class ChatController {
   // Protocol instances
   readonly cryptoManager: CryptoManager;
   readonly keyStore: KeyStore;
-  readonly transport: PeerTransport;
+  readonly transport: PeerTransport | any;
   messageProtocol: MessageProtocol | null = null;
   readonly messageStore: MessageStore;
   readonly workspaceManager: WorkspaceManager;
@@ -100,7 +100,8 @@ export class ChatController {
   constructor(private state: AppState) {
     this.cryptoManager = new CryptoManager();
     this.keyStore = new KeyStore(this.cryptoManager);
-    this.transport = new PeerTransport();
+    const MockT = typeof window !== 'undefined' && (window as any).__MockTransport;
+    this.transport = MockT ? new MockT() : new PeerTransport();
     this.messageStore = new MessageStore();
     this.workspaceManager = new WorkspaceManager();
     this.persistentStore = new PersistentStore();
@@ -280,7 +281,16 @@ export class ChatController {
 
           if (result.success) {
             const crdt = this.getOrCreateCRDT(channelId);
-            crdt.addReceived(msg, new VectorClock(data.vectorClock || {}));
+            crdt.addMessage({
+              id: msg.id,
+              channelId: msg.channelId,
+              senderId: msg.senderId,
+              content: msg.content,
+              type: (msg.type || 'text') as any,
+              vectorClock: data.vectorClock || {},
+              wallTime: msg.timestamp,
+              prevHash: msg.prevHash || '',
+            });
             await this.persistMessage(msg);
             await this.directConversationStore.updateLastMessage(channelId, msg.timestamp);
 
@@ -304,7 +314,16 @@ export class ChatController {
 
         if (result.success) {
           const crdt = this.getOrCreateCRDT(channelId);
-          crdt.addReceived(msg, new VectorClock(data.vectorClock || {}));
+          crdt.addMessage({
+            id: msg.id,
+            channelId: msg.channelId,
+            senderId: msg.senderId,
+            content: msg.content,
+            type: (msg.type || 'text') as any,
+            vectorClock: data.vectorClock || {},
+            wallTime: msg.timestamp,
+            prevHash: msg.prevHash || '',
+          });
 
           await this.persistMessage(msg);
 
