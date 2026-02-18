@@ -40,9 +40,20 @@ export interface PeerTransportConfig {
  * For production, use your own TURN server (e.g. coturn)
  */
 export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  // Google STUN servers (public, widely used)
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun.relay.metered.ca:80' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  
+  // Cloudflare STUN (fast, reliable)
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  
+  // Twilio STUN (global CDN)
+  { urls: 'stun:global.stun.twilio.com:3478' },
+  
+  // Metered TURN (free tier, might be rate-limited)
   {
     urls: 'turn:a.relay.metered.ca:80',
     username: 'e8dd65b92af91ac9c6b97e4d',
