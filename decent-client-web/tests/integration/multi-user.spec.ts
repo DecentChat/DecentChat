@@ -350,10 +350,29 @@ test.describe('Multi-User P2P Integration', () => {
     const alice = await createUser(browser, 'Alice');
     const bob = await createUser(browser, 'Bob');
 
+    // Capture console logs
+    alice.page.on('console', msg => {
+      const text = msg.text();
+      if (text.includes('[TRACE') || text.includes('sendMessage') || text.includes('onMessage') || 
+          text.includes('handshake') || text.includes('ready') || text.includes('connected')) {
+        console.log(`[Alice Browser] ${text}`);
+      }
+    });
+    bob.page.on('console', msg => {
+      const text = msg.text();
+      if (text.includes('[TRACE') || text.includes('sendMessage') || text.includes('onMessage') ||
+          text.includes('handshake') || text.includes('ready') || text.includes('connected')) {
+        console.log(`[Bob Browser] ${text}`);
+      }
+    });
+
     try {
       await createWorkspace(alice.page, 'P2P Delivery', 'Alice');
       const inviteUrl = await getInviteUrl(alice.page);
       await joinViaInviteUrl(bob.page, inviteUrl, 'Bob');
+      
+      // Wait for P2P connection to establish
+      await waitForPeerConnection(bob.page, 30000);
 
       const msg = `alice-to-bob-${Date.now()}`;
       await sendMessage(alice.page, msg);
