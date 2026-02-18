@@ -1187,9 +1187,8 @@ export class ChatController {
     const workspacePeers = ws
       ? ws.members.map((m: any) => m.peerId).filter((p: string) => p !== this.state.myPeerId)
       : [];
-
-    if (workspacePeers.length > 0) return workspacePeers;
-    return Array.from(this.state.readyPeers).filter(p => p !== this.state.myPeerId);
+    const readyPeers = Array.from(this.state.readyPeers).filter(p => p !== this.state.myPeerId);
+    return Array.from(new Set([...workspacePeers, ...readyPeers]));
   }
 
   private ensurePeerInActiveWorkspace(peerId: string, publicKey = ''): void {
