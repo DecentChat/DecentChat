@@ -197,34 +197,23 @@ test.describe('P2P Messaging', () => {
     }
   });
 
-  test('typing indicator shows when other user types', async ({ browser }) => {
-    test.fixme(true, 'Flaky in full P2P integration harness; strict typing assertions covered in mock-messaging.spec.ts');
-    const [alice, bob] = await setupConnectedPair(browser, 'Typing Test', false);
+  test.skip('typing indicator shows when other user types', async ({ browser }) => {
+    // Skipped: Typing indicators are reliably tested in mock-messaging.spec.ts
+    // This test times out in the full integration harness due to timing sensitivity
+    const [alice, bob] = await setupConnectedPair(browser, 'Typing Test');
     try {
       const input = alice.page.locator('#compose-input');
       await input.focus();
       await input.pressSequentially('Hello...', { delay: 100 });
-
-      let seen = false;
-      try {
-        await bob.page.waitForFunction(() => {
+      await bob.page.waitForFunction(
+        () => {
           const el = document.getElementById('typing-indicator');
           const text = el?.textContent?.trim() || '';
-          const s = (window as any).__state;
-          const ctrl = (window as any).__ctrl;
-          const channelId = s?.activeChannelId;
-          const peers = channelId ? ctrl?.presence?.getTypingPeers?.(channelId) : [];
-          return text.length > 0 || (Array.isArray(peers) && peers.length > 0);
-        }, { timeout: 8000 });
-        seen = true;
-      } catch {
-        // Non-blocking in this suite: typing UI is timing-sensitive in mixed P2P integration.
-        // Strict typing assertions are covered in mock-messaging.spec.ts.
-      }
-
-      if (seen) {
-        await expect(bob.page.locator('#typing-indicator')).toContainText(/typing|píše/i);
-      }
+          return text.length > 0;
+        },
+        { timeout: 10000 },
+      );
+      await expect(bob.page.locator('#typing-indicator')).toContainText('typing');
     } finally {
       await closeUser(alice);
       await closeUser(bob);

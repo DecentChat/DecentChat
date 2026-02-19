@@ -1,0 +1,26 @@
+Gateway service not loaded.
+Start with: openclaw gateway install
+Start with: openclaw gateway
+Start with: launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+[90m2026-02-19T06:28:27.675Z[39m [35m[canvas][39m [36mhost mounted at http://0.0.0.0:18789/__openclaw__/canvas/ (root /Users/claw/.openclaw/canvas)[39m
+[90m2026-02-19T06:28:27.719Z[39m [36m[heartbeat][39m [36mstarted[39m
+[90m2026-02-19T06:28:27.721Z[39m [32m[health-monitor][39m [36mstarted (interval: 300s, grace: 60s)[39m
+[90m2026-02-19T06:28:27.723Z[39m [36m[gateway][39m [36magent model: anthropic/claude-sonnet-4-6[39m
+[90m2026-02-19T06:28:27.724Z[39m [36m[gateway][39m [36mlistening on ws://0.0.0.0:18789 (PID 5032)[39m
+[90m2026-02-19T06:28:27.726Z[39m [36m[gateway][39m [36mlog file: /tmp/openclaw/openclaw-2026-02-19.log[39m
+[90m2026-02-19T06:28:27.739Z[39m [35m[browser/service][39m [36mBrowser control service ready (profiles=2)[39m
+[90m2026-02-19T06:28:27.745Z[39m [35m[whatsapp][39m [36m[default] starting provider (+421907945437)[39m
+[90m2026-02-19T06:28:27.786Z[39m [35m[slack][39m [36m[default] starting provider[39m
+[90m2026-02-19T06:28:27.833Z[39m [33m[delivery-recovery][39m [36mFound 14 pending delivery entries — starting recovery[39m
+[90m2026-02-19T06:28:27.834Z[39m [33m[delivery-recovery][39m [33mRecovery time budget exceeded — 14 entries deferred to next restart[39m
+[90m2026-02-19T06:28:27.834Z[39m [33m[delivery-recovery][39m [36mDelivery recovery complete: 0 recovered, 0 failed, 0 skipped (max retries)[39m
+[90m2026-02-19T06:28:28.371Z[39m [35m[slack][39m [36mchannel resolve failed; using config entries. Error: An API error occurred: missing_scope[39m
+[90m2026-02-19T06:28:28.681Z[39m [35m[slack][39m [36msocket mode connected[39m
+[90m2026-02-19T06:28:29.033Z[39m [35m[whatsapp][39m [36mListening for personal WhatsApp inbound messages.[39m
+[90m2026-02-19T06:28:52.503Z[39m [36m[ws][39m [36m⇄ res ✓ sessions.list 51ms conn=280bc978…8cdd id=7070c258…2783[39m
+[90m2026-02-19T06:29:05.298Z[39m [36m[ws][39m [36m⇄ res ✓ chat.history 65ms conn=280bc978…8cdd id=a72a9779…585b[39m
+[90m2026-02-19T06:29:44.278Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T06:31:06.759Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T06:37:11.376Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T06:38:28.964Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T06:39:14.605Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
