@@ -521,3 +521,25 @@ Config updatnutý, gateway reštartnutý. Teraz beží test sub-agent na overeni
 [90m2026-02-19T13:37:36.001Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
 [90m2026-02-19T13:37:36.296Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
 [90m2026-02-19T13:53:45.550Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771507960.321469)[39m
+[90m2026-02-19T13:54:19.503Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T13:54:19.809Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:54:24.662Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:54:24.948Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T13:58:20.499Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771507960.321469)[39m
+[90m2026-02-19T13:58:23.615Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T13:58:27.650Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771507798.603409)[39m
+[90m2026-02-19T13:59:20.933Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T13:59:21.300Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:59:57.505Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:59:57.809Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T14:17:59.406Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34)[39m
+2026-02-19T15:18:03.665+01:00 [tools] read failed: ENOENT: no such file or directory, access '/Users/claw/.openclaw/workspace/memory/2026-02-19.md'
+[90m2026-02-19T14:18:22.445Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771507798.603409)[39m
+[90m2026-02-19T14:18:34.954Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34)[39m
+[90m2026-02-19T14:18:35.146Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 1536x1024px 2.77MB -> 46.0KB (-98.4%)[39m
+[90m2026-02-19T14:19:01.823Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T14:19:02.208Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T14:19:02.499Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T14:19:32.703Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T14:19:33.035Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T14:19:57.711Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
