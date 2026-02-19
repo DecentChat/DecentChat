@@ -202,6 +202,29 @@ export class ChatController {
       try {
         // --- Handshake ---
         if (data?.type === 'handshake') {
+          // DEP-003 / MITM protection: if we have a pre-stored public key for this peer
+          // (e.g. from an invite URL), verify the handshake key matches before accepting.
+          const wsId = this.state.activeWorkspaceId;
+          const ws = wsId ? this.workspaceManager.getWorkspace(wsId) : null;
+          const existingMember = ws?.members.find((m: any) => m.peerId === peerId);
+          const preStoredKey = existingMember?.publicKey;
+
+          if (preStoredKey && data.publicKey && preStoredKey !== data.publicKey) {
+            // Key mismatch — possible MITM or stale invite. Disconnect immediately.
+            console.error(
+              `[Security] Key mismatch for peer ${peerId}!\n` +
+              `  Expected (from invite): ${preStoredKey.slice(0, 32)}...\n` +
+              `  Received (handshake):   ${data.publicKey.slice(0, 32)}...`
+            );
+            this.transport.disconnect(peerId);
+            this.ui?.showToast(
+              `⚠️ Security alert: ${peerId.slice(0, 8)} sent a different key than expected. ` +
+              `Connection rejected — possible impersonation attempt.`,
+              'error',
+            );
+            return;
+          }
+
           await this.messageProtocol!.processHandshake(peerId, data);
           this.state.readyPeers.add(peerId);
           this.ensurePeerInActiveWorkspace(peerId, data.publicKey);
