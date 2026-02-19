@@ -15,6 +15,7 @@ blob-report/
 .env
 .env.local
 .env.*.local
+.env.deploy
 
 # OS
 .DS_Store
