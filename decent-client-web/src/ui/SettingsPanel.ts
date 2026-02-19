@@ -9,6 +9,8 @@ export interface AppSettings {
   activeWorkspaceId?: string;
   /** Per-workspace display name override */
   workspaceAlias?: string;
+  /** BIP39 seed phrase for identity derivation */
+  seedPhrase?: string;
   theme?: 'auto' | 'light' | 'dark';
   notifications?: boolean;
   notificationSound?: boolean;

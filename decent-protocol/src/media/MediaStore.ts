@@ -15,7 +15,6 @@
  */
 
 import type { Attachment, AttachmentMeta, AttachmentStatus } from './Attachment';
-import { CHUNK_SIZE, calculateChunkCount } from './Attachment';
 
 /** Storage backend interface (implement for IndexedDB, filesystem, etc.) */
 export interface BlobStorage {

@@ -202,7 +202,7 @@ async function init(): Promise<void> {
     markChannelRead: (channelId) => ctrl.notifications.markRead(channelId),
 
     // Identity restore / transfer
-    getCurrentSeed: () => ctrl.persistentStore.getSetting<string>('seedPhrase'),
+    getCurrentSeed: () => ctrl.persistentStore.getSetting('seedPhrase') as Promise<string | null>,
     validateSeed: (mnemonic) => {
       const result = _spm.validate(mnemonic);
       return result.valid ? null : (result.error ?? 'Invalid phrase');

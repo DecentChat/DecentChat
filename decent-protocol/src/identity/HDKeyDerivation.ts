@@ -40,7 +40,7 @@ export class HDKeyDerivation {
   async deriveMasterKey(seed: Uint8Array): Promise<ArrayBuffer> {
     const keyMaterial = await crypto.subtle.importKey(
       'raw',
-      seed,
+      seed.buffer as ArrayBuffer,
       'PBKDF2',
       false,
       ['deriveBits']
@@ -257,7 +257,7 @@ export class HDKeyDerivation {
     const version = new Uint8Array([0x02, 0x01, 0x00]);
     const privKeyOctet = this.derOctetString(ecPrivKey);
 
-    return this.derSequence([version, algId, privKeyOctet]).buffer;
+    return this.derSequence([version, algId, privKeyOctet]).buffer as ArrayBuffer;
   }
 
   private derSequence(items: Uint8Array[]): Uint8Array {

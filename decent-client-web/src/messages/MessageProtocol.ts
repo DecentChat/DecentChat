@@ -243,7 +243,7 @@ export class MessageProtocol {
       const ratchetMsg = await DoubleRatchet.encrypt(ratchetState, content);
       await this.persistState(peerId);
 
-      const envelope = {
+      const envelope: RatchetEnvelope = {
         id: this.generateMessageId(),
         timestamp: Date.now(),
         sender: this.myPeerId,

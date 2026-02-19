@@ -437,7 +437,7 @@ export class SeedPhraseManager {
     const version = new Uint8Array([0x02, 0x01, 0x00]);
     const privKeyOctet = this.derOctetString(ecPrivKey);
 
-    return this.derSequence([version, algId, privKeyOctet]).buffer;
+    return this.derSequence([version, algId, privKeyOctet]).buffer as ArrayBuffer;
   }
 
   private derSequence(items: Uint8Array[]): Uint8Array {

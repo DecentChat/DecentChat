@@ -548,15 +548,65 @@ body {
 .message-thread-btn:hover { background: var(--bg-secondary); }
 .message:hover .message-thread-btn { display: inline-block; }
 
+/* Thread indicator — Slack style: always visible when has-replies, zero-height when empty */
 .message-thread-indicator {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--accent);
-  cursor: pointer;
-  padding: 2px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 0;
+  overflow: hidden;
+  transition: height 0.15s ease;
 }
 
-.message-thread-indicator:hover { text-decoration: underline; }
+.message-thread-indicator.has-replies {
+  height: 26px;
+  margin-top: 4px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px 2px 0;
+}
+
+.message-thread-indicator.has-replies:hover {
+  background: var(--bg-secondary);
+}
+
+.message-thread-indicator.has-replies:hover .thread-indicator-count {
+  text-decoration: underline;
+}
+
+/* Mini avatars row */
+.thread-indicator-avatars {
+  display: flex;
+  align-items: center;
+  margin-left: 0;
+}
+
+.thread-indicator-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: -4px;
+  border: 1px solid var(--bg);
+  flex-shrink: 0;
+}
+
+.thread-indicator-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-left: 6px;
+}
+
+.thread-indicator-time {
+  font-size: 11px;
+  color: var(--text-muted);
+}
 
 /* Grouped messages */
 .message.grouped { padding-top: 1px; padding-bottom: 1px; }

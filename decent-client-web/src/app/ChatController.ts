@@ -360,7 +360,10 @@ export class ChatController {
 
           const channelId = conv.id;
           const msg = await this.messageStore.createMessage(channelId, peerId, content);
-          msg.timestamp = data.timestamp;
+          {
+            const lastLocalTs = this.messageStore.getMessages(channelId).slice(-1)[0]?.timestamp ?? 0;
+            msg.timestamp = Math.max(data.timestamp ?? Date.now(), lastLocalTs + 1);
+          }
           (msg as any).vectorClock = data.vectorClock;
           const result = await this.messageStore.addMessage(msg);
 
@@ -442,7 +445,14 @@ export class ChatController {
 
         // Pass threadId so replies land in the correct thread (not the main channel)
         const msg = await this.messageStore.createMessage(channelId, peerId, content, 'text', data.threadId);
-        msg.timestamp = data.timestamp;
+        // Use sender's timestamp but guarantee it's strictly after our last stored message.
+        // Without this guard the hash-chain timestamp check rejects messages that arrive
+        // out-of-order (e.g. Alice sent a thread reply at T=100, Bob meanwhile sent at
+        // T=101, so when Alice's message finally lands on Bob it fails: 100 > 101 = false).
+        {
+          const lastLocalTs = this.messageStore.getMessages(channelId).slice(-1)[0]?.timestamp ?? 0;
+          msg.timestamp = Math.max(data.timestamp ?? Date.now(), lastLocalTs + 1);
+        }
         (msg as any).vectorClock = data.vectorClock;
         // Use sender's message ID so both peers share the same DOM element ID.
         // This is required for reaction sync: reactions reference messageId in the DOM
@@ -1321,6 +1331,8 @@ export class ChatController {
 
     if (file.type.startsWith('image/')) {
       try {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore — generateImageThumbnail is not yet exported; gracefully skipped
         const { generateImageThumbnail } = await import('decent-protocol');
         const result = await generateImageThumbnail(file);
         if (result) {
@@ -1364,7 +1376,7 @@ export class ChatController {
 
     const crdt = this.getOrCreateCRDT(this.state.activeChannelId);
     const crdtResult = crdt.createMessage(this.state.myPeerId, content);
-    (msg as any).vectorClock = crdtResult.clock.toJSON();
+    (msg as any).vectorClock = crdtResult.vectorClock;
 
     await this.persistMessage(msg);
     this.ui?.appendMessageToDOM(msg);

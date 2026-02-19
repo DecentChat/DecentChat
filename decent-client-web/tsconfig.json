@@ -19,9 +19,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"],
-  "references": [
-    { "path": "../decent-protocol" },
-    { "path": "../decent-transport-webrtc" }
-  ]
+  "include": ["src"]
 }

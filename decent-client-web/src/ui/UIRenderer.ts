@@ -800,8 +800,8 @@ export class UIRenderer {
       msg.type !== 'system';
 
     const threadReplies = this.state.activeChannelId
-      ? this.messageStore.getThread(this.state.activeChannelId, msg.id).length
-      : 0;
+      ? this.messageStore.getThread(this.state.activeChannelId, msg.id)
+      : [];
 
     const div = document.createElement('div');
     div.className = `message ${msg.type === 'system' ? 'system' : ''} ${isGrouped ? 'grouped' : ''}`;
@@ -821,15 +821,13 @@ export class UIRenderer {
           </div>
           <div class="message-content">${this.escapeHtml(msg.content)}</div>
           ${this.renderAttachments((msg as any).attachments)}
-          ${threadReplies > 0 ? `
-            <div class="message-thread-indicator" data-thread-id="${msg.id}">
-              💬 ${threadReplies} ${threadReplies === 1 ? 'reply' : 'replies'}
-            </div>
-          ` : ''}
+          <div class="message-thread-indicator${threadReplies.length > 0 ? ' has-replies' : ''}" data-thread-id="${msg.id}">
+            ${threadReplies.length > 0 ? this.renderThreadIndicatorContent(threadReplies) : ''}
+          </div>
           <div class="message-reactions" id="reactions-${msg.id}"></div>
           <div class="message-actions-bar">
             ${QUICK_REACTIONS.slice(0, 4).map(e => `<button class="quick-react" data-msg-id="${msg.id}" data-emoji="${e}">${e}</button>`).join('')}
-            <button class="message-thread-btn" data-thread-id="${msg.id}">💬</button>
+            <button class="message-thread-btn" data-thread-id="${msg.id}" title="Reply in thread">💬</button>
           </div>
         </div>
       `;
@@ -952,22 +950,65 @@ export class UIRenderer {
     const parentDiv = document.querySelector(`[data-message-id="${parentMessageId}"]`);
     if (!parentDiv) return;
 
-    const count = this.messageStore.getThread(channelId, parentMessageId).length;
-    let indicator = parentDiv.querySelector('.message-thread-indicator') as HTMLElement | null;
+    const replies = this.messageStore.getThread(channelId, parentMessageId);
+    const indicator = parentDiv.querySelector('.message-thread-indicator') as HTMLElement | null;
 
-    if (count > 0) {
-      if (!indicator) {
-        // Create indicator if it doesn't exist yet
-        indicator = document.createElement('div');
-        indicator.className = 'message-thread-indicator';
-        indicator.dataset.threadId = parentMessageId;
-        indicator.addEventListener('click', () => this.openThread(parentMessageId));
-        // Insert before reactions row
-        const reactionsRow = parentDiv.querySelector('.message-reactions');
-        reactionsRow?.parentElement?.insertBefore(indicator, reactionsRow);
+    if (indicator) {
+      if (replies.length > 0) {
+        indicator.classList.add('has-replies');
+        indicator.innerHTML = this.renderThreadIndicatorContent(replies);
+      } else {
+        indicator.classList.remove('has-replies');
+        indicator.innerHTML = '';
       }
-      indicator.textContent = `💬 ${count} ${count === 1 ? 'reply' : 'replies'}`;
     }
+  }
+
+  /**
+   * Render the Slack-style thread indicator content (avatars + reply count + last reply time).
+   */
+  private renderThreadIndicatorContent(replies: import('decent-protocol').PlaintextMessage[]): string {
+    const count = replies.length;
+    if (count === 0) return '';
+
+    // Unique senders (up to 4 avatars)
+    const seen = new Set<string>();
+    const uniqueSenders: string[] = [];
+    for (const r of replies) {
+      if (!seen.has(r.senderId)) {
+        seen.add(r.senderId);
+        uniqueSenders.push(r.senderId);
+        if (uniqueSenders.length >= 4) break;
+      }
+    }
+
+    const avatarsHTML = uniqueSenders.map(peerId => {
+      const name = this.getPeerAlias(peerId);
+      const initials = name.slice(0, 2).toUpperCase();
+      const color = this.peerColor(peerId);
+      return `<span class="thread-indicator-avatar" style="background:${color}" title="${this.escapeHtml(name)}">${this.escapeHtml(initials)}</span>`;
+    }).join('');
+
+    // Last reply relative time
+    const lastReply = replies[replies.length - 1];
+    const relTime = this.relativeTime(lastReply.timestamp);
+
+    return `
+      <span class="thread-indicator-avatars">${avatarsHTML}</span>
+      <span class="thread-indicator-count">${count} ${count === 1 ? 'reply' : 'replies'}</span>
+      <span class="thread-indicator-time">${relTime}</span>
+    `;
+  }
+
+  /** Format a timestamp as a short relative time string */
+  private relativeTime(ts: number): string {
+    const diffMs = Date.now() - ts;
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffH = Math.floor(diffMin / 60);
+    if (diffH < 24) return `${diffH}h ago`;
+    return `${Math.floor(diffH / 24)}d ago`;
   }
 
   // =========================================================================
