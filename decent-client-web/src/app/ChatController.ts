@@ -444,6 +444,11 @@ export class ChatController {
         const msg = await this.messageStore.createMessage(channelId, peerId, content, 'text', data.threadId);
         msg.timestamp = data.timestamp;
         (msg as any).vectorClock = data.vectorClock;
+        // Use sender's message ID so both peers share the same DOM element ID.
+        // This is required for reaction sync: reactions reference messageId in the DOM
+        // (e.g. #reactions-<msgId>). If the receiver generates its own ID, reactions
+        // from the sender target an element that doesn't exist on the receiver's DOM.
+        if (data.messageId) msg.id = data.messageId;
         const result = await this.messageStore.addMessage(msg);
 
         if (result.success) {
@@ -504,6 +509,32 @@ export class ChatController {
   }
 
   /** Send our workspace state (channels, members, name) to a connected peer */
+  /**
+   * Handle a channel-created message from a peer.
+   * Adds the channel to the local workspace if not already present, then
+   * refreshes the sidebar so the user sees it immediately.
+   */
+  private handleChannelCreated(workspaceId: string, channel: Channel): void {
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (!ws) {
+      console.warn(`[Sync] channel-created for unknown workspace ${workspaceId.slice(0, 8)}, ignoring`);
+      return;
+    }
+
+    const exists = ws.channels.find((c: Channel) => c.id === channel.id);
+    if (exists) return; // already have it (e.g. from workspace-state sync)
+
+    ws.channels.push(channel);
+    this.persistentStore.saveWorkspace(ws).catch(err =>
+      console.error('[Sync] Failed to persist workspace after channel-created:', err)
+    );
+
+    console.log(`[Sync] Channel created by peer: #${channel.name} in workspace ${workspaceId.slice(0, 8)}`);
+
+    // Refresh sidebar so the new channel appears immediately
+    this.ui?.updateSidebar();
+  }
+
   private sendWorkspaceState(peerId: string): void {
     if (!this.state.activeWorkspaceId) return;
     const ws = this.workspaceManager.getWorkspace(this.state.activeWorkspaceId);
@@ -532,6 +563,12 @@ export class ChatController {
     // Handle workspace state sync (channels, members, name)
     if (msg.sync?.type === 'workspace-state' && msg.workspaceId) {
       await this.handleWorkspaceStateSync(_peerId, msg.workspaceId, msg.sync);
+      return;
+    }
+
+    // Handle real-time channel creation broadcast
+    if (msg.sync?.type === 'channel-created' && msg.workspaceId && msg.sync.channel) {
+      this.handleChannelCreated(msg.workspaceId, msg.sync.channel);
       return;
     }
 
@@ -896,6 +933,7 @@ export class ChatController {
         (envelope as any).workspaceId = this.state.activeWorkspaceId;
         (envelope as any).threadId = threadId;
         (envelope as any).vectorClock = (msg as any).vectorClock;
+        (envelope as any).messageId = msg.id; // For reaction targeting — receiver must use same ID
 
         if (this.state.readyPeers.has(peerId)) {
           console.log(this.tracePrefix(), 'before transport.send', {
@@ -995,11 +1033,24 @@ export class ChatController {
 
   createChannel(name: string): { success: boolean; channel?: Channel; error?: string } {
     if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
-    return this.workspaceManager.createChannel(
+    const result = this.workspaceManager.createChannel(
       this.state.activeWorkspaceId,
       name,
       this.state.myPeerId,
     );
+    if (result.success && result.channel) {
+      // Broadcast to all connected workspace members so they see the new channel immediately
+      const wsId = this.state.activeWorkspaceId;
+      const channel = result.channel;
+      for (const peerId of this.getWorkspaceRecipientPeerIds()) {
+        this.transport.send(peerId, {
+          type: 'workspace-sync',
+          workspaceId: wsId,
+          sync: { type: 'channel-created', channel },
+        });
+      }
+    }
+    return result;
   }
 
   createDM(peerId: string): { success: boolean; channel?: Channel } {
