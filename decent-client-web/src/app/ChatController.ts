@@ -268,6 +268,14 @@ export class ChatController {
 
         // --- Reactions ---
         if (data?.type === 'reaction') {
+          // Workspace isolation: only accept reactions from peers in a shared workspace
+          if (data.workspaceId) {
+            const ws = this.workspaceManager.getWorkspace(data.workspaceId);
+            if (!ws || !ws.members.some((m: any) => m.peerId === peerId)) {
+              console.warn(`[Security] Dropping reaction from ${peerId.slice(0, 8)}: not in workspace`);
+              return;
+            }
+          }
           this.reactions.handleReactionEvent(data as ReactionEvent);
           return;
         }
@@ -1125,6 +1133,7 @@ export class ChatController {
     const event = this.reactions.toggleReaction(messageId, emoji, this.state.myPeerId);
     if (event && this.state.activeChannelId) {
       event.channelId = this.state.activeChannelId;
+      event.workspaceId = this.state.activeWorkspaceId ?? undefined;
       this.broadcastToWorkspacePeers(event);
     }
   }

@@ -16,6 +16,7 @@ export interface ReactionEvent {
   type: 'reaction';
   messageId: string;
   channelId: string;
+  workspaceId?: string;
   emoji: string;
   userId: string;
   action: 'add' | 'remove';
@@ -31,13 +32,14 @@ export class ReactionManager {
   onReactionsChanged?: (messageId: string, reactions: Map<string, string[]>) => void;
 
   /**
-   * Handle incoming reaction event from peer
+   * Handle incoming reaction event from peer.
+   * Always triggers onReactionsChanged so the DOM re-renders.
    */
   handleReactionEvent(event: ReactionEvent): void {
     if (event.action === 'add') {
-      this.addReaction(event.messageId, event.emoji, event.userId, false);
+      this.addReaction(event.messageId, event.emoji, event.userId); // notify=true (default)
     } else {
-      this.removeReaction(event.messageId, event.emoji, event.userId, false);
+      this.removeReaction(event.messageId, event.emoji, event.userId); // notify=true (default)
     }
   }
 
