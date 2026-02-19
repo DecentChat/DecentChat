@@ -15,6 +15,61 @@ import { CommandParser } from './commands/CommandParser';
 import { registerCommands } from './commands/registerCommands';
 import type { AppSettings } from './storage/types';
 
+function hydrateTitleTooltips(root: ParentNode = document): void {
+  const elements = root.querySelectorAll<HTMLElement>('[title]');
+
+  elements.forEach((el) => {
+    const title = el.getAttribute('title');
+    if (!title) return;
+
+    if (!el.hasAttribute('data-tooltip')) {
+      el.setAttribute('data-tooltip', title);
+    }
+
+    // Keep text available for assistive tech even after removing native browser tooltip.
+    if (!el.hasAttribute('aria-label') && !el.getAttribute('aria-labelledby')) {
+      el.setAttribute('aria-label', title);
+    }
+
+    // Remove native tooltip so only our styled tooltip is shown.
+    el.removeAttribute('title');
+  });
+}
+
+function initTitleTooltipObserver(): void {
+  hydrateTitleTooltips();
+
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type === 'attributes' && mutation.target instanceof HTMLElement) {
+        if (mutation.attributeName === 'title' || mutation.attributeName === 'data-tooltip') {
+          hydrateTitleTooltips(mutation.target.parentElement || document);
+        }
+        continue;
+      }
+
+      if (mutation.type === 'childList') {
+        mutation.addedNodes.forEach((node) => {
+          if (!(node instanceof HTMLElement)) return;
+
+          if (node.hasAttribute('title')) {
+            hydrateTitleTooltips(node.parentElement || document);
+          } else if (node.querySelector('[title]')) {
+            hydrateTitleTooltips(node);
+          }
+        });
+      }
+    }
+  });
+
+  observer.observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['title', 'data-tooltip'],
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Shared application state (passed by reference to both modules)
 // ---------------------------------------------------------------------------
@@ -395,6 +450,7 @@ async function init(): Promise<void> {
 // This prevents "Layout was forced before page was fully loaded" warning
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
+    initTitleTooltipObserver();
     // Small delay to ensure CSS is applied before layout calculations
     requestAnimationFrame(() => {
       initWithTimeout();
@@ -402,6 +458,7 @@ if (document.readyState === 'loading') {
   });
 } else {
   // DOM already loaded
+  initTitleTooltipObserver();
   requestAnimationFrame(() => {
     initWithTimeout();
   });

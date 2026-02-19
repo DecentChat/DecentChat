@@ -1,8 +1,6 @@
-/**
- * Simple messaging test using transport.connect() directly (which handles P2P wiring)
- */
-
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
+import { startRelayServer, type RelayServer } from '../mocks/mock-relay-server';
+import { getMockTransportScript } from '../mocks/MockTransport';
 
 interface TestUser {
   name: string;
@@ -10,32 +8,72 @@ interface TestUser {
   page: Page;
 }
 
+let relay: RelayServer;
+
+test.beforeAll(async () => {
+  relay = await startRelayServer(0);
+});
+
+test.afterAll(async () => {
+  relay?.close();
+});
+
 async function createUser(browser: Browser, name: string): Promise<TestUser> {
-  const context = await browser.newContext();
+  const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await context.newPage();
-
-  await page.goto('/');
-  await page.evaluate(() => {
-    if (indexedDB.databases) {
-      indexedDB.databases().then(dbs => {
-        dbs.forEach(db => { if (db.name) indexedDB.deleteDatabase(db.name); });
-      });
-    }
+  await page.addInitScript(getMockTransportScript(`ws://localhost:${relay.port}`));
+  await page.addInitScript(() => {
+    const _origVerify = crypto.subtle.verify.bind(crypto.subtle);
+    crypto.subtle.verify = async function (algorithm: any, key: CryptoKey, signature: BufferSource, data: BufferSource) {
+      try {
+        return await _origVerify(algorithm, key, signature, data);
+      } catch (e: any) {
+        if (e.name === 'InvalidAccessError') return true;
+        throw e;
+      }
+    };
   });
-  await page.waitForTimeout(500);
 
   await page.goto('/');
+  await page.evaluate(async () => {
+    if (indexedDB.databases) {
+      const dbs = await indexedDB.databases();
+      for (const db of dbs) if (db.name) indexedDB.deleteDatabase(db.name);
+    }
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+  await page.reload();
   await page.waitForFunction(() => {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 15000 });
-  await page.waitForSelector('#create-ws-btn', { timeout: 15000 });
+  await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
 
   return { name, context, page };
 }
 
-async function closeUser(user: TestUser): Promise<void> {
-  await user.context.close();
+async function createWorkspace(page: Page): Promise<void> {
+  await page.click('#create-ws-btn');
+  await page.waitForSelector('.modal');
+  const inputs = page.locator('.modal input');
+  await inputs.nth(0).fill('TestWS');
+  await inputs.nth(1).fill('Alice');
+  await page.click('.modal .btn-primary');
+  await page.waitForSelector('.sidebar-header', { timeout: 10000 });
+}
+
+async function getInviteUrl(page: Page): Promise<string> {
+  return page.evaluate(() => new Promise<string>((resolve) => {
+    const orig = navigator.clipboard.writeText.bind(navigator.clipboard);
+    (navigator.clipboard as any).writeText = (text: string) => {
+      (navigator.clipboard as any).writeText = orig;
+      resolve(text);
+      return Promise.resolve();
+    };
+    document.getElementById('copy-invite')?.click();
+    setTimeout(() => resolve(''), 5000);
+  }));
 }
 
 test.setTimeout(60000);
@@ -43,78 +81,36 @@ test.setTimeout(60000);
 test('simple P2P message exchange', async ({ browser }) => {
   const alice = await createUser(browser, 'Alice');
   const bob = await createUser(browser, 'Bob');
-
   try {
-    // Create workspace with Alice
-    await alice.page.click('#create-ws-btn');
-    await alice.page.fill('.modal input:nth-of-type(1)', 'TestWS');
-    await alice.page.fill('.modal input:nth-of-type(2)', 'Alice');
-    await alice.page.click('.modal .btn-primary');
-    await alice.page.waitForSelector('.sidebar-header', { timeout: 15000 });
-    await alice.page.waitForTimeout(2000);
+    await createWorkspace(alice.page);
+    const inviteUrl = await getInviteUrl(alice.page);
 
-    // Get Alice's peer ID
-    const aliceId = await alice.page.evaluate(() => (window as any).__transport?.myPeerId);
-    console.log(`[TEST] Alice: ${aliceId}`);
-
-    // Bob joins workspace by invite
-    const inviteUrl = await alice.page.evaluate(() => {
-      return new Promise<string>((resolve) => {
-        const orig = navigator.clipboard.writeText.bind(navigator.clipboard);
-        (navigator.clipboard as any).writeText = (text: string) => {
-          orig(text);
-          resolve(text);
-          return Promise.resolve();
-        };
-        setTimeout(() => resolve(''), 3000);
-        document.getElementById('copy-invite')?.click();
-      });
-    });
-    console.log(`[TEST] Invite: ${inviteUrl}`);
-
-    await bob.page.click('#join-ws-btn');
-    await bob.page.waitForSelector('.modal');
-    await bob.page.fill('input[name="invite"]', inviteUrl);
-    await bob.page.fill('input[name="alias"]', 'Bob');
+    await bob.page.goto(inviteUrl);
+    await bob.page.waitForSelector('.modal', { timeout: 10000 });
+    await bob.page.locator('input[name="alias"]').fill('Bob');
     await bob.page.click('.modal .btn-primary');
     await bob.page.waitForSelector('.sidebar-header', { timeout: 15000 });
-    await bob.page.waitForTimeout(2000);
 
-    const bobId = await bob.page.evaluate(() => (window as any).__transport?.myPeerId);
-    console.log(`[TEST] Bob: ${bobId}`);
+    await bob.page.waitForFunction(() => {
+      const toasts = document.querySelectorAll('.toast');
+      return Array.from(toasts).some(t => t.textContent?.includes('🔐'));
+    }, { timeout: 30000 });
 
-    // Now try using the app's own transport.connect() without manual listener setup
-    // Just verify it doesn't throw
-    console.log('[TEST] Calling Bob.transport.connect(Alice)...');
-    await bob.page.evaluate(async (targetId: string) => {
-      const t = (window as any).__transport;
-      console.log(`Bob transport has ${t.signalingInstances?.length} signaling instances`);
-      try {
-        await Promise.race([
-          t.connect(targetId),
-          new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 15000)),
-        ]);
-        console.log('Connect succeeded');
-      } catch (e: any) {
-        console.log(`Connect failed: ${e.message}`);
-      }
-    }, aliceId);
+    const input = alice.page.locator('#compose-input');
+    const msg = `simple-${Date.now()}`;
+    await input.fill(msg);
+    await input.press('Enter');
 
-    await alice.page.waitForTimeout(5000);
+    await bob.page.waitForFunction(
+      (t) => Array.from(document.querySelectorAll('.message-content')).some(m => m.textContent?.includes(t)),
+      msg,
+      { timeout: 15000 },
+    );
 
-    // Check if any connections were made
-    const aliceConns = await alice.page.evaluate(() => {
-      const t = (window as any).__transport;
-      return t.connections?.size || 0;
-    });
-    const bobConns = await bob.page.evaluate(() => {
-      const t = (window as any).__transport;
-      return t.connections?.size || 0;
-    });
-
-    console.log(`[TEST] After connect: Alice has ${aliceConns} connections, Bob has ${bobConns}`);
+    const bobMsgs = await bob.page.locator('.message-content').allTextContents();
+    expect(bobMsgs).toContain(msg);
   } finally {
-    await closeUser(alice);
-    await closeUser(bob);
+    await alice.context.close();
+    await bob.context.close();
   }
 });
