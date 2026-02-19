@@ -294,7 +294,7 @@ export class PeerTransport implements Transport {
     return servers;
   }
 
-  private _initSingleServer(peerId?: string): Promise<string> {
+  private _initSingleServer(peerId?: string, attempt = 0): Promise<string> {
     return new Promise((resolve, reject) => {
       const configuredPort = Number(
         (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SIGNAL_PORT) || 9000,
@@ -331,14 +331,24 @@ export class PeerTransport implements Transport {
         resolve(id);
       });
 
-      peer.on('error', (error) => {
-        this.onError?.(error);
-        reject(error);
+      peer.on('error', (error: any) => {
+        peer.destroy();
+        if (error.type === 'unavailable-id' && attempt < 3) {
+          // Transient: previous WebSocket session still alive on the server — retry.
+          const delay = (attempt + 1) * 3000;
+          console.warn(`[PeerTransport] Peer ID temporarily taken, retrying in ${delay / 1000}s (attempt ${attempt + 1}/3)...`);
+          setTimeout(() => {
+            this._initSingleServer(peerId, attempt + 1).then(resolve).catch(reject);
+          }, delay);
+        } else {
+          if (error.type !== 'unavailable-id') this.onError?.(error);
+          reject(error);
+        }
       });
     });
   }
 
-  private _initServer(server: { url: string; label: string }, peerId?: string): Promise<string> {
+  private _initServer(server: { url: string; label: string }, peerId?: string, attempt = 0): Promise<string> {
     return new Promise((resolve, reject) => {
       const url = new URL(server.url);
       // Auto-detect localhost for testing
@@ -384,10 +394,22 @@ export class PeerTransport implements Transport {
         resolve(assignedId);
       });
 
-      peer.on('error', (error) => {
+      peer.on('error', (error: any) => {
         clearTimeout(timeout);
-        this.onError?.(new Error(`[${server.label}] ${error.message || error}`));
-        reject(error);
+        peer.destroy();
+        if (error.type === 'unavailable-id' && attempt < 3) {
+          // Transient: stale session still registered on this server — retry.
+          const delay = (attempt + 1) * 3000;
+          console.warn(`[PeerTransport] [${server.label}] Peer ID temporarily taken, retrying in ${delay / 1000}s (attempt ${attempt + 1}/3)...`);
+          setTimeout(() => {
+            this._initServer(server, peerId, attempt + 1).then(resolve).catch(reject);
+          }, delay);
+        } else {
+          if (error.type !== 'unavailable-id') {
+            this.onError?.(new Error(`[${server.label}] ${error.message || error}`));
+          }
+          reject(error);
+        }
       });
     });
   }

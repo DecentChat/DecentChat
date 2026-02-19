@@ -499,6 +499,9 @@ export class ChatController {
     };
 
     this.transport.onError = (error) => {
+      // 'unavailable-id' is a transient race on page reload — PeerTransport retries silently,
+      // no need to alarm the user if it eventually surfaces here.
+      if ((error as any).type === 'unavailable-id' || error.message?.includes('is taken')) return;
       this.ui?.showToast(error.message, 'error');
     };
   }
