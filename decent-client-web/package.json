@@ -12,7 +12,8 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",
     "test:integration": "playwright test tests/integration/",
-    "test:integration:headed": "playwright test tests/integration/ --headed"
+    "test:integration:headed": "playwright test tests/integration/ --headed",
+    "test:unit": "bun test tests/unit/"
   },
   "license": "MIT",
   "dependencies": {
