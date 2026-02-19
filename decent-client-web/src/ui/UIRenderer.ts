@@ -143,20 +143,101 @@ export class UIRenderer {
     const app = document.getElementById('app')!;
     app.innerHTML = `
       <div class="welcome-screen">
-        <img src="/icons/logo-light.png" alt="DecentChat" class="welcome-logo" />
-        <h1>DecentChat</h1>
-        <p>End-to-end encrypted, serverless, peer-to-peer messaging</p>
-        <div class="welcome-actions">
-          <button class="btn-primary" id="create-ws-btn">Create Workspace</button>
-          <button class="btn-secondary" id="join-ws-btn">Join with Invite Code</button>
+
+        <!-- ── Hero ── -->
+        <div class="welcome-hero">
+          <img src="/icons/logo-light.png" alt="DecentChat" class="welcome-logo" />
+          <h1>DecentChat</h1>
+          <p class="welcome-tagline">Chat that belongs to you.<br>No servers. No accounts. No one watching.</p>
+          <div class="welcome-actions">
+            <button class="btn-primary" id="create-ws-btn">Create Workspace</button>
+            <button class="btn-secondary" id="join-ws-btn">Join with Invite Code</button>
+          </div>
+          <p class="welcome-peer-hint">
+            Your ID: <code id="welcome-peer-id" title="Click to copy">${this.state.myPeerId.slice(0, 20)}…</code>
+          </p>
         </div>
-        <p style="margin-top: 16px; font-size: 13px; color: var(--text-light);">
-          Your Peer ID: <code style="cursor:pointer;" id="welcome-peer-id">${this.state.myPeerId}</code>
-        </p>
+
+        <!-- ── What is this? ── -->
+        <div class="welcome-about">
+          <div class="welcome-divider">
+            <span>What is DecentChat?</span>
+          </div>
+
+          <p class="welcome-about-lead">
+            Every chat app you use today stores your messages on someone else's computer.
+            They can read them, sell them, lose them, or be forced to hand them over.
+            <strong>DecentChat is different.</strong>
+          </p>
+
+          <div class="welcome-features">
+
+            <div class="welcome-feature">
+              <div class="welcome-feature-icon">🔒</div>
+              <div>
+                <h3>Actually private</h3>
+                <p>Messages travel directly between you and the other person — encrypted end-to-end with the same Double Ratchet protocol used by Signal. They never touch a server. There is no server.</p>
+              </div>
+            </div>
+
+            <div class="welcome-feature">
+              <div class="welcome-feature-icon">🔑</div>
+              <div>
+                <h3>Your identity is a key, not an email</h3>
+                <p>No phone number. No sign-up. Your identity is a 12-word seed phrase — like a crypto wallet. Back it up on paper and you own your identity forever, on any device.</p>
+              </div>
+            </div>
+
+            <div class="welcome-feature">
+              <div class="welcome-feature-icon">🌐</div>
+              <div>
+                <h3>Serverless isn't a buzzword here</h3>
+                <p>Workspaces, channels, DMs — all synced peer-to-peer using WebRTC. Like BitTorrent, but for chat. No account to delete. No company to go bankrupt. No data center to breach.</p>
+              </div>
+            </div>
+
+            <div class="welcome-feature">
+              <div class="welcome-feature-icon">⚡</div>
+              <div>
+                <h3>Forward secrecy by default</h3>
+                <p>Keys rotate with every message. Even if someone steals your device tomorrow, they can't decrypt what you wrote yesterday. The math makes it impossible.</p>
+              </div>
+            </div>
+
+            <div class="welcome-feature">
+              <div class="welcome-feature-icon">📱</div>
+              <div>
+                <h3>Works everywhere</h3>
+                <p>It's a PWA — install it from your browser on any device. No app store, no update nags, no permissions you didn't ask for. It even works offline and syncs when you reconnect.</p>
+              </div>
+            </div>
+
+            <div class="welcome-feature">
+              <div class="welcome-feature-icon">🐙</div>
+              <div>
+                <h3>Built in the open</h3>
+                <p>The protocol is documented, the code is readable. You can run your own signaling server. You can fork the whole thing. Deci the octopus approves.</p>
+              </div>
+            </div>
+
+          </div>
+
+          <div class="welcome-cta">
+            <p>Ready to own your conversations?</p>
+            <button class="btn-primary" id="create-ws-btn-2">Get started →</button>
+          </div>
+
+          <p class="welcome-fine-print">
+            DecentChat uses WebRTC for data transport and only requires a tiny signaling server to help peers find each other — it never sees your messages.
+            Once connected, the signaling server is out of the picture entirely.
+          </p>
+        </div>
+
       </div>
     `;
 
     document.getElementById('create-ws-btn')!.addEventListener('click', () => this.showCreateWorkspaceModal());
+    document.getElementById('create-ws-btn-2')!.addEventListener('click', () => this.showCreateWorkspaceModal());
     document.getElementById('join-ws-btn')!.addEventListener('click', () => this.showJoinWorkspaceModal());
     document.getElementById('welcome-peer-id')!.addEventListener('click', () => {
       navigator.clipboard.writeText(this.state.myPeerId);

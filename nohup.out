@@ -500,3 +500,20 @@ Config updatnutý, gateway reštartnutý. Teraz beží test sub-agent na overeni
 [90m2026-02-19T13:32:03.199Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
 [90m2026-02-19T13:32:20.579Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
 [90m2026-02-19T13:32:36.916Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:32:54.451Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34)[39m
+[90m2026-02-19T13:32:54.727Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:32:55.011Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T13:33:52.218Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771507692.636669)[39m
+[90m2026-02-19T13:34:34.940Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34)[39m
+[90m2026-02-19T13:35:23.099Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T13:35:23.431Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:35:27.039Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:35:30.524Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:35:33.250Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:35:53.976Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:36:11.671Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:36:18.522Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:36:18.813Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T13:36:56.165Z[39m [31m[browser/chrome][39m [36m🦞 openclaw browser started (chrome) profile "openclaw" on 127.0.0.1:18800 (pid 13325)[39m
+[90m2026-02-19T13:36:56.322Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771507798.603409)[39m
+2026-02-19T14:36:59.931+01:00 [tools] browser failed: Can't reach the OpenClaw browser control service. Restart the OpenClaw gateway (OpenClaw.app menubar, or `openclaw gateway`). Do NOT retry the browser tool — it will keep failing. Use an alternative approach or inform the user that the browser is currently unavailable. (Error: Error: Chrome extension relay is running, but no tab is connected. Click the OpenClaw Chrome extension icon on a tab to attach it (profile "chrome").)
