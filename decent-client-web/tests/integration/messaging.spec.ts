@@ -122,6 +122,84 @@ async function waitForPeersReady(pageA: Page, pageB: Page, timeoutMs = 30000): P
   );
 }
 
+async function syncWorkspaceState(page1: Page, page2: Page): Promise<void> {
+  const aliceChannelId = await page1.evaluate(() => (window as any).__state?.activeChannelId);
+
+  await page2.evaluate((channelId: string) => {
+    const s = (window as any).__state;
+    const ctrl = (window as any).__ctrl;
+    if (!s.activeWorkspaceId) return;
+    const ws = ctrl.workspaceManager.getWorkspace(s.activeWorkspaceId);
+    if (!ws || !ws.channels[0]) return;
+
+    const oldChannelId = ws.channels[0].id;
+    ws.channels[0].id = channelId;
+    s.activeChannelId = channelId;
+
+    const allWs = ctrl.workspaceManager;
+    if (allWs.channels) {
+      const ch = allWs.channels.get(oldChannelId);
+      if (ch) {
+        allWs.channels.delete(oldChannelId);
+        ch.id = channelId;
+        allWs.channels.set(channelId, ch);
+      }
+    }
+  }, aliceChannelId);
+
+  const addMembers = () => {
+    const s = (window as any).__state;
+    const ctrl = (window as any).__ctrl;
+    if (!s.activeWorkspaceId) return;
+    const ws = ctrl.workspaceManager.getWorkspace(s.activeWorkspaceId);
+    if (!ws) return;
+    for (const peerId of s.readyPeers) {
+      if (!ws.members.some((m: any) => m.peerId === peerId)) {
+        ws.members.push({
+          peerId,
+          alias: peerId.slice(0, 8),
+          publicKey: '',
+          joinedAt: Date.now(),
+          role: 'member',
+        });
+      }
+    }
+  };
+
+  await page1.evaluate(addMembers);
+  await page2.evaluate(addMembers);
+}
+
+async function waitForWorkspaceSync(page1: Page, page2: Page, timeoutMs = 10000): Promise<void> {
+  const channel1 = await page1.evaluate(() => (window as any).__state?.activeChannelId || '');
+  const peer1 = await page1.evaluate(() => (window as any).__state?.myPeerId || '');
+  const peer2 = await page2.evaluate(() => (window as any).__state?.myPeerId || '');
+
+  await page2.waitForFunction(
+    ({ expectedChannel, expectedPeer }: { expectedChannel: string; expectedPeer: string }) => {
+      const s = (window as any).__state;
+      const ctrl = (window as any).__ctrl;
+      if (!s?.activeWorkspaceId || s.activeChannelId !== expectedChannel) return false;
+      const ws = ctrl?.workspaceManager?.getWorkspace?.(s.activeWorkspaceId);
+      return !!ws?.members?.some((m: any) => m.peerId === expectedPeer);
+    },
+    { expectedChannel: channel1, expectedPeer: peer1 },
+    { timeout: timeoutMs },
+  );
+
+  await page1.waitForFunction(
+    (expectedPeer: string) => {
+      const s = (window as any).__state;
+      const ctrl = (window as any).__ctrl;
+      if (!s?.activeWorkspaceId) return false;
+      const ws = ctrl?.workspaceManager?.getWorkspace?.(s.activeWorkspaceId);
+      return !!ws?.members?.some((m: any) => m.peerId === expectedPeer);
+    },
+    peer2,
+    { timeout: timeoutMs },
+  );
+}
+
 async function sendMessage(page: Page, text: string): Promise<void> {
   const input = page.locator('#compose-input');
   await expect(input).toBeVisible();
@@ -150,6 +228,8 @@ async function setupConnectedPair(browser: Browser, wsName: string, strictReady 
   await waitForPeerConnection(bob.page);
   if (strictReady) {
     await waitForPeersReady(alice.page, bob.page);
+    await syncWorkspaceState(alice.page, bob.page);
+    await waitForWorkspaceSync(alice.page, bob.page);
   }
 
   return [alice, bob];
@@ -197,19 +277,24 @@ test.describe('P2P Messaging', () => {
     }
   });
 
-  test.skip('typing indicator shows when other user types', async ({ browser }) => {
-    // Skipped: Typing indicators are reliably tested in mock-messaging.spec.ts
-    // This test times out in the full integration harness due to timing sensitivity
+  test('typing indicator shows when other user types', async ({ browser }) => {
     const [alice, bob] = await setupConnectedPair(browser, 'Typing Test');
     try {
+      // Alice starts typing
       const input = alice.page.locator('#compose-input');
       await input.focus();
       await input.pressSequentially('Hello...', { delay: 100 });
+
+      // Bob should see typing indicator
       await bob.page.waitForFunction(
         () => {
           const el = document.getElementById('typing-indicator');
           const text = el?.textContent?.trim() || '';
-          return text.length > 0;
+          const s = (window as any).__state;
+          const ctrl = (window as any).__ctrl;
+          const channelId = s?.activeChannelId;
+          const peers = channelId ? ctrl?.presence?.getTypingPeers?.(channelId) : [];
+          return text.length > 0 && Array.isArray(peers) && peers.length > 0;
         },
         { timeout: 10000 },
       );
