@@ -285,8 +285,11 @@ export class ChatController {
         }
 
         // --- Name announce (peer telling us their display name) ---
-        if (data?.type === 'name-announce' && data.workspaceId && data.alias) {
-          const ws = this.workspaceManager.getWorkspace(data.workspaceId);
+        // Note: data.workspaceId is the SENDER's workspace ID (different from ours).
+        // We must use our own activeWorkspaceId to find the local workspace.
+        if (data?.type === 'name-announce' && data.alias) {
+          const localWsId = this.state.activeWorkspaceId;
+          const ws = localWsId ? this.workspaceManager.getWorkspace(localWsId) : null;
           if (ws) {
             const member = ws.members.find((m: any) => m.peerId === peerId);
             if (member) {
