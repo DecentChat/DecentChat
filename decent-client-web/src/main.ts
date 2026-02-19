@@ -15,6 +15,8 @@ import { UIRenderer } from './ui/UIRenderer';
 import { CommandParser } from './commands/CommandParser';
 import { registerCommands } from './commands/registerCommands';
 import type { AppSettings } from './storage/types';
+import { SeedPhraseManager as _SeedPhraseManager } from 'decent-protocol';
+const _spm = new _SeedPhraseManager();
 
 function hydrateTitleTooltips(root: ParentNode = document): void {
   const elements = root.querySelectorAll<HTMLElement>('[title]');
@@ -198,6 +200,19 @@ async function init(): Promise<void> {
     getUnreadCount: (channelId) => ctrl.notifications.getUnreadCount(channelId),
     setFocusedChannel: (channelId) => ctrl.notifications.setFocusedChannel(channelId),
     markChannelRead: (channelId) => ctrl.notifications.markRead(channelId),
+
+    // Identity restore / transfer
+    getCurrentSeed: () => ctrl.persistentStore.getSetting<string>('seedPhrase'),
+    validateSeed: (mnemonic) => {
+      const result = _spm.validate(mnemonic);
+      return result.valid ? null : (result.error ?? 'Invalid phrase');
+    },
+    onSeedRestored: async (mnemonic) => {
+      await ctrl.persistentStore.saveSetting('seedPhrase', mnemonic);
+      // Clear stored peer ID so it gets re-derived from new seed on reload
+      await ctrl.persistentStore.saveSetting('myPeerId', null);
+      window.location.reload();
+    },
   });
 
   // Clicking a desktop notification switches to that channel

@@ -84,9 +84,12 @@ export class SettingsPanel {
             ` : ''}
             <div class="setting-row">
               <label>Seed Phrase</label>
-              <button class="btn-secondary" id="seed-phrase-btn" style="font-size:12px; padding:4px 12px;">
-                ${settings.seedPhrase ? '👁️ Show' : '🔑 Generate'}
-              </button>
+              <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <button class="btn-secondary" id="seed-phrase-btn" style="font-size:12px; padding:4px 12px;">
+                  ${settings.seedPhrase ? '👁️ Show' : '🔑 Generate'}
+                </button>
+                ${settings.seedPhrase ? `<button class="btn-secondary" id="seed-transfer-btn" style="font-size:12px; padding:4px 12px;" title="Transfer identity to another device via QR code">📲 Transfer</button>` : ''}
+              </div>
             </div>
             <div id="seed-phrase-display" style="display:none; margin-top:8px; padding:12px; background:var(--bg-secondary); border-radius:var(--radius); font-family:monospace; font-size:13px; word-spacing:4px; line-height:1.8; user-select:all;"></div>
           </div>
@@ -212,6 +215,14 @@ export class SettingsPanel {
             seedBtn.textContent = '🙈 Hide';
           }
         }
+      });
+    }
+
+    // Transfer button — opens seed QR for device transfer
+    const transferBtn = this.overlay.querySelector('#seed-transfer-btn') as HTMLButtonElement | null;
+    if (transferBtn) {
+      transferBtn.addEventListener('click', () => {
+        this.onAction?.('seed-transfer');
       });
     }
 

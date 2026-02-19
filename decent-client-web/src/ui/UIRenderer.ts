@@ -76,6 +76,12 @@ export interface UICallbacks {
   setFocusedChannel?: (channelId: string | null) => void;
   /** Mark a channel as fully read */
   markChannelRead?: (channelId: string) => void;
+  /** Get current seed phrase (for transfer QR) */
+  getCurrentSeed?: () => Promise<string | null>;
+  /** Validate a seed phrase — returns error string or null if valid */
+  validateSeed?: (mnemonic: string) => string | null;
+  /** Called when user restores identity from seed phrase */
+  onSeedRestored?: (mnemonic: string) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +108,8 @@ export class UIRenderer {
     this.messageSearch = new MessageSearch(messageStore);
     this.qrCodeManager = new QRCodeManager({
       onContactScanned: (data) => this.callbacks.onQRContactScanned?.(data),
+      onSeedRestored: (mnemonic) => this.callbacks.onSeedRestored?.(mnemonic),
+      validateSeed: (mnemonic) => this.callbacks.validateSeed?.(mnemonic) ?? null,
       showToast: (msg, type) => this.showToast(msg, type),
     });
     this.refreshContactsCache();
@@ -155,6 +163,10 @@ export class UIRenderer {
           </div>
           <p class="welcome-peer-hint">
             Your ID: <code id="welcome-peer-id" title="Click to copy">${this.state.myPeerId.slice(0, 20)}…</code>
+          </p>
+          <p class="welcome-restore-hint">
+            Already have an account?
+            <button class="restore-link-btn" id="restore-identity-btn">Restore from seed phrase →</button>
           </p>
         </div>
 
@@ -242,6 +254,9 @@ export class UIRenderer {
     document.getElementById('welcome-peer-id')!.addEventListener('click', () => {
       navigator.clipboard.writeText(this.state.myPeerId);
       this.showToast('Peer ID copied!');
+    });
+    document.getElementById('restore-identity-btn')!.addEventListener('click', () => {
+      this.qrCodeManager.showRestoreSeed();
     });
   }
 
@@ -1621,9 +1636,16 @@ export class UIRenderer {
         }
         return this.callbacks.persistSetting(key, value);
       },
-      (action) => {
+      async (action) => {
         if (action === 'generateSeed') {
           this.callbacks.onSettingsAction?.(action);
+        } else if (action === 'seed-transfer') {
+          const seed = await this.callbacks.getCurrentSeed?.();
+          if (seed) {
+            this.qrCodeManager.showSeedQR(seed);
+          } else {
+            this.showToast('No seed phrase found — generate one in Settings first', 'error');
+          }
         }
       },
     );
