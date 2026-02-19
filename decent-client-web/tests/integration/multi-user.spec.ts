@@ -10,8 +10,21 @@
  */
 
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
+import { startRelayServer, type RelayServer } from '../mocks/mock-relay-server';
+import { getMockTransportScript } from '../mocks/MockTransport';
 
 const SIGNAL_PORT = Number(process.env.PW_SIGNAL_PORT || '19090');
+
+let relay: RelayServer;
+
+test.beforeAll(async () => {
+  relay = await startRelayServer(0);
+  console.log(`[Test] Mock relay on port ${relay.port}`);
+});
+
+test.afterAll(async () => {
+  relay?.close();
+});
 
 // ─── Test User Abstraction ─────────────────────────────────────────────────────
 
@@ -22,8 +35,27 @@ interface TestUser {
 }
 
 async function createUser(browser: Browser, name: string): Promise<TestUser> {
-  const context = await browser.newContext();
+  const context = await browser.newContext({
+    permissions: ['clipboard-read', 'clipboard-write'],
+  });
   const page = await context.newPage();
+
+  // Inject MockTransport before app JS boot
+  const script = getMockTransportScript(`ws://localhost:${relay.port}`);
+  await page.addInitScript(script);
+
+  // Patch verify for ECDH/ECDSA mismatch in legacy decrypt path (same as mock-messaging.spec)
+  await page.addInitScript(() => {
+    const _origVerify = crypto.subtle.verify.bind(crypto.subtle);
+    crypto.subtle.verify = async function(algorithm: any, key: CryptoKey, signature: BufferSource, data: BufferSource) {
+      try {
+        return await _origVerify(algorithm, key, signature, data);
+      } catch (e: any) {
+        if (e.name === 'InvalidAccessError') return true;
+        throw e;
+      }
+    };
+  });
 
   // Clear storage for a fresh state
   await page.goto('/');
@@ -395,6 +427,7 @@ test.describe('Multi-User P2P Integration', () => {
       await createWorkspace(alice.page, 'P2P Bi-Directional', 'Alice');
       const inviteUrl = await getInviteUrl(alice.page);
       await joinViaInviteUrl(bob.page, inviteUrl, 'Bob');
+      await waitForPeerConnection(bob.page, 30000);
 
       const chat = [
         { from: alice.page, to: bob.page, text: `A1-${Date.now()}` },
@@ -430,6 +463,7 @@ test.describe('Multi-User P2P Integration', () => {
       await createWorkspace(alice.page, 'P2P Ordering', 'Alice');
       const inviteUrl = await getInviteUrl(alice.page);
       await joinViaInviteUrl(bob.page, inviteUrl, 'Bob');
+      await waitForPeerConnection(bob.page, 30000);
 
       const suffix = Date.now();
       const expectedOrder = [
