@@ -461,3 +461,23 @@ Config updatnutý, gateway reštartnutý. Teraz beží test sub-agent na overeni
 [90m2026-02-19T13:10:03.267Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
 [90m2026-02-19T13:10:03.514Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
 [90m2026-02-19T13:10:03.559Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:10:15.598Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:10:15.744Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:10:24.452Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:10:24.581Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:10:24.819Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T13:10:38.433Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:10:42.084Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:10:52.937Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:11:24.923Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:11:28.698Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:11:32.770Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:11:44.052Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:11:55.327Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:11:58.307Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:12:48.230Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:12:54.963Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:13:02.556Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:13:34.367Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:14:40.522Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T13:14:52.189Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m

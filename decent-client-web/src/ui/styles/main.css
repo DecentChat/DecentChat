@@ -662,7 +662,8 @@ body {
   min-height: 56px;
 }
 
-.thread-header h3 { font-size: 15px; font-weight: 700; }
+.thread-header h3 { font-size: 15px; font-weight: 700; margin: 0; }
+.thread-header-info { flex: 1; min-width: 0; }
 
 .thread-close {
   background: none;
@@ -1451,7 +1452,11 @@ body.compact .messages-list { gap: 0; }
     z-index: 50;
     width: 100%;
     transition: right 0.25s ease;
+    /* Override desktop display:none — use off-screen positioning instead */
+    display: flex !important;
   }
+  /* When hidden on mobile: keep flex but push off-screen */
+  .thread-panel.hidden:not(.open) { right: -100%; }
   .thread-panel.open { right: 0; }
 
   .mobile-overlay {
@@ -1612,6 +1617,23 @@ body.compact .messages-list { gap: 0; }
     padding: 8px 10px;
     min-width: 44px;
     min-height: 44px;
+  }
+
+  /* Thread button: always show on mobile (no hover state) */
+  .message-thread-btn {
+    display: inline-block !important;
+  }
+
+  /* Thread header: fix height for notch */
+  .thread-header {
+    padding-top: max(12px, env(safe-area-inset-top));
+    min-height: 56px;
+  }
+
+  /* Thread messages: momentum scroll */
+  .thread-messages {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
   }
 
   /* Connection bar: don't forget it */

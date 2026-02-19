@@ -204,7 +204,10 @@ async function init(): Promise<void> {
     appendMessageToDOM: (msg) => ui.appendMessageToDOM(msg),
     showToast: (message, type) => ui.showToast(message, type),
     renderThreadMessages: () => ui.renderThreadMessages(),
+    renderMessages: () => ui.renderMessages(),
     renderApp: () => ui.renderApp(),
+    updateThreadIndicator: (parentMessageId, channelId) =>
+      ui.updateThreadIndicator(parentMessageId, channelId),
   });
 
   // Wire typing indicator

@@ -66,7 +66,10 @@ export interface UIUpdater {
   appendMessageToDOM: (msg: PlaintextMessage) => void;
   showToast: (message: string, type?: 'info' | 'error' | 'success') => void;
   renderThreadMessages: () => void;
+  renderMessages: () => void;
   renderApp: () => void;
+  /** Update the thread reply indicator on a parent message in the main list */
+  updateThreadIndicator: (parentMessageId: string, channelId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -417,7 +420,8 @@ export class ChatController {
           }
         }
 
-        const msg = await this.messageStore.createMessage(channelId, peerId, content);
+        // Pass threadId so replies land in the correct thread (not the main channel)
+        const msg = await this.messageStore.createMessage(channelId, peerId, content, 'text', data.threadId);
         msg.timestamp = data.timestamp;
         (msg as any).vectorClock = data.vectorClock;
         const result = await this.messageStore.addMessage(msg);
@@ -430,6 +434,7 @@ export class ChatController {
             senderId: msg.senderId,
             content: msg.content,
             type: (msg.type || 'text') as any,
+            threadId: data.threadId,     // propagate threadId to CRDT
             vectorClock: data.vectorClock || {},
             wallTime: msg.timestamp,
             prevHash: msg.prevHash || '',
@@ -438,17 +443,27 @@ export class ChatController {
           await this.persistMessage(msg);
 
           if (channelId === this.state.activeChannelId) {
-            this.ui?.appendMessageToDOM(msg);
+            if (msg.threadId) {
+              // It's a thread reply — update the parent message's reply indicator and
+              // re-render the thread panel if it's open and showing the right thread
+              this.ui?.updateThreadIndicator(msg.threadId, channelId);
+              if (this.state.threadOpen && this.state.activeThreadId === msg.threadId) {
+                this.ui?.renderThreadMessages();
+              }
+            } else {
+              this.ui?.appendMessageToDOM(msg);
+            }
           }
 
           // Notify
           const ws = this.state.activeWorkspaceId
             ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId) : null;
           const ch = ws ? this.workspaceManager.getChannel(ws.id, channelId) : null;
+          const notifyName = this.getPeerAliasForChannel(peerId, channelId);
           this.notifications.notify(
             channelId,
             ch ? (ch.type === 'dm' ? ch.name : '#' + ch.name) : 'channel',
-            peerId.slice(0, 8),
+            notifyName,
             content,
           );
         }
@@ -1433,6 +1448,17 @@ export class ChatController {
 
     this.persistWorkspace(ws.id).catch(() => {});
     this.ui?.updateSidebar();
+  }
+
+  /** Resolve a peer's display name given a channel context (looks through workspace members) */
+  private getPeerAliasForChannel(peerId: string, channelId: string): string {
+    for (const ws of this.workspaceManager.getAllWorkspaces()) {
+      if (ws.channels.some((ch: any) => ch.id === channelId)) {
+        const member = ws.members.find((m: any) => m.peerId === peerId);
+        if (member?.alias) return member.alias;
+      }
+    }
+    return peerId.slice(0, 8);
   }
 
   /** Returns display name for the given workspace, falling back to global alias or peer ID slice */

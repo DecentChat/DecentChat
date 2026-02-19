@@ -191,13 +191,16 @@ export class UIRenderer {
             </div>
             <div class="thread-panel hidden" id="thread-panel">
               <div class="thread-header">
-                <h3>Thread</h3>
-                <button class="thread-close" id="thread-close">✕</button>
+                <div class="thread-header-info">
+                  <h3>💬 Thread</h3>
+                  <div class="thread-header-preview" style="font-size:12px; opacity:0.6; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+                </div>
+                <button class="thread-close icon-btn" id="thread-close">✕</button>
               </div>
               <div class="thread-messages" id="thread-messages"></div>
               <div class="thread-compose">
                 <div class="compose-inner">
-                  <textarea class="compose-input" id="thread-input" placeholder="Reply..." rows="1"></textarea>
+                  <textarea class="compose-input" id="thread-input" placeholder="Reply in thread…" rows="1"></textarea>
                   <button class="compose-send" id="thread-send-btn">⬆</button>
                 </div>
               </div>
@@ -631,14 +634,67 @@ export class UIRenderer {
   openThread(messageId: string): void {
     this.state.activeThreadId = messageId;
     this.state.threadOpen = true;
-    document.getElementById('thread-panel')!.classList.remove('hidden');
+    const panel = document.getElementById('thread-panel')!;
+    panel.classList.remove('hidden');
+    panel.classList.add('open'); // needed for mobile slide-in
+
+    // Update thread header with parent message preview
+    const parentEl = panel.querySelector('.thread-header h3');
+    if (parentEl && this.state.activeChannelId) {
+      const parent = this.messageStore.getMessages(this.state.activeChannelId)
+        .find((m: PlaintextMessage) => m.id === messageId);
+      if (parent) {
+        const preview = parent.content.length > 60
+          ? parent.content.slice(0, 60) + '…'
+          : parent.content;
+        parentEl.textContent = `💬 Thread`;
+        const sub = panel.querySelector('.thread-header-preview') as HTMLElement | null;
+        if (sub) {
+          sub.textContent = preview;
+        }
+      }
+    }
+
     this.renderThreadMessages();
+
+    // Focus the thread input
+    setTimeout(() => {
+      (document.getElementById('thread-input') as HTMLTextAreaElement)?.focus();
+    }, 100);
   }
 
   closeThread(): void {
     this.state.activeThreadId = null;
     this.state.threadOpen = false;
-    document.getElementById('thread-panel')?.classList.add('hidden');
+    const panel = document.getElementById('thread-panel');
+    panel?.classList.add('hidden');
+    panel?.classList.remove('open'); // remove mobile slide-in class
+  }
+
+  /**
+   * Update the thread reply indicator on the parent message in the main list.
+   * Called when a new thread reply arrives from a peer.
+   */
+  updateThreadIndicator(parentMessageId: string, channelId: string): void {
+    const parentDiv = document.querySelector(`[data-message-id="${parentMessageId}"]`);
+    if (!parentDiv) return;
+
+    const count = this.messageStore.getThread(channelId, parentMessageId).length;
+    let indicator = parentDiv.querySelector('.message-thread-indicator') as HTMLElement | null;
+
+    if (count > 0) {
+      if (!indicator) {
+        // Create indicator if it doesn't exist yet
+        indicator = document.createElement('div');
+        indicator.className = 'message-thread-indicator';
+        indicator.dataset.threadId = parentMessageId;
+        indicator.addEventListener('click', () => this.openThread(parentMessageId));
+        // Insert before reactions row
+        const reactionsRow = parentDiv.querySelector('.message-reactions');
+        reactionsRow?.parentElement?.insertBefore(indicator, reactionsRow);
+      }
+      indicator.textContent = `💬 ${count} ${count === 1 ? 'reply' : 'replies'}`;
+    }
   }
 
   // =========================================================================
