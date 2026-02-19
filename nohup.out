@@ -607,3 +607,103 @@ Config updatnutý, gateway reštartnutý. Teraz beží test sub-agent na overeni
 [90m2026-02-19T16:46:15.085Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
 [90m2026-02-19T16:46:21.858Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
 [90m2026-02-19T16:46:26.245Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:46:50.132Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:46:50.431Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T16:46:53.368Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T16:46:53.680Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:47:17.248Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771507798.603409)[39m
+[90m2026-02-19T16:47:49.247Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771507960.321469)[39m
+[90m2026-02-19T16:47:58.334Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T16:49:02.058Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T16:49:02.377Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:49:05.683Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:49:13.523Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:49:27.645Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:49:30.386Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:50:17.146Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:50:19.925Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:50:26.562Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:50:26.862Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T16:51:15.949Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:51:20.863Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:52:57.462Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:53:04.657Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:54:58.097Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771510676.919579)[39m
+[90m2026-02-19T16:54:58.276Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 1536x1024px 2.77MB -> 46.0KB (-98.4%)[39m
+[90m2026-02-19T16:55:17.851Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T16:55:18.163Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+2026-02-19T17:55:23.722+01:00 [tools] browser failed: Can't reach the OpenClaw browser control service. Restart the OpenClaw gateway (OpenClaw.app menubar, or `openclaw gateway`). Do NOT retry the browser tool — it will keep failing. Use an alternative approach or inform the user that the browser is currently unavailable. (Error: Error: Chrome extension relay is running, but no tab is connected. Click the OpenClaw Chrome extension icon on a tab to attach it (profile "chrome").)
+[90m2026-02-19T16:55:34.004Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:55:42.341Z[39m [33m[agent/embedded][39m [33membedded run timeout: runId=d1c43e08-351d-4382-9f61-bb09bf5e2b7b sessionId=8f8a8734-7173-47b9-a5f0-b01db8ac1e50 timeoutMs=600000[39m
+[90m2026-02-19T16:55:42.358Z[39m [33m[agent/embedded][39m [33mProfile anthropic:default timed out (possible rate limit). Trying next account...[39m
+[90m2026-02-19T16:55:42.359Z[39m [31m[diagnostic][39m [31mlane task error: lane=main durationMs=600058 error="FailoverError: LLM request timed out."[39m
+[90m2026-02-19T16:55:42.360Z[39m [31m[diagnostic][39m [31mlane task error: lane=session:agent:main:slack:channel:c0afdrzbz34:thread:1771519142.009939 durationMs=600061 error="FailoverError: LLM request timed out."[39m
+[90m2026-02-19T16:55:42.387Z[39m [31m[diagnostic][39m [31mlane task error: lane=main durationMs=21 error="FailoverError: No available auth profile for anthropic (all in cooldown or unavailable)."[39m
+[90m2026-02-19T16:55:42.388Z[39m [31m[diagnostic][39m [31mlane task error: lane=session:agent:main:slack:channel:c0afdrzbz34:thread:1771519142.009939 durationMs=25 error="FailoverError: No available auth profile for anthropic (all in cooldown or unavailable)."[39m
+[90m2026-02-19T16:55:42.404Z[39m [31m[diagnostic][39m [31mlane task error: lane=main durationMs=13 error="FailoverError: No available auth profile for anthropic (all in cooldown or unavailable)."[39m
+[90m2026-02-19T16:55:42.405Z[39m [31m[diagnostic][39m [31mlane task error: lane=session:agent:main:slack:channel:c0afdrzbz34:thread:1771519142.009939 durationMs=15 error="FailoverError: No available auth profile for anthropic (all in cooldown or unavailable)."[39m
+[90m2026-02-19T16:55:42.421Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771519142.009939)[39m
+[90m2026-02-19T16:55:49.885Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:55:56.077Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:56:12.649Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:56:12.933Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+2026-02-19T17:57:21.545+01:00 typing TTL reached (2m); stopping typing indicator
+[90m2026-02-19T16:59:12.715Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771510676.919579)[39m
+[90m2026-02-19T16:59:12.896Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 1536x1024px 2.77MB -> 46.0KB (-98.4%)[39m
+[90m2026-02-19T16:59:38.297Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T16:59:38.637Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:59:47.545Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T16:59:47.830Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T17:02:09.029Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771510676.919579)[39m
+[90m2026-02-19T17:02:09.211Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 1536x1024px 2.77MB -> 46.0KB (-98.4%)[39m
+[90m2026-02-19T17:02:35.538Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:02:41.534Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:02:54.346Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T17:02:54.680Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:03:08.401Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:03:39.238Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:03:45.456Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:03:54.545Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:04:01.490Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:04:03.222Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:04:07.746Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:04:09.800Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:04:21.506Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:04:21.749Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T17:04:35.562Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:05:13.402Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:05:29.585Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:05:35.087Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:05:42.432Z[39m [33m[agent/embedded][39m [33membedded run timeout: runId=d1c43e08-351d-4382-9f61-bb09bf5e2b7b sessionId=8f8a8734-7173-47b9-a5f0-b01db8ac1e50 timeoutMs=600000[39m
+[90m2026-02-19T17:05:42.441Z[39m [31m[diagnostic][39m [31mlane task error: lane=main durationMs=600033 error="FailoverError: LLM request timed out."[39m
+[90m2026-02-19T17:05:42.441Z[39m [31m[diagnostic][39m [31mlane task error: lane=session:agent:main:slack:channel:c0afdrzbz34:thread:1771519142.009939 durationMs=600035 error="FailoverError: LLM request timed out."[39m
+[90m2026-02-19T17:05:42.468Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771519142.009939)[39m
+[90m2026-02-19T17:15:42.479Z[39m [33m[agent/embedded][39m [33membedded run timeout: runId=d1c43e08-351d-4382-9f61-bb09bf5e2b7b sessionId=8f8a8734-7173-47b9-a5f0-b01db8ac1e50 timeoutMs=600000[39m
+[90m2026-02-19T17:15:42.493Z[39m [31m[diagnostic][39m [31mlane task error: lane=main durationMs=600047 error="FailoverError: Request was aborted"[39m
+[90m2026-02-19T17:15:42.494Z[39m [31m[diagnostic][39m [31mlane task error: lane=session:agent:main:slack:channel:c0afdrzbz34:thread:1771519142.009939 durationMs=600050 error="FailoverError: Request was aborted"[39m
+[90m2026-02-19T17:15:42.538Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771519142.009939)[39m
+[90m2026-02-19T17:15:43.330Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T17:16:29.018Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771510676.919579)[39m
+[90m2026-02-19T17:16:29.245Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 1924x1706px 316.4KB -> 35.2KB (-88.9%)[39m
+[90m2026-02-19T17:16:50.640Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T17:16:50.964Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:18:50.851Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771510676.919579)[39m
+[90m2026-02-19T17:18:51.142Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 1536x1024px 2.77MB -> 46.0KB (-98.4%)[39m
+[90m2026-02-19T17:19:58.492Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T17:19:58.812Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:20:53.227Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:21:41.863Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:21:51.367Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:21:54.764Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:22:12.199Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:22:22.930Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:22:23.215Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T17:32:49.303Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771510676.919579)[39m
+[90m2026-02-19T17:32:49.488Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 1536x1024px 2.77MB -> 46.0KB (-98.4%)[39m
+[90m2026-02-19T17:33:30.483Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T17:33:30.840Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T17:33:31.126Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T17:35:12.044Z[39m [35m[whatsapp][39m [31mWeb connection closed (status 428). Retry 1/12 in 2.34s… (status=428 Precondition Required Connection Terminated)[39m
+[90m2026-02-19T17:35:16.040Z[39m [35m[whatsapp][39m [36mListening for personal WhatsApp inbound messages.[39m
+[90m2026-02-19T17:36:27.416Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34)[39m
+2026-02-19T18:38:41.894+01:00 typing TTL reached (2m); stopping typing indicator

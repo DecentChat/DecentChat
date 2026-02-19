@@ -150,107 +150,236 @@ export class UIRenderer {
     this.hideLoading();
     const app = document.getElementById('app')!;
     app.innerHTML = `
-      <div class="welcome-screen">
+      <div class="landing-page">
+
+        <!-- ── Sticky Nav ── -->
+        <nav class="landing-nav">
+          <div class="landing-nav-inner">
+            <div class="landing-nav-brand">
+              <img src="/icons/logo-v2-light.png" alt="Deci" class="landing-nav-logo" />
+              <span class="landing-nav-name">DecentChat</span>
+            </div>
+            <div class="landing-nav-actions">
+              <button class="btn-secondary btn-sm" id="join-ws-btn-nav">Join workspace</button>
+              <button class="btn-primary btn-sm" id="create-ws-btn-nav">Launch App →</button>
+            </div>
+          </div>
+        </nav>
 
         <!-- ── Hero ── -->
-        <div class="welcome-hero">
-          <img src="/icons/logo-light.png" alt="DecentChat" class="welcome-logo" />
-          <h1>DecentChat</h1>
-          <p class="welcome-tagline">Chat that belongs to you.<br>No servers. No accounts. No one watching.</p>
-          <div class="welcome-actions">
-            <button class="btn-primary" id="create-ws-btn">Create Workspace</button>
-            <button class="btn-secondary" id="join-ws-btn">Join with Invite Code</button>
+        <section class="lp-hero">
+          <div class="lp-hero-inner">
+            <div class="lp-hero-badge">🔒 100% private · No servers · No accounts</div>
+            <h1 class="lp-hero-title">Chat that belongs<br>to <em>you</em>.</h1>
+            <p class="lp-hero-sub">
+              WhatsApp stores your data. Telegram stores your data. Slack stores your data.
+              <strong>DecentChat stores nothing.</strong> Messages go directly between people — encrypted, peer-to-peer, serverless.
+            </p>
+            <div class="lp-hero-actions">
+              <button class="btn-primary btn-lg" id="create-ws-btn">Start Chatting Free →</button>
+              <button class="btn-secondary btn-lg" id="join-ws-btn">Join with Invite Code</button>
+            </div>
+            <p class="lp-hero-note">No signup · No phone number · Works in your browser</p>
           </div>
-          <p class="welcome-peer-hint">
-            Your ID: <code id="welcome-peer-id" title="Click to copy">${this.state.myPeerId.slice(0, 20)}…</code>
-          </p>
-          <p class="welcome-restore-hint">
-            Already have an account?
-            <button class="restore-link-btn" id="restore-identity-btn">Restore from seed phrase →</button>
-          </p>
-        </div>
-
-        <!-- ── What is this? ── -->
-        <div class="welcome-about">
-          <div class="welcome-divider">
-            <span>What is DecentChat?</span>
+          <div class="lp-hero-mascot">
+            <img src="/icons/logo-v2-light.png" alt="Deci the DecentChat mascot" class="hero-deci" />
           </div>
+        </section>
 
-          <p class="welcome-about-lead">
-            Every chat app you use today stores your messages on a third party's computer.
-            They can read them, sell them, lose them, or be forced to hand them over.
-            <strong>DecentChat is different.</strong>
-          </p>
-
-          <div class="welcome-features">
-
-            <div class="welcome-feature">
-              <div class="welcome-feature-icon">🔒</div>
-              <div>
-                <h3>Actually private</h3>
-                <p>Messages travel directly between you and the other person — encrypted end-to-end with the same Double Ratchet protocol used by Signal. They never touch a server. There is no server.</p>
+        <!-- ── Problem banner ── -->
+        <section class="lp-problem">
+          <div class="lp-container">
+            <div class="lp-problem-grid">
+              <div class="lp-problem-item">
+                <span class="lp-problem-icon">📡</span>
+                <strong>WhatsApp</strong> — owned by Meta, messages on their servers
+              </div>
+              <div class="lp-problem-item">
+                <span class="lp-problem-icon">🕵️</span>
+                <strong>Telegram</strong> — not E2E by default, cloud stored
+              </div>
+              <div class="lp-problem-item">
+                <span class="lp-problem-item-highlight">✅</span>
+                <strong>DecentChat</strong> — zero servers, zero data collected
               </div>
             </div>
-
-            <div class="welcome-feature">
-              <div class="welcome-feature-icon">🔑</div>
-              <div>
-                <h3>Your identity is a key, not an email</h3>
-                <p>No phone number. No sign-up. Your identity is a 12-word seed phrase — like a crypto wallet. Back it up on paper and you own your identity forever, on any device.</p>
-              </div>
-            </div>
-
-            <div class="welcome-feature">
-              <div class="welcome-feature-icon">🌐</div>
-              <div>
-                <h3>Serverless isn't a buzzword here</h3>
-                <p>Workspaces, channels, DMs — all synced peer-to-peer using WebRTC. Like BitTorrent, but for chat. No account to delete. No company to go bankrupt. No data center to breach.</p>
-              </div>
-            </div>
-
-            <div class="welcome-feature">
-              <div class="welcome-feature-icon">⚡</div>
-              <div>
-                <h3>Forward secrecy by default</h3>
-                <p>Keys rotate with every message. Even if someone steals your device tomorrow, they can't decrypt what you wrote yesterday. The math makes it impossible.</p>
-              </div>
-            </div>
-
-            <div class="welcome-feature">
-              <div class="welcome-feature-icon">📱</div>
-              <div>
-                <h3>Works everywhere</h3>
-                <p>It's a PWA — install it from your browser on any device. No app store, no update nags, no permissions you didn't ask for. It even works offline and syncs when you reconnect.</p>
-              </div>
-            </div>
-
-            <div class="welcome-feature">
-              <div class="welcome-feature-icon">🐙</div>
-              <div>
-                <h3>Built in the open</h3>
-                <p>The protocol is documented, the code is readable. You can run your own signaling server. You can fork the whole thing. Deci the octopus approves.</p>
-              </div>
-            </div>
-
           </div>
+        </section>
 
-          <div class="welcome-cta">
-            <p>Ready to own your conversations?</p>
-            <button class="btn-primary" id="create-ws-btn-2">Get started →</button>
+        <!-- ── How it works ── -->
+        <section class="lp-how">
+          <div class="lp-container">
+            <h2 class="lp-section-title">How it works</h2>
+            <p class="lp-section-sub">Three steps. No servers involved.</p>
+            <div class="lp-steps">
+              <div class="lp-step">
+                <div class="lp-step-num">1</div>
+                <div class="lp-step-content">
+                  <h3>Generate your identity</h3>
+                  <p>A 12-word seed phrase is created right in your browser. Like a crypto wallet — no email, no phone, no verification. You own it forever.</p>
+                </div>
+              </div>
+              <div class="lp-step-arrow">→</div>
+              <div class="lp-step">
+                <div class="lp-step-num">2</div>
+                <div class="lp-step-content">
+                  <h3>Create or join a workspace</h3>
+                  <p>Create a workspace and share an invite link. Your contacts connect directly to your device via WebRTC. No server reads your messages.</p>
+                </div>
+              </div>
+              <div class="lp-step-arrow">→</div>
+              <div class="lp-step">
+                <div class="lp-step-num">3</div>
+                <div class="lp-step-content">
+                  <h3>Chat with total privacy</h3>
+                  <p>Messages are encrypted before leaving your device using Signal's Double Ratchet. Even the signaling server — the only server that exists — never sees your content.</p>
+                </div>
+              </div>
+            </div>
           </div>
+        </section>
 
-          <p class="welcome-fine-print">
-            DecentChat uses WebRTC for data transport and only requires a tiny signaling server to help peers find each other — it never sees your messages.
-            Once connected, the signaling server is out of the picture entirely.
-          </p>
-        </div>
+        <!-- ── Features ── -->
+        <section class="lp-features">
+          <div class="lp-container">
+            <h2 class="lp-section-title">Everything you need.<br>Nothing you don't.</h2>
+            <div class="lp-features-grid">
+              <div class="lp-feature-card">
+                <div class="lp-feature-icon">🔒</div>
+                <h3>Double Ratchet E2E</h3>
+                <p>Same encryption protocol as Signal. Keys rotate with every single message — past messages stay private forever, even if keys are compromised.</p>
+              </div>
+              <div class="lp-feature-card">
+                <div class="lp-feature-icon">🌐</div>
+                <h3>True P2P — No Server</h3>
+                <p>WebRTC peer-to-peer data channels. A tiny signaling server helps peers find each other, then disappears. Like BitTorrent, but for private chat.</p>
+              </div>
+              <div class="lp-feature-card">
+                <div class="lp-feature-icon">🔑</div>
+                <h3>Seed Phrase Identity</h3>
+                <p>12 words = your permanent identity. Works on any device. Back it up on paper. No company, no cloud, no way to lock you out of your own account.</p>
+              </div>
+              <div class="lp-feature-card">
+                <div class="lp-feature-icon">💬</div>
+                <h3>Full-Featured Chat</h3>
+                <p>Workspaces, channels, DMs, threads, reactions, file sharing, search, slash commands — everything Slack has, with none of the surveillance.</p>
+              </div>
+              <div class="lp-feature-card">
+                <div class="lp-feature-icon">📱</div>
+                <h3>Install Anywhere</h3>
+                <p>Progressive Web App — install from any browser on any device. iOS, Android, desktop. No app store, no permissions you didn't ask for.</p>
+              </div>
+              <div class="lp-feature-card">
+                <div class="lp-feature-icon">⚡</div>
+                <h3>Offline-First Sync</h3>
+                <p>Messages queue when offline and sync when peers reconnect using CRDTs and Negentropy set reconciliation. No message ever gets lost.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Comparison ── -->
+        <section class="lp-compare">
+          <div class="lp-container">
+            <h2 class="lp-section-title">The honest comparison</h2>
+            <div class="lp-compare-table">
+              <div class="lp-compare-header">
+                <span>Feature</span>
+                <span>WhatsApp / Telegram</span>
+                <span class="lp-compare-us">DecentChat 🐙</span>
+              </div>
+              <div class="lp-compare-row">
+                <span>Messages stored on servers</span>
+                <span class="bad">✓ Yes</span>
+                <span class="good">✗ Never</span>
+              </div>
+              <div class="lp-compare-row">
+                <span>Requires phone / email</span>
+                <span class="bad">✓ Required</span>
+                <span class="good">✗ None needed</span>
+              </div>
+              <div class="lp-compare-row">
+                <span>End-to-end encrypted by default</span>
+                <span class="mid">⚠️ Partial</span>
+                <span class="good">✓ Always</span>
+              </div>
+              <div class="lp-compare-row">
+                <span>Can be legally subpoenaed</span>
+                <span class="bad">✓ Yes</span>
+                <span class="good">Nothing to hand over</span>
+              </div>
+              <div class="lp-compare-row">
+                <span>Survives company going bust</span>
+                <span class="bad">✗ App dies too</span>
+                <span class="good">✓ Protocol lives forever</span>
+              </div>
+              <div class="lp-compare-row">
+                <span>Forward secrecy</span>
+                <span class="mid">⚠️ Sometimes</span>
+                <span class="good">✓ Every message</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Tech stack ── -->
+        <section class="lp-tech">
+          <div class="lp-container">
+            <h2 class="lp-section-title">Built on proven technology</h2>
+            <div class="lp-tech-pills">
+              <span class="lp-tech-pill">Signal's Double Ratchet</span>
+              <span class="lp-tech-pill">WebRTC P2P</span>
+              <span class="lp-tech-pill">BIP39 Seed Phrases</span>
+              <span class="lp-tech-pill">AES-GCM-256</span>
+              <span class="lp-tech-pill">ECDH P-256</span>
+              <span class="lp-tech-pill">CRDTs + Vector Clocks</span>
+              <span class="lp-tech-pill">Negentropy Set Sync</span>
+              <span class="lp-tech-pill">IndexedDB Persistence</span>
+              <span class="lp-tech-pill">Service Worker PWA</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Final CTA ── -->
+        <section class="lp-final-cta">
+          <div class="lp-container">
+            <img src="/icons/logo-v2-light.png" alt="Deci" class="lp-cta-mascot" />
+            <h2>Your conversations.<br>Your keys. Your rules.</h2>
+            <p>Start in 10 seconds. No signup. No credit card. No catch.</p>
+            <div class="lp-hero-actions" style="justify-content:center; margin-top: 24px;">
+              <button class="btn-primary btn-lg" id="create-ws-btn-2">Start Chatting Free →</button>
+              <button class="btn-secondary btn-lg" id="join-ws-btn-2">Join with Invite Code</button>
+            </div>
+            <p class="lp-restore-hint">
+              Already have an account?
+              <button class="restore-link-btn" id="restore-identity-btn">Restore from seed phrase →</button>
+            </p>
+          </div>
+        </section>
+
+        <!-- ── Footer ── -->
+        <footer class="lp-footer">
+          <div class="lp-container">
+            <div class="lp-footer-inner">
+              <div class="lp-footer-brand">
+                <img src="/icons/logo-v2-light.png" alt="Deci" style="width:24px;height:24px;margin-right:8px;" />
+                <strong>DecentChat</strong>
+              </div>
+              <p class="lp-footer-note">Open protocol · No tracking · No ads · Built with ❤️ and WebRTC</p>
+              <p class="lp-footer-peer">Your anonymous ID: <code id="welcome-peer-id" title="Click to copy">${this.state.myPeerId.slice(0, 20)}…</code></p>
+            </div>
+          </div>
+        </footer>
 
       </div>
     `;
 
     document.getElementById('create-ws-btn')!.addEventListener('click', () => this.showCreateWorkspaceModal());
     document.getElementById('create-ws-btn-2')!.addEventListener('click', () => this.showCreateWorkspaceModal());
+    document.getElementById('create-ws-btn-nav')!.addEventListener('click', () => this.showCreateWorkspaceModal());
     document.getElementById('join-ws-btn')!.addEventListener('click', () => this.showJoinWorkspaceModal());
+    document.getElementById('join-ws-btn-2')!.addEventListener('click', () => this.showJoinWorkspaceModal());
+    document.getElementById('join-ws-btn-nav')!.addEventListener('click', () => this.showJoinWorkspaceModal());
     document.getElementById('welcome-peer-id')!.addEventListener('click', () => {
       navigator.clipboard.writeText(this.state.myPeerId);
       this.showToast('Peer ID copied!');
