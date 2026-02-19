@@ -77,6 +77,8 @@ function initTitleTooltipObserver(): void {
 export interface AppState {
   myPeerId: string;
   myAlias: string;
+  /** Per-workspace display name overrides; falls back to myAlias */
+  workspaceAliases: Record<string, string>;
   connectedPeers: Set<string>;
   readyPeers: Set<string>;
   activeWorkspaceId: string | null;
@@ -96,6 +98,7 @@ async function init(): Promise<void> {
   const state: AppState = {
     myPeerId: '',
     myAlias: '',
+    workspaceAliases: {},
     connectedPeers: new Set(),
     readyPeers: new Set(),
     activeWorkspaceId: null,
@@ -190,6 +193,7 @@ async function init(): Promise<void> {
     },
     getMyPublicKey: () => ctrl.myPublicKey,
     getAllWorkspaces: () => ctrl.workspaceManager.getAllWorkspaces(),
+    setWorkspaceAlias: (wsId, alias) => ctrl.setWorkspaceAlias(wsId, alias),
   });
 
   // Give the controller a handle to the UI for push updates
@@ -207,7 +211,14 @@ async function init(): Promise<void> {
     if (channelId !== state.activeChannelId) return;
     const text = ctrl.presence.formatTypingText(
       typingPeers.filter(p => p !== state.myPeerId),
-      (peerId) => peerId.slice(0, 8),
+      (peerId) => ctrl.getMyAliasForWorkspace === undefined
+        ? peerId.slice(0, 8)
+        : (() => {
+            if (!state.activeWorkspaceId) return peerId.slice(0, 8);
+            const ws = ctrl.workspaceManager.getWorkspace(state.activeWorkspaceId);
+            const member = ws?.members.find((m: any) => m.peerId === peerId);
+            return member?.alias || peerId.slice(0, 8);
+          })(),
     );
     ui.updateTypingIndicator(text);
   };

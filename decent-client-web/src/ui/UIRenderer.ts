@@ -68,6 +68,8 @@ export interface UICallbacks {
   getDirectConversations?: () => Promise<DirectConversation[]>;
   /** Get all workspaces for the workspace switcher */
   getAllWorkspaces?: () => Array<import('decent-protocol').Workspace>;
+  /** Set a per-workspace display name alias */
+  setWorkspaceAlias?: (wsId: string, alias: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -396,7 +398,7 @@ export class UIRenderer {
           ${Array.from(this.state.connectedPeers).map(peerId => `
             <div class="sidebar-item" style="font-size:13px;">
               <span class="dm-status ${this.state.readyPeers.has(peerId) ? 'online' : ''}"></span>
-              ${peerId.slice(0, 16)}...
+              ${this.escapeHtml(this.getPeerAlias(peerId))}
             </div>
           `).join('')}
         </div>
@@ -536,7 +538,10 @@ export class UIRenderer {
     if (emptyState) emptyState.remove();
 
     const isMine = msg.senderId === this.state.myPeerId;
-    const senderName = isMine ? this.state.myAlias || 'You' : this.getPeerAlias(msg.senderId);
+    const myDisplayName = (this.state.activeWorkspaceId && this.state.workspaceAliases?.[this.state.activeWorkspaceId])
+      || this.state.myAlias
+      || 'You';
+    const senderName = isMine ? myDisplayName : this.getPeerAlias(msg.senderId);
     const initial = senderName.slice(0, 2).toUpperCase();
     const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -1405,9 +1410,22 @@ export class UIRenderer {
 
   /** Show settings panel */
   showSettings(): void {
+    const wsId = this.state.activeWorkspaceId;
     this.settingsPanel = new SettingsPanel(
-      async () => ({ ...await (this.callbacks.getSettings?.() || {}), myPeerId: this.state.myPeerId, myAlias: this.state.myAlias }),
-      (key, value) => this.callbacks.persistSetting(key, value),
+      async () => ({
+        ...await (this.callbacks.getSettings?.() || {}),
+        myPeerId: this.state.myPeerId,
+        myAlias: this.state.myAlias,
+        activeWorkspaceId: wsId,
+        workspaceAlias: wsId ? (this.state.workspaceAliases?.[wsId] || '') : '',
+      }),
+      (key, value) => {
+        if (key === 'workspaceAlias' && wsId) {
+          this.callbacks.setWorkspaceAlias?.(wsId, value as string);
+          return Promise.resolve();
+        }
+        return this.callbacks.persistSetting(key, value);
+      },
       (action) => {
         if (action === 'generateSeed') {
           this.callbacks.onSettingsAction?.(action);
@@ -1559,12 +1577,17 @@ export class UIRenderer {
   }
 
   private getPeerAlias(peerId: string): string {
-    // Check contacts first
+    // Check contacts first (explicitly added contacts take priority)
     const contact = this.cachedContacts.find(c => c.peerId === peerId);
     if (contact) return contact.displayName;
 
-    if (!this.state.activeWorkspaceId) return peerId.slice(0, 12);
-    const member = this.workspaceManager.getMember(this.state.activeWorkspaceId, peerId);
-    return member?.alias || peerId.slice(0, 12);
+    // Check workspace member alias
+    if (this.state.activeWorkspaceId) {
+      const member = this.workspaceManager.getMember(this.state.activeWorkspaceId, peerId);
+      if (member?.alias) return member.alias;
+    }
+
+    // Final fallback: truncated peer ID
+    return peerId.slice(0, 8);
   }
 }

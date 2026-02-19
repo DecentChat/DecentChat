@@ -226,6 +226,15 @@ export class ChatController {
           // Send workspace state to new peer (channels, members, name)
           this.sendWorkspaceState(peerId);
 
+          // Announce our display name for this workspace
+          if (this.state.activeWorkspaceId) {
+            this.transport.send(peerId, {
+              type: 'name-announce',
+              workspaceId: this.state.activeWorkspaceId,
+              alias: this.getMyAliasForWorkspace(this.state.activeWorkspaceId),
+            });
+          }
+
           // Start clock sync with new peer
           const syncReq = this.clockSync.startSync(peerId);
           this.transport.send(peerId, syncReq);
@@ -272,6 +281,23 @@ export class ChatController {
         // --- Read receipts ---
         if (data?.type === 'read-receipt') {
           this.presence.handleReadReceipt(data as ReadReceipt);
+          return;
+        }
+
+        // --- Name announce (peer telling us their display name) ---
+        if (data?.type === 'name-announce' && data.workspaceId && data.alias) {
+          const ws = this.workspaceManager.getWorkspace(data.workspaceId);
+          if (ws) {
+            const member = ws.members.find((m: any) => m.peerId === peerId);
+            if (member) {
+              member.alias = data.alias;
+            } else {
+              ws.members.push({ peerId, alias: data.alias, publicKey: '', joinedAt: Date.now(), role: 'member' });
+            }
+            this.persistWorkspace(ws.id).catch(() => {});
+            this.ui?.updateSidebar();
+            this.ui?.renderMessages();
+          }
           return;
         }
 
@@ -493,10 +519,11 @@ export class ChatController {
       }
     }
 
-    // Sync members: add missing members
+    // Sync members: add missing, update aliases for existing
     if (sync.members && Array.isArray(sync.members)) {
       for (const remoteMember of sync.members) {
-        if (!localWs.members.some((m: any) => m.peerId === remoteMember.peerId)) {
+        const existing = localWs.members.find((m: any) => m.peerId === remoteMember.peerId);
+        if (!existing) {
           localWs.members.push({
             peerId: remoteMember.peerId,
             alias: remoteMember.alias || remoteMember.peerId.slice(0, 8),
@@ -504,6 +531,12 @@ export class ChatController {
             joinedAt: Date.now(),
             role: remoteMember.role || 'member',
           });
+        } else {
+          // Update alias if the remote has a better (non-empty, non-hex-id) name
+          if (remoteMember.alias && remoteMember.alias.trim()) {
+            existing.alias = remoteMember.alias;
+          }
+          if (remoteMember.publicKey) existing.publicKey = remoteMember.publicKey;
         }
       }
     }
@@ -637,6 +670,11 @@ export class ChatController {
   async restoreFromStorage(): Promise<void> {
     const savedAlias = await this.persistentStore.getSetting('myAlias');
     if (savedAlias) this.state.myAlias = savedAlias;
+
+    const savedWsAliases = await this.persistentStore.getSetting('workspaceAliases');
+    if (savedWsAliases) {
+      try { this.state.workspaceAliases = JSON.parse(savedWsAliases); } catch {}
+    }
 
     const workspaces = await this.persistentStore.getAllWorkspaces();
     console.log('[DecentChat] restoreFromStorage: found', workspaces.length, 'workspaces');
@@ -1347,5 +1385,34 @@ export class ChatController {
 
     this.persistWorkspace(ws.id).catch(() => {});
     this.ui?.updateSidebar();
+  }
+
+  /** Returns display name for the given workspace, falling back to global alias or peer ID slice */
+  getMyAliasForWorkspace(wsId: string | null): string {
+    if (wsId && this.state.workspaceAliases?.[wsId]) return this.state.workspaceAliases[wsId];
+    return this.state.myAlias || this.state.myPeerId.slice(0, 8);
+  }
+
+  /** Set a workspace-specific display name and persist it */
+  setWorkspaceAlias(wsId: string, alias: string): void {
+    if (!this.state.workspaceAliases) this.state.workspaceAliases = {};
+    this.state.workspaceAliases[wsId] = alias;
+    this.persistentStore.saveSetting('workspaceAliases', JSON.stringify(this.state.workspaceAliases));
+
+    // Update our own member entry in the workspace
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (ws) {
+      const myMember = ws.members.find((m: any) => m.peerId === this.state.myPeerId);
+      if (myMember) myMember.alias = alias;
+      this.persistWorkspace(wsId).catch(() => {});
+    }
+
+    // Announce updated name to all connected peers in this workspace
+    const targets = this.getWorkspaceRecipientPeerIds();
+    for (const peerId of targets) {
+      if (this.state.readyPeers.has(peerId)) {
+        this.transport.send(peerId, { type: 'name-announce', workspaceId: wsId, alias });
+      }
+    }
   }
 }

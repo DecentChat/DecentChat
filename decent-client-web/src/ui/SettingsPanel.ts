@@ -5,6 +5,10 @@
 export interface AppSettings {
   myPeerId?: string;
   myAlias?: string;
+  /** ID of active workspace (used to show/hide workspace-specific settings) */
+  activeWorkspaceId?: string;
+  /** Per-workspace display name override */
+  workspaceAlias?: string;
   theme?: 'auto' | 'light' | 'dark';
   notifications?: boolean;
   notificationSound?: boolean;
@@ -69,9 +73,15 @@ export class SettingsPanel {
               <code style="font-size:12px; color:var(--text-muted); user-select:all">${settings.myPeerId || 'N/A'}</code>
             </div>
             <div class="setting-row">
-              <label>Display Name</label>
+              <label>Global display name</label>
               <input type="text" data-key="myAlias" value="${settings.myAlias || ''}" placeholder="Your name" style="width:160px; padding:4px 8px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-secondary); color:var(--text); font-size:13px;" />
             </div>
+            ${settings.activeWorkspaceId ? `
+            <div class="setting-row">
+              <label>Name in this workspace</label>
+              <input type="text" data-key="workspaceAlias" value="${settings.workspaceAlias || ''}" placeholder="${settings.myAlias || 'Same as global'}" style="width:160px; padding:4px 8px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-secondary); color:var(--text); font-size:13px;" />
+            </div>
+            ` : ''}
             <div class="setting-row">
               <label>Seed Phrase</label>
               <button class="btn-secondary" id="seed-phrase-btn" style="font-size:12px; padding:4px 12px;">

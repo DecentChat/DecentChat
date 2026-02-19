@@ -390,3 +390,24 @@ Config updatnutý, gateway reštartnutý. Teraz beží test sub-agent na overeni
 [90m2026-02-19T11:45:50.920Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
 [90m2026-02-19T11:47:37.917Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
 [90m2026-02-19T11:48:43.388Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T12:01:35.195Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34)[39m
+[90m2026-02-19T12:03:44.799Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T12:03:45.146Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:05:16.270Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:05:25.327Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:05:37.812Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:06:11.516Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:06:28.416Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:06:41.057Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:07:02.347Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:07:08.544Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:07:11.267Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:07:28.572Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:07:38.813Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:07:46.651Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:08:20.353Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:08:24.710Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:08:39.385Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:08:49.872Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:08:55.049Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T12:09:05.475Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
