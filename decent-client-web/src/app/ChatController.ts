@@ -364,18 +364,51 @@ export class ChatController {
           return;
         }
 
-        let channelId = data.channelId || this.state.activeChannelId || 'default';
-        const wsForChannel = this.state.activeWorkspaceId
-          ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-          : null;
-        if (
-          wsForChannel &&
-          data.channelId &&
-          !this.workspaceManager.getChannel(wsForChannel.id, data.channelId) &&
-          wsForChannel.channels.length === 1
-        ) {
-          channelId = wsForChannel.channels[0].id;
+        // ── Workspace + membership validation ──────────────────────────────
+        // Every workspace message MUST come from a peer who is a member of a
+        // workspace that owns the target channel. Reject anything that doesn't
+        // pass — this prevents cross-workspace message leakage.
+        let channelId: string;
+        {
+          const allWorkspaces = this.workspaceManager.getAllWorkspaces();
+
+          // Prefer the explicit workspaceId in the envelope (new protocol).
+          // If workspaceId is given but unknown, reject immediately — no fallback.
+          // Legacy fallback to channelId lookup only when workspaceId is absent.
+          let targetWs;
+          if (data.workspaceId) {
+            targetWs = allWorkspaces.find(ws => ws.id === data.workspaceId);
+            if (!targetWs) {
+              console.warn(`[Security] Dropping message from ${peerId.slice(0, 8)}: unknown workspaceId ${data.workspaceId}`);
+              return;
+            }
+          } else if (data.channelId) {
+            targetWs = allWorkspaces.find(ws =>
+              ws.channels.some((ch: any) => ch.id === data.channelId)
+            );
+          }
+
+          if (!targetWs) {
+            console.warn(`[Security] Dropping message from ${peerId.slice(0, 8)}: workspace/channel not found`, data);
+            return;
+          }
+
+          // Sender must be a member of that workspace
+          const isMember = targetWs.members.some((m: any) => m.peerId === peerId);
+          if (!isMember) {
+            console.warn(`[Security] Dropping message from ${peerId.slice(0, 8)}: not a member of workspace ${targetWs.id}`);
+            return;
+          }
+
+          // Resolve channelId: use the declared one if it exists in the workspace,
+          // otherwise fall back to the first channel (handles channel-id drift on first sync)
+          if (data.channelId && targetWs.channels.some((ch: any) => ch.id === data.channelId)) {
+            channelId = data.channelId;
+          } else {
+            channelId = targetWs.channels[0]?.id || data.channelId || 'default';
+          }
         }
+
         const msg = await this.messageStore.createMessage(channelId, peerId, content);
         msg.timestamp = data.timestamp;
         (msg as any).vectorClock = data.vectorClock;
@@ -781,6 +814,7 @@ export class ChatController {
       try {
         const envelope = await this.messageProtocol!.encryptMessage(peerId, content.trim(), 'text');
         (envelope as any).channelId = this.state.activeChannelId;
+        (envelope as any).workspaceId = this.state.activeWorkspaceId;
         (envelope as any).threadId = threadId;
         (envelope as any).vectorClock = (msg as any).vectorClock;
 
@@ -1209,6 +1243,7 @@ export class ChatController {
       try {
         const envelope = await this.messageProtocol!.encryptMessage(peerId, content, 'text');
         (envelope as any).channelId = this.state.activeChannelId;
+        (envelope as any).workspaceId = this.state.activeWorkspaceId;
         (envelope as any).vectorClock = (msg as any).vectorClock;
         (envelope as any).attachments = [meta]; // Metadata travels with message
 
@@ -1365,11 +1400,12 @@ export class ChatController {
     const ws = this.state.activeWorkspaceId
       ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
       : null;
-    const workspacePeers = ws
-      ? ws.members.map((m: any) => m.peerId).filter((p: string) => p !== this.state.myPeerId)
-      : [];
-    const readyPeers = Array.from(this.state.readyPeers).filter(p => p !== this.state.myPeerId);
-    return Array.from(new Set([...workspacePeers, ...readyPeers]));
+    if (!ws) return [];
+    // ONLY send to peers who are members of the active workspace AND have a ready connection.
+    // Do NOT union with readyPeers globally — that would leak messages across workspaces.
+    return ws.members
+      .map((m: any) => m.peerId)
+      .filter((p: string) => p !== this.state.myPeerId && this.state.readyPeers.has(p));
   }
 
   private ensurePeerInActiveWorkspace(peerId: string, publicKey = ''): void {
