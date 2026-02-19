@@ -564,6 +564,36 @@ export class ChatController {
     // If our active workspace's invite code matches the remote one, or we have only 1 workspace
     if (!localWs) return;
 
+    // Remap workspace ID so both peers agree on the same ID.
+    // Deterministic rule: the lexicographically smaller ID wins.
+    // Both peers see both IDs and converge on the same canonical one.
+    if (remoteWorkspaceId && localWs.id !== remoteWorkspaceId && remoteWorkspaceId < localWs.id) {
+      const oldId = localWs.id;
+      console.log(`[Sync] Remapping workspace ID: ${oldId.slice(0, 8)} → ${remoteWorkspaceId.slice(0, 8)}`);
+
+      // Remove old entry and re-insert with canonical ID
+      this.workspaceManager.removeWorkspace(oldId);
+      localWs.id = remoteWorkspaceId;
+
+      // Update channel workspace references
+      for (const ch of localWs.channels) {
+        if ((ch as any).workspaceId === oldId) {
+          (ch as any).workspaceId = remoteWorkspaceId;
+        }
+      }
+
+      // Re-add with new ID
+      this.workspaceManager.importWorkspace(localWs);
+
+      // Update active state
+      if (this.state.activeWorkspaceId === oldId) {
+        this.state.activeWorkspaceId = remoteWorkspaceId;
+      }
+
+      // Delete old persisted workspace and persist with new ID
+      this.persistentStore.deleteWorkspace(oldId).catch(() => {});
+    }
+
     // Update workspace name if it was using the invite code as name
     if (sync.name && localWs.name !== sync.name) {
       const isPlaceholder = localWs.name === localWs.inviteCode || localWs.name.length === 8;

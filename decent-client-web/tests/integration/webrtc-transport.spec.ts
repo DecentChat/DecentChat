@@ -1,6 +1,16 @@
 import { test, expect } from '@playwright/test';
+import { startRelayServer, type RelayServer } from '../mocks/mock-relay-server';
+import { getMockTransportScript } from '../mocks/MockTransport';
 
-test.setTimeout(60000);
+let relay: RelayServer;
+
+test.beforeAll(async () => {
+  relay = await startRelayServer(0);
+});
+
+test.afterAll(() => relay?.close());
+
+test.setTimeout(30000);
 
 test('check transport state and attempt P2P connect', async ({ browser }) => {
   const ctx1 = await browser.newContext();
@@ -8,13 +18,17 @@ test('check transport state and attempt P2P connect', async ({ browser }) => {
   const page1 = await ctx1.newPage();
   const page2 = await ctx2.newPage();
 
-  page1.on('console', msg => console.log(`[P1] ${msg.text()}`));
-  page2.on('console', msg => console.log(`[P2] ${msg.text()}`));
-  page1.on('pageerror', err => console.log(`[P1 ERR] ${err.message}`));
-  page2.on('pageerror', err => console.log(`[P2 ERR] ${err.message}`));
-
   for (const page of [page1, page2]) {
+    await page.addInitScript(getMockTransportScript(`ws://localhost:${relay.port}`));
     await page.goto('/');
+    await page.evaluate(async () => {
+      if (indexedDB.databases) {
+        const dbs = await indexedDB.databases();
+        for (const db of dbs) if (db.name) indexedDB.deleteDatabase(db.name);
+      }
+      localStorage.clear();
+    });
+    await page.reload();
     await page.waitForFunction(() => {
       const loading = document.getElementById('loading');
       return !loading || loading.style.opacity === '0';
@@ -22,75 +36,49 @@ test('check transport state and attempt P2P connect', async ({ browser }) => {
     await page.waitForSelector('#create-ws-btn', { timeout: 15000 });
   }
 
-  // Wait for transports to fully initialize
-  await page1.waitForTimeout(3000);
-  await page2.waitForTimeout(3000);
-
   // Check transport state
   const p1State = await page1.evaluate(() => {
     const t = (window as any).__transport;
-    if (!t) return 'NO TRANSPORT';
-    return JSON.stringify({
-      peerId: t.myPeerId,
-      signalingCount: t.signalingInstances?.length ?? -1,
-      connectedServers: t.signalingInstances?.filter((i: any) => i.connected).length ?? -1,
-      hasOnConnection: typeof t.onConnection,
-    });
+    return {
+      peerId: t?.getMyPeerId?.(),
+      serverCount: t?.getConnectedServerCount?.() ?? 0,
+      signalingStatus: t?.getSignalingStatus?.(),
+    };
   });
-  console.log(`[TEST] P1 transport: ${p1State}`);
 
   const p2State = await page2.evaluate(() => {
     const t = (window as any).__transport;
-    if (!t) return 'NO TRANSPORT';
-    return JSON.stringify({
-      peerId: t.myPeerId,
-      signalingCount: t.signalingInstances?.length ?? -1,
-      connectedServers: t.signalingInstances?.filter((i: any) => i.connected).length ?? -1,
-    });
-  });
-  console.log(`[TEST] P2 transport: ${p2State}`);
-
-  // Set up P1 to log incoming connections
-  await page1.evaluate(() => {
-    const t = (window as any).__transport;
-    if (t && t.signalingInstances) {
-      for (const inst of t.signalingInstances) {
-        if (inst.peer) {
-          console.log(`[P1] PeerJS peer state: ${inst.peer.open ? 'OPEN' : 'NOT OPEN'}, id: ${inst.peer.id}, destroyed: ${inst.peer.destroyed}, disconnected: ${inst.peer.disconnected}`);
-        }
-      }
-    }
+    return {
+      peerId: t?.getMyPeerId?.(),
+      serverCount: t?.getConnectedServerCount?.() ?? 0,
+      signalingStatus: t?.getSignalingStatus?.(),
+    };
   });
 
-  await page2.evaluate(() => {
-    const t = (window as any).__transport;
-    if (t && t.signalingInstances) {
-      for (const inst of t.signalingInstances) {
-        if (inst.peer) {
-          console.log(`[P2] PeerJS peer state: ${inst.peer.open ? 'OPEN' : 'NOT OPEN'}, id: ${inst.peer.id}, destroyed: ${inst.peer.destroyed}, disconnected: ${inst.peer.disconnected}`);
-        }
-      }
-    }
-  });
+  expect(p1State.peerId).toBeTruthy();
+  expect(p2State.peerId).toBeTruthy();
+  expect(p1State.serverCount).toBeGreaterThan(0);
+  expect(p2State.serverCount).toBeGreaterThan(0);
+  expect(p1State.signalingStatus[0].connected).toBe(true);
+  expect(p2State.signalingStatus[0].connected).toBe(true);
 
-  // Try P2 connecting to P1
-  const p1Id = await page1.evaluate(() => (window as any).__transport?.myPeerId || '');
-  console.log(`[TEST] Attempting P2 -> P1 (${p1Id})`);
-
+  // P2 connects to P1
   const connectResult = await page2.evaluate(async (targetId: string) => {
-    const t = (window as any).__transport;
-    if (!t) return 'NO TRANSPORT';
-    
     try {
-      console.log(`[P2] Calling transport.connect(${targetId})...`);
-      await t.connect(targetId);
+      await (window as any).__transport.connect(targetId);
       return 'SUCCESS';
     } catch (e: any) {
       return `FAILED: ${e.message}`;
     }
-  }, p1Id);
+  }, p1State.peerId);
 
-  console.log(`[TEST] Connect result: ${connectResult}`);
+  expect(connectResult).toBe('SUCCESS');
+
+  // Verify bidirectional connection
+  const p1Peers = await page1.evaluate(() => (window as any).__transport.getConnectedPeers());
+  const p2Peers = await page2.evaluate(() => (window as any).__transport.getConnectedPeers());
+  expect(p1Peers.length).toBeGreaterThan(0);
+  expect(p2Peers.length).toBeGreaterThan(0);
 
   await ctx1.close();
   await ctx2.close();

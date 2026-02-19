@@ -1,6 +1,16 @@
 import { test, expect } from '@playwright/test';
+import { startRelayServer, type RelayServer } from '../mocks/mock-relay-server';
+import { getMockTransportScript } from '../mocks/MockTransport';
 
-test.setTimeout(60000);
+let relay: RelayServer;
+
+test.beforeAll(async () => {
+  relay = await startRelayServer(0);
+});
+
+test.afterAll(() => relay?.close());
+
+test.setTimeout(30000);
 
 test('raw transport connection between two browser contexts', async ({ browser }) => {
   const ctx1 = await browser.newContext();
@@ -9,39 +19,50 @@ test('raw transport connection between two browser contexts', async ({ browser }
   const page2 = await ctx2.newPage();
 
   for (const page of [page1, page2]) {
+    await page.addInitScript(getMockTransportScript(`ws://localhost:${relay.port}`));
     await page.goto('/');
+    await page.evaluate(async () => {
+      if (indexedDB.databases) {
+        const dbs = await indexedDB.databases();
+        for (const db of dbs) if (db.name) indexedDB.deleteDatabase(db.name);
+      }
+      localStorage.clear();
+    });
+    await page.reload();
     await page.waitForFunction(() => {
       const loading = document.getElementById('loading');
       return !loading || loading.style.opacity === '0';
     }, { timeout: 15000 });
-    await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
+    await page.waitForSelector('#create-ws-btn', { timeout: 15000 });
   }
 
-  const p1Id = await page1.evaluate(() => (window as any).__transport?.myPeerId || '');
-  const p2Id = await page2.evaluate(() => (window as any).__transport?.myPeerId || '');
+  // Verify transport is initialized
+  const p1Id = await page1.evaluate(() => (window as any).__transport?.getMyPeerId?.());
+  const p2Id = await page2.evaluate(() => (window as any).__transport?.getMyPeerId?.());
   expect(p1Id).toBeTruthy();
   expect(p2Id).toBeTruthy();
 
-  // Trigger app-level connect via transport (no direct `import('peerjs')` in browser test context)
-  await page2.evaluate(async (targetId: string) => {
-    const t = (window as any).__transport;
-    await t.connect(targetId);
-  }, p1Id);
-
-  await page2.waitForFunction(() => {
-    const t = (window as any).__transport;
-    return (t?.connections?.size || 0) > 0;
-  }, { timeout: 20000 });
-
-  await page1.waitForFunction(() => {
-    const t = (window as any).__transport;
-    return (t?.connections?.size || 0) > 0;
-  }, { timeout: 20000 });
-
-  const c1 = await page1.evaluate(() => (window as any).__transport?.connections?.size || 0);
-  const c2 = await page2.evaluate(() => (window as any).__transport?.connections?.size || 0);
+  // Check connected server count
+  const c1 = await page1.evaluate(() => (window as any).__transport?.getConnectedServerCount?.() ?? 0);
+  const c2 = await page2.evaluate(() => (window as any).__transport?.getConnectedServerCount?.() ?? 0);
   expect(c1).toBeGreaterThan(0);
   expect(c2).toBeGreaterThan(0);
+
+  // P2 connects to P1
+  await page2.evaluate(async (targetId: string) => {
+    await (window as any).__transport.connect(targetId);
+  }, p1Id);
+
+  // Verify connection established on both sides
+  await page1.waitForFunction(
+    () => (window as any).__transport?.getConnectedPeers?.()?.length > 0,
+    { timeout: 10000 },
+  );
+
+  const p1Peers = await page1.evaluate(() => (window as any).__transport.getConnectedPeers());
+  const p2Peers = await page2.evaluate(() => (window as any).__transport.getConnectedPeers());
+  expect(p1Peers).toContain(p2Id);
+  expect(p2Peers).toContain(p1Id);
 
   await ctx1.close();
   await ctx2.close();

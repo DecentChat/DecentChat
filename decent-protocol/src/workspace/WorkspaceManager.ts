@@ -65,6 +65,11 @@ export class WorkspaceManager {
     return true;
   }
 
+  /** Remove a workspace by ID without ownership check (for internal sync remapping). */
+  removeWorkspace(id: string): void {
+    this.workspaces.delete(id);
+  }
+
   // === Member Management ===
 
   addMember(workspaceId: string, member: WorkspaceMember): { success: boolean; error?: string } {
