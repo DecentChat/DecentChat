@@ -199,6 +199,54 @@ describe('SeedPhraseManager - Deterministic Key Derivation', () => {
   });
 });
 
+describe('SeedPhraseManager - DEP-003 Peer ID Derivation', () => {
+  let spm: SeedPhraseManager;
+
+  beforeEach(() => {
+    spm = new SeedPhraseManager();
+  });
+
+  test('derives deterministic 18-char hex peer ID from seed phrase', async () => {
+    const mnemonic = 'attitude modify quote style debate search blouse crumble explain silly memory wheat';
+    const peerId1 = await spm.derivePeerId(mnemonic);
+    const peerId2 = await spm.derivePeerId(mnemonic);
+
+    expect(peerId1).toBe(peerId2);
+    expect(peerId1).toHaveLength(18);
+    expect(peerId1).toMatch(/^[0-9a-f]{18}$/);
+  });
+
+  test('different seed phrases derive different peer IDs', async () => {
+    const a = 'attitude modify quote style debate search blouse crumble explain silly memory wheat';
+    const b = 'dawn summer salmon cute apology drop just letter cruel canal key bronze';
+    const peerIdA = await spm.derivePeerId(a);
+    const peerIdB = await spm.derivePeerId(b);
+
+    expect(peerIdA).not.toBe(peerIdB);
+  });
+
+  test('matches DEP-003 test vectors', async () => {
+    const vectors = [
+      {
+        mnemonic: 'attitude modify quote style debate search blouse crumble explain silly memory wheat',
+        expectedPeerId: '698c9749f0552f151f',
+      },
+      {
+        mnemonic: 'dawn summer salmon cute apology drop just letter cruel canal key bronze',
+        expectedPeerId: 'b13332faa592c7c01c',
+      },
+      {
+        mnemonic: 'profit primary erase year more trust broccoli same nasty accident emerge verify',
+        expectedPeerId: '3744b357105b3cdba1',
+      },
+    ];
+
+    for (const vector of vectors) {
+      await expect(spm.derivePeerId(vector.mnemonic)).resolves.toBe(vector.expectedPeerId);
+    }
+  });
+});
+
 describe('SeedPhraseManager - Identity Integration', () => {
   test('full flow: generate seed → derive keys → create identity → recover from seed', async () => {
     const spm = new SeedPhraseManager();

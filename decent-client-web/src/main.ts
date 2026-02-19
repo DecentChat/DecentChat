@@ -284,14 +284,29 @@ async function init(): Promise<void> {
     // Bootstrap transport + peer ID
     const settingsDefaults: AppSettings = { theme: 'auto', notifications: true };
     const settings = await ctrl.persistentStore.getSettings<AppSettings>(settingsDefaults);
+    const seedPhrase = await ctrl.persistentStore.getSetting('seedPhrase');
+
+    let derivedPeerId: string | null = null;
+    if (typeof seedPhrase === 'string' && seedPhrase.trim()) {
+      try {
+        const { SeedPhraseManager } = await import('decent-protocol');
+        const seedPhraseManager = new SeedPhraseManager();
+        derivedPeerId = await seedPhraseManager.derivePeerId(seedPhrase);
+      } catch (err) {
+        console.warn('[DecentChat] Failed to derive peer ID from seed phrase, falling back:', (err as Error).message);
+      }
+    }
+
+    // DEP-003: derived ID is canonical whenever a seed phrase exists.
+    const preferredPeerId = derivedPeerId || settings.myPeerId;
 
     let myPeerId: string;
     try {
-      myPeerId = await ctrl.transport.init(settings.myPeerId);
+      myPeerId = await ctrl.transport.init(preferredPeerId);
     } catch (err) {
       // Signaling server unavailable — work offline with a local ID
       console.warn('[DecentChat] Signaling server unavailable, working offline:', (err as Error).message);
-      myPeerId = settings.myPeerId || crypto.randomUUID();
+      myPeerId = preferredPeerId || crypto.randomUUID();
       // Schedule retry
       const retryConnect = () => {
         ctrl.transport.init(myPeerId).then(() => {

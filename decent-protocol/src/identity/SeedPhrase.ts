@@ -200,6 +200,22 @@ export class SeedPhraseManager {
     }
   }
 
+  /**
+   * Derive a deterministic Peer ID from a seed phrase.
+   *
+   * Algorithm (DEP-003):
+   *   seed phrase -> PBKDF2 -> HKDF(mesh-ecdh-key-v1) -> ECDH P-256 key
+   *   -> export public key as SPKI -> SHA-256 -> first 9 bytes -> hex (18 chars)
+   */
+  async derivePeerId(seedPhrase: string): Promise<string> {
+    const keys = await this.deriveKeys(seedPhrase);
+    const spki = await crypto.subtle.exportKey('spki', keys.ecdhKeyPair.publicKey);
+    const hash = await crypto.subtle.digest('SHA-256', spki);
+    return Array.from(new Uint8Array(hash).slice(0, 9))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
   // === HD Key Derivation ===
 
   private hd = new HDKeyDerivation();
