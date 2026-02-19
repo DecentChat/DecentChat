@@ -6,6 +6,7 @@ import { describe, test, expect } from 'bun:test';
 import { CryptoManager, MessageCipher, HashChain, GENESIS_HASH, MessageStore, MessageCRDT } from '../../src/index';
 import { IdentityManager } from '../../src/identity/Identity';
 import { SeedPhraseManager } from '../../src/identity/SeedPhrase';
+import { verifyHandshakeKey } from '../../src/security/HandshakeVerifier';
 
 describe('Security - Crypto Edge Cases', () => {
   test('cross-peer encryption roundtrip: Alice encrypts, Bob decrypts', async () => {
@@ -319,5 +320,116 @@ describe('Security - Sync Attacks', () => {
     const result = await store.addMessage(forged);
     expect(result.success).toBe(false);
     expect(result.error).toContain('prevHash');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEP-003: Handshake Key Verification
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Security - Handshake Key Verification (DEP-003)', () => {
+  const KEY_ALICE = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEalice000000000000000000000000000000000000000000000000000';
+  const KEY_MALLORY = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEmallory0000000000000000000000000000000000000000000000000';
+
+  // ── TOFU cases (no pre-stored key) ──────────────────────────────────────
+
+  test('TOFU: no pre-stored key → accept any handshake key', () => {
+    expect(verifyHandshakeKey(undefined, KEY_ALICE)).toEqual({ ok: true });
+    expect(verifyHandshakeKey(null, KEY_ALICE)).toEqual({ ok: true });
+    expect(verifyHandshakeKey('', KEY_ALICE)).toEqual({ ok: true });
+  });
+
+  test('TOFU: no pre-stored key, no handshake key → still accept (first-connect edge case)', () => {
+    expect(verifyHandshakeKey(undefined, undefined)).toEqual({ ok: true });
+    expect(verifyHandshakeKey(null, null)).toEqual({ ok: true });
+    expect(verifyHandshakeKey('', '')).toEqual({ ok: true });
+  });
+
+  // ── Matching key cases ───────────────────────────────────────────────────
+
+  test('matching keys → accepted', () => {
+    expect(verifyHandshakeKey(KEY_ALICE, KEY_ALICE)).toEqual({ ok: true });
+  });
+
+  test('matching keys → accepted regardless of key length', () => {
+    const shortKey = 'abc123';
+    expect(verifyHandshakeKey(shortKey, shortKey)).toEqual({ ok: true });
+  });
+
+  // ── Mismatch / MITM cases ────────────────────────────────────────────────
+
+  test('MITM: different keys → rejected with reason', () => {
+    const result = verifyHandshakeKey(KEY_ALICE, KEY_MALLORY);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain('mismatch');
+    }
+  });
+
+  test('MITM: reason includes key prefixes for debugging', () => {
+    const result = verifyHandshakeKey(KEY_ALICE, KEY_MALLORY);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // Should include enough of each key to identify them in logs
+      expect(result.reason).toContain(KEY_ALICE.slice(0, 16));
+      expect(result.reason).toContain(KEY_MALLORY.slice(0, 16));
+    }
+  });
+
+  test('MITM: pre-stored key exists but handshake sends no key → rejected', () => {
+    const result = verifyHandshakeKey(KEY_ALICE, undefined);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBeTruthy();
+    }
+  });
+
+  test('MITM: pre-stored key exists but handshake sends empty string → rejected', () => {
+    const result = verifyHandshakeKey(KEY_ALICE, '');
+    expect(result.ok).toBe(false);
+  });
+
+  // ── Determinism ──────────────────────────────────────────────────────────
+
+  test('deterministic: same inputs always produce same output', () => {
+    const r1 = verifyHandshakeKey(KEY_ALICE, KEY_ALICE);
+    const r2 = verifyHandshakeKey(KEY_ALICE, KEY_ALICE);
+    expect(r1).toEqual(r2);
+
+    const r3 = verifyHandshakeKey(KEY_ALICE, KEY_MALLORY);
+    const r4 = verifyHandshakeKey(KEY_ALICE, KEY_MALLORY);
+    expect(r3).toEqual(r4);
+  });
+
+  // ── Integration: invite URL → handshake verification ────────────────────
+
+  test('invite URL key survives encode → decode → verify flow', async () => {
+    // Simulate: Alice generates her identity, embeds key in invite URL,
+    // Bob decodes invite URL and later verifies handshake key against it.
+    const { InviteURI } = await import('../../src/invite/InviteURI');
+
+    const alicePublicKey = KEY_ALICE;
+
+    const inviteUrl = InviteURI.encode({
+      host: 'localhost',
+      port: 9000,
+      inviteCode: 'TESTCODE',
+      secure: false,
+      path: '/peerjs',
+      fallbackServers: [],
+      turnServers: [],
+      peerId: 'alice-peer-id',
+      publicKey: alicePublicKey,
+      workspaceName: 'Test Workspace',
+    });
+
+    const decoded = InviteURI.decode(inviteUrl);
+
+    // Key from invite matches Alice's real key → accept
+    expect(verifyHandshakeKey(decoded.publicKey, alicePublicKey)).toEqual({ ok: true });
+
+    // Key from invite does NOT match Mallory's key → reject
+    const mitm = verifyHandshakeKey(decoded.publicKey, KEY_MALLORY);
+    expect(mitm.ok).toBe(false);
   });
 });

@@ -6,3 +6,6 @@ export type {
 
 export { MessageGuard } from './MessageGuard';
 export type { SizeLimits, GuardResult } from './MessageGuard';
+
+export { verifyHandshakeKey } from './HandshakeVerifier';
+export type { HandshakeVerificationResult } from './HandshakeVerifier';

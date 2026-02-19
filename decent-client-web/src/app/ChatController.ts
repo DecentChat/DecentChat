@@ -19,6 +19,7 @@ import {
   ChunkedReceiver,
   ClockSync,
   MessageGuard,
+  verifyHandshakeKey,
   hashBlob,
   createAttachmentMeta,
   CHUNK_SIZE,
@@ -209,13 +210,9 @@ export class ChatController {
           const existingMember = ws?.members.find((m: any) => m.peerId === peerId);
           const preStoredKey = existingMember?.publicKey;
 
-          if (preStoredKey && data.publicKey && preStoredKey !== data.publicKey) {
-            // Key mismatch — possible MITM or stale invite. Disconnect immediately.
-            console.error(
-              `[Security] Key mismatch for peer ${peerId}!\n` +
-              `  Expected (from invite): ${preStoredKey.slice(0, 32)}...\n` +
-              `  Received (handshake):   ${data.publicKey.slice(0, 32)}...`
-            );
+          const verification = verifyHandshakeKey(preStoredKey, data.publicKey);
+          if (!verification.ok) {
+            console.error(`[Security] Handshake rejected for peer ${peerId}: ${verification.reason}`);
             this.transport.disconnect(peerId);
             this.ui?.showToast(
               `⚠️ Security alert: ${peerId.slice(0, 8)} sent a different key than expected. ` +
