@@ -18,9 +18,8 @@ These workflows capture institutional knowledge and ensure consistency.
 |------|---------|-------------|
 | [protocol-changes.md](protocol-changes.md) | DEP creation & maintenance | Changing message types, sync, crypto, transport |
 | [storage-migrations.md](storage-migrations.md) | Storage migration strategy | Changing IndexedDB schema or data format |
-| testing.md | Test coverage checklist | Adding features, refactoring |
-| deployment.md | Build + deploy workflow | Shipping to production |
-| code-review.md | Review checklist | Before merging PRs |
+| [testing.md](testing.md) | Test coverage checklist | Adding features, refactoring, bug fixes |
+| [deployment.md](deployment.md) | Build + deploy workflow | Shipping to production |
 
 ## How to Use
 
@@ -37,11 +36,11 @@ These workflows capture institutional knowledge and ensure consistency.
    - Read [protocol-changes.md](protocol-changes.md)
    - Check if DEP exists or needs creation
 3. If tests needed:
-   - Read [testing.md](testing.md) (when it exists)
+   - Read [testing.md](testing.md)
    - Write comprehensive tests
 4. Before deploying:
-   - Read [deployment.md](deployment.md) (when it exists)
-   - Run full test suite
+   - Read [deployment.md](deployment.md)
+   - Run all gates (unit tests, typecheck, build, E2E threshold check)
 
 ## For Humans
 
