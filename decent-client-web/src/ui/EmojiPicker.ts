@@ -67,10 +67,14 @@ export class EmojiPicker {
       </div>
     `;
 
-    // Position above anchor
-    const rect = anchor.getBoundingClientRect();
-    this.container.style.bottom = `${window.innerHeight - rect.top + 8}px`;
-    this.container.style.left = `${rect.left}px`;
+    // Position above anchor (desktop) or bottom sheet (mobile)
+    const isMobile = window.innerWidth <= 768;
+    if (!isMobile) {
+      const rect = anchor.getBoundingClientRect();
+      this.container.style.bottom = `${window.innerHeight - rect.top + 8}px`;
+      this.container.style.left = `${rect.left}px`;
+    }
+    // On mobile, CSS handles positioning as a bottom sheet (bottom: 0, full-width)
 
     document.body.appendChild(this.container);
 

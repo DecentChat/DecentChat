@@ -223,6 +223,9 @@ export class ChatController {
 
           await this.flushOfflineQueue(peerId);
 
+          // Send workspace state to new peer (channels, members, name)
+          this.sendWorkspaceState(peerId);
+
           // Start clock sync with new peer
           const syncReq = this.clockSync.startSync(peerId);
           this.transport.send(peerId, syncReq);
@@ -389,8 +392,37 @@ export class ChatController {
     };
   }
 
+  /** Send our workspace state (channels, members, name) to a connected peer */
+  private sendWorkspaceState(peerId: string): void {
+    if (!this.state.activeWorkspaceId) return;
+    const ws = this.workspaceManager.getWorkspace(this.state.activeWorkspaceId);
+    if (!ws) return;
+
+    console.log(`[Sync] Sending workspace state to ${peerId.slice(0, 8)}:`, {
+      name: ws.name, channels: ws.channels.length, members: ws.members.length,
+    });
+
+    this.transport.send(peerId, {
+      type: 'workspace-sync',
+      workspaceId: ws.id,
+      sync: {
+        type: 'workspace-state',
+        name: ws.name,
+        channels: ws.channels.map(ch => ({ id: ch.id, name: ch.name, type: ch.type })),
+        members: ws.members.map(m => ({ peerId: m.peerId, alias: m.alias, publicKey: m.publicKey, role: m.role })),
+        inviteCode: ws.inviteCode,
+      },
+    });
+  }
+
   private async handleSyncMessage(_peerId: string, msg: any): Promise<void> {
     console.log('Sync message from', _peerId, msg);
+
+    // Handle workspace state sync (channels, members, name)
+    if (msg.sync?.type === 'workspace-state' && msg.workspaceId) {
+      await this.handleWorkspaceStateSync(_peerId, msg.workspaceId, msg.sync);
+      return;
+    }
 
     // DEP-002: Handle peer-exchange messages
     if (msg.sync?.type === 'peer-exchange' && msg.workspaceId) {
@@ -404,6 +436,82 @@ export class ChatController {
         await this.connectToDiscoveredServers(discovery);
       }
     }
+  }
+
+  /**
+   * Handle incoming workspace state sync — update local channels, members, and name
+   * to match the peer's state. This ensures both peers see the same channels.
+   */
+  private async handleWorkspaceStateSync(peerId: string, remoteWorkspaceId: string, sync: any): Promise<void> {
+    console.log(`[Sync] Received workspace state from ${peerId.slice(0, 8)}:`, sync);
+
+    // Find our local workspace that matches (by invite code or active workspace)
+    let localWs = this.state.activeWorkspaceId
+      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+      : null;
+
+    // If our active workspace's invite code matches the remote one, or we have only 1 workspace
+    if (!localWs) return;
+
+    // Update workspace name if it was using the invite code as name
+    if (sync.name && localWs.name !== sync.name) {
+      const isPlaceholder = localWs.name === localWs.inviteCode || localWs.name.length === 8;
+      if (isPlaceholder) {
+        localWs.name = sync.name;
+      }
+    }
+
+    // Sync channels: map remote channels to local ones
+    if (sync.channels && Array.isArray(sync.channels)) {
+      for (const remoteCh of sync.channels) {
+        const localCh = localWs.channels.find(
+          (ch: any) => ch.name === remoteCh.name && ch.type === remoteCh.type
+        );
+        if (localCh && localCh.id !== remoteCh.id) {
+          // Remap: adopt the remote channel ID so both peers use the same ID
+          console.log(`[Sync] Remapping channel "${remoteCh.name}": ${localCh.id.slice(0, 8)} → ${remoteCh.id.slice(0, 8)}`);
+          const oldId = localCh.id;
+          localCh.id = remoteCh.id;
+
+          // Update active channel if needed
+          if (this.state.activeChannelId === oldId) {
+            this.state.activeChannelId = remoteCh.id;
+          }
+        } else if (!localCh) {
+          // New channel from peer — add it locally
+          console.log(`[Sync] Adding new channel "${remoteCh.name}" from peer`);
+          localWs.channels.push({
+            id: remoteCh.id,
+            workspaceId: localWs.id,
+            name: remoteCh.name,
+            type: remoteCh.type || 'channel',
+            members: [],
+            createdBy: peerId,
+            createdAt: Date.now(),
+          });
+        }
+      }
+    }
+
+    // Sync members: add missing members
+    if (sync.members && Array.isArray(sync.members)) {
+      for (const remoteMember of sync.members) {
+        if (!localWs.members.some((m: any) => m.peerId === remoteMember.peerId)) {
+          localWs.members.push({
+            peerId: remoteMember.peerId,
+            alias: remoteMember.alias || remoteMember.peerId.slice(0, 8),
+            publicKey: remoteMember.publicKey || '',
+            joinedAt: Date.now(),
+            role: remoteMember.role || 'member',
+          });
+        }
+      }
+    }
+
+    // Persist and re-render
+    await this.persistWorkspace(localWs.id);
+    this.ui?.renderApp();
+    console.log(`[Sync] Workspace state synced from ${peerId.slice(0, 8)}`);
   }
 
   /**
