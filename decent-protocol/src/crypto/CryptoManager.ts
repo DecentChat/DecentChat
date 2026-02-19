@@ -110,6 +110,18 @@ export class CryptoManager {
   /**
    * Generate signing key pair (ECDSA)
    */
+  /** Import an ECDSA signing public key from Base64 JWK (for signature verification) */
+  async importSigningPublicKey(publicKeyBase64: string): Promise<CryptoKey> {
+    const jwk = JSON.parse(atob(publicKeyBase64));
+    return await crypto.subtle.importKey(
+      'jwk',
+      jwk,
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true,
+      ['verify'],
+    );
+  }
+
   async generateSigningKeyPair(): Promise<KeyPair> {
     return await crypto.subtle.generateKey(
       {

@@ -61,11 +61,13 @@ export interface LegacyEnvelope {
 export type MessageEnvelope = RatchetEnvelope | LegacyEnvelope;
 
 export interface HandshakeData {
-  publicKey: string;  // Base64 ECDH public key (identity key)
+  publicKey: string;  // Base64 ECDH public key (identity key, for ratchet key exchange)
   peerId: string;
   /** Bob's ratchet DH public key (raw, base64) for initializing Alice's ratchet */
   ratchetDHPublicKey?: string;
   protocolVersion?: number;
+  /** Base64 ECDSA signing public key (for message signature verification) */
+  signingPublicKey?: string;
 }
 
 /** Persistence interface for ratchet state */
@@ -89,6 +91,9 @@ export class MessageProtocol {
 
   /** Legacy shared secrets (fallback for old peers) */
   private sharedSecrets = new Map<string, CryptoKey>();
+
+  /** Per-peer ECDSA signing public keys (for message signature verification) */
+  private signingPublicKeys = new Map<string, CryptoKey>();
 
   /** Persistence backend (optional) */
   private persistence: RatchetPersistence | null = null;
@@ -134,16 +139,33 @@ export class MessageProtocol {
     const ratchetPubRaw = await crypto.subtle.exportKey('raw', this.ratchetDHKeyPair.publicKey);
     const ratchetDHPublicKey = arrayBufferToBase64(ratchetPubRaw);
 
+    // Export ECDSA signing public key so peers can verify our message signatures
+    let signingPublicKey: string | undefined;
+    if (this._signingKeyPair?.publicKey) {
+      signingPublicKey = await this.cryptoManager.exportPublicKey(this._signingKeyPair.publicKey);
+    }
+
     return {
       publicKey,
       peerId: this.myPeerId,
       ratchetDHPublicKey,
       protocolVersion: 2,
+      signingPublicKey,
     };
   }
 
   async processHandshake(peerId: string, handshake: HandshakeData): Promise<void> {
     const peerPublicKey = await this.cryptoManager.importPublicKey(handshake.publicKey);
+
+    // Store peer's ECDSA signing public key for message signature verification
+    if (handshake.signingPublicKey) {
+      try {
+        const signingKey = await this.cryptoManager.importSigningPublicKey(handshake.signingPublicKey);
+        this.signingPublicKeys.set(peerId, signingKey);
+      } catch (e) {
+        console.warn(`[MessageProtocol] Failed to import signing key for ${peerId.slice(0, 8)}:`, e);
+      }
+    }
 
     // Always derive a legacy shared secret for fallback
     const sharedSecret = await this.cryptoManager.deriveSharedSecret(peerPublicKey);
@@ -309,8 +331,9 @@ export class MessageProtocol {
     const content = await DoubleRatchet.decrypt(state, envelope.ratchet);
     await this.persistState(peerId);
 
-    // Verify signature
-    const isValid = await this.cipher.verify(content, envelope.signature, peerPublicKey);
+    // Verify signature using ECDSA signing key (not the ECDH identity key)
+    const signingKey = this.signingPublicKeys.get(peerId) ?? peerPublicKey;
+    const isValid = await this.cipher.verify(content, envelope.signature, signingKey);
     if (!isValid) return null;
 
     return content;
@@ -326,7 +349,9 @@ export class MessageProtocol {
 
     const content = await this.cipher.decrypt(envelope.encrypted, sharedSecret);
 
-    const isValid = await this.cipher.verify(content, envelope.signature, peerPublicKey);
+    // Use ECDSA signing key for verification if available, fallback to ECDH identity key
+    const signingKey = this.signingPublicKeys.get(peerId) ?? peerPublicKey;
+    const isValid = await this.cipher.verify(content, envelope.signature, signingKey);
     if (!isValid) return null;
 
     return content;
