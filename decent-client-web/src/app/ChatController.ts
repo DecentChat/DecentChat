@@ -915,9 +915,11 @@ export class ChatController {
       workspaceName: ws.name || undefined,
     };
 
-    // Use InviteURI.encode to generate proper URL
-    const webDomain = window.location.hostname === 'localhost' ? `localhost:${window.location.port}` : 'decentchat.app';
-    return InviteURI.encode(inviteData, webDomain);
+    // Use InviteURI.encode to generate proper URL (InviteURI hardcodes https, fix for localhost)
+    const isLocal = window.location.hostname === 'localhost';
+    const webDomain = isLocal ? `localhost:${window.location.port}` : 'decentchat.app';
+    const url = InviteURI.encode(inviteData, webDomain);
+    return isLocal ? url.replace('https://', 'http://') : url;
   }
 
   /** Parse a WebSocket signaling URL into host/port/secure/path components */
