@@ -10,6 +10,13 @@ export class CryptoManager {
   /**
    * Generate an ECDH key pair for key exchange
    */
+  /**
+   * Set an externally-loaded key pair (e.g. restored from KeyStore)
+   */
+  setKeyPair(keyPair: KeyPair): void {
+    this.keyPair = keyPair;
+  }
+
   async generateKeyPair(): Promise<KeyPair> {
     const keyPair = await crypto.subtle.generateKey(
       {

@@ -286,6 +286,9 @@ async function init(): Promise<void> {
     if (!ecdhKeyPair) {
       ecdhKeyPair = await ctrl.cryptoManager.generateKeyPair();
       await ctrl.keyStore.storeECDHKeyPair(ecdhKeyPair);
+    } else {
+      // Ensure CryptoManager uses the stored key pair (not a new random one)
+      ctrl.cryptoManager.setKeyPair(ecdhKeyPair);
     }
 
     let ecdsaKeyPair = await ctrl.keyStore.getECDSAKeyPair();
