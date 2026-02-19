@@ -200,6 +200,7 @@ async function init(): Promise<void> {
     getUnreadCount: (channelId) => ctrl.notifications.getUnreadCount(channelId),
     setFocusedChannel: (channelId) => ctrl.notifications.setFocusedChannel(channelId),
     markChannelRead: (channelId) => ctrl.notifications.markRead(channelId),
+    getDisplayNameForPeer: (peerId) => ctrl.getDisplayNameForPeer(peerId),
 
     // Identity restore / transfer
     getCurrentSeed: () => ctrl.persistentStore.getSetting('seedPhrase') as Promise<string | null>,

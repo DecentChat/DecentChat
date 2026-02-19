@@ -76,6 +76,8 @@ export interface UICallbacks {
   setFocusedChannel?: (channelId: string | null) => void;
   /** Mark a channel as fully read */
   markChannelRead?: (channelId: string) => void;
+  /** Resolve best display name for a peer — checks contacts, workspace members, fallback */
+  getDisplayNameForPeer?: (peerId: string) => string;
   /** Get current seed phrase (for transfer QR) */
   getCurrentSeed?: () => Promise<string | null>;
   /** Validate a seed phrase — returns error string or null if valid */
@@ -559,8 +561,7 @@ export class UIRenderer {
       .slice()
       .sort((a, b) => b.lastMessageAt - a.lastMessageAt);
     const directDMsHTML = sortedDirectConversations.map(conv => {
-      const contact = this.cachedContacts.find(c => c.peerId === conv.contactPeerId);
-      const name = contact?.displayName || conv.contactPeerId.slice(0, 12);
+      const name = this.getPeerAlias(conv.contactPeerId);
       const isOnline = this.state.readyPeers.has(conv.contactPeerId);
       const isActive = this.state.activeDirectConversationId === conv.id;
       const unreadDM = this.callbacks.getUnreadCount?.(conv.id) || 0;
@@ -637,16 +638,29 @@ export class UIRenderer {
         </div>
         ` : ''}
         <div class="sidebar-section">
-          <div class="sidebar-section-header">Peers</div>
+          <div class="sidebar-section-header">Members</div>
           <div class="sidebar-item" id="connect-peer-btn" style="color: var(--sidebar-text); opacity: 0.8;">
             + Connect to peer...
           </div>
-          ${Array.from(this.state.connectedPeers).map(peerId => `
-            <div class="sidebar-item" style="font-size:13px;">
-              <span class="dm-status ${this.state.readyPeers.has(peerId) ? 'online' : ''}"></span>
-              ${this.escapeHtml(this.getPeerAlias(peerId))}
-            </div>
-          `).join('')}
+          ${(ws ? ws.members : []).filter((m: any) => m.peerId !== this.state.myPeerId).map((m: any) => {
+            const isOnline = this.state.readyPeers.has(m.peerId);
+            const name = this.getPeerAlias(m.peerId);
+            return `
+              <div class="sidebar-item member-row" data-member-peer-id="${m.peerId}">
+                <span class="dm-status ${isOnline ? 'online' : ''}"></span>
+                <span class="member-name">${this.escapeHtml(name)}</span>
+                <button class="member-dm-btn" data-peer-id="${m.peerId}" title="Send direct message">✉</button>
+              </div>
+            `;
+          }).join('')}
+          ${Array.from(this.state.connectedPeers)
+            .filter(peerId => !ws?.members.some((m: any) => m.peerId === peerId))
+            .map(peerId => `
+              <div class="sidebar-item" style="font-size:13px;">
+                <span class="dm-status ${this.state.readyPeers.has(peerId) ? 'online' : ''}"></span>
+                ${this.escapeHtml(this.getPeerAlias(peerId))}
+              </div>
+            `).join('')}
         </div>
       </div>
       ${ws ? `
@@ -668,8 +682,7 @@ export class UIRenderer {
     // Check if we're in a standalone direct conversation
     if (this.state.activeDirectConversationId) {
       const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
-      const contact = conv ? this.cachedContacts.find(c => c.peerId === conv.contactPeerId) : null;
-      const name = contact?.displayName || conv?.contactPeerId.slice(0, 12) || 'Direct Message';
+      const name = conv ? this.getPeerAlias(conv.contactPeerId) : 'Direct Message';
 
       return `
         <div class="channel-header">
@@ -741,8 +754,7 @@ export class UIRenderer {
       let channelName = 'the channel';
       if (this.state.activeDirectConversationId) {
         const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
-        const contact = conv ? this.cachedContacts.find(c => c.peerId === conv.contactPeerId) : null;
-        channelName = contact?.displayName || 'this conversation';
+        channelName = conv ? this.getPeerAlias(conv.contactPeerId) : 'this conversation';
       } else {
         const ws = this.state.activeWorkspaceId
           ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
@@ -1050,8 +1062,7 @@ export class UIRenderer {
     // Standalone direct conversation
     if (this.state.activeDirectConversationId) {
       const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
-      const contact = conv ? this.cachedContacts.find(c => c.peerId === conv.contactPeerId) : null;
-      input.placeholder = `Message ${contact?.displayName || 'contact'}`;
+      input.placeholder = conv ? `Message ${this.getPeerAlias(conv.contactPeerId)}` : 'Message contact';
       return;
     }
 
@@ -1222,6 +1233,15 @@ export class UIRenderer {
 
   private bindSidebarEvents(): void {
     document.getElementById('sidebar-nav')?.addEventListener('click', (e) => {
+      // Member DM button — start a direct conversation with a workspace member
+      const dmBtn = (e.target as HTMLElement).closest('.member-dm-btn') as HTMLElement;
+      if (dmBtn) {
+        e.stopPropagation();
+        const peerId = dmBtn.dataset.peerId!;
+        this.startMemberDM(peerId);
+        return;
+      }
+
       const directConvItem = (e.target as HTMLElement).closest('.sidebar-item[data-direct-conv-id]') as HTMLElement;
       if (directConvItem) {
         this.switchToDirectConversation(directConvItem.dataset.directConvId!);
@@ -1233,6 +1253,23 @@ export class UIRenderer {
       if (item) this.switchChannel(item.dataset.channelId!);
     });
     this.bindSidebarActionEvents();
+  }
+
+  /**
+   * Start a DM with a workspace member — reuses existing conversation if one exists,
+   * otherwise creates a new one.
+   */
+  private startMemberDM(peerId: string): void {
+    // Check if there's already a direct conversation with this peer
+    const existing = this.cachedDirectConversations.find(c => c.contactPeerId === peerId);
+    if (existing) {
+      this.switchToDirectConversation(existing.id);
+      return;
+    }
+    // Create new direct conversation
+    this.callbacks.startDirectMessage?.(peerId).then(conv => {
+      this.switchToDirectConversation(conv.id);
+    }).catch(() => this.showToast('Could not start DM', 'error'));
   }
 
   private bindSidebarActionEvents(): void {
@@ -1838,8 +1875,7 @@ export class UIRenderer {
   private getComposePlaceholder(): string {
     if (this.state.activeDirectConversationId) {
       const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
-      const contact = conv ? this.cachedContacts.find(c => c.peerId === conv.contactPeerId) : null;
-      return `Message ${contact?.displayName || 'contact'}`;
+      return conv ? `Message ${this.getPeerAlias(conv.contactPeerId)}` : 'Message contact';
     }
     if (!this.state.activeChannelId || !this.state.activeWorkspaceId) {
       return 'Message...';
@@ -1964,17 +2000,18 @@ export class UIRenderer {
   }
 
   private getPeerAlias(peerId: string): string {
-    // Check contacts first (explicitly added contacts take priority)
+    // Use controller callback if available — checks contacts + ALL workspace members
+    if (this.callbacks.getDisplayNameForPeer) {
+      return this.callbacks.getDisplayNameForPeer(peerId);
+    }
+
+    // Fallback: cached contacts then active workspace
     const contact = this.cachedContacts.find(c => c.peerId === peerId);
     if (contact) return contact.displayName;
-
-    // Check workspace member alias
     if (this.state.activeWorkspaceId) {
       const member = this.workspaceManager.getMember(this.state.activeWorkspaceId, peerId);
       if (member?.alias) return member.alias;
     }
-
-    // Final fallback: truncated peer ID
     return peerId.slice(0, 8);
   }
 }

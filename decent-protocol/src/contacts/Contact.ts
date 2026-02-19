@@ -33,6 +33,8 @@ export interface ContactStore {
   add(contact: Contact): Promise<void>;
   remove(peerId: string): Promise<void>;
   get(peerId: string): Promise<Contact | undefined>;
+  /** Optional synchronous lookup for in-memory implementations */
+  getSync?(peerId: string): Contact | undefined;
   list(): Promise<Contact[]>;
   update(peerId: string, updates: Partial<Omit<Contact, 'peerId'>>): Promise<void>;
 }
@@ -64,5 +66,10 @@ export class MemoryContactStore implements ContactStore {
     const existing = this.contacts.get(peerId);
     if (!existing) return;
     this.contacts.set(peerId, { ...existing, ...updates });
+  }
+
+  /** Synchronous lookup (safe because MemoryContactStore is in-memory) */
+  getSync(peerId: string): Contact | undefined {
+    return this.contacts.get(peerId);
   }
 }

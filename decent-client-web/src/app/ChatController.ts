@@ -329,9 +329,16 @@ export class ChatController {
               ws.members.push({ peerId, alias: data.alias, publicKey: '', joinedAt: Date.now(), role: 'member' });
             }
             this.persistWorkspace(ws.id).catch(() => {});
-            this.ui?.updateSidebar();
-            this.ui?.renderMessages();
           }
+          // Also update the contact record if this peer is a contact
+          this.contactStore.get(peerId).then(contact => {
+            if (contact && contact.displayName !== data.alias) {
+              this.contactStore.update(peerId, { displayName: data.alias }).catch(() => {});
+              this.persistentStore.saveContact({ ...contact, displayName: data.alias }).catch(() => {});
+            }
+          }).catch(() => {});
+          this.ui?.updateSidebar();
+          this.ui?.renderMessages();
           return;
         }
 
@@ -390,8 +397,7 @@ export class ChatController {
               this.ui?.appendMessageToDOM(msg);
             }
 
-            const contactInfo = await this.contactStore.get(peerId);
-            const senderName = contactInfo?.displayName || peerId.slice(0, 8);
+            const senderName = this.getDisplayNameForPeer(peerId);
             this.notifications.notify(channelId, senderName, senderName, content);
             this.ui?.updateSidebar();
           }
@@ -1079,6 +1085,16 @@ export class ChatController {
   async addContact(contact: Contact): Promise<void> {
     await this.contactStore.add(contact);
     await this.persistentStore.saveContact(contact);
+    // Also persist the peer's public key so the decrypt path can find it
+    // (receive path checks persistentStore.getPeer before decrypting)
+    if (contact.publicKey) {
+      await this.persistentStore.savePeer({
+        peerId: contact.peerId,
+        publicKey: contact.publicKey,
+        lastSeen: Date.now(),
+        alias: contact.displayName,
+      });
+    }
     this.ui?.updateSidebar();
   }
 
@@ -1577,6 +1593,27 @@ export class ChatController {
         if (member?.alias) return member.alias;
       }
     }
+    return peerId.slice(0, 8);
+  }
+
+  /**
+   * Best available display name for a peer — checks all sources in priority order:
+   * 1. Explicit contacts (user-chosen name)
+   * 2. Any workspace member alias (synced via name-announce)
+   * 3. Truncated peer ID fallback
+   */
+  getDisplayNameForPeer(peerId: string): string {
+    // 1. Explicit contact (highest priority — user-named)
+    const contact = this.contactStore.getSync?.(peerId);
+    if (contact?.displayName) return contact.displayName;
+
+    // 2. Any workspace member alias
+    for (const ws of this.workspaceManager.getAllWorkspaces()) {
+      const member = ws.members.find((m: any) => m.peerId === peerId);
+      if (member?.alias && member.alias.trim()) return member.alias;
+    }
+
+    // 3. Truncated peer ID
     return peerId.slice(0, 8);
   }
 
