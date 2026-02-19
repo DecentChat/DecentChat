@@ -195,7 +195,23 @@ async function init(): Promise<void> {
     getMyPublicKey: () => ctrl.myPublicKey,
     getAllWorkspaces: () => ctrl.workspaceManager.getAllWorkspaces(),
     setWorkspaceAlias: (wsId, alias) => ctrl.setWorkspaceAlias(wsId, alias),
+    getUnreadCount: (channelId) => ctrl.notifications.getUnreadCount(channelId),
+    setFocusedChannel: (channelId) => ctrl.notifications.setFocusedChannel(channelId),
+    markChannelRead: (channelId) => ctrl.notifications.markRead(channelId),
   });
+
+  // Clicking a desktop notification switches to that channel
+  ctrl.notifications.onNotificationClick = (channelId) => {
+    // Find workspace that owns this channel and activate it first
+    for (const ws of ctrl.workspaceManager.getAllWorkspaces()) {
+      if (ws.channels.some((ch: any) => ch.id === channelId)) {
+        state.activeWorkspaceId = ws.id;
+        break;
+      }
+    }
+    ui.switchChannel(channelId);
+    ui.renderApp(); // re-render to reflect workspace change if needed
+  };
 
   // Give the controller a handle to the UI for push updates
   ctrl.setUI({
@@ -386,6 +402,10 @@ async function init(): Promise<void> {
       const ws = ctrl.workspaceManager.getWorkspace(state.activeWorkspaceId!)!;
       state.activeChannelId = ws.channels[0]?.id || null;
       ui.renderApp();
+      // Tell NotificationManager which channel is currently focused on startup
+      if (state.activeChannelId) {
+        ctrl.notifications.setFocusedChannel(state.activeChannelId);
+      }
     }
   } catch (error) {
     console.error('[DecentChat] Initialization failed:', error);

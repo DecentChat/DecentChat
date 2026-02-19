@@ -466,6 +466,9 @@ export class ChatController {
             notifyName,
             content,
           );
+
+          // Always update sidebar so unread badge appears on non-active channels
+          this.ui?.updateSidebar();
         }
       } catch (error) {
         console.error('Message processing failed:', error);

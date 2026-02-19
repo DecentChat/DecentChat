@@ -294,6 +294,28 @@ body {
   font-weight: 600;
 }
 
+/* Unread channel/DM indicator */
+.sidebar-item.has-unread {
+  font-weight: 700;
+  color: var(--sidebar-text-active);
+}
+.unread-badge {
+  margin-left: auto;
+  background: var(--primary);
+  color: white;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
 .sidebar-item .channel-hash {
   opacity: 0.5;
   font-size: 13px;

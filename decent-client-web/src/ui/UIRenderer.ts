@@ -70,6 +70,12 @@ export interface UICallbacks {
   getAllWorkspaces?: () => Array<import('decent-protocol').Workspace>;
   /** Set a per-workspace display name alias */
   setWorkspaceAlias?: (wsId: string, alias: string) => void;
+  /** Get unread message count for a channel */
+  getUnreadCount?: (channelId: string) => number;
+  /** Notify the notification system which channel is currently active */
+  setFocusedChannel?: (channelId: string | null) => void;
+  /** Mark a channel as fully read */
+  markChannelRead?: (channelId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -332,14 +338,18 @@ export class UIRenderer {
       const name = contact?.displayName || conv.contactPeerId.slice(0, 12);
       const isOnline = this.state.readyPeers.has(conv.contactPeerId);
       const isActive = this.state.activeDirectConversationId === conv.id;
+      const unreadDM = this.callbacks.getUnreadCount?.(conv.id) || 0;
       const meta = conv.lastMessageAt
         ? new Date(conv.lastMessageAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         : 'No messages';
       return `
-        <div class="sidebar-item ${isActive ? 'active' : ''}" data-direct-conv-id="${conv.id}" data-testid="direct-conversation-item">
+        <div class="sidebar-item ${isActive ? 'active' : ''} ${unreadDM > 0 ? 'has-unread' : ''}" data-direct-conv-id="${conv.id}" data-testid="direct-conversation-item">
           <span class="dm-status ${isOnline ? 'online' : ''}"></span>
           <span>${this.escapeHtml(name)}</span>
-          <span class="sidebar-item-meta">${this.escapeHtml(meta)}</span>
+          ${unreadDM > 0
+            ? `<span class="unread-badge">${unreadDM > 99 ? '99+' : unreadDM}</span>`
+            : `<span class="sidebar-item-meta">${this.escapeHtml(meta)}</span>`
+          }
         </div>`;
     }).join('');
 
@@ -372,10 +382,13 @@ export class UIRenderer {
           ${!isDMView ? dms.map(dm => {
             const otherPeerId = dm.members.find((m: string) => m !== this.state.myPeerId) || '???';
             const isOnline = this.state.readyPeers.has(otherPeerId);
+            const unreadWsDM = this.callbacks.getUnreadCount?.(dm.id) || 0;
+            const isActiveDM = dm.id === this.state.activeChannelId && !this.state.activeDirectConversationId;
             return `
-              <div class="sidebar-item ${dm.id === this.state.activeChannelId && !this.state.activeDirectConversationId ? 'active' : ''}" data-channel-id="${dm.id}">
+              <div class="sidebar-item ${isActiveDM ? 'active' : ''} ${unreadWsDM > 0 ? 'has-unread' : ''}" data-channel-id="${dm.id}">
                 <span class="dm-status ${isOnline ? 'online' : ''}"></span>
-                ${this.escapeHtml(otherPeerId.slice(0, 12))}
+                <span>${this.escapeHtml(this.getPeerAlias(otherPeerId))}</span>
+                ${unreadWsDM > 0 ? `<span class="unread-badge">${unreadWsDM > 99 ? '99+' : unreadWsDM}</span>` : ''}
               </div>
             `;
           }).join('') : ''}
@@ -386,11 +399,16 @@ export class UIRenderer {
             Channels
             <button class="add-btn" id="add-channel-btn" title="Create channel">+</button>
           </div>
-          ${channels.map(ch => `
-            <div class="sidebar-item ${ch.id === this.state.activeChannelId && !this.state.activeDirectConversationId ? 'active' : ''}" data-channel-id="${ch.id}">
-              <span class="channel-hash">#</span> ${this.escapeHtml(ch.name)}
-            </div>
-          `).join('')}
+          ${channels.map(ch => {
+            const unreadCh = this.callbacks.getUnreadCount?.(ch.id) || 0;
+            const isActiveCh = ch.id === this.state.activeChannelId && !this.state.activeDirectConversationId;
+            return `
+            <div class="sidebar-item ${isActiveCh ? 'active' : ''} ${unreadCh > 0 ? 'has-unread' : ''}" data-channel-id="${ch.id}">
+              <span class="channel-hash">#</span>
+              <span>${this.escapeHtml(ch.name)}</span>
+              ${unreadCh > 0 ? `<span class="unread-badge">${unreadCh > 99 ? '99+' : unreadCh}</span>` : ''}
+            </div>`;
+          }).join('')}
         </div>
         ` : ''}
         <div class="sidebar-section">
@@ -734,6 +752,8 @@ export class UIRenderer {
   switchChannel(channelId: string): void {
     this.state.activeChannelId = channelId;
     this.state.activeDirectConversationId = null;
+    this.callbacks.setFocusedChannel?.(channelId);
+    this.callbacks.markChannelRead?.(channelId);
     this.closeThread();
     this.updateSidebar();
     this.updateChannelHeader();
@@ -747,6 +767,8 @@ export class UIRenderer {
     this.state.activeDirectConversationId = conversationId;
     this.state.activeChannelId = conversationId; // channelId = conversationId for message routing
     this.state.activeWorkspaceId = null;
+    this.callbacks.setFocusedChannel?.(conversationId);
+    this.callbacks.markChannelRead?.(conversationId);
     this.closeThread();
     this.updateSidebar();
     this.updateChannelHeader();

@@ -17,6 +17,8 @@ export class NotificationManager {
   private originalTitle = document.title;
   /** Title flash interval */
   private titleInterval: any = null;
+  /** Called when user clicks a desktop notification — switch to that channel */
+  onNotificationClick?: (channelId: string) => void;
 
   constructor() {
     // Track window focus
@@ -77,7 +79,7 @@ export class NotificationManager {
       notification.onclick = () => {
         window.focus();
         notification.close();
-        // TODO: switch to channel
+        this.onNotificationClick?.(channelId);
       };
 
       // Auto-close after 5s
