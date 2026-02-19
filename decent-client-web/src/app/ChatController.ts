@@ -49,6 +49,12 @@ import type { AppState } from '../main';
 
 const DEV_SIGNAL_PORT = Number((import.meta as any).env?.VITE_SIGNAL_PORT || 9000);
 const DEV_SIGNAL_WS = `ws://localhost:${DEV_SIGNAL_PORT}`;
+const PROD_SIGNAL_WS = 'wss://0.peerjs.com/myapp'; // Free PeerJS cloud service
+
+// Get the appropriate signaling server based on environment
+function getDefaultSignalingServer(): string {
+  return window.location.hostname === 'localhost' ? DEV_SIGNAL_WS : PROD_SIGNAL_WS;
+}
 
 // ---------------------------------------------------------------------------
 // Interface for UI callbacks that ChatController drives
@@ -530,8 +536,7 @@ export class ChatController {
       this.workspaceManager.importWorkspace(ws);
 
       // DEP-002: Restore server discovery for this workspace
-      // TODO: Get primary server from workspace metadata
-      await this.restoreServerDiscovery(ws.id, DEV_SIGNAL_WS);
+      await this.restoreServerDiscovery(ws.id, getDefaultSignalingServer());
 
       for (const channel of ws.channels) {
         const messages = await this.persistentStore.getChannelMessages(channel.id);
@@ -658,8 +663,8 @@ export class ChatController {
     );
 
     // DEP-002: Initialize server discovery for new workspace
-    // TODO: Get primary server from config
-    this.getServerDiscovery(ws.id, DEV_SIGNAL_WS);
+    const defaultServer = getDefaultSignalingServer();
+    this.getServerDiscovery(ws.id, defaultServer);
     this.startPEXBroadcasts();
 
     return ws;
@@ -679,7 +684,7 @@ export class ChatController {
     // Extract primary signaling server from invite data
     const primaryServer = inviteData
       ? `${inviteData.secure ? 'wss' : 'ws'}://${inviteData.host}:${inviteData.port}${inviteData.path || ''}`
-      : DEV_SIGNAL_WS; // Fallback for dev
+      : getDefaultSignalingServer(); // Fallback to environment-appropriate server
 
     console.log(`[PEX] Initializing server discovery with primary: ${primaryServer}`);
     this.getServerDiscovery(ws.id, primaryServer);
@@ -892,17 +897,42 @@ export class ChatController {
     const ws = this.workspaceManager.getWorkspace(workspaceId);
     if (!ws) return '';
 
-    // Build a clickable web URL: https://decentchat.app/join/CODE?params
-    const baseUrl = window.location.hostname === 'localhost'
-      ? `http://localhost:${window.location.port}`
-      : 'https://decentchat.app';
+    // Parse primary signaling server
+    const defaultServer = getDefaultSignalingServer();
+    const { host, port, secure, path } = this.parseSignalingURL(defaultServer);
 
-    const params = new URLSearchParams();
-    params.set('peer', this.state.myPeerId);
-    if (ws.name) params.set('name', ws.name);
-    if (this.myPublicKey) params.set('pk', this.myPublicKey);
+    // Build InviteData
+    const inviteData: InviteData = {
+      host,
+      port,
+      inviteCode: ws.inviteCode,
+      secure,
+      path,
+      fallbackServers: [],
+      turnServers: [],
+      peerId: this.state.myPeerId,
+      publicKey: this.myPublicKey || undefined,
+      workspaceName: ws.name || undefined,
+    };
 
-    return `${baseUrl}/join/${ws.inviteCode}?${params.toString()}`;
+    // Use InviteURI.encode to generate proper URL
+    const webDomain = window.location.hostname === 'localhost' ? `localhost:${window.location.port}` : 'decentchat.app';
+    return InviteURI.encode(inviteData, webDomain);
+  }
+
+  /** Parse a WebSocket signaling URL into host/port/secure/path components */
+  private parseSignalingURL(url: string): { host: string; port: number; secure: boolean; path: string } {
+    // Handle ws://host:port/path or wss://host:port/path
+    const match = url.match(/^(wss?):\/\/([^:/]+)(?::(\d+))?(\/.*)?$/);
+    if (!match) {
+      throw new Error(`Invalid signaling URL: ${url}`);
+    }
+
+    const [, protocol, host, portStr, path] = match;
+    const secure = protocol === 'wss';
+    const port = portStr ? parseInt(portStr, 10) : (secure ? 443 : 80);
+
+    return { host, port, secure, path: path || '/peerjs' };
   }
 
   /** Toggle a reaction on a message and broadcast to peers */

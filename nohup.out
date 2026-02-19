@@ -26,3 +26,105 @@ Start with: launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.gate
 [90m2026-02-19T06:39:14.605Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
 [90m2026-02-19T06:44:56.820Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
 2026-02-19T07:47:52.644+01:00 [tools] edit failed: Could not find the exact text in ~/Projects/decent-chat/decent-client-web/tests/integration/messaging.spec.ts. The old text must match exactly including all whitespace and newlines.
+[90m2026-02-19T06:55:46.944Z[39m [36m[ws][39m [36m⇄ res ✓ channels.status 269ms conn=111f305e…b581 id=68a0e89c…7a85[39m
+[90m2026-02-19T06:55:47.520Z[39m [34m[reload][39m [36mconfig change detected; evaluating reload (meta.lastTouchedAt, wizard.lastRunAt, models.providers.ollama.models, models.providers.anthropic.models, agents.list)[39m
+[90m2026-02-19T06:55:47.522Z[39m [34m[reload][39m [36mconfig change applied (dynamic reads: meta.lastTouchedAt, wizard.lastRunAt, models.providers.ollama.models, models.providers.anthropic.models, agents.list)[39m
+[90m2026-02-19T06:56:13.310Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T06:58:03.686Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T06:58:15.771Z[39m [31m[browser/chrome][39m [36m🦞 openclaw browser started (chrome) profile "openclaw" on 127.0.0.1:18800 (pid 7332)[39m
+2026-02-19T07:58:19.153+01:00 [tools] browser failed: Can't reach the OpenClaw browser control service. Restart the OpenClaw gateway (OpenClaw.app menubar, or `openclaw gateway`). Do NOT retry the browser tool — it will keep failing. Use an alternative approach or inform the user that the browser is currently unavailable. (Error: Error: Chrome extension relay is running, but no tab is connected. Click the OpenClaw Chrome extension icon on a tab to attach it (profile "chrome").)
+[90m2026-02-19T06:59:40.943Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 1280x720px 55.8KB -> 28.4KB (-49.1%)[39m
+[90m2026-02-19T07:01:15.473Z[39m [36m[ws][39m [36m⇄ res ✓ update.run 55837ms conn=6f3504a6…6d4d id=35c673c4…e83c[39m
+[90m2026-02-19T07:01:38.275Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 1280x720px 56.9KB -> 28.7KB (-49.5%)[39m
+[90m2026-02-19T07:01:41.763Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:whatsapp:direct:+421940900565)[39m
+[90m2026-02-19T07:01:47.586Z[39m [36m[gateway][39m [36msignal SIGUSR1 received[39m
+[90m2026-02-19T07:01:47.588Z[39m [36m[gateway][39m [36mreceived SIGUSR1; restarting[39m
+[90m2026-02-19T07:01:47.590Z[39m [36m[gateway][39m [36mdraining 4 active task(s) before restart (timeout 30000ms)[39m
+2026-02-19T08:01:54.396+01:00 **Dobré ráno!** ⚔️
+
+Ranný update:
+
+✅ **Claude Code** updatovaný na **2.1.47** (z 2.1.45)
+
+✅ **OpenClaw 2026.2.17** — dependencies refresh (666 packages changed)
+
+**Nové features v poslednom OpenClaw release:**
+- **Anthropic:** 1M context beta support (Opus/Sonnet)
+- **iOS:** Share extension, background Talk Mode
+- **Cron:** Webhook delivery, telemetry logs
+- **Subagents:** Lepší context management
+- **Memory:** FTS fallback s query expansion
+
+Všetko beží hladko. 
+
+---
+
+Pokračujem na tých knihách — manuálne download bude skutočne najrýchlejšie. Keď budeš mať PDF-ká, fact-checknem všetky `[VERIFY]` značky v kapitolách. ⚔️
+[90m2026-02-19T07:01:54.405Z[39m [35m[whatsapp][39m [36mSending message -> 421940900565@s.whatsapp.net[39m
+[90m2026-02-19T07:01:54.868Z[39m [35m[whatsapp][39m [36mSent message 3EB01F5D86C6D70CECCF4E -> 421940900565@s.whatsapp.net (470ms)[39m
+[90m2026-02-19T07:02:17.628Z[39m [36m[gateway][39m [33mdrain timeout reached; proceeding with restart[39m
+[90m2026-02-19T07:02:17.644Z[39m [34m[gmail-watcher][39m [36mgmail watcher stopped[39m
+[90m2026-02-19T07:02:17.827Z[39m [36m[gateway][39m [36mrestart mode: full process restart (spawned pid 8959)[39m
+[90m2026-02-19T07:02:19.756Z[39m [35m[canvas][39m [36mhost mounted at http://0.0.0.0:18789/__openclaw__/canvas/ (root /Users/claw/.openclaw/canvas)[39m
+[90m2026-02-19T07:02:19.786Z[39m [36m[heartbeat][39m [36mstarted[39m
+[90m2026-02-19T07:02:19.787Z[39m [32m[health-monitor][39m [36mstarted (interval: 300s, grace: 60s)[39m
+[90m2026-02-19T07:02:19.789Z[39m [36m[gateway][39m [36magent model: anthropic/claude-sonnet-4-6[39m
+[90m2026-02-19T07:02:19.791Z[39m [36m[gateway][39m [36mlistening on ws://0.0.0.0:18789 (PID 8959)[39m
+[90m2026-02-19T07:02:19.792Z[39m [36m[gateway][39m [36mlog file: /tmp/openclaw/openclaw-2026-02-19.log[39m
+[90m2026-02-19T07:02:19.798Z[39m [35m[browser/service][39m [36mBrowser control service ready (profiles=2)[39m
+[90m2026-02-19T07:02:19.804Z[39m [35m[whatsapp][39m [36m[default] starting provider (+421907945437)[39m
+[90m2026-02-19T07:02:19.854Z[39m [35m[slack][39m [36m[default] starting provider[39m
+[90m2026-02-19T07:02:19.899Z[39m [33m[delivery-recovery][39m [36mFound 14 pending delivery entries — starting recovery[39m
+[90m2026-02-19T07:02:19.900Z[39m [33m[delivery-recovery][39m [33mRecovery time budget exceeded — 14 entries deferred to next restart[39m
+[90m2026-02-19T07:02:19.901Z[39m [33m[delivery-recovery][39m [36mDelivery recovery complete: 0 recovered, 0 failed, 0 skipped (max retries)[39m
+[90m2026-02-19T07:02:20.401Z[39m [35m[slack][39m [36mchannel resolve failed; using config entries. Error: An API error occurred: missing_scope[39m
+[90m2026-02-19T07:02:20.715Z[39m [35m[slack][39m [36msocket mode connected[39m
+[90m2026-02-19T07:02:20.955Z[39m [35m[whatsapp][39m [36mListening for personal WhatsApp inbound messages.[39m
+[90m2026-02-19T07:53:24.095Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T07:53:50.730Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T07:53:51.099Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T07:53:51.408Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T07:58:00.121Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T07:58:10.368Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T07:58:10.721Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T08:00:19.289Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T08:00:26.351Z[39m [31m[browser/chrome][39m [36m🦞 openclaw browser started (chrome) profile "openclaw" on 127.0.0.1:18800 (pid 23787)[39m
+2026-02-19T09:00:30.412+01:00 [tools] browser failed: Can't reach the OpenClaw browser control service. Restart the OpenClaw gateway (OpenClaw.app menubar, or `openclaw gateway`). Do NOT retry the browser tool — it will keep failing. Use an alternative approach or inform the user that the browser is currently unavailable. (Error: Error: Chrome extension relay is running, but no tab is connected. Click the OpenClaw Chrome extension icon on a tab to attach it (profile "chrome").)
+2026-02-19T09:00:45.725+01:00 [tools] browser failed: Can't reach the OpenClaw browser control service. Restart the OpenClaw gateway (OpenClaw.app menubar, or `openclaw gateway`). Do NOT retry the browser tool — it will keep failing. Use an alternative approach or inform the user that the browser is currently unavailable. (Error: Error: Chrome extension relay is running, but no tab is connected. Click the OpenClaw Chrome extension icon on a tab to attach it (profile "chrome").)
+2026-02-19T09:01:16.053+01:00 [tools] browser failed: Can't reach the OpenClaw browser control service. Restart the OpenClaw gateway (OpenClaw.app menubar, or `openclaw gateway`). Do NOT retry the browser tool — it will keep failing. Use an alternative approach or inform the user that the browser is currently unavailable. (Error: fields are required)
+[90m2026-02-19T08:01:45.725Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T08:01:46.042Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+2026-02-19T09:02:10.100+01:00 [tools] browser failed: Can't reach the OpenClaw browser control service (timed out after 20000ms). Restart the OpenClaw gateway (OpenClaw.app menubar, or `openclaw gateway`). Do NOT retry the browser tool — it will keep failing. Use an alternative approach or inform the user that the browser is currently unavailable.
+[90m2026-02-19T08:02:21.597Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T08:02:21.635Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 2000x1382px 64.2KB -> 31.0KB (-51.8%)[39m
+[90m2026-02-19T08:02:22.678Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T08:02:33.091Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T08:02:57.285Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T08:03:19.838Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T08:03:32.291Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+2026-02-19T09:03:55.038+01:00 [tools] browser failed: Can't reach the OpenClaw browser control service. Restart the OpenClaw gateway (OpenClaw.app menubar, or `openclaw gateway`). Do NOT retry the browser tool — it will keep failing. Use an alternative approach or inform the user that the browser is currently unavailable. (Error: Error: Element "e83" not found or not visible. Run a new snapshot to see current page elements.)
+[90m2026-02-19T08:03:55.374Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T08:04:26.017Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T08:04:34.441Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 2000x1382px 61.3KB -> 29.5KB (-51.9%)[39m
+[90m2026-02-19T08:04:35.555Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T08:04:47.365Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 2000x1382px 55.4KB -> 28.4KB (-48.7%)[39m
+[90m2026-02-19T08:04:47.392Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T08:04:48.446Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T08:05:05.753Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T08:05:06.035Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T09:41:16.788Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T09:41:38.947Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T09:41:39.064Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 2000x1382px 55.3KB -> 28.4KB (-48.7%)[39m
+[90m2026-02-19T09:41:39.266Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T09:41:40.305Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T09:41:49.654Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T09:41:49.938Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T09:46:22.336Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T09:47:51.072Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T09:47:51.403Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T09:48:02.615Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
+[90m2026-02-19T09:48:02.903Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T09:57:38.898Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T09:58:23.245Z[39m [33m[agents/tool-images][39m [36mImage resized to fit limits: 2000x1382px 55.3KB -> 28.0KB (-49.3%)[39m
+[90m2026-02-19T10:00:55.977Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
+[90m2026-02-19T10:05:39.458Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 20901 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34:thread:1771449733.708869)[39m
