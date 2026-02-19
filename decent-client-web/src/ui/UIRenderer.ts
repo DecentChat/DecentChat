@@ -751,7 +751,7 @@ export class UIRenderer {
     // Emoji picker
     const emojiBtn = document.getElementById('emoji-btn');
     emojiBtn?.addEventListener('click', () => {
-      this.emojiPicker.show(emojiBtn, (emoji) => {
+      void this.emojiPicker.show(emojiBtn, (emoji) => {
         input.value += emoji;
         input.focus();
       });

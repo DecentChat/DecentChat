@@ -1,7 +1,10 @@
 /**
  * EmojiPicker — Lightweight inline emoji picker
  * No dependencies, uses native emoji.
+ * Positioning via @floating-ui/dom (viewport-aware, no off-screen).
  */
+
+import { computePosition, flip, shift, offset } from '@floating-ui/dom';
 
 const EMOJI_CATEGORIES: Record<string, string[]> = {
   '😀 Smileys': [
@@ -43,9 +46,10 @@ export class EmojiPicker {
   private searchInput: HTMLInputElement | null = null;
 
   /**
-   * Show the emoji picker anchored to an element
+   * Show the emoji picker anchored to an element.
+   * Uses @floating-ui/dom to keep it in viewport (flip + shift).
    */
-  show(anchor: HTMLElement, onSelect: (emoji: string) => void): void {
+  async show(anchor: HTMLElement, onSelect: (emoji: string) => void): Promise<void> {
     this.close();
     this.onSelect = onSelect;
 
@@ -67,16 +71,32 @@ export class EmojiPicker {
       </div>
     `;
 
-    // Position above anchor (desktop) or bottom sheet (mobile)
     const isMobile = window.innerWidth <= 768;
-    if (!isMobile) {
-      const rect = anchor.getBoundingClientRect();
-      this.container.style.bottom = `${window.innerHeight - rect.top + 8}px`;
-      this.container.style.left = `${rect.left}px`;
-    }
-    // On mobile, CSS handles positioning as a bottom sheet (bottom: 0, full-width)
 
-    document.body.appendChild(this.container);
+    if (isMobile) {
+      // On mobile: CSS handles bottom-sheet positioning
+      document.body.appendChild(this.container);
+    } else {
+      // Desktop: use floating-ui for viewport-aware positioning
+      this.container.style.position = 'fixed';
+      this.container.style.top = '0';
+      this.container.style.left = '0';
+      document.body.appendChild(this.container);
+
+      const { x, y } = await computePosition(anchor, this.container, {
+        placement: 'top-start',
+        middleware: [
+          offset(8),
+          flip({ fallbackPlacements: ['top-end', 'bottom-start', 'bottom-end'] }),
+          shift({ padding: 8 }),
+        ],
+      });
+
+      Object.assign(this.container.style, {
+        left: `${x}px`,
+        top: `${y}px`,
+      });
+    }
 
     // Event handlers
     this.container.addEventListener('click', (e) => {

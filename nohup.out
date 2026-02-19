@@ -444,3 +444,20 @@ Config updatnutý, gateway reštartnutý. Teraz beží test sub-agent na overeni
 [90m2026-02-19T13:01:39.668Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34)[39m
 [90m2026-02-19T13:01:40.007Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m
 [90m2026-02-19T13:01:40.303Z[39m [35m[slack][39m [31mslack-stream: failed to stop stream: Error: An API error occurred: missing_recipient_team_id[39m
+[90m2026-02-19T13:07:06.210Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0ag5axm4p2:thread:1771444558.114939)[39m
+[90m2026-02-19T13:07:59.316Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T13:07:59.689Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:08:24.568Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34)[39m
+[90m2026-02-19T13:08:31.328Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:08:54.017Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:09:00.860Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:09:22.015Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:09:26.058Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:09:34.252Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:09:42.017Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:09:44.632Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:09:53.235Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:09:57.953Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:10:03.267Z[39m [35m[slack][39m [31mslack-stream: streaming API call failed: Error: An API error occurred: missing_recipient_team_id, falling back[39m
+[90m2026-02-19T13:10:03.514Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AG5AXM4P2[39m
+[90m2026-02-19T13:10:03.559Z[39m [35m[slack][39m [36mdelivered reply to channel:C0AFDRZBZ34[39m

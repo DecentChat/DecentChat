@@ -1,23 +1,21 @@
 /**
- * Custom Tooltips — Bootstrap-style, zero dependencies
- * 
- * Usage:
- *   <button data-tooltip="Click me!" data-tooltip-pos="top">Button</button>
- * 
+ * Tooltips — JS-driven via @floating-ui/dom (TooltipManager.ts)
+ *
+ * Usage (same data attributes as before):
+ *   <button data-tooltip="Hint text" data-tooltip-pos="top">…</button>
+ *
  * Positions: top (default), bottom, left, right
+ * Floating-ui handles viewport clamping automatically (flip + shift).
  */
 
-[data-tooltip] {
-  position: relative;
-  cursor: pointer;
-}
+/* ============================================================
+ * Floating tooltip element
+ * ============================================================ */
+.ft-tooltip {
+  position: fixed;
+  z-index: 10000;
+  display: none;
 
-/* Tooltip bubble */
-[data-tooltip]::before {
-  content: attr(data-tooltip);
-  position: absolute;
-  z-index: 9999;
-  
   /* Style */
   background: rgba(0, 0, 0, 0.92);
   color: #fff;
@@ -28,168 +26,45 @@
   font-weight: 500;
   white-space: nowrap;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
-  
-  /* Animation */
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(-8px);
-  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
   pointer-events: none;
+
+  /* Animate */
+  opacity: 0;
+  transition: opacity 0.15s ease;
 }
 
-/* Tooltip arrow */
-[data-tooltip]::after {
-  content: '';
+/* Arrow */
+.ft-tooltip-arrow {
   position: absolute;
-  z-index: 9999;
-  
-  /* Arrow shape */
-  width: 0;
-  height: 0;
-  border: 5px solid transparent;
-  
-  /* Animation */
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(-8px);
-  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+  width: 8px;
+  height: 8px;
+  background: rgba(0, 0, 0, 0.92);
+  transform: rotate(45deg);
   pointer-events: none;
 }
 
-/* Show on hover */
-[data-tooltip]:hover::before,
-[data-tooltip]:hover::after {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(0);
-}
-
-/* Position: top (default) */
-[data-tooltip]:not([data-tooltip-pos])::before,
-[data-tooltip][data-tooltip-pos="top"]::before {
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%) translateY(-8px);
-}
-
-[data-tooltip]:not([data-tooltip-pos])::after,
-[data-tooltip][data-tooltip-pos="top"]::after {
-  bottom: calc(100% + 3px);
-  left: 50%;
-  transform: translateX(-50%) translateY(-8px);
-  border-top-color: rgba(0, 0, 0, 0.92);
-}
-
-[data-tooltip]:not([data-tooltip-pos]):hover::before,
-[data-tooltip][data-tooltip-pos="top"]:hover::before {
-  transform: translateX(-50%) translateY(0);
-}
-
-[data-tooltip]:not([data-tooltip-pos]):hover::after,
-[data-tooltip][data-tooltip-pos="top"]:hover::after {
-  transform: translateX(-50%) translateY(0);
-}
-
-/* Position: bottom */
-[data-tooltip][data-tooltip-pos="bottom"]::before {
-  top: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%) translateY(8px);
-}
-
-[data-tooltip][data-tooltip-pos="bottom"]::after {
-  top: calc(100% + 3px);
-  left: 50%;
-  transform: translateX(-50%) translateY(8px);
-  border-bottom-color: rgba(0, 0, 0, 0.92);
-}
-
-[data-tooltip][data-tooltip-pos="bottom"]:hover::before,
-[data-tooltip][data-tooltip-pos="bottom"]:hover::after {
-  transform: translateX(-50%) translateY(0);
-}
-
-/* Position: left */
-[data-tooltip][data-tooltip-pos="left"]::before {
-  right: calc(100% + 8px);
-  top: 50%;
-  transform: translateY(-50%) translateX(-8px);
-}
-
-[data-tooltip][data-tooltip-pos="left"]::after {
-  right: calc(100% + 3px);
-  top: 50%;
-  transform: translateY(-50%) translateX(-8px);
-  border-left-color: rgba(0, 0, 0, 0.92);
-}
-
-[data-tooltip][data-tooltip-pos="left"]:hover::before,
-[data-tooltip][data-tooltip-pos="left"]:hover::after {
-  transform: translateY(-50%) translateX(0);
-}
-
-/* Position: right */
-[data-tooltip][data-tooltip-pos="right"]::before {
-  left: calc(100% + 8px);
-  top: 50%;
-  transform: translateY(-50%) translateX(8px);
-}
-
-[data-tooltip][data-tooltip-pos="right"]::after {
-  left: calc(100% + 3px);
-  top: 50%;
-  transform: translateY(-50%) translateX(8px);
-  border-right-color: rgba(0, 0, 0, 0.92);
-}
-
-[data-tooltip][data-tooltip-pos="right"]:hover::before,
-[data-tooltip][data-tooltip-pos="right"]:hover::after {
-  transform: translateY(-50%) translateX(0);
-}
+/* Arrow side colours are inherited from the background — no per-side overrides needed */
 
 /* Multi-line support */
-[data-tooltip][data-tooltip-multiline]::before {
+[data-tooltip-multiline] + .ft-tooltip,
+.ft-tooltip[data-multiline] {
   white-space: normal;
   max-width: 200px;
   text-align: center;
 }
 
-/* Delay (optional, for accidental hovers) */
-[data-tooltip][data-tooltip-delay]::before,
-[data-tooltip][data-tooltip-delay]::after {
-  transition-delay: 0.5s;
-}
-
-/* Theme: light (optional) */
-[data-tooltip][data-tooltip-theme="light"]::before {
-  background: rgba(255, 255, 255, 0.95);
+/* Light theme variant */
+[data-tooltip-theme="light"] + .ft-tooltip {
+  background: rgba(255, 255, 255, 0.97);
   color: #1a1a1a;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.1);
 }
 
-[data-tooltip][data-tooltip-theme="light"]::after {
-  border-top-color: rgba(255, 255, 255, 0.95);
-}
-
-[data-tooltip][data-tooltip-theme="light"][data-tooltip-pos="bottom"]::after {
-  border-bottom-color: rgba(255, 255, 255, 0.95);
-  border-top-color: transparent;
-}
-
-[data-tooltip][data-tooltip-theme="light"][data-tooltip-pos="left"]::after {
-  border-left-color: rgba(255, 255, 255, 0.95);
-  border-top-color: transparent;
-}
-
-[data-tooltip][data-tooltip-theme="light"][data-tooltip-pos="right"]::after {
-  border-right-color: rgba(255, 255, 255, 0.95);
-  border-top-color: transparent;
-}
-
-/* Disabled state (no tooltip on disabled elements) */
-[data-tooltip][disabled]::before,
-[data-tooltip][disabled]::after,
-[data-tooltip].disabled::before,
-[data-tooltip].disabled::after {
-  display: none;
+/* ============================================================
+ * Disable the old pure-CSS pseudo-element tooltips so we don't
+ * get double tooltips — the JS layer now handles everything.
+ * ============================================================ */
+[data-tooltip]::before,
+[data-tooltip]::after {
+  display: none !important;
 }

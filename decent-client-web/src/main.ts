@@ -9,6 +9,7 @@
 import './ui/styles/main.css';
 import './ui/styles/tooltips.css';
 
+import { initTooltips } from './ui/TooltipManager';
 import { ChatController } from './app/ChatController';
 import { UIRenderer } from './ui/UIRenderer';
 import { CommandParser } from './commands/CommandParser';
@@ -462,6 +463,7 @@ async function init(): Promise<void> {
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     initTitleTooltipObserver();
+    initTooltips();
     // Small delay to ensure CSS is applied before layout calculations
     requestAnimationFrame(() => {
       initWithTimeout();
@@ -470,6 +472,7 @@ if (document.readyState === 'loading') {
 } else {
   // DOM already loaded
   initTitleTooltipObserver();
+  initTooltips();
   requestAnimationFrame(() => {
     initWithTimeout();
   });
