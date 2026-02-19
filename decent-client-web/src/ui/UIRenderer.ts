@@ -671,6 +671,36 @@ export class UIRenderer {
     panel?.classList.remove('open'); // remove mobile slide-in class
   }
 
+  // =========================================================================
+  // Mobile sidebar helpers
+  // =========================================================================
+
+  openMobileSidebar(): void {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+    sidebar.classList.add('open');
+
+    // Inject backdrop overlay — tapping it closes the sidebar
+    const existing = document.getElementById('mobile-sidebar-overlay');
+    if (existing) return; // Already open
+
+    const overlay = document.createElement('div');
+    overlay.id = 'mobile-sidebar-overlay';
+    overlay.className = 'mobile-overlay';
+    overlay.addEventListener('click', () => this.closeMobileSidebar());
+    // Also close on touch start for faster response on mobile
+    overlay.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      this.closeMobileSidebar();
+    }, { passive: false });
+    document.body.appendChild(overlay);
+  }
+
+  closeMobileSidebar(): void {
+    document.getElementById('sidebar')?.classList.remove('open');
+    document.getElementById('mobile-sidebar-overlay')?.remove();
+  }
+
   /**
    * Update the thread reply indicator on the parent message in the main list.
    * Called when a new thread reply arrives from a peer.
@@ -709,7 +739,7 @@ export class UIRenderer {
     this.updateChannelHeader();
     this.renderMessages();
     this.updateComposePlaceholder();
-    document.getElementById('sidebar')?.classList.remove('open');
+    this.closeMobileSidebar();
   }
 
   /** Switch to a standalone direct conversation */
@@ -722,7 +752,7 @@ export class UIRenderer {
     this.updateChannelHeader();
     this.renderMessages();
     this.updateComposePlaceholder();
-    document.getElementById('sidebar')?.classList.remove('open');
+    this.closeMobileSidebar();
   }
 
   private updateComposePlaceholder(): void {
@@ -882,7 +912,8 @@ export class UIRenderer {
       // Ctrl/Cmd + Shift + M: toggle sidebar on mobile
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'M') {
         e.preventDefault();
-        document.getElementById('sidebar')?.classList.toggle('open');
+        const sidebar = document.getElementById('sidebar');
+        sidebar?.classList.contains('open') ? this.closeMobileSidebar() : this.openMobileSidebar();
       }
     });
 
@@ -980,7 +1011,12 @@ export class UIRenderer {
     document.getElementById('search-btn')?.addEventListener('click', () => this.showSearchPanel());
     document.getElementById('settings-btn')?.addEventListener('click', () => this.showSettings());
     document.getElementById('hamburger-btn')?.addEventListener('click', () => {
-      document.getElementById('sidebar')?.classList.toggle('open');
+      const sidebar = document.getElementById('sidebar');
+      if (sidebar?.classList.contains('open')) {
+        this.closeMobileSidebar();
+      } else {
+        this.openMobileSidebar();
+      }
     });
   }
 
