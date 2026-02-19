@@ -165,7 +165,7 @@ export class UIRenderer {
           </div>
 
           <p class="welcome-about-lead">
-            Every chat app you use today stores your messages on someone else's computer.
+            Every chat app you use today stores your messages on a third party's computer.
             They can read them, sell them, lose them, or be forced to hand them over.
             <strong>DecentChat is different.</strong>
           </p>
