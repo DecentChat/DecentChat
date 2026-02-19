@@ -46,28 +46,25 @@ export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   
   // Cloudflare STUN (fast, reliable)
   { urls: 'stun:stun.cloudflare.com:3478' },
-  
-  // DecentChat TURN server (self-hosted on decentchat.app)
-  // TODO: Replace TURN_PASSWORD with actual password from Step 1
-  {
-    urls: 'turn:37.9.175.197:3478',
-    username: 'decentchat',
-    credential: 'TURN_PASSWORD', // Replace with password from docker setup
-  },
-  {
-    urls: 'turn:37.9.175.197:3478?transport=tcp',
-    username: 'decentchat',
-    credential: 'TURN_PASSWORD',
-  },
-  {
-    urls: 'turns:37.9.175.197:5349?transport=tcp',
-    username: 'decentchat',
-    credential: 'TURN_PASSWORD',
-  },
-  
-  // Fallback: Metered TURN (free tier, backup only)
+
+  // Metered.ca TURN relay (free tier, 50GB/month)
   {
     urls: 'turn:a.relay.metered.ca:80',
+    username: 'e8dd65b92af91ac9c6b97e4d',
+    credential: '1rW/JmqjQBWuHEVi',
+  },
+  {
+    urls: 'turn:a.relay.metered.ca:80?transport=tcp',
+    username: 'e8dd65b92af91ac9c6b97e4d',
+    credential: '1rW/JmqjQBWuHEVi',
+  },
+  {
+    urls: 'turn:a.relay.metered.ca:443',
+    username: 'e8dd65b92af91ac9c6b97e4d',
+    credential: '1rW/JmqjQBWuHEVi',
+  },
+  {
+    urls: 'turns:a.relay.metered.ca:443?transport=tcp',
     username: 'e8dd65b92af91ac9c6b97e4d',
     credential: '1rW/JmqjQBWuHEVi',
   },
