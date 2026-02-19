@@ -173,7 +173,11 @@ async function init(): Promise<void> {
         const { SeedPhraseManager } = await import('decent-protocol');
         const seedPhrase = new SeedPhraseManager();
         const { mnemonic } = seedPhrase.generate();
+        // Save to standalone key (used by peer ID derivation on startup)
         await ctrl.persistentStore.saveSetting('seedPhrase', mnemonic);
+        // Also persist within app-settings so SettingsPanel.getSettings() sees it
+        const existingSettings = await ctrl.persistentStore.getSettings<any>({});
+        await ctrl.persistentStore.saveSettings({ ...existingSettings, seedPhrase: mnemonic });
       }
     },
     onQRContactScanned: async (data) => {
@@ -210,6 +214,9 @@ async function init(): Promise<void> {
     },
     onSeedRestored: async (mnemonic) => {
       await ctrl.persistentStore.saveSetting('seedPhrase', mnemonic);
+      // Also persist within app-settings for consistency
+      const existingSettings = await ctrl.persistentStore.getSettings<any>({});
+      await ctrl.persistentStore.saveSettings({ ...existingSettings, seedPhrase: mnemonic });
       // Clear stored peer ID so it gets re-derived from new seed on reload
       await ctrl.persistentStore.saveSetting('myPeerId', null);
       window.location.reload();
@@ -303,7 +310,23 @@ async function init(): Promise<void> {
     // Bootstrap transport + peer ID
     const settingsDefaults: AppSettings = { theme: 'auto', notifications: true };
     const settings = await ctrl.persistentStore.getSettings<AppSettings>(settingsDefaults);
-    const seedPhrase = await ctrl.persistentStore.getSetting('seedPhrase');
+    let seedPhrase = await ctrl.persistentStore.getSetting('seedPhrase');
+
+    // Auto-generate seed phrase if none exists — ensures deterministic peer ID from the start
+    if (!seedPhrase || (typeof seedPhrase === 'string' && !seedPhrase.trim())) {
+      try {
+        const { SeedPhraseManager } = await import('decent-protocol');
+        const spm = new SeedPhraseManager();
+        const { mnemonic } = spm.generate();
+        await ctrl.persistentStore.saveSetting('seedPhrase', mnemonic);
+        const existingSettings = await ctrl.persistentStore.getSettings<any>({});
+        await ctrl.persistentStore.saveSettings({ ...existingSettings, seedPhrase: mnemonic });
+        seedPhrase = mnemonic;
+        console.log('[DecentChat] Auto-generated seed phrase for new identity');
+      } catch (err) {
+        console.warn('[DecentChat] Failed to auto-generate seed phrase:', (err as Error).message);
+      }
+    }
 
     let derivedPeerId: string | null = null;
     if (typeof seedPhrase === 'string' && seedPhrase.trim()) {

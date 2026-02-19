@@ -12,9 +12,9 @@ import { clearStorage, waitForApp, createWorkspace } from './helpers';
 
 // A real BIP39 12-word phrase (from protocol test vectors)
 const VALID_MNEMONIC =
-  'abandon ability able about above absent absorb abstract absurd abuse access accident';
+  'snack soul crime uncover invest leisure dad crazy latin media hip broom';
 const INVALID_MNEMONIC_SHORT = 'one two three four';
-const INVALID_MNEMONIC_BADWORD = 'abandon ability able about above absent absorb abstract absurd abuse access xyzzy';
+const INVALID_MNEMONIC_BADWORD = 'snack soul crime uncover invest leisure dad crazy latin media hip xyzzy';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -242,7 +242,7 @@ test.describe('Restore modal — confirmation dialog', () => {
 
   test('confirmation modal shows the seed phrase to restore', async ({ page }) => {
     // At least the first word of the phrase should appear
-    await expect(page.locator('.modal')).toContainText('abandon');
+    await expect(page.locator('.modal')).toContainText('snack');
   });
 
   test('cancel button closes the confirmation without restoring', async ({ page }) => {
