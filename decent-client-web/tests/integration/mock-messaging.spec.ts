@@ -244,6 +244,36 @@ async function syncWorkspaceState(page1: Page, page2: Page): Promise<void> {
   await page2.evaluate(addMembers);
 }
 
+async function waitForWorkspaceSync(page1: Page, page2: Page, timeoutMs = 10000): Promise<void> {
+  const channel1 = await page1.evaluate(() => (window as any).__state?.activeChannelId || '');
+  const peer1 = await page1.evaluate(() => (window as any).__state?.myPeerId || '');
+  const peer2 = await page2.evaluate(() => (window as any).__state?.myPeerId || '');
+
+  await page2.waitForFunction(
+    ({ expectedChannel, expectedPeer }: { expectedChannel: string; expectedPeer: string }) => {
+      const s = (window as any).__state;
+      const ctrl = (window as any).__ctrl;
+      if (!s?.activeWorkspaceId || s.activeChannelId !== expectedChannel) return false;
+      const ws = ctrl?.workspaceManager?.getWorkspace?.(s.activeWorkspaceId);
+      return !!ws?.members?.some((m: any) => m.peerId === expectedPeer);
+    },
+    { expectedChannel: channel1, expectedPeer: peer1 },
+    { timeout: timeoutMs },
+  );
+
+  await page1.waitForFunction(
+    (expectedPeer: string) => {
+      const s = (window as any).__state;
+      const ctrl = (window as any).__ctrl;
+      if (!s?.activeWorkspaceId) return false;
+      const ws = ctrl?.workspaceManager?.getWorkspace?.(s.activeWorkspaceId);
+      return !!ws?.members?.some((m: any) => m.peerId === expectedPeer);
+    },
+    peer2,
+    { timeout: timeoutMs },
+  );
+}
+
 async function setupConnectedPair(browser: Browser, wsName: string): Promise<[TestUser, TestUser]> {
   const alice = await createUser(browser, 'Alice');
   const bob = await createUser(browser, 'Bob');
@@ -260,9 +290,7 @@ async function setupConnectedPair(browser: Browser, wsName: string): Promise<[Te
 
   // Sync workspace state: member lists and channel IDs (simulates workspace sync)
   await syncWorkspaceState(alice.page, bob.page);
-
-  // Brief stabilization
-  await alice.page.waitForTimeout(500);
+  await waitForWorkspaceSync(alice.page, bob.page);
 
   return [alice, bob];
 }
@@ -335,13 +363,16 @@ test.describe('Mock Transport Messaging', () => {
       await bob.page.waitForFunction(
         () => {
           const el = document.getElementById('typing-indicator');
-          return el && el.textContent && el.textContent.length > 0;
+          const text = el?.textContent?.trim() || '';
+          const s = (window as any).__state;
+          const ctrl = (window as any).__ctrl;
+          const channelId = s?.activeChannelId;
+          const peers = channelId ? ctrl?.presence?.getTypingPeers?.(channelId) : [];
+          return text.length > 0 && Array.isArray(peers) && peers.length > 0;
         },
         { timeout: 10000 },
       );
-      const text = await bob.page.locator('#typing-indicator').textContent();
-      expect(text).toBeTruthy();
-      console.log(`[Test] Typing indicator: "${text}"`);
+      await expect(bob.page.locator('#typing-indicator')).toContainText('typing');
     } finally {
       await closeUser(alice);
       await closeUser(bob);
