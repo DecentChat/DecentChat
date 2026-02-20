@@ -423,6 +423,7 @@ export class UIRenderer {
               </div>
             </div>
             <div class="thread-panel hidden" id="thread-panel">
+              <div class="thread-resize-handle" id="thread-resize-handle" title="Drag to resize"></div>
               <div class="thread-header">
                 <div class="thread-header-info">
                   <h3>💬 Thread</h3>
@@ -543,16 +544,10 @@ export class UIRenderer {
     // Build contacts section
     const contactsHTML = this.cachedContacts.map(c => {
       const isOnline = this.state.readyPeers.has(c.peerId);
-      const signaling = c.signalingServers.length > 0 ? c.signalingServers.join(', ') : 'None';
       return `
-        <div class="contact-card" data-contact-peer-id="${c.peerId}" data-testid="contact-card">
-          <div class="contact-card-title-row">
-            <span class="dm-status ${isOnline ? 'online' : ''}"></span>
-            <strong>${this.escapeHtml(c.displayName)}</strong>
-          </div>
-          <div class="contact-card-row">Peer: <code>${this.escapeHtml(c.peerId)}</code></div>
-          <div class="contact-card-row">Public Key: <code>${this.escapeHtml(c.publicKey.slice(0, 24))}...</code></div>
-          <div class="contact-card-row">Signals: ${this.escapeHtml(signaling)}</div>
+        <div class="sidebar-item contact-card" data-contact-peer-id="${c.peerId}" data-testid="contact-card" title="${this.escapeHtml(c.peerId)}">
+          <span class="dm-status ${isOnline ? 'online' : ''}"></span>
+          <span>${this.escapeHtml(c.displayName)}</span>
         </div>`;
     }).join('');
 
@@ -635,6 +630,27 @@ export class UIRenderer {
               ${unreadCh > 0 ? `<span class="unread-badge">${unreadCh > 99 ? '99+' : unreadCh}</span>` : ''}
             </div>`;
           }).join('')}
+        </div>
+        <div class="sidebar-section" data-testid="ws-direct-messages-section">
+          <div class="sidebar-section-header">
+            Direct Messages
+            <button class="add-btn" id="start-ws-dm-btn" title="Start DM">+</button>
+          </div>
+          ${this.cachedDirectConversations.length > 0
+            ? this.cachedDirectConversations.map(conv => {
+                const dmName = this.getPeerAlias(conv.contactPeerId);
+                const isOnlineDM = this.state.readyPeers.has(conv.contactPeerId);
+                const isActiveDMConv = this.state.activeDirectConversationId === conv.id;
+                const unreadDMConv = this.callbacks.getUnreadCount?.(conv.id) || 0;
+                return `
+                <div class="sidebar-item ${isActiveDMConv ? 'active' : ''} ${unreadDMConv > 0 ? 'has-unread' : ''}" data-direct-conv-id="${conv.id}" data-testid="ws-direct-conversation-item">
+                  <span class="dm-status ${isOnlineDM ? 'online' : ''}"></span>
+                  <span>${this.escapeHtml(dmName)}</span>
+                  ${unreadDMConv > 0 ? `<span class="unread-badge">${unreadDMConv > 99 ? '99+' : unreadDMConv}</span>` : ''}
+                </div>`;
+              }).join('')
+            : '<div class="sidebar-item" style="font-size:12px; opacity:0.5;">No direct messages yet</div>'
+          }
         </div>
         ` : ''}
         <div class="sidebar-section">
@@ -1242,6 +1258,22 @@ export class UIRenderer {
         return;
       }
 
+      // Contact card click — open/start a DM with that contact
+      const contactCard = (e.target as HTMLElement).closest('.contact-card[data-contact-peer-id]') as HTMLElement;
+      if (contactCard) {
+        const peerId = contactCard.dataset.contactPeerId!;
+        this.startMemberDM(peerId);
+        return;
+      }
+
+      // Member row click — open/start a DM with that member
+      const memberRow = (e.target as HTMLElement).closest('.member-row[data-member-peer-id]') as HTMLElement;
+      if (memberRow) {
+        const peerId = memberRow.dataset.memberPeerId!;
+        this.startMemberDM(peerId);
+        return;
+      }
+
       const directConvItem = (e.target as HTMLElement).closest('.sidebar-item[data-direct-conv-id]') as HTMLElement;
       if (directConvItem) {
         this.switchToDirectConversation(directConvItem.dataset.directConvId!);
@@ -1306,6 +1338,9 @@ export class UIRenderer {
       this.showAddContactModal(),
     );
     document.getElementById('start-dm-btn')?.addEventListener('click', () =>
+      this.showStartDirectMessageModal(),
+    );
+    document.getElementById('start-ws-dm-btn')?.addEventListener('click', () =>
       this.showStartDirectMessageModal(),
     );
     document.getElementById('copy-peer-id')?.addEventListener('click', () => {

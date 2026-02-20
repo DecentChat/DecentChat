@@ -921,6 +921,10 @@ export class ChatController {
     } else if (!threadId) {
       this.ui?.appendMessageToDOM(msg);
     }
+    // Update reply count on parent message for the sender (peer events handle remote side)
+    if (threadId) {
+      this.ui?.updateThreadIndicator(threadId, this.state.activeChannelId);
+    }
 
     // Deliver to workspace peers (or queue if offline)
     for (const peerId of this.getWorkspaceRecipientPeerIds()) {
@@ -1140,6 +1144,10 @@ export class ChatController {
         this.ui?.renderThreadMessages();
       } else if (!threadId) {
         this.ui?.appendMessageToDOM(msg);
+      }
+      // Update reply count on parent message for the sender
+      if (threadId) {
+        this.ui?.updateThreadIndicator(threadId, conversationId);
       }
     }
 

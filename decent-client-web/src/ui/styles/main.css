@@ -367,34 +367,7 @@ body {
   opacity: 0.7;
 }
 
-.contact-card {
-  margin: 6px 12px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.contact-card-title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.contact-card-row {
-  font-size: 11px;
-  opacity: 0.85;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.contact-card code {
-  font-size: 10px;
-}
+/* .contact-card now uses .sidebar-item styles — no custom overrides needed */
 
 .sidebar-item .unread-badge {
   margin-left: auto; background: var(--primary); color: white;
@@ -749,11 +722,29 @@ body {
 /* === Thread Panel === */
 .thread-panel {
   width: var(--thread-width);
-  min-width: var(--thread-width);
+  min-width: 280px;
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  position: relative;
+}
+
+.thread-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.15s;
+}
+.thread-resize-handle:hover,
+.thread-resize-handle.dragging {
+  background: var(--accent, #4f8ef7);
+  opacity: 0.4;
 }
 
 .thread-panel.hidden { display: none; }

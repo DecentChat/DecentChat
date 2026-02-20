@@ -72,4 +72,43 @@ test.describe('Direct Messages', () => {
     await expect(page.locator('[data-testid="direct-conversation-item"]')).toHaveCount(2);
     await expect(page.locator('[data-testid="direct-conversation-item"]').first()).toContainText('Bob Contact');
   });
+
+  test('clicking a contact card in DM view opens a direct conversation', async ({ page }) => {
+    await addContactViaURI(page, 'Charlie', 'charlie-peer-id');
+    // Click the contact card directly instead of using the Start DM modal
+    await page.locator('.contact-card[data-contact-peer-id="charlie-peer-id"]').click();
+    // Channel header should show the contact's name
+    await expect(page.locator('.channel-header h2')).toContainText('Charlie');
+  });
+});
+
+test.describe('Workspace Direct Messages Section', () => {
+  test.beforeEach(async ({ page }) => {
+    await clearStorage(page);
+    await page.goto('/');
+    await waitForApp(page);
+    await createWorkspace(page, 'WS DM Test', 'Alice');
+  });
+
+  test('Direct Messages section is visible in workspace sidebar', async ({ page }) => {
+    // In workspace view, the sidebar should have a Direct Messages section
+    await expect(page.locator('[data-testid="ws-direct-messages-section"]')).toBeVisible();
+    await expect(page.locator('[data-testid="ws-direct-messages-section"]')).toContainText('Direct Messages');
+  });
+
+  test('+ button next to Direct Messages in workspace opens the DM modal', async ({ page }) => {
+    // First switch to DM view to add a contact (required for the modal to work)
+    await page.click('#ws-rail-dms');
+    await expect(page.locator('#nav-dms-btn')).toHaveClass(/active/);
+    await addContactViaURI(page, 'Eve', 'eve-peer-id');
+
+    // Switch back to workspace view
+    await page.click('[data-testid="workspaces-tab"]');
+    await expect(page.locator('[data-testid="ws-direct-messages-section"]')).toBeVisible();
+
+    // Click the + button in the workspace Direct Messages section
+    await page.click('#start-ws-dm-btn');
+    await page.waitForSelector('.modal');
+    await expect(page.locator('.modal h2')).toContainText('Start Direct Message');
+  });
 });
