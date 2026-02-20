@@ -52,7 +52,7 @@ export class SettingsPanel {
   constructor(
     private getSettings: () => Promise<AppSettings>,
     private saveSetting: (key: string, value: any) => Promise<void>,
-    private onAction?: (action: string) => void,
+    private onAction?: (action: string) => void | Promise<void>,
   ) {}
 
   async show(): Promise<void> {
@@ -179,6 +179,16 @@ export class SettingsPanel {
               <input type="checkbox" data-key="debug" ${settings.debug ? 'checked' : ''} />
             </div>
           </div>
+
+          <div class="settings-section" style="border:2px solid #e74c3c; border-radius:var(--radius); padding:16px; margin-top:12px;">
+            <h3 style="color:#e74c3c; margin-top:0;">⚠️ Danger Zone</h3>
+            <p style="font-size:13px; color:var(--text-muted); margin:0 0 12px 0;">
+              These actions are irreversible. Proceed with caution.
+            </p>
+            <button id="danger-clear-all-btn" style="padding:10px 20px; background:#e74c3c; color:#fff; border:none; border-radius:var(--radius-sm); cursor:pointer; font-size:14px; font-weight:600;">
+              Clear All Data &amp; Start Fresh
+            </button>
+          </div>
         </div>
       </div>
     `;
@@ -207,8 +217,8 @@ export class SettingsPanel {
             seedBtn.textContent = '👁️ Show';
           }
         } else {
-          // Generate new seed phrase
-          this.onAction?.('generateSeed');
+          // Generate new seed phrase (await so the seed is persisted before we read it back)
+          await this.onAction?.('generateSeed');
           const newSettings = await this.getSettings();
           if (newSettings.seedPhrase) {
             settings.seedPhrase = newSettings.seedPhrase;
@@ -226,6 +236,12 @@ export class SettingsPanel {
       transferBtn.addEventListener('click', () => {
         this.onAction?.('seed-transfer');
       });
+    }
+
+    // Danger Zone — Clear All Data
+    const dangerBtn = this.overlay.querySelector('#danger-clear-all-btn') as HTMLButtonElement | null;
+    if (dangerBtn) {
+      dangerBtn.addEventListener('click', () => this.showClearAllConfirmation());
     }
 
     // Auto-save on change
@@ -251,6 +267,116 @@ export class SettingsPanel {
   close(): void {
     this.overlay?.remove();
     this.overlay = null;
+  }
+
+  /**
+   * Show confirmation dialog for clearing all data
+   */
+  private showClearAllConfirmation(): void {
+    const dialog = document.createElement('div');
+    dialog.className = 'modal-overlay';
+    dialog.style.zIndex = '10001';
+    dialog.innerHTML = `
+      <div class="modal" style="max-width:440px; padding:24px;">
+        <h2 style="color:#e74c3c; margin:0 0 12px 0;">⚠️ Delete Everything?</h2>
+        <p style="font-size:14px; line-height:1.6; margin:0 0 8px 0;">
+          This will <strong>permanently delete</strong> all your:
+        </p>
+        <ul style="font-size:13px; line-height:1.8; margin:0 0 16px 0; padding-left:20px; color:var(--text-muted);">
+          <li>Messages and chat history</li>
+          <li>Channels and workspaces</li>
+          <li>Contacts and peer connections</li>
+          <li>Your identity and seed phrase</li>
+          <li>All cached data and service workers</li>
+        </ul>
+        <p style="font-size:13px; color:var(--text-muted); margin:0 0 16px 0;">
+          You will need to create a new identity to use DecentChat again.
+        </p>
+        <div style="margin-bottom:16px;">
+          <label style="font-size:13px; font-weight:600; display:block; margin-bottom:6px;">
+            Type <code style="background:var(--bg-secondary); padding:2px 6px; border-radius:3px;">DELETE</code> to confirm:
+          </label>
+          <input id="danger-confirm-input" type="text" autocomplete="off" spellcheck="false"
+            style="width:100%; padding:8px 12px; border:2px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-secondary); color:var(--text); font-size:14px; font-family:monospace; box-sizing:border-box;"
+            placeholder="Type DELETE here" />
+        </div>
+        <div style="display:flex; gap:10px; justify-content:flex-end;">
+          <button id="danger-cancel-btn" style="padding:8px 20px; background:var(--bg-secondary); color:var(--text); border:1px solid var(--border); border-radius:var(--radius-sm); cursor:pointer; font-size:14px;">
+            Cancel
+          </button>
+          <button id="danger-confirm-btn" disabled
+            style="padding:8px 20px; background:#999; color:#fff; border:none; border-radius:var(--radius-sm); cursor:not-allowed; font-size:14px; font-weight:600;">
+            I understand, delete everything
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    const input = dialog.querySelector('#danger-confirm-input') as HTMLInputElement;
+    const confirmBtn = dialog.querySelector('#danger-confirm-btn') as HTMLButtonElement;
+    const cancelBtn = dialog.querySelector('#danger-cancel-btn') as HTMLButtonElement;
+
+    // Enable confirm button only when user types DELETE
+    input.addEventListener('input', () => {
+      const match = input.value.trim() === 'DELETE';
+      confirmBtn.disabled = !match;
+      confirmBtn.style.background = match ? '#e74c3c' : '#999';
+      confirmBtn.style.cursor = match ? 'pointer' : 'not-allowed';
+    });
+
+    cancelBtn.addEventListener('click', () => dialog.remove());
+    dialog.addEventListener('click', (e) => {
+      if (e.target === dialog) dialog.remove();
+    });
+
+    confirmBtn.addEventListener('click', async () => {
+      if (input.value.trim() !== 'DELETE') return;
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Clearing...';
+      await SettingsPanel.clearAllData();
+    });
+
+    input.focus();
+  }
+
+  /**
+   * Nuclear option: wipe IndexedDB, localStorage, sessionStorage, caches, service workers, then reload.
+   */
+  private static async clearAllData(): Promise<void> {
+    try {
+      // Clear IndexedDB
+      const dbs = await indexedDB.databases();
+      for (const db of dbs) {
+        if (db.name) indexedDB.deleteDatabase(db.name);
+      }
+
+      // Clear localStorage & sessionStorage
+      localStorage.clear();
+      sessionStorage.clear();
+
+      // Unregister service workers
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (const reg of registrations) {
+          await reg.unregister();
+        }
+      }
+
+      // Clear Cache API
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        for (const name of cacheNames) {
+          await caches.delete(name);
+        }
+      }
+
+      // Reload page
+      location.reload();
+    } catch (err) {
+      alert('Failed to clear data: ' + (err as Error).message);
+    }
   }
 
   /**

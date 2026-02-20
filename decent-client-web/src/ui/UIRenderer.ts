@@ -51,7 +51,7 @@ export interface UICallbacks {
   /** Generate full invite URL for a workspace */
   generateInviteURL?: (workspaceId: string) => string;
   /** Settings panel action (e.g. generateSeed) */
-  onSettingsAction?: (action: string) => void;
+  onSettingsAction?: (action: string) => void | Promise<void>;
   /** Handle scanned QR contact — add to contacts and optionally connect */
   onQRContactScanned?: (data: ContactURIData) => void;
   /** Get user's public key for QR code generation */
@@ -1845,7 +1845,7 @@ export class UIRenderer {
       },
       async (action) => {
         if (action === 'generateSeed') {
-          this.callbacks.onSettingsAction?.(action);
+          await this.callbacks.onSettingsAction?.(action);
         } else if (action === 'seed-transfer') {
           const seed = await this.callbacks.getCurrentSeed?.();
           if (seed) {
