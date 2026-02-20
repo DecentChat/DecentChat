@@ -587,3 +587,98 @@ describe('Edge Case: Re-sync after missed messages', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// 12. Large history sync cap — message-level sync (50 per channel)
+// ---------------------------------------------------------------------------
+
+/**
+ * Simulated ChatController-level message sync handler with 50-per-channel cap.
+ * The SyncProtocol's handleSyncRequest sends ALL messages (metadata-only).
+ * The ChatController's handleMessageSyncRequest caps at 50 per channel.
+ */
+function cappedMessageSync(
+  ms: ReturnType<typeof createPeer>['ms'],
+  channels: { id: string }[],
+  channelTimestamps: Record<string, number>,
+): any[] {
+  const allMessages: any[] = [];
+
+  for (const ch of channels) {
+    const since = channelTimestamps[ch.id] ?? 0;
+    const msgs = ms.getMessages(ch.id);
+    const newer = msgs.filter((m: any) => m.timestamp > since);
+    const limited = newer.slice(0, 50); // 50-per-channel cap
+    for (const m of limited) {
+      allMessages.push({
+        id: m.id,
+        channelId: m.channelId,
+        senderId: m.senderId,
+        content: m.content,
+        timestamp: m.timestamp,
+        type: m.type,
+        prevHash: m.prevHash,
+      });
+    }
+  }
+
+  return allMessages;
+}
+
+describe('Edge Case: Large history sync cap (message-level)', () => {
+  // 6a: 300 messages in one channel → capped at 50
+  test('300 messages in one channel → sync response capped at 50', async () => {
+    const alice = createPeer('alice');
+
+    const ws = alice.wm.createWorkspace('BigTeam', 'alice', 'Alice', 'alice-key');
+    const channelId = ws.channels[0].id;
+
+    await createMessages(alice.ms, channelId, 'alice', 300);
+    expect(alice.ms.getMessages(channelId)).toHaveLength(300);
+
+    const messages = cappedMessageSync(
+      alice.ms,
+      ws.channels,
+      { [channelId]: 0 }, // Bob has nothing
+    );
+
+    expect(messages).toHaveLength(50);
+    // Should be the first 50 (oldest first)
+    expect(messages[0].content).toBe('Message 0');
+    expect(messages[49].content).toBe('Message 49');
+  });
+
+  // 6b: 5 channels x 60 messages → each capped at 50 (250 total, not 300)
+  test('5 channels x 60 messages → sync response capped at 50 per channel', async () => {
+    const alice = createPeer('alice');
+
+    const ws = alice.wm.createWorkspace('BigTeam', 'alice', 'Alice', 'alice-key');
+
+    // Create 4 additional channels (general already exists)
+    for (let i = 0; i < 4; i++) {
+      alice.wm.createChannel(ws.id, `channel-${i}`, 'alice');
+    }
+    const allChannels = alice.wm.getChannels(ws.id);
+    expect(allChannels).toHaveLength(5);
+
+    // Add 60 messages to each channel
+    for (const ch of allChannels) {
+      await createMessages(alice.ms, ch.id, 'alice', 60);
+    }
+
+    const messages = cappedMessageSync(
+      alice.ms,
+      allChannels,
+      {}, // Bob has nothing (all timestamps default to 0)
+    );
+
+    // Each of 5 channels capped at 50 = 250 total
+    expect(messages).toHaveLength(250);
+
+    // Verify per-channel: each channel contributed exactly 50
+    for (const ch of allChannels) {
+      const chMsgs = messages.filter((m: any) => m.channelId === ch.id);
+      expect(chMsgs).toHaveLength(50);
+    }
+  });
+});

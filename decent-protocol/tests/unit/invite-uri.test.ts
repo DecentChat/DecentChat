@@ -176,6 +176,92 @@ describe('InviteURI - Validation', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Backward compatibility: decent:// vs https:// (5a, 5b, 5c)
+// ---------------------------------------------------------------------------
+
+describe('InviteURI - Backward Compatibility', () => {
+  const sampleData = {
+    host: '192.168.1.50',
+    port: 9000,
+    inviteCode: 'COMPAT01',
+    secure: false,
+    path: '/peerjs',
+    fallbackServers: ['wss://fallback.example.com'],
+    turnServers: ['turn:relay.example.com'],
+    peerId: 'alice-peer-id',
+    publicKey: 'alice-pub-key',
+    workspaceName: 'TestTeam',
+  };
+
+  // 5a: decode() on decent:// returns same InviteData as decode() on equivalent https://
+  test('decode() on decent:// URI returns same InviteData as equivalent https:// URI', () => {
+    const nativeUri = InviteURI.encodeNative(sampleData);
+    const webUri = InviteURI.encode(sampleData);
+
+    const fromNative = InviteURI.decode(nativeUri);
+    const fromWeb = InviteURI.decode(webUri);
+
+    expect(fromNative.host).toBe(fromWeb.host);
+    expect(fromNative.port).toBe(fromWeb.port);
+    expect(fromNative.inviteCode).toBe(fromWeb.inviteCode);
+    expect(fromNative.secure).toBe(fromWeb.secure);
+    expect(fromNative.peerId).toBe(fromWeb.peerId);
+    expect(fromNative.publicKey).toBe(fromWeb.publicKey);
+    expect(fromNative.workspaceName).toBe(fromWeb.workspaceName);
+    expect(fromNative.fallbackServers).toEqual(fromWeb.fallbackServers);
+    expect(fromNative.turnServers).toEqual(fromWeb.turnServers);
+  });
+
+  // 5b: encode() → decode() round-trip for web format
+  test('encode() → decode() round-trip for web URL format', () => {
+    const encoded = InviteURI.encode(sampleData);
+    const decoded = InviteURI.decode(encoded);
+
+    expect(decoded.host).toBe(sampleData.host);
+    expect(decoded.port).toBe(sampleData.port);
+    expect(decoded.inviteCode).toBe(sampleData.inviteCode);
+    expect(decoded.peerId).toBe(sampleData.peerId);
+    expect(decoded.publicKey).toBe(sampleData.publicKey);
+    expect(decoded.workspaceName).toBe(sampleData.workspaceName);
+    expect(decoded.fallbackServers).toEqual(sampleData.fallbackServers);
+    expect(decoded.turnServers).toEqual(sampleData.turnServers);
+  });
+
+  // 5b: encodeNative() → decode() round-trip for native format
+  test('encodeNative() → decode() round-trip for decent:// format', () => {
+    const encoded = InviteURI.encodeNative(sampleData);
+    const decoded = InviteURI.decode(encoded);
+
+    expect(decoded.host).toBe(sampleData.host);
+    expect(decoded.port).toBe(sampleData.port);
+    expect(decoded.inviteCode).toBe(sampleData.inviteCode);
+    expect(decoded.peerId).toBe(sampleData.peerId);
+    expect(decoded.publicKey).toBe(sampleData.publicKey);
+    expect(decoded.workspaceName).toBe(sampleData.workspaceName);
+    expect(decoded.fallbackServers).toEqual(sampleData.fallbackServers);
+    expect(decoded.turnServers).toEqual(sampleData.turnServers);
+  });
+
+  // 5c: decode() on unknown/malformed URI throws (does not crash)
+  test('decode() on malformed URI throws', () => {
+    expect(() => InviteURI.decode('ftp://invalid')).toThrow();
+    expect(() => InviteURI.decode('decent://')).toThrow();
+    expect(() => InviteURI.decode('decent://host:9000/')).toThrow('missing invite code');
+    expect(() => InviteURI.decode('')).toThrow();
+    expect(() => InviteURI.decode('just-random-text')).toThrow();
+  });
+
+  // 5c: isValid returns false for malformed URIs (does not crash)
+  test('isValid() returns false for malformed URIs without crashing', () => {
+    expect(InviteURI.isValid('ftp://invalid')).toBe(false);
+    expect(InviteURI.isValid('decent://')).toBe(false);
+    expect(InviteURI.isValid('')).toBe(false);
+    expect(InviteURI.isValid('random garbage !@#$')).toBe(false);
+    expect(InviteURI.isValid('https://example.com/not-a-join-link')).toBe(false);
+  });
+});
+
 describe('InviteURI - Share Text', () => {
   test('generates shareable text with web URL', () => {
     const text = InviteURI.toShareText({

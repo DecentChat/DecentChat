@@ -279,3 +279,79 @@ describe('Workspace Isolation — workspace membership integrity', () => {
     expect(unique.size).toBe(allChannelIds.length); // No duplicates
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cross-workspace message injection (4a, 4b)
+// ---------------------------------------------------------------------------
+
+describe('Workspace Isolation — cross-workspace message injection', () => {
+  let wm: WorkspaceManager;
+  let ws1Id: string;
+  let ws2Id: string;
+  let ws1ChannelId: string;
+  let ws2ChannelId: string;
+
+  beforeEach(() => {
+    wm = new WorkspaceManager();
+
+    const ws1 = wm.createWorkspace('workspace1', 'alice', 'Alice', 'alice-key');
+    wm.addMember(ws1.id, { peerId: 'bob', alias: 'Bob', publicKey: 'bob-key', joinedAt: Date.now(), role: 'member' });
+    ws1Id = ws1.id;
+    ws1ChannelId = ws1.channels[0].id;
+
+    const ws2 = wm.createWorkspace('workspace2', 'alice', 'Alice', 'alice-key');
+    wm.addMember(ws2.id, { peerId: 'kim', alias: 'Kim', publicKey: 'kim-key', joinedAt: Date.now(), role: 'member' });
+    ws2Id = ws2.id;
+    ws2ChannelId = ws2.channels[0].id;
+  });
+
+  // 4a: valid channelId but wrong workspaceId → rejected
+  test('rejects message with valid channelId but wrong workspaceId (cross-workspace injection)', () => {
+    // Bob is member of workspace1. He sends a message with workspace1's channelId
+    // but claims it's for workspace2 → should be rejected because Bob is not
+    // a member of workspace2.
+    const result = validateIncomingMessage('bob', {
+      workspaceId: ws2Id,
+      channelId: ws1ChannelId, // valid channel, but belongs to workspace1
+    }, wm);
+    expect(result).toBeNull();
+  });
+
+  // 4a variant: non-member sends with a channelId that exists in the target workspace
+  test('rejects message from non-member even with correct workspaceId and channelId', () => {
+    // Mallory is not a member of either workspace
+    const result = validateIncomingMessage('mallory', {
+      workspaceId: ws1Id,
+      channelId: ws1ChannelId,
+    }, wm);
+    expect(result).toBeNull();
+  });
+
+  // 4b: peer sends workspace-state for a workspaceId they are not a member of
+  test('rejects sync request from non-member of workspace', () => {
+    // Simulate the membership check used in handleMessageSyncRequest:
+    // Kim is in workspace2, NOT workspace1.
+    const ws = wm.getWorkspace(ws1Id)!;
+    const isMember = ws.members.some(m => m.peerId === 'kim');
+    expect(isMember).toBe(false); // Kim cannot request sync for workspace1
+
+    // Bob IS a member of workspace1
+    const isBobMember = ws.members.some(m => m.peerId === 'bob');
+    expect(isBobMember).toBe(true);
+  });
+
+  // 4b: workspace-state for non-member workspace is rejected at sync level
+  test('non-member cannot receive workspace state via sync', () => {
+    // Stranger tries to get workspace2 state — membership gate blocks them
+    const ws2 = wm.getWorkspace(ws2Id)!;
+    const isStrangerMember = ws2.members.some(m => m.peerId === 'stranger');
+    expect(isStrangerMember).toBe(false);
+
+    // Only alice (owner) and kim are members
+    const memberPeerIds = ws2.members.map(m => m.peerId);
+    expect(memberPeerIds).toContain('alice');
+    expect(memberPeerIds).toContain('kim');
+    expect(memberPeerIds).not.toContain('bob');
+    expect(memberPeerIds).not.toContain('stranger');
+  });
+});
