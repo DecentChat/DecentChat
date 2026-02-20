@@ -25,8 +25,27 @@ export interface PeerTransportConfig {
   signalingServer?: string;
   /** Multiple signaling servers for federation */
   signalingServers?: (string | SignalingServer)[];
-  /** ICE/STUN/TURN servers for NAT traversal (pass TURN here via runtime env/API config) */
+  /**
+   * ICE/STUN/TURN servers for NAT traversal.
+   * When provided, used as-is (overrides STUN + TURN defaults).
+   * In production, pass your own TURN credentials here.
+   */
   iceServers?: RTCIceServer[];
+  /**
+   * Whether to include TURN servers for NAT traversal (default: true in production).
+   * Set to false in tests or when providing your own iceServers.
+   * Automatically false on localhost.
+   */
+  useTurn?: boolean;
+  /**
+   * Custom TURN servers — overrides DEFAULT_TURN_SERVERS when provided.
+   * 
+   * Recommended options:
+   *   - Cloudflare: https://developers.cloudflare.com/calls/turn/
+   *   - Metered free tier: https://www.metered.ca/tools/openrelay/
+   *   - Self-hosted coturn: https://github.com/coturn/coturn
+   */
+  turnServers?: RTCIceServer[];
   /** PeerJS debug level: 0 = none, 1 = warnings, 2 = all (default: 1) */
   debug?: 0 | 1 | 2 | 3;
   /** Max connection retries per server (default: 3) */
@@ -36,8 +55,7 @@ export interface PeerTransportConfig {
 }
 
 /**
- * Default ICE servers include only STUN.
- * TURN credentials should be provided via config.iceServers (loaded from env/API at runtime)
+ * Default STUN servers for NAT traversal.
  */
 export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   // Google STUN servers (public, widely used)
@@ -46,6 +64,40 @@ export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   
   // Cloudflare STUN (fast, reliable)
   { urls: 'stun:stun.cloudflare.com:3478' },
+];
+
+/**
+ * Open relay TURN servers — free, no auth required, rate-limited.
+ * 
+ * ⚠️  For DEVELOPMENT only. In production, provide your own TURN credentials:
+ *   - Cloudflare free tier: https://developers.cloudflare.com/calls/turn/
+ *   - Metered.ca:           https://www.metered.ca/tools/openrelay/
+ *   - Self-hosted coturn:   https://github.com/coturn/coturn
+ *
+ * Pass your credentials via PeerTransportConfig.turnServers.
+ */
+export const DEFAULT_TURN_SERVERS: RTCIceServer[] = [
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp',
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+];
+
+/**
+ * Combined STUN + TURN for maximum NAT traversal reliability.
+ * Peers behind symmetric NAT (corporate networks, some mobile) can only
+ * connect via TURN — STUN alone will fail.
+ *
+ * Usage: pass to PeerTransportConfig.iceServers or set config.useTurn = true.
+ */
+export const ICE_SERVERS_WITH_TURN: RTCIceServer[] = [
+  ...DEFAULT_ICE_SERVERS,
+  ...DEFAULT_TURN_SERVERS,
 ];
 
 interface ActiveConnection {
@@ -525,6 +577,37 @@ export class PeerTransport implements Transport {
     }
   }
 
+  // ── Internal: ICE server resolution ──────────────────────────────────────
+
+  /**
+   * Build the ICE server list based on config and environment.
+   *
+   * Priority order:
+   *   1. config.iceServers — full override (caller manages everything)
+   *   2. localhost → empty [] (host candidates suffice, STUN/TURN timeouts break tests)
+   *   3. config.useTurn === false → STUN only (DEFAULT_ICE_SERVERS)
+   *   4. config.turnServers → STUN + custom TURN servers
+   *   5. default → STUN + DEFAULT_TURN_SERVERS (open relay)
+   */
+  private _resolveIceServers(isLocalhost: boolean): RTCIceServer[] {
+    // Explicit override takes full priority
+    if (this.config.iceServers) return this.config.iceServers;
+
+    // Localhost: skip all NAT traversal (host candidates work, STUN causes timeouts in tests)
+    if (isLocalhost) return [];
+
+    // Caller explicitly disabled TURN
+    if (this.config.useTurn === false) return DEFAULT_ICE_SERVERS;
+
+    // Use caller-provided TURN servers
+    if (this.config.turnServers && this.config.turnServers.length > 0) {
+      return [...DEFAULT_ICE_SERVERS, ...this.config.turnServers];
+    }
+
+    // Default: STUN + open relay TURN for maximum NAT traversal
+    return ICE_SERVERS_WITH_TURN;
+  }
+
   // ── Internal: signaling server management ─────────────────────────────────
 
   private _resolveSignalingServers(): { url: string; label: string }[] {
@@ -571,11 +654,9 @@ export class PeerTransport implements Transport {
       }
 
       // In test/dev on localhost, skip STUN/TURN (host candidates suffice, STUN timeouts break tests)
-      // Auto-detect localhost for testing (skip STUN since host candidates suffice and DNS failures block negotiation)
       const isLocalhost = typeof window !== 'undefined' && 
         (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-      const iceServers = isLocalhost ? [] : (this.config.iceServers || DEFAULT_ICE_SERVERS);
-      peerConfig.config = { iceServers };
+      peerConfig.config = { iceServers: this._resolveIceServers(isLocalhost) };
 
       const peer = peerId ? new Peer(peerId, peerConfig as any) : new Peer(peerConfig as any);
 
@@ -608,10 +689,8 @@ export class PeerTransport implements Transport {
   private _initServer(server: { url: string; label: string }, peerId?: string, attempt = 0): Promise<string> {
     return new Promise((resolve, reject) => {
       const url = new URL(server.url);
-      // Auto-detect localhost for testing
       const isLocalhost = typeof window !== 'undefined' && 
         (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-      const iceServers = isLocalhost ? [] : (this.config.iceServers || DEFAULT_ICE_SERVERS);
 
       const peerConfig: any = {
         host: url.hostname,
@@ -619,7 +698,7 @@ export class PeerTransport implements Transport {
         path: url.pathname === '/' ? '/peerjs' : url.pathname,
         secure: url.protocol === 'https:' || url.protocol === 'wss:',
         debug: this.config.debug ?? 1,
-        config: { iceServers },
+        config: { iceServers: this._resolveIceServers(isLocalhost) },
       };
 
       // Use the same peer ID on all servers (or let first server assign one)

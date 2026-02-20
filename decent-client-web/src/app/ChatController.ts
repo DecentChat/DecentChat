@@ -35,9 +35,10 @@ import type {
   Contact, DirectConversation,
 } from 'decent-protocol';
 
-import { PeerTransport } from 'decent-transport-webrtc';
+import { PeerTransport, ICE_SERVERS_WITH_TURN } from 'decent-transport-webrtc';
 import { KeyStore } from '../crypto/KeyStore';
 import { IndexedDBBlobStorage } from '../storage/IndexedDBBlobStorage';
+import { StorageQuotaManager } from '../storage/StorageQuotaManager';
 // Database.ts is kept on disk (task #8 — not deleted yet) but is no longer
 // instantiated here; PersistentStore is the single source of truth.
 import { MessageProtocol } from '../messages/MessageProtocol';
@@ -102,8 +103,12 @@ export class ChatController {
   readonly directConversationStore: MemoryDirectConversationStore;
 
   /** DEP-002: Peer Exchange for signaling server discovery */
+  readonly storageQuota: StorageQuotaManager = new StorageQuotaManager();
+
   private serverDiscovery: Map<string, ServerDiscovery> = new Map();
   private pexBroadcastInterval: number | null = null;
+  private _quotaCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private _peerMaintenanceInterval: ReturnType<typeof setInterval> | null = null;
 
   /** Active chunked transfers (receiving) */
   private activeTransfers = new Map<string, ChunkedReceiver>();
@@ -872,6 +877,108 @@ export class ChatController {
       clearInterval(this.pexBroadcastInterval);
       this.pexBroadcastInterval = null;
     }
+    // Also stop maintenance timers
+    if (this._quotaCheckInterval) {
+      clearInterval(this._quotaCheckInterval);
+      this._quotaCheckInterval = null;
+    }
+    if (this._peerMaintenanceInterval) {
+      clearInterval(this._peerMaintenanceInterval);
+      this._peerMaintenanceInterval = null;
+    }
+  }
+
+  // =========================================================================
+  // T2.4: Storage Quota Management
+  // =========================================================================
+
+  /**
+   * Check current storage usage and auto-prune if needed.
+   * Call once on startup and every 24h thereafter.
+   */
+  async checkStorageQuota(): Promise<void> {
+    const status = await this.storageQuota.check();
+    if (!status.isPruneNeeded && !status.isWarning) return;
+
+    const usedPct = Math.round(status.usageFraction * 100);
+
+    if (status.isPruneNeeded) {
+      console.warn(`[StorageQuota] Usage at ${usedPct}% — auto-pruning old messages`);
+      const result = await this.storageQuota.prune(this.persistentStore, this.workspaceManager);
+      if (result.messagesDeleted > 0) {
+        const used = StorageQuotaManager.formatBytes(status.usageBytes);
+        const quota = StorageQuotaManager.formatBytes(status.quotaBytes);
+        this.ui?.showToast(
+          `Storage was ${usedPct}% full (${used}/${quota}). Pruned ${result.messagesDeleted} old messages across ${result.channelsPruned} channel(s).`,
+          'info',
+        );
+      }
+    } else if (status.isWarning) {
+      const used = StorageQuotaManager.formatBytes(status.usageBytes);
+      const quota = StorageQuotaManager.formatBytes(status.quotaBytes);
+      console.warn(`[StorageQuota] Usage at ${usedPct}% — approaching limit (${used} / ${quota})`);
+      this.ui?.showToast(
+        `Storage usage is high (${usedPct}%). Consider clearing old messages in Settings.`,
+        'info',
+      );
+    }
+  }
+
+  /** Start periodic storage quota checks (every 24h) */
+  startQuotaChecks(): void {
+    if (this._quotaCheckInterval) return;
+    // Check immediately, then every 24 hours
+    void this.checkStorageQuota();
+    this._quotaCheckInterval = setInterval(() => {
+      void this.checkStorageQuota();
+    }, 24 * 60 * 60 * 1000);
+  }
+
+  // =========================================================================
+  // T2.5: Proactive Peer Maintenance
+  // =========================================================================
+
+  /** Start the peer maintenance sweep (every 60s) */
+  startPeerMaintenance(): void {
+    if (this._peerMaintenanceInterval) return;
+    // Run immediately, then every 60s
+    this._runPeerMaintenance();
+    this._peerMaintenanceInterval = setInterval(() => {
+      this._runPeerMaintenance();
+    }, 60_000);
+  }
+
+  /**
+   * Proactive peer maintenance sweep — attempts to connect to any workspace
+   * member we're not currently connected to.
+   *
+   * Complements PeerTransport's auto-reconnect (which only fires on connection
+   * drop) by also reaching out to members we've never connected to.
+   */
+  private _runPeerMaintenance(): void {
+    const ws = this.state.activeWorkspaceId
+      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+      : null;
+    if (!ws) return;
+
+    const connectedPeers = new Set(this.transport.getConnectedPeers());
+    let attempted = 0;
+
+    for (const member of ws.members) {
+      if (member.peerId === this.state.myPeerId) continue;
+      if (connectedPeers.has(member.peerId)) continue;
+      if (this.state.connectingPeers.has(member.peerId)) continue;
+
+      attempted++;
+      this.state.connectingPeers.add(member.peerId);
+      this.transport.connect(member.peerId).catch(() => {
+        this.state.connectingPeers.delete(member.peerId);
+      });
+    }
+
+    if (attempted > 0) {
+      console.log(`[Maintenance] Attempting reconnect to ${attempted} workspace member(s)`);
+    }
   }
 
   /**
@@ -956,6 +1063,8 @@ export class ChatController {
     // DEP-002: Start periodic PEX broadcasts
     if (workspaces.length > 0) {
       this.startPEXBroadcasts();
+      this.startPeerMaintenance();  // T2.5
+      this.startQuotaChecks();      // T2.4
     }
   }
 
@@ -1059,6 +1168,8 @@ export class ChatController {
     const defaultServer = getDefaultSignalingServer();
     this.getServerDiscovery(ws.id, defaultServer);
     this.startPEXBroadcasts();
+    this.startPeerMaintenance();  // T2.5
+    this.startQuotaChecks();      // T2.4
 
     return ws;
   }
@@ -1096,6 +1207,8 @@ export class ChatController {
     }
 
     this.startPEXBroadcasts();
+    this.startPeerMaintenance();  // T2.5
+    this.startQuotaChecks();      // T2.4
 
     // Bootstrap local member list so outbound messages can target inviter
     this.workspaceManager.addMember(ws.id, {
@@ -1706,6 +1819,7 @@ export class ChatController {
       turnUrls.push(...env.VITE_TURN_URLS.split(',').map((s: string) => s.trim()).filter(Boolean));
     }
 
+    // No custom TURN configured — let PeerTransport._resolveIceServers() decide (uses DEFAULT_TURN_SERVERS)
     if (turnUrls.length === 0) return undefined;
 
     const username = typeof env.VITE_TURN_USERNAME === 'string' ? env.VITE_TURN_USERNAME : '';
@@ -1713,11 +1827,14 @@ export class ChatController {
       ? env.VITE_TURN_CREDENTIAL
       : (typeof env.VITE_TURN_PASSWORD === 'string' ? env.VITE_TURN_PASSWORD : '');
 
-    return turnUrls.map((url) => ({
+    const customTurn: RTCIceServer[] = turnUrls.map((url) => ({
       urls: url,
       ...(username ? { username } : {}),
       ...(credential ? { credential } : {}),
     }));
+
+    // Always include STUN alongside custom TURN for best connectivity
+    return [...ICE_SERVERS_WITH_TURN, ...customTurn];
   }
 
   // =========================================================================

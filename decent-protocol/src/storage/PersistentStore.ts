@@ -147,6 +147,24 @@ export class PersistentStore {
     });
   }
 
+  async deleteMessage(messageId: string): Promise<void> {
+    await this.delete('messages', messageId);
+  }
+
+  /** Bulk-delete messages by ID. More efficient than calling deleteMessage() in a loop. */
+  async deleteMessages(messageIds: string[]): Promise<void> {
+    if (messageIds.length === 0) return;
+    const tx = this.getDB().transaction('messages', 'readwrite');
+    const store = tx.objectStore('messages');
+    for (const id of messageIds) {
+      store.delete(id);
+    }
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
   // === Identity ===
 
   async saveIdentity(key: string, value: any): Promise<void> {
