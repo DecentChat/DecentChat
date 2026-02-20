@@ -18,6 +18,7 @@
     "test:e2e": "cd decent-client-web && bun run test:e2e",
     "test:integration": "cd decent-client-web && bun run test:integration",
     "test:unit": "cd decent-client-web && bun run test:unit",
+    "test:all": "bun test && cd decent-client-web && bun run test:unit",
     "typecheck": "tsc --build tsconfig.json"
   },
   "devDependencies": {
