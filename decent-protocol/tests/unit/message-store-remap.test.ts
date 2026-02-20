@@ -63,10 +63,16 @@ describe('MessageStore.remapChannel()', () => {
     }
   });
 
-  // 1c — BUG: remapChannel(id, id) deletes all messages because
-  // channels.delete(oldId) removes the key just set by channels.set(newId, ...).
-  // When oldId === newId this should be a no-op but currently destroys data.
-  test.todo('is a no-op when oldId === newId');
+  // 1c
+  test('is a no-op when oldId === newId', async () => {
+    await seedMessages(ms, 'same-ch', 'alice', 3);
+
+    const before = ms.getMessages('same-ch').map(m => m.id);
+    ms.remapChannel('same-ch', 'same-ch');
+    const after = ms.getMessages('same-ch').map(m => m.id);
+
+    expect(after).toEqual(before);
+  });
 
   // 1d
   test('returns empty array without throwing for unknown channelId', () => {

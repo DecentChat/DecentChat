@@ -183,6 +183,8 @@ export class MessageStore {
    * Used during workspace-state sync when channel IDs are reconciled via min-wins.
    */
   remapChannel(oldId: string, newId: string): PlaintextMessage[] {
+    if (oldId === newId) return this.channels.get(oldId) ?? [];
+
     const messages = this.channels.get(oldId);
     if (!messages || messages.length === 0) return [];
 
