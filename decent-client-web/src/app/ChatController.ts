@@ -110,6 +110,14 @@ export class ChatController {
   private _quotaCheckInterval: ReturnType<typeof setInterval> | null = null;
   private _peerMaintenanceInterval: ReturnType<typeof setInterval> | null = null;
 
+  // T3.2: Gossip propagation
+  /** Max relay hops a message may travel (0 = sent by original author, 1 = relayed once, …) */
+  static readonly GOSSIP_TTL = 2;
+  /** Deduplicate received messages by their original ID. Maps id → received timestamp */
+  private _gossipSeen = new Map<string, number>();
+  /** Cleanup interval for the seen-set (every 5 min) */
+  private _gossipCleanupInterval: ReturnType<typeof setInterval> | null = null;
+
   /** Active chunked transfers (receiving) */
   private activeTransfers = new Map<string, ChunkedReceiver>();
   /** Active chunked transfers (sending) */
@@ -385,6 +393,13 @@ export class ChatController {
           return;
         }
 
+        // --- T3.2: Gossip dedup — drop if we already processed this message via another path ---
+        const _gossipOrigId: string | undefined = (rawData as any)?._originalMessageId;
+        if (_gossipOrigId) {
+          if (this._gossipSeen.has(_gossipOrigId)) return; // already processed
+          this._gossipSeen.set(_gossipOrigId, Date.now());
+        }
+
         // --- Encrypted chat message ---
         // Use persistentStore as the single source of truth for peer public keys.
         const peerData = await this.persistentStore.getPeer(peerId);
@@ -491,7 +506,9 @@ export class ChatController {
         }
 
         // Pass threadId so replies land in the correct thread (not the main channel)
-        const msg = await this.messageStore.createMessage(channelId, peerId, content, 'text', data.threadId);
+        // T3.2: For gossip-relayed messages, use the original sender's peerId (not the relay node)
+        const actualSenderId: string = (data._gossipOriginalSender as string | undefined) ?? peerId;
+        const msg = await this.messageStore.createMessage(channelId, actualSenderId, content, 'text', data.threadId);
         // Use sender's timestamp but guarantee it's strictly after our last stored message.
         // Without this guard the hash-chain timestamp check rejects messages that arrive
         // out-of-order (e.g. Alice sent a thread reply at T=100, Bob meanwhile sent at
@@ -526,6 +543,9 @@ export class ChatController {
 
           // DEP-005: Send delivery ACK back to sender
           this.transport.send(peerId, { type: 'ack', messageId: msg.id, channelId });
+
+          // T3.2: Gossip relay — re-encrypt and forward to workspace peers who might not have received this
+          void this._gossipRelay(peerId, msg.id, msg.senderId, content, channelId, data);
 
           if (channelId === this.state.activeChannelId) {
             if (msg.threadId) {
@@ -886,6 +906,10 @@ export class ChatController {
       clearInterval(this._peerMaintenanceInterval);
       this._peerMaintenanceInterval = null;
     }
+    if (this._gossipCleanupInterval) {
+      clearInterval(this._gossipCleanupInterval);
+      this._gossipCleanupInterval = null;
+    }
   }
 
   // =========================================================================
@@ -946,6 +970,83 @@ export class ChatController {
     this._peerMaintenanceInterval = setInterval(() => {
       this._runPeerMaintenance();
     }, 60_000);
+  }
+
+  // =========================================================================
+  // T3.2: Gossip Propagation
+  // =========================================================================
+
+  /**
+   * Relay a received workspace message to connected peers who might not have
+   * received it from the original sender (partial mesh scenario).
+   *
+   * Strategy:
+   *   - Re-encrypt the plaintext for each eligible relay target
+   *   - Include _originalMessageId so recipients can dedup
+   *   - Limit depth with GOSSIP_TTL (default: 2 hops)
+   *
+   * Overhead in full mesh: near-zero (every peer is already directly connected
+   * to the sender; no session established with relay → skipped). CRDT dedup
+   * handles the rare duplicate if two paths both deliver the same message.
+   */
+  private async _gossipRelay(
+    fromPeerId: string,
+    originalMsgId: string,
+    originalSenderId: string,
+    plaintext: string,
+    channelId: string,
+    envelope: any,
+  ): Promise<void> {
+    if (!this.messageProtocol) return;
+
+    const hop = (envelope._gossipHop ?? 0) + 1;
+    if (hop > ChatController.GOSSIP_TTL) return;
+
+    const ws = this.state.activeWorkspaceId
+      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+      : null;
+    if (!ws) return;
+
+    const connectedPeers = new Set(this.transport.getConnectedPeers());
+
+    for (const member of ws.members) {
+      const targetPeerId = member.peerId;
+      if (targetPeerId === this.state.myPeerId) continue;  // skip self
+      if (targetPeerId === fromPeerId) continue;           // don't send back to relay source
+      if (targetPeerId === originalSenderId) continue;     // don't send back to original author
+      if (!connectedPeers.has(targetPeerId)) continue;     // must be reachable
+      if (!this.messageProtocol.hasSharedSecret(targetPeerId)) continue; // need session
+
+      try {
+        const relayEnv = await this.messageProtocol.encryptMessage(
+          targetPeerId, plaintext, 'text',
+          envelope.metadata,
+        );
+        // Attach relay metadata (unencrypted, alongside the encrypted payload)
+        (relayEnv as any).channelId = channelId;
+        (relayEnv as any).workspaceId = envelope.workspaceId ?? this.state.activeWorkspaceId;
+        (relayEnv as any).threadId = envelope.threadId;
+        (relayEnv as any).vectorClock = envelope.vectorClock;
+        (relayEnv as any)._originalMessageId = originalMsgId;    // dedup key
+        (relayEnv as any)._gossipOriginalSender = originalSenderId; // real author
+        (relayEnv as any)._gossipHop = hop;
+        this.transport.send(targetPeerId, relayEnv);
+      } catch {
+        // Best-effort — ignore relay failures silently
+      }
+    }
+  }
+
+  /** Start cleanup sweep for the gossip seen-set (every 5 minutes) */
+  startGossipCleanup(): void {
+    if (this._gossipCleanupInterval) return;
+    const FIVE_MIN = 5 * 60 * 1000;
+    this._gossipCleanupInterval = setInterval(() => {
+      const cutoff = Date.now() - FIVE_MIN;
+      for (const [id, ts] of this._gossipSeen) {
+        if (ts < cutoff) this._gossipSeen.delete(id);
+      }
+    }, FIVE_MIN);
   }
 
   /**
@@ -1065,6 +1166,7 @@ export class ChatController {
       this.startPEXBroadcasts();
       this.startPeerMaintenance();  // T2.5
       this.startQuotaChecks();      // T2.4
+      this.startGossipCleanup();    // T3.2
     }
   }
 
@@ -1170,6 +1272,7 @@ export class ChatController {
     this.startPEXBroadcasts();
     this.startPeerMaintenance();  // T2.5
     this.startQuotaChecks();      // T2.4
+    this.startGossipCleanup();    // T3.2
 
     return ws;
   }
@@ -1209,6 +1312,7 @@ export class ChatController {
     this.startPEXBroadcasts();
     this.startPeerMaintenance();  // T2.5
     this.startQuotaChecks();      // T2.4
+    this.startGossipCleanup();    // T3.2
 
     // Bootstrap local member list so outbound messages can target inviter
     this.workspaceManager.addMember(ws.id, {
