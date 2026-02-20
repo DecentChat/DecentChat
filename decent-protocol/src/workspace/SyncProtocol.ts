@@ -12,6 +12,8 @@ import { WorkspaceManager } from './WorkspaceManager';
 import { MessageStore } from '../messages/MessageStore';
 import type { ServerDiscovery } from './ServerDiscovery';
 
+type SyncedHistoryMessage = Omit<PlaintextMessage, 'content'> & { content?: string };
+
 export type SendFn = (peerId: string, data: any) => boolean;
 export type OnEvent = (event: SyncEvent) => void;
 
@@ -19,7 +21,8 @@ export type SyncEvent =
   | { type: 'member-joined'; workspaceId: string; member: WorkspaceMember }
   | { type: 'member-left'; workspaceId: string; peerId: string }
   | { type: 'channel-created'; workspaceId: string; channel: Channel }
-  | { type: 'workspace-joined'; workspace: Workspace; messageHistory: Record<string, PlaintextMessage[]> }
+  // Message history sent during sync intentionally omits plaintext `content`.
+  | { type: 'workspace-joined'; workspace: Workspace; messageHistory: Record<string, SyncedHistoryMessage[]> }
   | { type: 'join-rejected'; reason: string }
   | { type: 'message-received'; channelId: string; message: PlaintextMessage }
   | { type: 'sync-complete'; workspaceId: string };
@@ -179,11 +182,15 @@ export class SyncProtocol {
     }
 
     // Send full workspace state + message history
-    const messageHistory: Record<string, PlaintextMessage[]> = {};
+    // Sync history intentionally excludes plaintext content; encrypted payloads are sent separately.
+    const messageHistory: Record<string, SyncedHistoryMessage[]> = {};
     for (const channel of workspace.channels) {
       const msgs = this.messageStore.getMessages(channel.id);
       if (msgs.length > 0) {
-        messageHistory[channel.id] = msgs;
+        messageHistory[channel.id] = msgs.map((msg) => {
+          const { content, ...safeMsg } = msg;
+          return safeMsg;
+        });
       }
     }
 
@@ -211,7 +218,7 @@ export class SyncProtocol {
 
     // Import message histories (with chain verification)
     for (const [channelId, messages] of Object.entries(msg.messageHistory)) {
-      await this.messageStore.importMessages(channelId, messages as PlaintextMessage[]);
+      await this.messageStore.importMessages(channelId, messages as SyncedHistoryMessage[]);
     }
 
     this.onEvent({
@@ -272,11 +279,15 @@ export class SyncProtocol {
     const workspace = this.workspaceManager.getWorkspace(msg.workspaceId);
     if (!workspace) return;
 
-    const messageHistory: Record<string, PlaintextMessage[]> = {};
+    // Sync history intentionally excludes plaintext content; encrypted payloads are sent separately.
+    const messageHistory: Record<string, SyncedHistoryMessage[]> = {};
     for (const channel of workspace.channels) {
       const msgs = this.messageStore.getMessages(channel.id);
       if (msgs.length > 0) {
-        messageHistory[channel.id] = msgs;
+        messageHistory[channel.id] = msgs.map((msg) => {
+          const { content, ...safeMsg } = msg;
+          return safeMsg;
+        });
       }
     }
 
@@ -295,7 +306,7 @@ export class SyncProtocol {
 
     // Import verified message histories
     for (const [channelId, messages] of Object.entries(msg.messageHistory)) {
-      await this.messageStore.importMessages(channelId, messages as PlaintextMessage[]);
+      await this.messageStore.importMessages(channelId, messages as SyncedHistoryMessage[]);
     }
 
     this.onEvent({ type: 'sync-complete', workspaceId: msg.workspace.id });

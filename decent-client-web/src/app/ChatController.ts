@@ -14,7 +14,6 @@ import {
   MessageCRDT,
 
   MediaStore,
-  MemoryBlobStorage,
   ChunkedSender,
   ChunkedReceiver,
   ClockSync,
@@ -38,6 +37,7 @@ import type {
 
 import { PeerTransport } from 'decent-transport-webrtc';
 import { KeyStore } from '../crypto/KeyStore';
+import { IndexedDBBlobStorage } from '../storage/IndexedDBBlobStorage';
 // Database.ts is kept on disk (task #8 — not deleted yet) but is no longer
 // instantiated here; PersistentStore is the single source of truth.
 import { MessageProtocol } from '../messages/MessageProtocol';
@@ -114,13 +114,14 @@ export class ChatController {
     this.cryptoManager = new CryptoManager();
     this.keyStore = new KeyStore(this.cryptoManager);
     const MockT = typeof window !== 'undefined' && (window as any).__MockTransport;
-    this.transport = MockT ? new MockT() : new PeerTransport();
+    this.transport = MockT ? new MockT() : new PeerTransport({
+      iceServers: this.getIceServersFromEnv(),
+    });
     this.messageStore = new MessageStore();
     this.workspaceManager = new WorkspaceManager();
     this.persistentStore = new PersistentStore();
     this.offlineQueue = new OfflineQueue({ maxAgeMs: 7 * 24 * 60 * 60 * 1000 });
-    // TODO: Replace MemoryBlobStorage with IndexedDB-backed storage for production
-    this.mediaStore = new MediaStore(new MemoryBlobStorage());
+    this.mediaStore = new MediaStore(new IndexedDBBlobStorage());
     this.clockSync = new ClockSync();
     this.messageGuard = new MessageGuard();
     this.presence = new PresenceManager();
@@ -154,13 +155,6 @@ export class ChatController {
     this.ui = ui;
   }
 
-  private tracePrefix(): string {
-    const alias = (this.state.myAlias || '').trim();
-    if (/^alice$/i.test(alias)) return '[TRACE Alice]';
-    if (/^bob$/i.test(alias)) return '[TRACE Bob]';
-    return `[TRACE ${alias || this.state.myPeerId.slice(0, 8)}]`;
-  }
-
   // =========================================================================
   // Transport event wiring
   // =========================================================================
@@ -187,11 +181,6 @@ export class ChatController {
 
     this.transport.onMessage = async (peerId, rawData) => {
       const data = rawData as any;
-      console.log(this.tracePrefix(), 'onMessage inbound', {
-        fromPeerId: peerId,
-        type: data?.type,
-        channelId: data?.channelId,
-      });
 
       // Rate limit + validate before any processing
       const guardResult = this.messageGuard.check(peerId, data);
@@ -517,9 +506,11 @@ export class ChatController {
     };
 
     this.transport.onError = (error) => {
-      // 'unavailable-id' is a transient race on page reload — PeerTransport retries silently,
-      // no need to alarm the user if it eventually surfaces here.
+      // 'unavailable-id' is a transient race on page reload — PeerTransport retries silently.
       if ((error as any).type === 'unavailable-id' || error.message?.includes('is taken')) return;
+      // Signaling server briefly dropped — PeerTransport auto-reconnects within ~3s.
+      if (error.message?.includes('disconnecting from server') ||
+          error.message?.includes('disconnected from server')) return;
       this.ui?.showToast(error.message, 'error');
     };
   }
@@ -574,8 +565,6 @@ export class ChatController {
   }
 
   private async handleSyncMessage(_peerId: string, msg: any): Promise<void> {
-    console.log('Sync message from', _peerId, msg);
-
     // Handle workspace state sync (channels, members, name)
     if (msg.sync?.type === 'workspace-state' && msg.workspaceId) {
       await this.handleWorkspaceStateSync(_peerId, msg.workspaceId, msg.sync);
@@ -905,13 +894,6 @@ export class ChatController {
   // =========================================================================
 
   async sendMessage(content: string, threadId?: string): Promise<void> {
-    const workspacePeers = this.getWorkspaceRecipientPeerIds();
-    console.log(this.tracePrefix(), 'sendMessage entry', {
-      content: content.slice(0, 200),
-      activeChannelId: this.state.activeChannelId,
-      workspacePeers,
-    });
-    console.log('[DecentChat] sendMessage called:', { content: content.slice(0, 50), channelId: this.state.activeChannelId, threadId });
     if (!content.trim() || !this.state.activeChannelId) return;
 
     const msg = await this.messageStore.createMessage(
@@ -923,7 +905,6 @@ export class ChatController {
     );
 
     const result = await this.messageStore.addMessage(msg);
-    console.log('[DecentChat] addMessage result:', JSON.stringify(result), 'msgId:', msg.id);
     if (!result.success) {
       this.ui?.showToast('Failed to create message: ' + result.error, 'error');
       return;
@@ -952,10 +933,6 @@ export class ChatController {
         (envelope as any).messageId = msg.id; // For reaction targeting — receiver must use same ID
 
         if (this.state.readyPeers.has(peerId)) {
-          console.log(this.tracePrefix(), 'before transport.send', {
-            peerId,
-            envelope,
-          });
           this.transport.send(peerId, envelope);
         } else {
           await this.offlineQueue.enqueue(peerId, envelope);
@@ -1311,12 +1288,6 @@ export class ChatController {
   /** Send a message to all workspace peers */
   private broadcastToWorkspacePeers(data: any): void {
     const recipients = this.getWorkspaceRecipientPeerIds();
-    console.log(this.tracePrefix(), 'broadcastToWorkspacePeers', {
-      recipients,
-      readyPeers: Array.from(this.state.readyPeers),
-      type: data?.type,
-      channelId: data?.channelId,
-    });
     for (const peerId of recipients) {
       if (this.state.readyPeers.has(peerId)) {
         try { this.transport.send(peerId, data); } catch {}
@@ -1366,16 +1337,17 @@ export class ChatController {
       { thumbnail, width, height },
     );
 
-    // Encrypt blob with workspace key (for now, using self-encryption)
-    // TODO: Use workspace shared key for proper E2E
-    const encryptedBlob = arrayBuffer; // Placeholder — encrypt in production
+    const encrypted = await this.encryptAttachmentBlob(arrayBuffer);
+    meta.iv = encrypted.iv;
+    meta.encryptionKey = encrypted.encryptionKey;
+    meta.encryptedHash = await hashBlob(encrypted.ciphertext);
 
     // Store locally
     const wsId = this.state.activeWorkspaceId || 'default';
-    await this.mediaStore.store(wsId, meta, encryptedBlob);
+    await this.mediaStore.store(wsId, meta, encrypted.ciphertext);
 
     // Create chunked sender for when peers request it
-    this.activeSenders.set(meta.id, new ChunkedSender(meta.id, encryptedBlob));
+    this.activeSenders.set(meta.id, new ChunkedSender(meta.id, arrayBuffer));
 
     // Send message with attachment metadata
     const content = text || `📎 ${file.name}`;
@@ -1427,21 +1399,21 @@ export class ChatController {
 
   /** Handle incoming media request — start sending chunks */
   private async handleMediaRequest(peerId: string, request: MediaRequest): Promise<void> {
-    const blob = await this.mediaStore.getBlob(request.attachmentId);
-
-    if (!blob) {
-      // We don't have this blob — tell the requester
-      const response: MediaResponse = {
-        type: 'media-response',
-        attachmentId: request.attachmentId,
-        available: false,
-      };
-      this.transport.send(peerId, response);
-      return;
-    }
-
     // Create sender if needed
     if (!this.activeSenders.has(request.attachmentId)) {
+      const encryptedBlob = await this.mediaStore.getBlob(request.attachmentId);
+      if (!encryptedBlob) {
+        // We don't have this blob — tell the requester
+        const response: MediaResponse = {
+          type: 'media-response',
+          attachmentId: request.attachmentId,
+          available: false,
+        };
+        this.transport.send(peerId, response);
+        return;
+      }
+
+      const blob = await this.decryptStoredAttachmentBlob(request.attachmentId, encryptedBlob);
       this.activeSenders.set(request.attachmentId, new ChunkedSender(request.attachmentId, blob));
     }
     const sender = this.activeSenders.get(request.attachmentId)!;
@@ -1497,7 +1469,13 @@ export class ChatController {
         const wsId = this.state.activeWorkspaceId || 'default';
         const att = this.mediaStore.getAttachment(chunk.attachmentId);
         if (att) {
-          await this.mediaStore.store(wsId, att, blob);
+          const encrypted = await this.encryptAttachmentBlob(blob, att);
+          await this.mediaStore.store(wsId, {
+            ...att,
+            iv: encrypted.iv,
+            encryptionKey: encrypted.encryptionKey,
+            encryptedHash: await hashBlob(encrypted.ciphertext),
+          } as AttachmentMeta, encrypted.ciphertext);
         }
         this.activeTransfers.delete(chunk.attachmentId);
         this.ui?.showToast(`📥 Downloaded ${att?.name || 'attachment'}`, 'success');
@@ -1525,6 +1503,117 @@ export class ChatController {
 
   async pruneOldMedia(ageMs: number): Promise<number> {
     return this.mediaStore.pruneOlderThan(ageMs);
+  }
+
+  private async encryptAttachmentBlob(
+    data: ArrayBuffer,
+    existingMeta?: Partial<AttachmentMeta> & { encryptionKey?: string }
+  ): Promise<{ ciphertext: ArrayBuffer; iv: string; encryptionKey: string }> {
+    let aesKey: CryptoKey;
+    let encryptionKey = existingMeta?.encryptionKey;
+    let ivBytes: Uint8Array;
+
+    if (encryptionKey) {
+      aesKey = await this.importAesKeyFromBase64Jwk(encryptionKey);
+    } else {
+      aesKey = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        true,
+        ['encrypt', 'decrypt'],
+      );
+      encryptionKey = await this.exportAesKeyToBase64Jwk(aesKey);
+    }
+
+    if (existingMeta?.iv) {
+      ivBytes = new Uint8Array(this.base64ToArrayBuffer(existingMeta.iv));
+    } else {
+      ivBytes = crypto.getRandomValues(new Uint8Array(12));
+    }
+
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: ivBytes },
+      aesKey,
+      data,
+    );
+
+    return {
+      ciphertext,
+      iv: this.arrayBufferToBase64(ivBytes.buffer),
+      encryptionKey,
+    };
+  }
+
+  private async decryptStoredAttachmentBlob(attachmentId: string, encryptedBlob: ArrayBuffer): Promise<ArrayBuffer> {
+    const attachment = this.mediaStore.getAttachment(attachmentId) as (AttachmentMeta & { encryptionKey?: string }) | undefined;
+    if (!attachment?.encryptionKey || !attachment.iv) {
+      return encryptedBlob;
+    }
+
+    const key = await this.importAesKeyFromBase64Jwk(attachment.encryptionKey);
+    const iv = this.base64ToArrayBuffer(attachment.iv);
+    return await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(iv) },
+      key,
+      encryptedBlob,
+    );
+  }
+
+  private async exportAesKeyToBase64Jwk(key: CryptoKey): Promise<string> {
+    const jwk = await crypto.subtle.exportKey('jwk', key);
+    return btoa(JSON.stringify(jwk));
+  }
+
+  private async importAesKeyFromBase64Jwk(keyBase64: string): Promise<CryptoKey> {
+    const jwk = JSON.parse(atob(keyBase64));
+    return await crypto.subtle.importKey(
+      'jwk',
+      jwk,
+      { name: 'AES-GCM' },
+      true,
+      ['encrypt', 'decrypt'],
+    );
+  }
+
+  private arrayBufferToBase64(buffer: ArrayBuffer): string {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+
+  private base64ToArrayBuffer(base64: string): ArrayBuffer {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  private getIceServersFromEnv(): RTCIceServer[] | undefined {
+    const env = (import.meta as any).env || {};
+    const turnUrls: string[] = [];
+
+    if (typeof env.VITE_TURN_URL === 'string' && env.VITE_TURN_URL.trim()) {
+      turnUrls.push(env.VITE_TURN_URL.trim());
+    }
+    if (typeof env.VITE_TURNS_URL === 'string' && env.VITE_TURNS_URL.trim()) {
+      turnUrls.push(env.VITE_TURNS_URL.trim());
+    }
+    if (typeof env.VITE_TURN_URLS === 'string' && env.VITE_TURN_URLS.trim()) {
+      turnUrls.push(...env.VITE_TURN_URLS.split(',').map((s: string) => s.trim()).filter(Boolean));
+    }
+
+    if (turnUrls.length === 0) return undefined;
+
+    const username = typeof env.VITE_TURN_USERNAME === 'string' ? env.VITE_TURN_USERNAME : '';
+    const credential = typeof env.VITE_TURN_CREDENTIAL === 'string'
+      ? env.VITE_TURN_CREDENTIAL
+      : (typeof env.VITE_TURN_PASSWORD === 'string' ? env.VITE_TURN_PASSWORD : '');
+
+    return turnUrls.map((url) => ({
+      urls: url,
+      ...(username ? { username } : {}),
+      ...(credential ? { credential } : {}),
+    }));
   }
 
   // =========================================================================

@@ -45,8 +45,10 @@ export interface AttachmentMeta {
   height?: number;
   /** Audio/video duration in seconds */
   durationSec?: number;
-  /** Encryption IV used for this attachment (hex) */
+  /** AES-GCM IV used for this attachment (base64) */
   iv?: string;
+  /** Base64-encoded JWK for per-file AES-GCM key */
+  encryptionKey?: string;
 }
 
 /** Full attachment with local status tracking */

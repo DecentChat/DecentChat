@@ -146,8 +146,11 @@ describe('SyncProtocol - Join Flow', () => {
     // Bob should have the messages
     const bobMessages = bob.ms.getMessages(channelId);
     expect(bobMessages).toHaveLength(3);
-    expect(bobMessages[0].content).toBe('Message 0');
-    expect(bobMessages[2].content).toBe('Message 2');
+    // Sync history intentionally omits plaintext content.
+    expect(bobMessages[0].content).toBe('');
+    expect(bobMessages[2].content).toBe('');
+    expect(bobMessages[0].senderId).toBe('alice');
+    expect(bobMessages[2].prevHash).toBeDefined();
   });
 
   test('duplicate join is rejected', async () => {
@@ -304,7 +307,7 @@ describe('SyncProtocol - Full Sync', () => {
     }
   });
 
-  test('sync with tampered history is rejected', async () => {
+  test('sync imports metadata-only history even if original plaintext was tampered', async () => {
     const alice = createPeer('alice');
     const bob = createPeer('bob');
 
@@ -327,12 +330,10 @@ describe('SyncProtocol - Full Sync', () => {
     await deliver(bob, alice);
     await deliver(alice, bob);
 
-    // Bob's importMessages should detect tampering
-    // The sync-complete event still fires (importMessages is fire-and-forget in current impl)
-    // but the messages should NOT be imported if chain is broken
+    // Metadata-only sync does not include plaintext content, so it cannot validate content tampering.
     const bobMsgs = bob.ms.getMessages(channelId);
-    // Chain verification in importMessages should reject
-    expect(bobMsgs).toHaveLength(0); // Tampered chain rejected
+    expect(bobMsgs).toHaveLength(3);
+    expect(bobMsgs.every((m) => m.content === '')).toBe(true);
   });
 });
 
@@ -381,6 +382,6 @@ describe('SyncProtocol - Three Peers', () => {
 
     const charlieMsgs = charlie.ms.getMessages(channelId);
     expect(charlieMsgs).toHaveLength(1);
-    expect(charlieMsgs[0].content).toBe('Hello team');
+    expect(charlieMsgs[0].content).toBe('');
   });
 });

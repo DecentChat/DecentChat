@@ -9,6 +9,8 @@ import { HashChain, GENESIS_HASH } from '../crypto/HashChain';
 import type { HashableMessage } from '../crypto/HashChain';
 import type { PlaintextMessage } from './types';
 
+type ImportedMessage = Omit<PlaintextMessage, 'content'> & { content?: string | null };
+
 export class MessageStore {
   private hashChain: HashChain;
   // In-memory store per channel (channelId → messages[])
@@ -136,21 +138,30 @@ export class MessageStore {
    */
   async importMessages(
     channelId: string,
-    messages: PlaintextMessage[]
+    messages: ImportedMessage[]
   ): Promise<{ success: boolean; error?: string }> {
-    // Verify the full chain
-    const hashable = messages.map(m => this.toHashable(m));
-    const verification = await this.hashChain.verifyFullChain(hashable);
+    const normalized: PlaintextMessage[] = messages.map((message) => ({
+      ...message,
+      content: typeof message.content === 'string' ? message.content : '',
+    }));
 
-    if (!verification.valid) {
-      return {
-        success: false,
-        error: `Tampered message history detected: ${verification.reason}`,
-      };
+    const hasOmittedContent = messages.some((message) => typeof message.content !== 'string');
+
+    // Full-chain verification requires message content; metadata-only sync intentionally omits it.
+    if (!hasOmittedContent) {
+      const hashable = normalized.map(m => this.toHashable(m));
+      const verification = await this.hashChain.verifyFullChain(hashable);
+
+      if (!verification.valid) {
+        return {
+          success: false,
+          error: `Tampered message history detected: ${verification.reason}`,
+        };
+      }
     }
 
     // Replace channel messages (peer's chain is valid)
-    this.channels.set(channelId, [...messages]);
+    this.channels.set(channelId, normalized);
     return { success: true };
   }
 
@@ -188,6 +199,6 @@ export class MessageStore {
   }
 
   private generateId(): string {
-    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    return crypto.randomUUID();
   }
 }

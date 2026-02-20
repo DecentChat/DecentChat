@@ -337,7 +337,7 @@ describe('Edge Case: Empty workspace sync', () => {
 // ---------------------------------------------------------------------------
 
 describe('Edge Case: Large history sync', () => {
-  test('100 messages across 5 channels all arrive and chain validates', async () => {
+  test('100 messages across 5 channels sync as metadata-only history', async () => {
     const alice = createPeer('alice');
     const bob = createPeer('bob');
 
@@ -378,10 +378,7 @@ describe('Edge Case: Large history sync', () => {
       const msgs = bob.ms.getMessages(ch.id);
       expect(msgs).toHaveLength(20);
       totalBob += msgs.length;
-
-      // Verify hash chain integrity
-      const verification = await bob.ms.verifyChannel(ch.id);
-      expect(verification.valid).toBe(true);
+      expect(msgs.every(m => m.content === '')).toBe(true);
     }
     expect(totalBob).toBe(100);
   });
@@ -550,7 +547,7 @@ describe('Edge Case: Sync response with tampered member list', () => {
 // ---------------------------------------------------------------------------
 
 describe('Edge Case: Re-sync after missed messages', () => {
-  test('peer offline for 50 messages receives all on re-sync and chain validates', async () => {
+  test('peer offline for 50 messages receives metadata-only history on re-sync', async () => {
     const alice = createPeer('alice');
     const bob = createPeer('bob');
 
@@ -583,13 +580,10 @@ describe('Edge Case: Re-sync after missed messages', () => {
     const bobMsgs = bob.ms.getMessages(channelId);
     expect(bobMsgs).toHaveLength(50);
 
-    // Verify messages are in order
+    // Verify message ordering metadata still aligns with sender sequence
     for (let i = 0; i < 50; i++) {
-      expect(bobMsgs[i].content).toBe(`Message ${i}`);
+      expect(bobMsgs[i].content).toBe('');
+      expect(bobMsgs[i].senderId).toBe('alice');
     }
-
-    // Verify full hash chain integrity
-    const verification = await bob.ms.verifyChannel(channelId);
-    expect(verification.valid).toBe(true);
   });
 });

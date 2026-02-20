@@ -72,7 +72,9 @@ export class CryptoManager {
    */
   async deriveSharedSecret(
     peerPublicKey: CryptoKey,
-    privateKey?: CryptoKey
+    privateKey?: CryptoKey,
+    myPeerId?: string,
+    theirPeerId?: string,
   ): Promise<CryptoKey> {
     const keyPair = await this.getKeyPair();
     const privKey = privateKey || keyPair.privateKey;
@@ -96,12 +98,25 @@ export class CryptoManager {
       ['deriveKey']
     );
 
+    let salt: Uint8Array;
+    if (myPeerId && theirPeerId) {
+      const pair = [myPeerId, theirPeerId].sort().join(':');
+      const hashedSalt = await crypto.subtle.digest(
+        'SHA-256',
+        new TextEncoder().encode(pair),
+      );
+      salt = new Uint8Array(hashedSalt);
+    } else {
+      // Backward compatibility for callers that don't pass peer IDs.
+      salt = new TextEncoder().encode('decent-protocol-v1');
+    }
+
     // Derive AES-GCM key from shared secret using HKDF
     return await crypto.subtle.deriveKey(
       {
         name: 'HKDF',
         hash: 'SHA-256',
-        salt: new TextEncoder().encode('decent-protocol-v1'),
+        salt,
         info: new TextEncoder().encode('p2p-chat-aes-gcm'),
       },
       importedSecret,

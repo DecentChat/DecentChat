@@ -25,7 +25,7 @@ export interface PeerTransportConfig {
   signalingServer?: string;
   /** Multiple signaling servers for federation */
   signalingServers?: (string | SignalingServer)[];
-  /** ICE/STUN/TURN servers for NAT traversal */
+  /** ICE/STUN/TURN servers for NAT traversal (pass TURN here via runtime env/API config) */
   iceServers?: RTCIceServer[];
   /** PeerJS debug level: 0 = none, 1 = warnings, 2 = all (default: 1) */
   debug?: 0 | 1 | 2 | 3;
@@ -36,8 +36,8 @@ export interface PeerTransportConfig {
 }
 
 /**
- * Default ICE servers including free STUN + public TURN relays
- * For production, use your own TURN server (e.g. coturn)
+ * Default ICE servers include only STUN.
+ * TURN credentials should be provided via config.iceServers (loaded from env/API at runtime)
  */
 export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   // Google STUN servers (public, widely used)
@@ -46,28 +46,6 @@ export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   
   // Cloudflare STUN (fast, reliable)
   { urls: 'stun:stun.cloudflare.com:3478' },
-
-  // Metered.ca TURN relay (free tier, 50GB/month)
-  {
-    urls: 'turn:a.relay.metered.ca:80',
-    username: 'e8dd65b92af91ac9c6b97e4d',
-    credential: '1rW/JmqjQBWuHEVi',
-  },
-  {
-    urls: 'turn:a.relay.metered.ca:80?transport=tcp',
-    username: 'e8dd65b92af91ac9c6b97e4d',
-    credential: '1rW/JmqjQBWuHEVi',
-  },
-  {
-    urls: 'turn:a.relay.metered.ca:443',
-    username: 'e8dd65b92af91ac9c6b97e4d',
-    credential: '1rW/JmqjQBWuHEVi',
-  },
-  {
-    urls: 'turns:a.relay.metered.ca:443?transport=tcp',
-    username: 'e8dd65b92af91ac9c6b97e4d',
-    credential: '1rW/JmqjQBWuHEVi',
-  },
 ];
 
 interface ActiveConnection {
@@ -148,6 +126,31 @@ export class PeerTransport implements Transport {
    * Connect to a remote peer.
    * Tries all signaling servers until one succeeds.
    */
+  /**
+   * Wait up to `timeoutMs` for at least one signaling instance to (re)connect.
+   * Resolves immediately if any instance is already connected.
+   */
+  private _waitForAnySignalingReconnect(timeoutMs = 6000): Promise<void> {
+    if (this.signalingInstances.some(i => i.connected)) return Promise.resolve();
+
+    return new Promise<void>((resolve, reject) => {
+      const deadline = setTimeout(() => {
+        cleanup();
+        reject(new Error('Timed out waiting for signaling server reconnect'));
+      }, timeoutMs);
+
+      // Poll every 250 ms — PeerJS emits 'open' on reconnect, but we watch state directly
+      const poll = setInterval(() => {
+        if (this.signalingInstances.some(i => i.connected)) {
+          cleanup();
+          resolve();
+        }
+      }, 250);
+
+      function cleanup() { clearTimeout(deadline); clearInterval(poll); }
+    });
+  }
+
   async connect(peerId: string): Promise<void> {
     if (this.signalingInstances.length === 0) {
       throw new Error('PeerTransport not initialised — call init() first');
@@ -160,6 +163,14 @@ export class PeerTransport implements Transport {
     const baseDelay = this.config.retryDelayMs ?? 2000;
 
     try {
+      // If all signaling servers are currently disconnected, wait briefly for
+      // the auto-reconnect to fire (3 s in _setupPeerEvents) before giving up.
+      if (!this.signalingInstances.some(i => i.connected)) {
+        await this._waitForAnySignalingReconnect(8000).catch(() => {
+          throw new Error('Signaling server temporarily unavailable — please try again in a moment');
+        });
+      }
+
       // Try each signaling server
       for (const instance of this.signalingInstances) {
         if (!instance.connected) continue;
@@ -168,7 +179,23 @@ export class PeerTransport implements Transport {
           try {
             await this._attemptConnect(instance, peerId);
             return; // Success
-          } catch {
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+
+            // PeerJS race: peer became disconnected between our check and the actual call.
+            // Wait for reconnect and then retry this instance once more.
+            if (msg.includes('disconnecting from server') || msg.includes('disconnected from server')) {
+              await this._waitForAnySignalingReconnect(6000).catch(() => null);
+              this.connections.delete(peerId);
+              // Retry this attempt once
+              try {
+                await this._attemptConnect(instance, peerId);
+                return;
+              } catch {
+                // Fall through to next attempt / server
+              }
+            }
+
             if (attempt < maxRetries) {
               const delay = baseDelay * Math.pow(2, attempt);
               await new Promise(r => setTimeout(r, delay));
@@ -417,6 +444,13 @@ export class PeerTransport implements Transport {
   private _setupPeerEvents(instance: SignalingInstance): void {
     instance.peer.on('connection', (conn) => {
       this._setupConnection(conn, instance.url);
+    });
+
+    // Signaling server (re)connected — flip connected flag back on.
+    // This fires both on initial connect AND after peer.reconnect() succeeds.
+    instance.peer.on('open', () => {
+      instance.connected = true;
+      console.log(`[DecentChat] Connected to signaling: ${instance.label}`);
     });
 
     instance.peer.on('disconnected', () => {

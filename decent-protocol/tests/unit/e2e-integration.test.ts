@@ -6,7 +6,7 @@ import '../setup';
 import { describe, test, expect, beforeEach } from 'bun:test';
 import {
   CryptoManager, MessageCipher, MessageStore, WorkspaceManager,
-  MessageCRDT, VectorClock, MerkleTree, PersistentStore, HashChain,
+  MessageCRDT, VectorClock, MerkleTree, PersistentStore,
 } from '../../src/index';
 import { SeedPhraseManager } from '../../src/identity/SeedPhrase';
 import { IdentityManager } from '../../src/identity/Identity';
@@ -314,12 +314,9 @@ describe('E2E - SyncProtocol Full Join Flow', () => {
     expect(bobWorkspace).toHaveLength(1);
     expect(bobWorkspace[0].name).toBe('Synced Team');
 
-    // Bob has all messages with valid chain
+    // Bob has all message metadata (content intentionally omitted during sync)
     const bobMessages = bobMS.getMessages(channelId);
     expect(bobMessages).toHaveLength(5);
-
-    const chain = new HashChain();
-    const verification = await chain.verifyFullChain(bobMessages);
-    expect(verification.valid).toBe(true);
+    expect(bobMessages.every(m => m.content === '')).toBe(true);
   });
 });
