@@ -43,8 +43,10 @@ test.describe('Direct Messages', () => {
 
   test('add contact via ContactURI', async ({ page }) => {
     await addContactViaURI(page, 'Bob', 'bob-peer-id');
-    await expect(page.locator('[data-testid="contact-card"]').filter({ hasText: 'pk-bob-peer-id' })).toBeVisible();
-    await expect(page.locator('[data-testid="contact-card"]').filter({ hasText: 'wss://signal.example' })).toBeVisible();
+    // Card shows name + online dot, peer details in tooltip — not inline
+    const card = page.locator('[data-testid="contact-card"]').filter({ hasText: 'Bob' });
+    await expect(card).toBeVisible();
+    await expect(card).toHaveAttribute('title', 'bob-peer-id');
   });
 
   test('start direct message conversation from contact', async ({ page }) => {

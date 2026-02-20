@@ -234,6 +234,7 @@ export class ChatController {
           );
 
           await this.flushOfflineQueue(peerId);
+          this.requestMessageSync(peerId).catch(err => console.warn('[Sync] Message sync request failed:', err));
 
           // Send workspace state to new peer (channels, members, name)
           this.sendWorkspaceState(peerId);
@@ -334,6 +335,16 @@ export class ChatController {
         // --- Workspace sync ---
         if (data?.type === 'workspace-sync') {
           this.handleSyncMessage(peerId, data);
+          return;
+        }
+
+        // --- Message sync (reconnect catch-up) ---
+        if (data?.type === 'message-sync-request') {
+          await this.handleMessageSyncRequest(peerId, data);
+          return;
+        }
+        if (data?.type === 'message-sync-response') {
+          await this.handleMessageSyncResponse(peerId, data);
           return;
         }
 
@@ -1622,6 +1633,122 @@ export class ChatController {
       ...(username ? { username } : {}),
       ...(credential ? { credential } : {}),
     }));
+  }
+
+  // =========================================================================
+  // Message sync (reconnect catch-up)
+  // =========================================================================
+
+  private async requestMessageSync(peerId: string): Promise<void> {
+    const wsId = this.state.activeWorkspaceId;
+    if (!wsId) return;
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return;
+
+    const channelTimestamps: Record<string, number> = {};
+    for (const ch of ws.channels) {
+      const msgs = this.messageStore.getMessages(ch.id);
+      const last = msgs[msgs.length - 1];
+      channelTimestamps[ch.id] = last?.timestamp ?? 0;
+    }
+
+    this.transport.send(peerId, {
+      type: 'message-sync-request',
+      workspaceId: wsId,
+      channelTimestamps,
+    });
+  }
+
+  private async handleMessageSyncRequest(peerId: string, data: any): Promise<void> {
+    const wsId = data.workspaceId;
+    if (!wsId) return;
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return;
+    if (!ws.members.some((m: any) => m.peerId === peerId)) return;
+
+    const allMessages: any[] = [];
+    const channelTimestamps: Record<string, number> = data.channelTimestamps || {};
+
+    for (const ch of ws.channels) {
+      const since = channelTimestamps[ch.id] ?? 0;
+      const msgs = this.messageStore.getMessages(ch.id);
+      const newer = msgs.filter(m => m.timestamp > since);
+      // Limit to 50 per channel
+      const limited = newer.slice(0, 50);
+      for (const m of limited) {
+        allMessages.push({
+          id: m.id,
+          channelId: m.channelId,
+          senderId: m.senderId,
+          content: m.content,
+          timestamp: m.timestamp,
+          type: m.type,
+          threadId: m.threadId,
+          prevHash: m.prevHash,
+          vectorClock: (m as any).vectorClock,
+        });
+      }
+    }
+
+    this.transport.send(peerId, {
+      type: 'message-sync-response',
+      workspaceId: wsId,
+      messages: allMessages,
+    });
+  }
+
+  private async handleMessageSyncResponse(_peerId: string, data: any): Promise<void> {
+    const wsId = data.workspaceId;
+    if (!wsId) return;
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return;
+    if (!ws.members.some((m: any) => m.peerId === _peerId)) return;
+
+    const messages: any[] = data.messages || [];
+    let added = 0;
+
+    for (const msg of messages) {
+      // Skip if we already have this message
+      const existing = this.messageStore.getMessages(msg.channelId);
+      if (existing.some(m => m.id === msg.id)) continue;
+
+      // Skip if channel not in this workspace
+      if (!ws.channels.some((ch: any) => ch.id === msg.channelId)) continue;
+
+      // Create and add the message
+      const newMsg = await this.messageStore.createMessage(
+        msg.channelId, msg.senderId, msg.content, msg.type || 'text', msg.threadId,
+      );
+      newMsg.id = msg.id;
+      newMsg.timestamp = msg.timestamp;
+      (newMsg as any).vectorClock = msg.vectorClock;
+
+      const result = await this.messageStore.addMessage(newMsg);
+      if (result.success) {
+        const crdt = this.getOrCreateCRDT(msg.channelId);
+        crdt.addMessage({
+          id: newMsg.id,
+          channelId: newMsg.channelId,
+          senderId: newMsg.senderId,
+          content: newMsg.content,
+          type: (newMsg.type || 'text') as any,
+          vectorClock: msg.vectorClock || {},
+          wallTime: newMsg.timestamp,
+          prevHash: newMsg.prevHash || '',
+        });
+        await this.persistMessage(newMsg);
+        added++;
+
+        // Re-render if this is the active channel
+        if (msg.channelId === this.state.activeChannelId) {
+          this.ui?.renderMessages();
+        }
+      }
+    }
+
+    if (added > 0) {
+      console.log(`[Sync] Message sync: added ${added} missing message(s)`);
+    }
   }
 
   // =========================================================================

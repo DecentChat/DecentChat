@@ -73,6 +73,13 @@ export class PeerTransport implements Transport {
   private config: PeerTransportConfig;
   private myPeerId: string | null = null;
 
+  // ── Auto-reconnect state ────────────────────────────────────────────────
+  private _autoReconnectEnabled = true;
+  private _manuallyDisconnected = new Set<string>();
+  private _reconnectAttempts = new Map<string, number>();
+  private _reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly _reconnectDelays = [5000, 15000, 30000, 60000, 120000];
+
   // ── Transport callbacks ───────────────────────────────────────────────────
   public onConnect: ((peerId: string) => void) | null = null;
   public onDisconnect: ((peerId: string) => void) | null = null;
@@ -152,6 +159,8 @@ export class PeerTransport implements Transport {
   }
 
   async connect(peerId: string): Promise<void> {
+    this._manuallyDisconnected.delete(peerId);
+
     if (this.signalingInstances.length === 0) {
       throw new Error('PeerTransport not initialised — call init() first');
     }
@@ -212,6 +221,9 @@ export class PeerTransport implements Transport {
   }
 
   disconnect(peerId: string): void {
+    this._manuallyDisconnected.add(peerId);
+    this._cancelReconnect(peerId);
+
     const active = this.connections.get(peerId);
     if (active) {
       active.conn.close();
@@ -238,6 +250,11 @@ export class PeerTransport implements Transport {
   }
 
   destroy(): void {
+    this._reconnectTimers.forEach(t => clearTimeout(t));
+    this._reconnectTimers.clear();
+    this._reconnectAttempts.clear();
+    this._manuallyDisconnected.clear();
+
     this.connections.forEach(({ conn }) => conn.close());
     this.connections.clear();
     this.connectingTo.clear();
@@ -246,6 +263,52 @@ export class PeerTransport implements Transport {
     }
     this.signalingInstances = [];
     this.myPeerId = null;
+  }
+
+  // ── Auto-reconnect ───────────────────────────────────────────────────────
+
+  setAutoReconnect(enabled: boolean): void {
+    this._autoReconnectEnabled = enabled;
+  }
+
+  private _cancelReconnect(peerId: string): void {
+    const timer = this._reconnectTimers.get(peerId);
+    if (timer) clearTimeout(timer);
+    this._reconnectTimers.delete(peerId);
+    this._reconnectAttempts.delete(peerId);
+  }
+
+  private _scheduleReconnect(peerId: string): void {
+    if (!this._autoReconnectEnabled) return;
+    if (this._manuallyDisconnected.has(peerId)) return;
+    if (this._reconnectTimers.has(peerId)) return; // already scheduled
+
+    const attempt = this._reconnectAttempts.get(peerId) ?? 0;
+    if (attempt >= this._reconnectDelays.length) {
+      // Give up after max attempts
+      this._reconnectAttempts.delete(peerId);
+      return;
+    }
+
+    const delay = this._reconnectDelays[attempt];
+    const timer = setTimeout(async () => {
+      this._reconnectTimers.delete(peerId);
+
+      if (this._manuallyDisconnected.has(peerId)) return;
+      if (this.connections.has(peerId)) return; // already reconnected
+
+      this._reconnectAttempts.set(peerId, attempt + 1);
+      try {
+        await this.connect(peerId);
+        // Success — clear attempt counter
+        this._reconnectAttempts.delete(peerId);
+      } catch {
+        // Failed — schedule next attempt
+        this._scheduleReconnect(peerId);
+      }
+    }, delay);
+
+    this._reconnectTimers.set(peerId, timer);
   }
 
   // ── Public helpers ────────────────────────────────────────────────────────
@@ -548,6 +611,7 @@ export class PeerTransport implements Transport {
         active.status = 'failed';
         this.connections.delete(peerId);
         this.onDisconnect?.(peerId);
+        this._scheduleReconnect(peerId);
       }
     });
 
