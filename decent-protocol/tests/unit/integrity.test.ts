@@ -63,7 +63,8 @@ describe('HashChain', () => {
     const baseHash = await chain.hashMessage(base);
 
     // Change each field and verify hash changes
-    const fields: (keyof HashableMessage)[] = ['id', 'channelId', 'senderId', 'content', 'type', 'prevHash'];
+    // Note: channelId is excluded from the hash (routing metadata, can be remapped)
+    const fields: (keyof HashableMessage)[] = ['id', 'senderId', 'content', 'type', 'prevHash'];
     for (const field of fields) {
       const modified = { ...base, [field]: 'TAMPERED' };
       const modifiedHash = await chain.hashMessage(modified);

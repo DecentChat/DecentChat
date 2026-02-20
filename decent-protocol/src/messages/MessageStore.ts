@@ -188,14 +188,22 @@ export class MessageStore {
     const messages = this.channels.get(oldId);
     if (!messages || messages.length === 0) return [];
 
-    // Update each message's channelId
+    // Update each message's channelId.
+    // Safe: channelId is excluded from HashChain.canonicalize(), so this
+    // mutation does not invalidate prevHash values or break verifyFullChain.
     for (const msg of messages) {
       msg.channelId = newId;
     }
 
-    // Move to new key, merging if newId already has messages
+    // Merge with existing messages at newId, deduplicating by message ID,
+    // then sort by timestamp to maintain chronological order.
     const existing = this.channels.get(newId) || [];
-    this.channels.set(newId, [...existing, ...messages]);
+    const existingIds = new Set(existing.map(m => m.id));
+    const deduped = messages.filter(m => !existingIds.has(m.id));
+    const merged = [...existing, ...deduped];
+    merged.sort((a, b) => a.timestamp - b.timestamp);
+
+    this.channels.set(newId, merged);
     this.channels.delete(oldId);
 
     return this.channels.get(newId)!;

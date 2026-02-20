@@ -162,6 +162,7 @@ export class ChatController {
   setupTransportHandlers(): void {
     this.transport.onConnect = async (peerId) => {
       this.state.connectedPeers.add(peerId);
+      this.state.connectingPeers.delete(peerId);
       this.ui?.updateSidebar();
 
       try {
@@ -174,6 +175,7 @@ export class ChatController {
 
     this.transport.onDisconnect = (peerId) => {
       this.state.connectedPeers.delete(peerId);
+      this.state.connectingPeers.delete(peerId);
       this.state.readyPeers.delete(peerId);
       this.messageProtocol?.clearSharedSecret(peerId);
       this.ui?.updateSidebar();
@@ -722,11 +724,15 @@ export class ChatController {
     // Bug 1 fix: connect to workspace members we haven't connected to yet.
     // When Mary joins via Bob, Bob's workspace-state tells Mary about Alice,
     // but without an explicit connect() Mary never opens a WebRTC connection to Alice.
+    // Guard connectingPeers to avoid duplicate in-flight connect() calls when
+    // multiple peers send workspace-state in quick succession.
     for (const member of localWs.members) {
       if (
         member.peerId !== this.state.myPeerId &&
-        !this.state.connectedPeers.has(member.peerId)
+        !this.state.connectedPeers.has(member.peerId) &&
+        !this.state.connectingPeers.has(member.peerId)
       ) {
+        this.state.connectingPeers.add(member.peerId);
         this.transport.connect(member.peerId);
       }
     }

@@ -70,9 +70,13 @@ export class HashChain {
    * Only includes fields that affect integrity (not status, metadata)
    */
   private canonicalize(message: HashableMessage): string {
+    // channelId is intentionally excluded: it is routing metadata that can be
+    // remapped during channel reconciliation (min-wins ID resolution). Including
+    // it would invalidate the entire chain whenever a channel is renamed/merged.
+    // Message integrity is guaranteed by id, senderId, timestamp, content, type,
+    // and prevHash — these fields are immutable for the lifetime of a message.
     return JSON.stringify({
       id: message.id,
-      channelId: message.channelId,
       senderId: message.senderId,
       timestamp: message.timestamp,
       content: message.content,

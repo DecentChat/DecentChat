@@ -83,6 +83,8 @@ export interface AppState {
   /** Per-workspace display name overrides; falls back to myAlias */
   workspaceAliases: Record<string, string>;
   connectedPeers: Set<string>;
+  /** Peers where a connect() call is in flight but the connection isn't open yet */
+  connectingPeers: Set<string>;
   readyPeers: Set<string>;
   activeWorkspaceId: string | null;
   activeChannelId: string | null;
@@ -103,6 +105,7 @@ async function init(): Promise<void> {
     myAlias: '',
     workspaceAliases: {},
     connectedPeers: new Set(),
+    connectingPeers: new Set(),
     readyPeers: new Set(),
     activeWorkspaceId: null,
     activeChannelId: null,
