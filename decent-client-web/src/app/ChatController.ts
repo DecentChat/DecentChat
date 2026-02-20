@@ -661,11 +661,21 @@ export class ChatController {
         const localCh = localWs.channels.find(
           (ch: any) => ch.name === remoteCh.name && ch.type === remoteCh.type
         );
-        if (localCh && localCh.id !== remoteCh.id) {
-          // Remap: adopt the remote channel ID so both peers use the same ID
+        if (localCh && localCh.id !== remoteCh.id && remoteCh.id < localCh.id) {
+          // Min-wins: only adopt the remote channel ID when it is lexicographically smaller.
+          // This prevents a late-joining peer (with fresh UUIDs) from overwriting the
+          // established channel ID and orphaning messages stored under the old key.
           console.log(`[Sync] Remapping channel "${remoteCh.name}": ${localCh.id.slice(0, 8)} → ${remoteCh.id.slice(0, 8)}`);
           const oldId = localCh.id;
           localCh.id = remoteCh.id;
+
+          // Migrate messages and CRDTs to the new channel ID
+          this.messageStore.remapChannel(oldId, remoteCh.id);
+          if (this.messageCRDTs.has(oldId)) {
+            const crdt = this.messageCRDTs.get(oldId)!;
+            this.messageCRDTs.set(remoteCh.id, crdt);
+            this.messageCRDTs.delete(oldId);
+          }
 
           // Update active channel if needed
           if (this.state.activeChannelId === oldId) {
@@ -706,6 +716,18 @@ export class ChatController {
           }
           if (remoteMember.publicKey) existing.publicKey = remoteMember.publicKey;
         }
+      }
+    }
+
+    // Bug 1 fix: connect to workspace members we haven't connected to yet.
+    // When Mary joins via Bob, Bob's workspace-state tells Mary about Alice,
+    // but without an explicit connect() Mary never opens a WebRTC connection to Alice.
+    for (const member of localWs.members) {
+      if (
+        member.peerId !== this.state.myPeerId &&
+        !this.state.connectedPeers.has(member.peerId)
+      ) {
+        this.transport.connect(member.peerId);
       }
     }
 

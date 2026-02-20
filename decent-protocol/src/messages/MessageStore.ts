@@ -178,6 +178,28 @@ export class MessageStore {
   }
 
   /**
+   * Remap all messages from one channel ID to another.
+   * Moves the message array and updates each message's channelId field.
+   * Used during workspace-state sync when channel IDs are reconciled via min-wins.
+   */
+  remapChannel(oldId: string, newId: string): PlaintextMessage[] {
+    const messages = this.channels.get(oldId);
+    if (!messages || messages.length === 0) return [];
+
+    // Update each message's channelId
+    for (const msg of messages) {
+      msg.channelId = newId;
+    }
+
+    // Move to new key, merging if newId already has messages
+    const existing = this.channels.get(newId) || [];
+    this.channels.set(newId, [...existing, ...messages]);
+    this.channels.delete(oldId);
+
+    return this.channels.get(newId)!;
+  }
+
+  /**
    * Clear a channel (for testing only)
    */
   clearChannel(channelId: string): void {
