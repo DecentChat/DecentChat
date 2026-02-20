@@ -46,6 +46,12 @@ export default defineConfig({
     },
     VitePWA({
       registerType: 'autoUpdate',
+      // Use injectManifest so we control the SW entirely (src/sw.ts).
+      // This lets us handle SKIP_WAITING ourselves instead of the aggressive
+      // auto-skipWaiting that would disrupt active chat sessions.
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
       manifest: {
         name: 'DecentChat',
         short_name: 'DecentChat',
@@ -67,7 +73,7 @@ export default defineConfig({
         ],
       },
       workbox: {
-        skipWaiting: true,
+        // No skipWaiting: true — controlled via SKIP_WAITING message in sw.ts
         clientsClaim: true,
         cleanupOutdatedCaches: true,
         runtimeCaching: [

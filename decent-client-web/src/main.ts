@@ -597,25 +597,82 @@ async function initWithTimeout() {
   }
 }
 
-// Service Worker update detection — show non-intrusive toast
+// ─── Service Worker: Seamless update flow ────────────────────────────────────
+// Strategy:
+//  1. New SW downloads automatically in background (registerType: 'autoUpdate')
+//  2. New SW waits — won't disrupt an active chat session (no skipWaiting: true)
+//  3. When waiting SW detected → show sticky update banner at top of page
+//  4. User clicks "Update now" → SKIP_WAITING message → controllerchange → reload
+//  5. On next tab focus (visibilitychange) with a waiting SW → auto-apply silently
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.ready.then(registration => {
-    registration.addEventListener('updatefound', () => {
-      const newWorker = registration.installing;
-      if (!newWorker) return;
+  let waitingWorker: ServiceWorker | null = null;
 
+  function showUpdateBanner(worker: ServiceWorker) {
+    waitingWorker = worker;
+    // Don't stack duplicate banners
+    if (document.getElementById('sw-update-banner')) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'sw-update-banner';
+    banner.innerHTML = `
+      <span>🐙 New version available</span>
+      <div class="sw-update-actions">
+        <button id="sw-update-now">Update now</button>
+        <button id="sw-update-later">Later</button>
+      </div>
+    `;
+    document.body.insertBefore(banner, document.body.firstChild);
+
+    document.getElementById('sw-update-now')!.addEventListener('click', () => {
+      if (waitingWorker) waitingWorker.postMessage({ type: 'SKIP_WAITING' });
+      banner.remove();
+    });
+    document.getElementById('sw-update-later')!.addEventListener('click', () => {
+      banner.remove();
+    });
+  }
+
+  // When SW takes control (after SKIP_WAITING), reload so new assets are used
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    window.location.reload();
+  });
+
+  navigator.serviceWorker.ready.then(reg => {
+    // Already a waiting worker when page loads (e.g. user had old tab open)
+    if (reg.waiting) showUpdateBanner(reg.waiting);
+
+    reg.addEventListener('updatefound', () => {
+      const newWorker = reg.installing;
+      if (!newWorker) return;
       newWorker.addEventListener('statechange', () => {
         if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-          // New version ready — show toast with reload button (don't auto-reload!)
-          const toast = document.createElement('div');
-          toast.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:9999;padding:12px 20px;background:#6c5ce7;color:#fff;border-radius:8px;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,0.3);cursor:pointer;display:flex;align-items:center;gap:8px;';
-          toast.innerHTML = '🐙 Update available! <u>Click to reload</u>';
-          toast.addEventListener('click', () => window.location.reload());
-          document.body.appendChild(toast);
-          // Auto-dismiss after 30s
-          setTimeout(() => toast.remove(), 30000);
+          showUpdateBanner(newWorker);
         }
       });
     });
+  });
+
+  // Auto-apply silently when user returns to tab (non-disruptive)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && waitingWorker) {
+      waitingWorker.postMessage({ type: 'SKIP_WAITING' });
+      waitingWorker = null;
+    }
+  });
+}
+
+// Wire AutoUpdater — polls /version.json every 5 min as a backup mechanism.
+// If server has a newer version.json but SW hasn't picked it up yet, nudge it.
+if (typeof __APP_VERSION__ !== 'undefined') {
+  import('./updater/AutoUpdater').then(({ AutoUpdater }) => {
+    const updater = new AutoUpdater(__APP_VERSION__, {
+      checkIntervalMs: 5 * 60 * 1000,
+      onUpdateAvailable: () => {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistration().then(reg => reg?.update());
+        }
+      },
+    });
+    updater.start();
   });
 }

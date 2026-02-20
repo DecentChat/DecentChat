@@ -2688,3 +2688,59 @@ body:has(.landing-page) #app {
   overflow: auto;
   height: auto;
 }
+
+/* ─── SW Update Banner ──────────────────────────────────────────────────── */
+#sw-update-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: linear-gradient(90deg, #6c5ce7, #a855f7);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  animation: sw-banner-slide-in 0.3s ease-out;
+}
+
+@keyframes sw-banner-slide-in {
+  from { transform: translateY(-100%); }
+  to   { transform: translateY(0); }
+}
+
+.sw-update-actions {
+  display: flex;
+  gap: 8px;
+}
+
+#sw-update-now {
+  padding: 5px 14px;
+  background: #fff;
+  color: #6c5ce7;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: opacity 0.15s;
+}
+
+#sw-update-now:hover { opacity: 0.85; }
+
+#sw-update-later {
+  padding: 5px 10px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: opacity 0.15s;
+}
+
+#sw-update-later:hover { opacity: 0.7; }
