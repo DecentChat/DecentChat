@@ -73,6 +73,8 @@ export interface UIUpdater {
   renderApp: () => void;
   /** Update the thread reply indicator on a parent message in the main list */
   updateThreadIndicator: (parentMessageId: string, channelId: string) => void;
+  /** DEP-005: Update delivery status tick on a specific message (avoids full re-render) */
+  updateMessageStatus?: (messageId: string, status: 'pending' | 'sent' | 'delivered') => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +206,8 @@ export class ChatController {
             if (msg && msg.status !== 'delivered') {
               msg.status = 'delivered';
               await this.persistentStore.saveMessage({ ...msg, status: 'delivered' });
-              this.ui?.renderMessages?.();
+              // Targeted DOM update — no full re-render needed
+              this.ui?.updateMessageStatus?.(messageId, 'delivered');
             }
           }
           return;
@@ -1011,6 +1014,7 @@ export class ChatController {
     }
 
     // Deliver to workspace peers (or queue if offline)
+    let sentDirectly = false;
     for (const peerId of this.getWorkspaceRecipientPeerIds()) {
       try {
         const envelope = await this.messageProtocol!.encryptMessage(peerId, content.trim(), 'text');
@@ -1022,12 +1026,20 @@ export class ChatController {
 
         if (this.state.readyPeers.has(peerId)) {
           this.transport.send(peerId, envelope);
+          sentDirectly = true;
         } else {
           await this.offlineQueue.enqueue(peerId, envelope);
         }
       } catch (err) {
         console.error('Send to', peerId, 'failed:', err);
       }
+    }
+
+    // DEP-005: Transition pending → sent once dispatched to at least one live peer
+    if (sentDirectly && msg.status !== 'sent' && msg.status !== 'delivered') {
+      msg.status = 'sent';
+      await this.persistentStore.saveMessage({ ...msg, status: 'sent' });
+      this.ui?.updateMessageStatus?.(msg.id, 'sent');
     }
   }
 

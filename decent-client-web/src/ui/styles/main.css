@@ -529,6 +529,26 @@ body {
   font-weight: 400;
 }
 
+/* DEP-005: Delivery status ticks (only shown on own messages) */
+.msg-delivery-status {
+  font-size: 11px;
+  margin-left: 4px;
+  color: var(--text-light);
+  user-select: none;
+  line-height: 1;
+  transition: color 0.2s;
+}
+.msg-delivery-status.sent {
+  color: var(--text-light);
+}
+.msg-delivery-status.delivered {
+  color: var(--accent, #5865F2);
+  font-weight: 600;
+}
+.msg-delivery-status.pending {
+  opacity: 0.5;
+}
+
 .message-content {
   font-size: 15px;
   word-break: break-word;

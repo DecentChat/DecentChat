@@ -846,6 +846,7 @@ export class UIRenderer {
           <div class="message-header">
             <span class="message-sender">${this.escapeHtml(senderName)}</span>
             <span class="message-time">${time}</span>
+            ${isMine ? `<span class="msg-delivery-status ${msg.status || 'pending'}" data-message-id="${msg.id}" title="${msg.status === 'delivered' ? 'Delivered' : msg.status === 'sent' ? 'Sent' : 'Sending…'}">${msg.status === 'delivered' ? '✓✓' : msg.status === 'sent' ? '✓' : '⏳'}</span>` : ''}
           </div>
           <div class="message-content">${this.escapeHtml(msg.content)}</div>
           ${this.renderAttachments((msg as any).attachments)}
@@ -894,6 +895,18 @@ export class UIRenderer {
       this.state.activeThreadId,
     );
     for (const reply of replies) this.appendMessageToDOM(reply, container);
+  }
+
+  /**
+   * DEP-005: Update the delivery status tick on a sent message without re-rendering everything.
+   * Called when an ACK arrives from the recipient.
+   */
+  updateMessageStatus(messageId: string, status: 'pending' | 'sent' | 'delivered'): void {
+    const el = document.querySelector(`.msg-delivery-status[data-message-id="${messageId}"]`) as HTMLElement | null;
+    if (!el) return;
+    el.className = `msg-delivery-status ${status}`;
+    el.title = status === 'delivered' ? 'Delivered' : status === 'sent' ? 'Sent' : 'Sending…';
+    el.textContent = status === 'delivered' ? '✓✓' : status === 'sent' ? '✓' : '⏳';
   }
 
   // =========================================================================

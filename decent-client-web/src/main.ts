@@ -250,6 +250,8 @@ async function init(): Promise<void> {
     renderApp: () => ui.renderApp(),
     updateThreadIndicator: (parentMessageId, channelId) =>
       ui.updateThreadIndicator(parentMessageId, channelId),
+    updateMessageStatus: (messageId, status) =>
+      ui.updateMessageStatus(messageId, status),
   });
 
   // Wire typing indicator
