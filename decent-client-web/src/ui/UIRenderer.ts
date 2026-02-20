@@ -940,6 +940,46 @@ export class UIRenderer {
     panel?.classList.remove('open'); // remove mobile slide-in class
   }
 
+  /** Wire up the left-edge drag handle for resizing the thread panel (Slack-style). */
+  private setupThreadResize(): void {
+    const handle = document.getElementById('thread-resize-handle');
+    const panel  = document.getElementById('thread-panel');
+    if (!handle || !panel) return;
+
+    // Restore saved width
+    const saved = localStorage.getItem('decentchat:threadWidth');
+    if (saved) panel.style.width = saved;
+
+    let startX = 0;
+    let startWidth = 0;
+
+    const onMove = (e: MouseEvent) => {
+      const delta = startX - e.clientX; // dragging left = wider
+      const newWidth = Math.min(Math.max(startWidth + delta, 280), window.innerWidth * 0.6);
+      panel.style.width = `${newWidth}px`;
+    };
+
+    const onUp = () => {
+      handle.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      localStorage.setItem('decentchat:threadWidth', panel.style.width);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      startX = e.clientX;
+      startWidth = panel.offsetWidth;
+      handle.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+
   // =========================================================================
   // Mobile sidebar helpers
   // =========================================================================
@@ -1197,6 +1237,8 @@ export class UIRenderer {
     });
 
     document.getElementById('thread-close')?.addEventListener('click', () => this.closeThread());
+
+    this.setupThreadResize();
 
     // Global keyboard shortcuts
     document.addEventListener('keydown', (e) => {
