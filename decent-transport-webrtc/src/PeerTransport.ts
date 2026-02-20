@@ -80,6 +80,15 @@ export class PeerTransport implements Transport {
   private _reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly _reconnectDelays = [5000, 15000, 30000, 60000, 120000];
 
+  // ── DEP-004: Heartbeat state ────────────────────────────────────────────
+  private static readonly PING_INTERVAL_MS = 30_000;
+  private static readonly PONG_TIMEOUT_MS = 10_000;
+  private _pingTimers = new Map<string, ReturnType<typeof setInterval>>();
+  private _pongTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+  private _pendingPing = new Map<string, number>();
+  private _heartbeatEnabled = true;
+  private _networkListenersSetup = false;
+
   // ── Transport callbacks ───────────────────────────────────────────────────
   public onConnect: ((peerId: string) => void) | null = null;
   public onDisconnect: ((peerId: string) => void) | null = null;
@@ -126,6 +135,7 @@ export class PeerTransport implements Transport {
     const total = servers.length;
     console.log(`[DecentChat] Connected to ${connected}/${total} signaling servers as ${assignedId}`);
 
+    this._setupNetworkListeners();
     return assignedId;
   }
 
@@ -223,6 +233,7 @@ export class PeerTransport implements Transport {
   disconnect(peerId: string): void {
     this._manuallyDisconnected.add(peerId);
     this._cancelReconnect(peerId);
+    this._stopHeartbeat(peerId);
 
     const active = this.connections.get(peerId);
     if (active) {
@@ -254,6 +265,13 @@ export class PeerTransport implements Transport {
     this._reconnectTimers.clear();
     this._reconnectAttempts.clear();
     this._manuallyDisconnected.clear();
+
+    // DEP-004: Clean up heartbeat timers
+    this._pingTimers.forEach(t => clearInterval(t));
+    this._pingTimers.clear();
+    this._pongTimeouts.forEach(t => clearTimeout(t));
+    this._pongTimeouts.clear();
+    this._pendingPing.clear();
 
     this.connections.forEach(({ conn }) => conn.close());
     this.connections.clear();
@@ -309,6 +327,154 @@ export class PeerTransport implements Transport {
     }, delay);
 
     this._reconnectTimers.set(peerId, timer);
+  }
+
+  // ── DEP-004: Heartbeat ──────────────────────────────────────────────────
+
+  /** Enable or disable heartbeat (useful for testing) */
+  setHeartbeatEnabled(enabled: boolean): void {
+    this._heartbeatEnabled = enabled;
+    if (!enabled) {
+      // Stop all active heartbeats
+      for (const peerId of this._pingTimers.keys()) {
+        this._stopHeartbeat(peerId);
+      }
+    } else {
+      // Start heartbeats for all connected peers
+      for (const [peerId, active] of this.connections) {
+        if (active.status === 'connected') {
+          this._startHeartbeat(peerId);
+        }
+      }
+    }
+  }
+
+  private _startHeartbeat(peerId: string): void {
+    if (!this._heartbeatEnabled) return;
+    if (this._pingTimers.has(peerId)) return; // Already running
+
+    const interval = setInterval(() => {
+      this._sendPing(peerId);
+    }, PeerTransport.PING_INTERVAL_MS);
+
+    this._pingTimers.set(peerId, interval);
+  }
+
+  private _stopHeartbeat(peerId: string): void {
+    const interval = this._pingTimers.get(peerId);
+    if (interval) clearInterval(interval);
+    this._pingTimers.delete(peerId);
+
+    const timeout = this._pongTimeouts.get(peerId);
+    if (timeout) clearTimeout(timeout);
+    this._pongTimeouts.delete(peerId);
+
+    this._pendingPing.delete(peerId);
+  }
+
+  private _sendPing(peerId: string): void {
+    const ts = Date.now();
+    const sent = this.send(peerId, { type: 'heartbeat:ping', ts });
+    if (!sent) return;
+
+    this._pendingPing.set(peerId, ts);
+
+    // Set pong timeout
+    const existing = this._pongTimeouts.get(peerId);
+    if (existing) clearTimeout(existing);
+
+    const timeout = setTimeout(() => {
+      this._pongTimeouts.delete(peerId);
+      this._onPingTimeout(peerId);
+    }, PeerTransport.PONG_TIMEOUT_MS);
+
+    this._pongTimeouts.set(peerId, timeout);
+  }
+
+  private _handlePong(peerId: string, ts: number): void {
+    const pending = this._pendingPing.get(peerId);
+    if (pending !== ts) return; // Stale pong
+
+    this._pendingPing.delete(peerId);
+    const timeout = this._pongTimeouts.get(peerId);
+    if (timeout) clearTimeout(timeout);
+    this._pongTimeouts.delete(peerId);
+  }
+
+  private _onPingTimeout(peerId: string): void {
+    console.warn(`[Heartbeat] Peer ${peerId.slice(0, 8)} unresponsive — attempting recovery`);
+    const active = this.connections.get(peerId);
+    if (!active) return;
+
+    // Try ICE restart first
+    try {
+      const pc = (active.conn as any).peerConnection as RTCPeerConnection | undefined;
+      if (pc && typeof pc.restartIce === 'function') {
+        console.log(`[Heartbeat] Triggering ICE restart for ${peerId.slice(0, 8)}`);
+        pc.restartIce();
+        return;
+      }
+    } catch {
+      // restartIce not available — fall through to close
+    }
+
+    // Fallback: close connection (triggers auto-reconnect via _scheduleReconnect)
+    console.log(`[Heartbeat] Closing dead connection to ${peerId.slice(0, 8)}`);
+    active.conn.close();
+  }
+
+  /** DEP-004: Setup browser network event listeners (called once from init) */
+  private _setupNetworkListeners(): void {
+    if (this._networkListenersSetup) return;
+    if (typeof window === 'undefined') return;
+    this._networkListenersSetup = true;
+
+    const onOnline = () => {
+      console.log('[Network] Browser went online — pinging all peers');
+      // Immediately ping all connected peers
+      for (const [peerId, active] of this.connections) {
+        if (active.status === 'connected' && this._heartbeatEnabled) {
+          this._sendPing(peerId);
+        }
+      }
+      // T1.5: Probe signaling servers
+      this._probeSignalingServers();
+    };
+
+    const onOffline = () => {
+      console.log('[Network] Browser went offline');
+    };
+
+    const onVisibilityChange = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        console.log('[Network] Tab became visible — pinging all peers');
+        for (const [peerId, active] of this.connections) {
+          if (active.status === 'connected' && this._heartbeatEnabled) {
+            this._sendPing(peerId);
+          }
+        }
+      }
+    };
+
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
+  }
+
+  /** T1.5: Try to reconnect disconnected signaling servers */
+  private _probeSignalingServers(): void {
+    for (const instance of this.signalingInstances) {
+      if (!instance.connected && !instance.peer.destroyed) {
+        console.log(`[Network] Probing signaling server: ${instance.label}`);
+        try {
+          instance.peer.reconnect();
+        } catch {
+          // Ignore — server may be truly down
+        }
+      }
+    }
   }
 
   // ── Public helpers ────────────────────────────────────────────────────────
@@ -418,6 +584,7 @@ export class PeerTransport implements Transport {
         const instance: SignalingInstance = { peer, url: 'default', label: 'default', connected: true };
         this.signalingInstances.push(instance);
         this._setupPeerEvents(instance);
+        this._setupNetworkListeners();
         resolve(id);
       });
 
@@ -587,6 +754,7 @@ export class PeerTransport implements Transport {
 
       active.status = 'connected';
       this.connections.set(peerId, active);
+      this._startHeartbeat(peerId);
       this.onConnect?.(peerId);
     };
 
@@ -599,15 +767,28 @@ export class PeerTransport implements Transport {
     conn.on('data', (data) => {
       // Only process data from the active connection for this peer
       const current = this.connections.get(peerId);
-      if (current?.conn === conn) {
-        this.onMessage?.(peerId, data);
+      if (current?.conn !== conn) return;
+
+      // DEP-004: Intercept heartbeat messages (transport-internal)
+      const msg = data as any;
+      if (msg?.type === 'heartbeat:ping') {
+        // Reply with pong
+        this.send(peerId, { type: 'heartbeat:pong', ts: msg.ts });
+        return;
       }
+      if (msg?.type === 'heartbeat:pong') {
+        this._handlePong(peerId, msg.ts);
+        return;
+      }
+
+      this.onMessage?.(peerId, data);
     });
 
     conn.on('close', () => {
       // Only fire disconnect if this was the active connection
       const current = this.connections.get(peerId);
       if (current?.conn === conn) {
+        this._stopHeartbeat(peerId);
         active.status = 'failed';
         this.connections.delete(peerId);
         this.onDisconnect?.(peerId);

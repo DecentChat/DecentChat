@@ -48,6 +48,8 @@ import type { TypingEvent, ReadReceipt } from '../ui/PresenceManager';
 import { NotificationManager } from '../ui/NotificationManager';
 import type { AppState } from '../main';
 
+const PROTOCOL_VERSION = 2;
+
 const DEV_SIGNAL_PORT = Number((import.meta as any).env?.VITE_SIGNAL_PORT || 9000);
 const DEV_SIGNAL_WS = `ws://localhost:${DEV_SIGNAL_PORT}`;
 const PROD_SIGNAL_WS = 'wss://0.peerjs.com/myapp'; // Free PeerJS cloud service
@@ -192,6 +194,22 @@ export class ChatController {
       }
 
       try {
+        // --- DEP-005: Delivery ACK (control message — handle before decrypt) ---
+        if (data?.type === 'ack') {
+          const channelId = data.channelId as string;
+          const messageId = data.messageId as string;
+          if (channelId && messageId) {
+            const msgs = this.messageStore.getMessages(channelId);
+            const msg = msgs.find(m => m.id === messageId);
+            if (msg && msg.status !== 'delivered') {
+              msg.status = 'delivered';
+              await this.persistentStore.saveMessage({ ...msg, status: 'delivered' });
+              this.ui?.renderMessages?.();
+            }
+          }
+          return;
+        }
+
         // --- Handshake ---
         if (data?.type === 'handshake') {
           // DEP-003 / MITM protection: if we have a pre-stored public key for this peer
@@ -214,6 +232,15 @@ export class ChatController {
           }
 
           await this.messageProtocol!.processHandshake(peerId, data);
+
+          // Protocol version check (DEP-004)
+          if (data.protocolVersion != null && data.protocolVersion > PROTOCOL_VERSION) {
+            console.warn(
+              `[Protocol] Peer ${peerId.slice(0, 8)} uses protocol v${data.protocolVersion} ` +
+              `(we support v${PROTOCOL_VERSION}). Some features may not work.`,
+            );
+          }
+
           this.state.readyPeers.add(peerId);
           this.ensurePeerInActiveWorkspace(peerId, data.publicKey);
 
@@ -389,6 +416,10 @@ export class ChatController {
               prevHash: msg.prevHash || '',
             });
             await this.persistMessage(msg);
+
+            // DEP-005: Send delivery ACK back to sender
+            this.transport.send(peerId, { type: 'ack', messageId: msg.id, channelId });
+
             await this.directConversationStore.updateLastMessage(channelId, msg.timestamp);
             const updatedConv = await this.directConversationStore.get(channelId);
             if (updatedConv) {
@@ -485,6 +516,9 @@ export class ChatController {
 
           await this.persistMessage(msg);
 
+          // DEP-005: Send delivery ACK back to sender
+          this.transport.send(peerId, { type: 'ack', messageId: msg.id, channelId });
+
           if (channelId === this.state.activeChannelId) {
             if (msg.threadId) {
               // It's a thread reply — update the parent message's reply indicator and
@@ -526,6 +560,17 @@ export class ChatController {
           error.message?.includes('disconnected from server')) return;
       this.ui?.showToast(error.message, 'error');
     };
+
+    // ICE restart on network recovery (DEP-004)
+    // PeerTransport's network listener handles heartbeat pings and signaling server probing.
+    // At the app layer, show a toast to keep the user informed.
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', () => {
+        const peers = this.transport.getConnectedPeers();
+        console.log(`[Network] Reconnected. Re-probing ${peers.length} peers...`);
+        this.ui?.showToast('Network reconnected — checking connections...', 'info');
+      });
+    }
   }
 
   /** Send our workspace state (channels, members, name) to a connected peer */
