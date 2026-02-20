@@ -1340,8 +1340,9 @@ export class UIRenderer {
       this.switchToDirectConversation(existing.id);
       return;
     }
-    // Create new direct conversation
-    this.callbacks.startDirectMessage?.(peerId).then(conv => {
+    // Create new direct conversation — refresh cache first so renderChannelHeaderHTML can find it
+    this.callbacks.startDirectMessage?.(peerId).then(async conv => {
+      await this.refreshContactsCache();
       this.switchToDirectConversation(conv.id);
     }).catch(() => this.showToast('Could not start DM', 'error'));
   }

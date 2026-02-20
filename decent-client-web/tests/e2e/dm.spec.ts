@@ -43,10 +43,10 @@ test.describe('Direct Messages', () => {
 
   test('add contact via ContactURI', async ({ page }) => {
     await addContactViaURI(page, 'Bob', 'bob-peer-id');
-    // Card shows name + online dot, peer details in tooltip — not inline
+    // Card shows name + online dot, peer ID in aria-label (tooltip manager converts title → data-tooltip)
     const card = page.locator('[data-testid="contact-card"]').filter({ hasText: 'Bob' });
     await expect(card).toBeVisible();
-    await expect(card).toHaveAttribute('title', 'bob-peer-id');
+    await expect(card).toHaveAttribute('aria-label', 'bob-peer-id');
   });
 
   test('start direct message conversation from contact', async ({ page }) => {
