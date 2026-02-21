@@ -439,6 +439,15 @@ export class ChatController {
             msg.timestamp = Math.max(data.timestamp ?? Date.now(), lastLocalTs + 1);
           }
           (msg as any).vectorClock = data.vectorClock;
+          // Carry attachment metadata from the envelope so the receiver renders thumbnails
+          if ((data as any).attachments?.length) {
+            (msg as any).attachments = (data as any).attachments;
+            const wsId = this.state.activeWorkspaceId || 'default';
+            for (const att of (data as any).attachments) {
+              // Register metadata in MediaStore (no blob yet — will be fetched on demand)
+              this.mediaStore.registerMeta(wsId, att, 'pruned');
+            }
+          }
           const result = await this.messageStore.addMessage(msg);
 
           if (result.success) {
@@ -538,6 +547,14 @@ export class ChatController {
         // (e.g. #reactions-<msgId>). If the receiver generates its own ID, reactions
         // from the sender target an element that doesn't exist on the receiver's DOM.
         if (data.messageId) msg.id = data.messageId;
+        // Carry attachment metadata (thumbnail + meta) so the receiver renders previews
+        if (data.attachments?.length) {
+          (msg as any).attachments = data.attachments;
+          const wsId = this.state.activeWorkspaceId || 'default';
+          for (const att of data.attachments) {
+            this.mediaStore.registerMeta(wsId, att, 'pruned');
+          }
+        }
 
         // T3.2 Gossip dedup (post-decryption): if we already processed this exact message
         // ID via any path (direct or gossip), skip it now.  This covers the gossip-first
@@ -1059,6 +1076,9 @@ export class ChatController {
         (relayEnv as any).workspaceId = workspaceId;
         (relayEnv as any).threadId = envelope.threadId;
         (relayEnv as any).vectorClock = envelope.vectorClock;
+        if (envelope.attachments?.length) {
+          (relayEnv as any).attachments = envelope.attachments;  // carry thumbnail + metadata through relay hops
+        }
         (relayEnv as any)._originalMessageId = originalMsgId;    // dedup key (checked before decryption)
         (relayEnv as any)._gossipOriginalSender = originalSenderId; // real author
         (relayEnv as any)._gossipHop = hop;
