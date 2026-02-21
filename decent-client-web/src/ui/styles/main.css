@@ -2814,6 +2814,7 @@ body:has(.landing-page) #app {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  pointer-events: none;
 }
 
 /* === Attachment image - WhatsApp style === */
