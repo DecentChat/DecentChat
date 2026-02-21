@@ -341,7 +341,7 @@ export class HuddleManager {
     }
 
     pc.ontrack = (event) => {
-      const [remoteStream] = event.streams;
+      const remoteStream = event.streams[0] ?? new MediaStream([event.track]);
       let audioEl = this.audioElements.get(peerId);
       if (!audioEl) {
         audioEl = new Audio();
@@ -350,6 +350,13 @@ export class HuddleManager {
         this.audioElements.set(peerId, audioEl);
       }
       audioEl.srcObject = remoteStream;
+      // Explicit play() required — autoplay alone is blocked by Chrome's autoplay policy
+      audioEl.play().catch(err => {
+        console.warn('[Huddle] Audio autoplay blocked, retrying on user gesture:', err);
+        // Queue a one-shot retry on the next user interaction
+        const retry = () => { audioEl!.play().catch(() => {}); document.removeEventListener('click', retry); };
+        document.addEventListener('click', retry, { once: true });
+      });
     };
 
     pc.onicecandidate = (event) => {
@@ -374,7 +381,9 @@ export class HuddleManager {
           });
           this.callbacks.onParticipantsChange(this.getParticipants());
         }
-      } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+      } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        // 'disconnected' is transient — WebRTC may recover from it automatically.
+        // Only clean up on 'failed' (unrecoverable) or 'closed' (explicit close).
         this.connections.delete(peerId);
         this.participants.delete(peerId);
         this.callbacks.onParticipantsChange(this.getParticipants());
