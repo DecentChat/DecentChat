@@ -256,8 +256,11 @@ export class SettingsPanel {
           value = parseInt(el.value) || 30;
         } else if (el instanceof HTMLSelectElement) {
           value = el.value;
+        } else if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+          value = el.value.trim();
         }
 
+        if (value === undefined) return;
         this.saveSetting(key, value);
         this.applySettingImmediately(key, value);
       });

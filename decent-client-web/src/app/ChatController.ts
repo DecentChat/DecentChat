@@ -1254,6 +1254,34 @@ export class ChatController {
 
   async persistSetting(key: string, value: unknown): Promise<void> {
     await this.persistentStore.saveSetting(key, value);
+
+    if (key === 'myAlias' && typeof value === 'string' && value.trim()) {
+      const alias = value.trim();
+      this.state.myAlias = alias;
+
+      // Update our member entry in the active workspace
+      const wsId = this.state.activeWorkspaceId;
+      if (wsId) {
+        const ws = this.workspaceManager.getWorkspace(wsId);
+        if (ws) {
+          const myMember = ws.members.find((m: any) => m.peerId === this.state.myPeerId);
+          if (myMember) myMember.alias = alias;
+          this.persistWorkspace(wsId).catch(() => {});
+        }
+
+        // Announce new name to connected peers
+        const targets = this.getWorkspaceRecipientPeerIds();
+        for (const peerId of targets) {
+          if (this.state.readyPeers.has(peerId)) {
+            this.transport.send(peerId, { type: 'name-announce', workspaceId: wsId, alias });
+          }
+        }
+      }
+
+      // Refresh sidebar and messages so own name updates immediately
+      this.ui?.updateSidebar();
+      this.ui?.renderMessages();
+    }
   }
 
   // =========================================================================

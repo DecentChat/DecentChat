@@ -2104,6 +2104,9 @@ export class UIRenderer {
           this.callbacks.setWorkspaceAlias?.(wsId, value as string);
           return Promise.resolve();
         }
+        if (key === 'myAlias' && typeof value === 'string' && value.trim()) {
+          this.state.myAlias = value.trim();
+        }
         return this.callbacks.persistSetting(key, value);
       },
       async (action) => {

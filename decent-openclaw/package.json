@@ -1,0 +1,22 @@
+{
+  "name": "decent-openclaw",
+  "version": "0.1.0",
+  "description": "OpenClaw channel plugin for DecentChat",
+  "main": "index.ts",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "channel": {
+      "id": "decentchat",
+      "label": "DecentChat",
+      "selectionLabel": "DecentChat (P2P)",
+      "docsPath": "/channels/decentchat",
+      "blurb": "P2P encrypted chat via DecentChat."
+    }
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.14"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "decentchat",
+  "name": "DecentChat",
+  "description": "DecentChat P2P channel plugin for OpenClaw",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "port": { "type": "number", "default": 4242 },
+      "secret": { "type": "string" }
+    }
+  },
+  "uiHints": {
+    "port": { "label": "WebSocket Port", "placeholder": "4242" },
+    "secret": { "label": "Shared Secret", "sensitive": true }
+  }
+}
