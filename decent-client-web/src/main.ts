@@ -336,9 +336,16 @@ async function init(): Promise<void> {
     let derivedPeerId: string | null = null;
     if (typeof seedPhrase === 'string' && seedPhrase.trim()) {
       try {
-        const { SeedPhraseManager } = await import('decent-protocol');
+        const { SeedPhraseManager, AtRestEncryption } = await import('decent-protocol');
         const seedPhraseManager = new SeedPhraseManager();
         derivedPeerId = await seedPhraseManager.derivePeerId(seedPhrase);
+
+        // T3.5: Derive at-rest encryption key from master seed
+        const derivedKeys = await seedPhraseManager.deriveKeys(seedPhrase);
+        const atRest = new AtRestEncryption();
+        await atRest.init(derivedKeys.masterSeed);
+        ctrl.persistentStore.setAtRestEncryption(atRest);
+        console.log('[DecentChat] At-rest encryption enabled');
       } catch (err) {
         console.warn('[DecentChat] Failed to derive peer ID from seed phrase, falling back:', (err as Error).message);
       }

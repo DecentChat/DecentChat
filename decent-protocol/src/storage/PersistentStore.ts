@@ -5,6 +5,8 @@
  * All data stays local (no server).
  */
 
+import { AtRestEncryption } from './AtRestEncryption';
+
 export interface PersistentStoreConfig {
   dbName?: string;
   version?: number;
@@ -14,6 +16,8 @@ export class PersistentStore {
   private db: IDBDatabase | null = null;
   private dbName: string;
   private version: number;
+  /** T3.5: Optional at-rest encryption for message content */
+  private atRest: AtRestEncryption | null = null;
 
   constructor(config: PersistentStoreConfig = {}) {
     this.dbName = config.dbName || 'decent-protocol';
@@ -106,14 +110,39 @@ export class PersistentStore {
 
   // === Messages ===
 
+  /**
+   * T3.5: Set the at-rest encryption handler.
+   * Once set, message content is encrypted before storage and decrypted on read.
+   * Call after the user's seed phrase has been loaded and keys derived.
+   */
+  setAtRestEncryption(enc: AtRestEncryption | null): void {
+    this.atRest = enc;
+  }
+
   async saveMessage(message: any): Promise<void> {
-    await this.put('messages', message);
+    if (this.atRest?.ready && typeof message?.content === 'string') {
+      const encrypted = await this.atRest.encrypt(message.content);
+      await this.put('messages', { ...message, content: encrypted });
+    } else {
+      await this.put('messages', message);
+    }
   }
 
   async saveMessages(messages: any[]): Promise<void> {
+    // T3.5: Encrypt content before batch-saving if at-rest encryption is active
+    const toStore = this.atRest?.ready
+      ? await Promise.all(
+          messages.map(async (msg) =>
+            typeof msg?.content === 'string'
+              ? { ...msg, content: await this.atRest!.encrypt(msg.content) }
+              : msg,
+          ),
+        )
+      : messages;
+
     const tx = this.getDB().transaction('messages', 'readwrite');
     const store = tx.objectStore('messages');
-    for (const msg of messages) {
+    for (const msg of toStore) {
       store.put(msg);
     }
     return new Promise((resolve, reject) => {
@@ -123,18 +152,32 @@ export class PersistentStore {
   }
 
   async getChannelMessages(channelId: string): Promise<any[]> {
-    return new Promise((resolve, reject) => {
+    const messages: any[] = await new Promise((resolve, reject) => {
       const tx = this.getDB().transaction('messages', 'readonly');
       const store = tx.objectStore('messages');
       const index = store.index('channelId');
       const request = index.getAll(channelId);
       request.onsuccess = () => {
-        const messages = request.result || [];
-        messages.sort((a: any, b: any) => a.timestamp - b.timestamp);
-        resolve(messages);
+        const msgs = request.result || [];
+        msgs.sort((a: any, b: any) => a.timestamp - b.timestamp);
+        resolve(msgs);
       };
       request.onerror = () => reject(request.error);
     });
+
+    // T3.5: Decrypt message content if at-rest encryption is active
+    if (this.atRest) {
+      return Promise.all(
+        messages.map(async (msg) => {
+          if (typeof msg?.content === 'string' && AtRestEncryption.isEncrypted(msg.content)) {
+            return { ...msg, content: await this.atRest!.decrypt(msg.content) };
+          }
+          return msg;
+        }),
+      );
+    }
+
+    return messages;
   }
 
   async getMessageCount(channelId: string): Promise<number> {

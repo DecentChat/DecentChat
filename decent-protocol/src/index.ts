@@ -30,6 +30,7 @@ export { OfflineQueue } from './messages/OfflineQueue';
 
 // ─── Storage ────────────────────────────────────────────────────────────────
 export { PersistentStore } from './storage/PersistentStore';
+export { AtRestEncryption } from './storage/AtRestEncryption';
 
 // ─── Identity ───────────────────────────────────────────────────────────────
 export { IdentityManager } from './identity/Identity';
