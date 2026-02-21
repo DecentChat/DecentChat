@@ -27,8 +27,8 @@ export interface ReadReceipt {
   timestamp: number;
 }
 
-/** Typing indicator timeout (stop showing after 5s of no update) */
-const TYPING_TIMEOUT_MS = 5000;
+/** Typing indicator timeout (stop showing after 3s of no update) */
+const TYPING_TIMEOUT_MS = 3000;
 /** How often to send typing updates */
 const TYPING_THROTTLE_MS = 2000;
 

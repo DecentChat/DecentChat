@@ -1214,12 +1214,20 @@ export class UIRenderer {
     const input = document.getElementById('compose-input') as HTMLTextAreaElement;
     const sendBtn = document.getElementById('send-btn')!;
 
+    // ── Typing indicator state (hoisted so all handlers can reference it) ──
+    let typingTimeout: any;
+    const stopTypingNow = () => {
+      clearTimeout(typingTimeout);
+      this.callbacks.broadcastStopTyping?.();
+    };
+
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         this.callbacks.sendMessage(input.value);
         input.value = '';
         this.autoResizeTextarea(input);
+        stopTypingNow();
       }
     });
 
@@ -1227,13 +1235,21 @@ export class UIRenderer {
       this.autoResizeTextarea(input);
       sendBtn.classList.toggle('active', input.value.trim().length > 0);
       this.handleCommandAutocomplete(input);
+      // Typing indicator: broadcast and reset auto-stop timer
+      this.callbacks.broadcastTyping?.();
+      clearTimeout(typingTimeout);
+      typingTimeout = setTimeout(stopTypingNow, 1500);
     });
 
     sendBtn.addEventListener('click', () => {
       this.callbacks.sendMessage(input.value);
       input.value = '';
       this.autoResizeTextarea(input);
+      stopTypingNow();
     });
+
+    // Stop typing when input loses focus
+    input.addEventListener('blur', stopTypingNow);
 
     // Emoji picker
     const emojiBtn = document.getElementById('emoji-btn');
@@ -1242,14 +1258,6 @@ export class UIRenderer {
         input.value += emoji;
         input.focus();
       });
-    });
-
-    // Typing indicator (send on input, stop on send/blur)
-    let typingTimeout: any;
-    input.addEventListener('input', () => {
-      this.callbacks.broadcastTyping?.();
-      clearTimeout(typingTimeout);
-      typingTimeout = setTimeout(() => this.callbacks.broadcastStopTyping?.(), 3000);
     });
 
     // File attachment
