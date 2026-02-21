@@ -177,7 +177,7 @@ export class ChatController {
   // =========================================================================
 
   setupTransportHandlers(): void {
-    this.transport.onConnect = async (peerId) => {
+    this.transport.onConnect = async (peerId: string) => {
       this.state.connectedPeers.add(peerId);
       this.state.connectingPeers.delete(peerId);
       this.ui?.updateSidebar();
@@ -190,7 +190,7 @@ export class ChatController {
       }
     };
 
-    this.transport.onDisconnect = (peerId) => {
+    this.transport.onDisconnect = (peerId: string) => {
       this.state.connectedPeers.delete(peerId);
       this.state.connectingPeers.delete(peerId);
       this.state.readyPeers.delete(peerId);
@@ -198,7 +198,7 @@ export class ChatController {
       this.ui?.updateSidebar();
     };
 
-    this.transport.onMessage = async (peerId, rawData) => {
+    this.transport.onMessage = async (peerId: string, rawData: unknown) => {
       const data = rawData as any;
 
       // Rate limit + validate before any processing
@@ -580,7 +580,7 @@ export class ChatController {
       }
     };
 
-    this.transport.onError = (error) => {
+    this.transport.onError = (error: Error) => {
       // 'unavailable-id' is a transient race on page reload — PeerTransport retries silently.
       if ((error as any).type === 'unavailable-id' || error.message?.includes('is taken')) return;
       // Signaling server briefly dropped — PeerTransport auto-reconnects within ~3s.
@@ -821,7 +821,7 @@ export class ChatController {
    */
   private async connectToDiscoveredServers(discovery: ServerDiscovery): Promise<void> {
     const ranked = discovery.getRankedServers();
-    const currentServers = this.transport.getSignalingStatus().map(s => s.url);
+    const currentServers = this.transport.getSignalingStatus().map((s: { url: string }) => s.url);
 
     // Try to connect to top 3 servers we're not connected to
     let attempted = 0;
@@ -831,7 +831,7 @@ export class ChatController {
 
       attempted++;
       // Don't await - connect in background
-      this.transport.addSignalingServer(server.url, `PEX:${server.url}`).then(success => {
+      this.transport.addSignalingServer(server.url, `PEX:${server.url}`).then((success: boolean) => {
         if (success) {
           discovery.recordSuccess(server.url, 100); // Assume 100ms latency for now
           this.saveServerDiscovery(discovery.toJSON().workspaceId);
@@ -1832,7 +1832,7 @@ export class ChatController {
   ): Promise<{ ciphertext: ArrayBuffer; iv: string; encryptionKey: string }> {
     let aesKey: CryptoKey;
     let encryptionKey = existingMeta?.encryptionKey;
-    let ivBytes: Uint8Array;
+    let ivBytes: Uint8Array<ArrayBuffer>;
 
     if (encryptionKey) {
       aesKey = await this.importAesKeyFromBase64Jwk(encryptionKey);
@@ -1848,7 +1848,7 @@ export class ChatController {
     if (existingMeta?.iv) {
       ivBytes = new Uint8Array(this.base64ToArrayBuffer(existingMeta.iv));
     } else {
-      ivBytes = crypto.getRandomValues(new Uint8Array(12));
+      ivBytes = new Uint8Array(crypto.getRandomValues(new Uint8Array(12)));
     }
 
     const ciphertext = await crypto.subtle.encrypt(
@@ -1859,7 +1859,7 @@ export class ChatController {
 
     return {
       ciphertext,
-      iv: this.arrayBufferToBase64(ivBytes.buffer),
+      iv: this.arrayBufferToBase64(ivBytes.buffer as ArrayBuffer),
       encryptionKey,
     };
   }

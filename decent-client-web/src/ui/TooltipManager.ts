@@ -53,14 +53,14 @@ async function showTooltip(anchor: HTMLElement): Promise<void> {
   if (!text) return;
 
   currentAnchor = anchor;
-  const { tooltip, arrow } = ensureTooltipEl();
+  const { tooltip } = ensureTooltipEl(); // arrowEl set as side-effect (module-level var)
 
   // Set text (excluding the arrow child)
   // Update only the text node to preserve the arrow element
   let textNode = tooltip.childNodes[0];
   if (!textNode || textNode.nodeType !== Node.TEXT_NODE) {
     textNode = document.createTextNode(text);
-    tooltip.insertBefore(textNode, arrow);
+    tooltip.insertBefore(textNode, arrowEl);
   } else {
     textNode.textContent = text;
   }

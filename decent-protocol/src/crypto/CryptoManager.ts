@@ -98,7 +98,7 @@ export class CryptoManager {
       ['deriveKey']
     );
 
-    let salt: Uint8Array;
+    let salt: Uint8Array<ArrayBuffer>;
     if (myPeerId && theirPeerId) {
       const pair = [myPeerId, theirPeerId].sort().join(':');
       const hashedSalt = await crypto.subtle.digest(
