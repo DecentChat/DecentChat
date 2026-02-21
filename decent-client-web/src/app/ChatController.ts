@@ -1792,6 +1792,8 @@ export class ChatController {
         const envelope = await this.messageProtocol!.encryptMessage(peerId, content, 'text');
         (envelope as any).channelId = this.state.activeChannelId;
         (envelope as any).workspaceId = this.state.activeWorkspaceId;
+        (envelope as any).messageId = msg.id;  // receiver must use same ID so reactions sync
+        (envelope as any).timestamp = msg.timestamp;
         (envelope as any).vectorClock = (msg as any).vectorClock;
         (envelope as any).attachments = [meta]; // Metadata travels with message
 
