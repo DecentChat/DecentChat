@@ -13,6 +13,7 @@ import { QRCodeManager } from './QRCodeManager';
 import { QUICK_REACTIONS } from './ReactionManager';
 import { ContactURI, InviteURI } from 'decent-protocol';
 import type { PlaintextMessage, Contact, ContactURIData, DirectConversation } from 'decent-protocol';
+import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
 import type { AppState } from '../main';
 
 // ---------------------------------------------------------------------------
@@ -84,6 +85,14 @@ export interface UICallbacks {
   validateSeed?: (mnemonic: string) => string | null;
   /** Called when user restores identity from seed phrase */
   onSeedRestored?: (mnemonic: string) => Promise<void>;
+  /** Start a voice huddle in a channel */
+  startHuddle?: (channelId: string) => Promise<void>;
+  /** Join an existing voice huddle */
+  joinHuddle?: (channelId: string) => Promise<void>;
+  /** Leave the current voice huddle */
+  leaveHuddle?: () => Promise<void>;
+  /** Toggle mute in the current huddle */
+  toggleHuddleMute?: () => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +109,12 @@ export class UIRenderer {
   private cachedContacts: Contact[] = [];
   /** Cached direct conversations for synchronous sidebar rendering */
   private cachedDirectConversations: DirectConversation[] = [];
+
+  /** Huddle (voice call) state */
+  private huddleState: HuddleState = 'inactive';
+  private huddleChannelId: string | null = null;
+  private huddleParticipants: HuddleParticipant[] = [];
+  private huddleMuted = false;
 
   constructor(
     private state: AppState,
@@ -408,10 +423,26 @@ export class UIRenderer {
         </div>
         <div class="main-content">
           ${this.renderChannelHeaderHTML()}
+          <div class="huddle-join-banner" id="huddle-join-banner" style="display:none">
+            <span class="huddle-join-icon">🟢</span>
+            <span class="huddle-join-text">Huddle in progress</span>
+            <button class="huddle-join-btn" id="huddle-join-btn">Join</button>
+          </div>
           <div class="messages-area">
             <div class="messages-pane">
               <div class="messages-list" id="messages-list"></div>
               <div class="typing-indicator" id="typing-indicator"></div>
+              <div class="huddle-bar" id="huddle-bar" style="display:none">
+                <div class="huddle-bar-info">
+                  <span class="huddle-icon">🟢</span>
+                  <span class="huddle-label">Huddle</span>
+                  <div class="huddle-participants" id="huddle-participants"></div>
+                </div>
+                <div class="huddle-bar-controls">
+                  <button class="huddle-mute-btn" id="huddle-mute-btn" title="Mute/Unmute">🎤</button>
+                  <button class="huddle-leave-btn" id="huddle-leave-btn" title="Leave Huddle">📵</button>
+                </div>
+              </div>
               <div class="compose-box">
                 <div class="compose-inner">
                   <input type="file" id="file-input" style="display:none" multiple />
@@ -743,6 +774,7 @@ export class UIRenderer {
           ${memberCount > 0 ? `<span class="member-count">👥 ${memberCount}</span>` : ''}
         </div>
         <div class="channel-header-right">
+          <button class="icon-btn${this.huddleState === 'in-call' && this.huddleChannelId === this.state.activeChannelId ? ' huddle-start-btn active' : ''}" id="huddle-start-btn" title="Start Huddle">🎧</button>
           <button class="icon-btn" id="qr-btn" title="QR Code">📱</button>
           <button class="icon-btn" id="search-btn" title="Search messages (Ctrl+F)">🔍</button>
           <button class="icon-btn" id="invite-btn" title="Invite code">🔗</button>
@@ -1359,6 +1391,7 @@ export class UIRenderer {
     this.bindSidebarActionEvents();
     this.bindChannelHeaderEvents();
     this.bindWorkspaceRailEvents();
+    this.bindHuddleEvents();
   }
 
   private bindSidebarEvents(): void {
@@ -1474,6 +1507,15 @@ export class UIRenderer {
   }
 
   private bindChannelHeaderEvents(): void {
+    document.getElementById('huddle-start-btn')?.addEventListener('click', async () => {
+      const channelId = this.state.activeChannelId;
+      if (!channelId) return;
+      if (this.huddleState === 'in-call') {
+        await this.callbacks.leaveHuddle?.();
+      } else {
+        await this.callbacks.startHuddle?.(channelId);
+      }
+    });
     document.getElementById('invite-btn')?.addEventListener('click', () => {
       if (!this.state.activeWorkspaceId) return;
       const inviteURL = this.callbacks.generateInviteURL?.(this.state.activeWorkspaceId);
@@ -1493,6 +1535,73 @@ export class UIRenderer {
         this.openMobileSidebar();
       }
     });
+  }
+
+  // =========================================================================
+  // Huddle (voice calling) UI
+  // =========================================================================
+
+  private bindHuddleEvents(): void {
+    document.getElementById('huddle-mute-btn')?.addEventListener('click', () => {
+      const muted = this.callbacks.toggleHuddleMute?.() ?? false;
+      this.huddleMuted = muted;
+      const btn = document.getElementById('huddle-mute-btn');
+      if (btn) btn.textContent = muted ? '🔇' : '🎤';
+    });
+
+    document.getElementById('huddle-leave-btn')?.addEventListener('click', async () => {
+      await this.callbacks.leaveHuddle?.();
+    });
+
+    document.getElementById('huddle-join-btn')?.addEventListener('click', async () => {
+      const channelId = this.huddleChannelId || this.state.activeChannelId;
+      if (channelId) await this.callbacks.joinHuddle?.(channelId);
+    });
+  }
+
+  onHuddleStateChange(state: HuddleState, channelId: string | null): void {
+    this.huddleState = state;
+    this.huddleChannelId = channelId;
+    this.updateHuddleUI();
+    this.updateChannelHeader();
+  }
+
+  onHuddleParticipantsChange(participants: HuddleParticipant[]): void {
+    this.huddleParticipants = participants;
+    this.updateHuddleUI();
+  }
+
+  private updateHuddleUI(): void {
+    const bar = document.getElementById('huddle-bar');
+    const joinBanner = document.getElementById('huddle-join-banner');
+    const participantsEl = document.getElementById('huddle-participants');
+
+    if (!bar || !joinBanner) return;
+
+    if (this.huddleState === 'in-call') {
+      bar.style.display = 'flex';
+      joinBanner.style.display = 'none';
+
+      if (participantsEl) {
+        participantsEl.innerHTML = this.huddleParticipants.map(p => {
+          const initials = p.displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+          const color = this.peerColor(p.peerId);
+          const muteIcon = p.muted ? ' 🔇' : '';
+          return `<span class="huddle-avatar" style="background:${color}" title="${this.escapeHtml(p.displayName)}${muteIcon}">${this.escapeHtml(initials)}</span>`;
+        }).join('');
+      }
+
+      const muteBtn = document.getElementById('huddle-mute-btn');
+      if (muteBtn) muteBtn.textContent = this.huddleMuted ? '🔇' : '🎤';
+
+    } else if (this.huddleState === 'available') {
+      bar.style.display = 'none';
+      joinBanner.style.display = 'flex';
+
+    } else {
+      bar.style.display = 'none';
+      joinBanner.style.display = 'none';
+    }
   }
 
   // =========================================================================

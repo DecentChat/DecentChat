@@ -48,6 +48,8 @@ import { ReactionManager } from '../ui/ReactionManager';
 import type { ReactionEvent } from '../ui/ReactionManager';
 import type { TypingEvent, ReadReceipt } from '../ui/PresenceManager';
 import { NotificationManager } from '../ui/NotificationManager';
+import { HuddleManager } from '../huddle/HuddleManager';
+import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
 import type { AppState } from '../main';
 
 const PROTOCOL_VERSION = 2;
@@ -77,6 +79,10 @@ export interface UIUpdater {
   updateThreadIndicator: (parentMessageId: string, channelId: string) => void;
   /** DEP-005: Update delivery status tick on a specific message (avoids full re-render) */
   updateMessageStatus?: (messageId: string, status: 'pending' | 'sent' | 'delivered') => void;
+  /** Huddle state changed (inactive / available / in-call) */
+  onHuddleStateChange?: (state: HuddleState, channelId: string | null) => void;
+  /** Huddle participants list updated */
+  onHuddleParticipantsChange?: (participants: HuddleParticipant[]) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +131,7 @@ export class ChatController {
   private activeSenders = new Map<string, ChunkedSender>();
 
   myPublicKey: string = '';
+  huddle: HuddleManager | null = null;
 
   private ui: UIUpdater | null = null;
 
@@ -224,6 +231,12 @@ export class ChatController {
               this.ui?.updateMessageStatus?.(messageId, 'delivered');
             }
           }
+          return;
+        }
+
+        // --- Huddle signaling (voice calls) ---
+        if (data?.type?.startsWith('huddle-')) {
+          await this.huddle?.handleSignal(peerId, data);
           return;
         }
 
@@ -1616,6 +1629,51 @@ export class ChatController {
     if (!this.state.activeChannelId) return;
     const event = this.presence.createStopTypingEvent(this.state.activeChannelId, this.state.myPeerId);
     this.broadcastToWorkspacePeers(event);
+  }
+
+  // =========================================================================
+  // Huddle (voice calling)
+  // =========================================================================
+
+  /** Initialize HuddleManager — call after myPeerId is known */
+  initHuddle(): void {
+    this.huddle = new HuddleManager(this.state.myPeerId, {
+      onStateChange: (state, channelId) => {
+        this.ui?.onHuddleStateChange?.(state, channelId);
+      },
+      onParticipantsChange: (participants) => {
+        this.ui?.onHuddleParticipantsChange?.(participants);
+      },
+      onError: (msg) => {
+        this.ui?.showToast(msg, 'error');
+      },
+      sendSignal: (peerId, data) => {
+        this.transport.send(peerId, data);
+      },
+      broadcastSignal: (data) => {
+        for (const peerId of this.getWorkspaceRecipientPeerIds()) {
+          try { this.transport.send(peerId, data); } catch {}
+        }
+      },
+      getConnectedPeers: () => this.transport.getConnectedPeers(),
+      getDisplayName: (peerId) => this.getDisplayNameForPeer(peerId),
+    });
+  }
+
+  async startHuddle(channelId: string): Promise<void> {
+    await this.huddle?.startHuddle(channelId);
+  }
+
+  async joinHuddle(channelId: string): Promise<void> {
+    await this.huddle?.joinHuddle(channelId);
+  }
+
+  async leaveHuddle(): Promise<void> {
+    await this.huddle?.leaveHuddle();
+  }
+
+  toggleHuddleMute(): boolean {
+    return this.huddle?.toggleMute() ?? false;
   }
 
   /** Send read receipt for a message */

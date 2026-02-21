@@ -215,6 +215,10 @@ async function init(): Promise<void> {
       const result = _spm.validate(mnemonic);
       return result.valid ? null : (result.error ?? 'Invalid phrase');
     },
+    startHuddle: (channelId) => ctrl.startHuddle(channelId),
+    joinHuddle: (channelId) => ctrl.joinHuddle(channelId),
+    leaveHuddle: () => ctrl.leaveHuddle(),
+    toggleHuddleMute: () => ctrl.toggleHuddleMute(),
     onSeedRestored: async (mnemonic) => {
       await ctrl.persistentStore.saveSetting('seedPhrase', mnemonic);
       // Also persist within app-settings for consistency
@@ -252,6 +256,10 @@ async function init(): Promise<void> {
       ui.updateThreadIndicator(parentMessageId, channelId),
     updateMessageStatus: (messageId, status) =>
       ui.updateMessageStatus(messageId, status),
+    onHuddleStateChange: (state, channelId) =>
+      ui.onHuddleStateChange(state, channelId),
+    onHuddleParticipantsChange: (participants) =>
+      ui.onHuddleParticipantsChange(participants),
   });
 
   // Wire typing indicator
@@ -377,6 +385,9 @@ async function init(): Promise<void> {
 
     state.myPeerId = myPeerId;
     state.myAlias = myPeerId.slice(0, 8);
+
+    // Initialize huddle (voice calling) — needs myPeerId
+    ctrl.initHuddle();
 
     // Expose for testing
     if (typeof window !== 'undefined') {
