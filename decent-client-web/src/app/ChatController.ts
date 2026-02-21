@@ -394,9 +394,11 @@ export class ChatController {
         }
 
         // --- T3.2: Gossip dedup — drop if we already processed this message via another path ---
+        // _originalMessageId is set by the gossip relay on relayed copies.
+        // We always check it first (fast path, before decryption).
         const _gossipOrigId: string | undefined = (rawData as any)?._originalMessageId;
         if (_gossipOrigId) {
-          if (this._gossipSeen.has(_gossipOrigId)) return; // already processed
+          if (this._gossipSeen.has(_gossipOrigId)) return; // already processed via gossip
           this._gossipSeen.set(_gossipOrigId, Date.now());
         }
 
@@ -523,6 +525,13 @@ export class ChatController {
         // (e.g. #reactions-<msgId>). If the receiver generates its own ID, reactions
         // from the sender target an element that doesn't exist on the receiver's DOM.
         if (data.messageId) msg.id = data.messageId;
+
+        // T3.2 Gossip dedup (post-decryption): if we already processed this exact message
+        // ID via any path (direct or gossip), skip it now.  This covers the gossip-first
+        // ordering where _originalMessageId was added to _gossipSeen before the direct
+        // copy arrived (which has no _originalMessageId to check at the top of the handler).
+        if (this._gossipSeen.has(msg.id)) return;
+
         const result = await this.messageStore.addMessage(msg);
 
         if (result.success) {
@@ -543,6 +552,11 @@ export class ChatController {
 
           // DEP-005: Send delivery ACK back to sender
           this.transport.send(peerId, { type: 'ack', messageId: msg.id, channelId });
+
+          // T3.2: Seed gossip seen-set with the canonical message ID so that a later
+          // gossip-relayed copy of this same message (which uses msg.id as _originalMessageId)
+          // is caught by the early dedup check and dropped without re-rendering.
+          this._gossipSeen.set(msg.id, Date.now());
 
           // T3.2: Gossip relay — re-encrypt and forward to workspace peers who might not have received this
           void this._gossipRelay(peerId, msg.id, msg.senderId, content, channelId, data);

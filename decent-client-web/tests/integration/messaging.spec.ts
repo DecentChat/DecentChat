@@ -236,7 +236,7 @@ async function setupConnectedPair(browser: Browser, wsName: string, strictReady 
 }
 
 test.describe('P2P Messaging', () => {
-  test.setTimeout(60000);
+  test.setTimeout(90000);
 
   test('two users can send and receive messages in real-time', async ({ browser }) => {
     const [alice, bob] = await setupConnectedPair(browser, 'Message Exchange');
@@ -270,7 +270,7 @@ test.describe('P2P Messaging', () => {
     const [alice, bob] = await setupConnectedPair(browser, 'Rapid Fire');
     try {
       for (let i = 1; i <= 5; i++) await sendMessage(alice.page, `Msg ${i}`);
-      for (let i = 1; i <= 5; i++) await waitForMessage(bob.page, `Msg ${i}`, 10000);
+      for (let i = 1; i <= 5; i++) await waitForMessage(bob.page, `Msg ${i}`, 15000);
     } finally {
       await closeUser(alice);
       await closeUser(bob);

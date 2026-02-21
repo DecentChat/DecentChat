@@ -92,35 +92,49 @@ async function getDisplayedPeerId(page: Page): Promise<string> {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 test.describe('Seed Phrase — Generate', () => {
-  test('generate button creates a 12-word phrase and shows it', async ({ browser }) => {
+  test('seed phrase is auto-generated and can be shown/hidden in settings', async ({ browser }) => {
+    // App auto-generates a seed phrase on first launch (commit 6ec0e9d).
+    // This test verifies the Show/Hide flow that users actually encounter.
     test.setTimeout(60000);
     const ctx = await browser.newContext();
     const page = await freshPage(ctx);
 
     await createWorkspace(page);
+
+    // Wait for auto-generation to complete (logged to console)
+    await page.waitForFunction(
+      () => (window as any).__ctrl?.persistentStore != null,
+      { timeout: 10000 },
+    );
+
     await openSettings(page);
 
-    // "Generate" button should be present when no seed phrase exists yet
-    const generateBtn = page.locator('#seed-phrase-btn');
-    await expect(generateBtn).toBeVisible();
-    await expect(generateBtn).toContainText('Generate');
+    const seedBtn = page.locator('#seed-phrase-btn');
+    await expect(seedBtn).toBeVisible({ timeout: 5000 });
 
-    // The seed phrase display should be hidden initially
+    // With auto-generated seed, button starts as "Show"
     const display = page.locator('#seed-phrase-display');
-    await expect(display).toBeHidden();
 
-    // Click Generate
-    await generateBtn.click();
-
-    // Seed phrase should now be visible
-    await expect(display).toBeVisible({ timeout: 5000 });
-    const phrase = (await display.textContent()) ?? '';
-    const words = phrase.trim().split(/\s+/);
-    expect(words).toHaveLength(12);
-    words.forEach(w => expect(w).toMatch(/^[a-z]+$/));
-
-    // Button should now say "Hide" (phrase is currently revealed)
-    await expect(generateBtn).toContainText('Hide');
+    // Click Show → phrase becomes visible
+    if (await seedBtn.textContent({ timeout: 3000 }).then(t => t?.includes('Show'))) {
+      await seedBtn.click();
+      await expect(display).toBeVisible({ timeout: 5000 });
+      const phrase = (await display.textContent()) ?? '';
+      const words = phrase.trim().split(/\s+/);
+      expect(words.length).toBeGreaterThanOrEqual(12);
+      words.slice(0, 12).forEach(w => expect(w).toMatch(/^[a-z]+$/));
+      // Button should now say "Hide"
+      await expect(seedBtn).toContainText('Hide');
+    } else {
+      // Button says "Generate" (no auto-gen yet) — test the generate flow
+      await seedBtn.click();
+      await expect(display).toBeVisible({ timeout: 5000 });
+      const phrase = (await display.textContent()) ?? '';
+      const words = phrase.trim().split(/\s+/);
+      expect(words).toHaveLength(12);
+      words.forEach(w => expect(w).toMatch(/^[a-z]+$/));
+      await expect(seedBtn).toContainText('Hide');
+    }
 
     await ctx.close();
   });

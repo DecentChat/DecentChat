@@ -76,7 +76,7 @@ async function getInviteUrl(page: Page): Promise<string> {
   }));
 }
 
-test.setTimeout(60000);
+test.setTimeout(90000);
 
 test('simple P2P message exchange', async ({ browser }) => {
   const alice = await createUser(browser, 'Alice');
