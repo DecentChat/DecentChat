@@ -415,14 +415,26 @@ async function init(): Promise<void> {
       delete: (peerId) => ctrl.persistentStore.deleteRatchetState(peerId),
     });
 
+    // Wire transport event handlers BEFORE restoring storage so onConnect/onDisconnect
+    // fire correctly even if a connection completes during the restore phase.
+    ctrl.setupTransportHandlers();
+
     // Restore persisted workspaces / messages
     await ctrl.restoreFromStorage();
 
     // Restore contacts and direct conversations
     await ctrl.restoreContacts();
 
-    // Wire transport event handlers
-    ctrl.setupTransportHandlers();
+    // Pre-mark all known workspace members as "connecting" so the sidebar's
+    // amber pulsing dot is visible from the very first render (not a grey→green jump).
+    // The dots will transition to green when WebRTC handshakes complete.
+    for (const ws of ctrl.workspaceManager.getAllWorkspaces()) {
+      for (const member of ws.members) {
+        if (member.peerId !== state.myPeerId) {
+          state.connectingPeers.add(member.peerId);
+        }
+      }
+    }
 
     // Check for /join/CODE invite URL
     const joinMatch = window.location.pathname.match(/^\/join\/([A-Za-z0-9]+)/);
