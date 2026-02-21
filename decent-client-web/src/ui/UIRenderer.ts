@@ -637,18 +637,6 @@ export class UIRenderer {
           <div id="direct-conversation-list" data-testid="direct-conversation-list">
             ${directDMsHTML || '<div class="sidebar-item" style="font-size:12px; opacity:0.5;">No direct messages yet</div>'}
           </div>
-          ${!isDMView ? dms.map(dm => {
-            const otherPeerId = dm.members.find((m: string) => m !== this.state.myPeerId) || '???';
-            const unreadWsDM = this.callbacks.getUnreadCount?.(dm.id) || 0;
-            const isActiveDM = dm.id === this.state.activeChannelId && !this.state.activeDirectConversationId;
-            return `
-              <div class="sidebar-item ${isActiveDM ? 'active' : ''} ${unreadWsDM > 0 ? 'has-unread' : ''}" data-channel-id="${dm.id}">
-                <span class="dm-status ${this.peerStatusClass(otherPeerId)}" title="${this.peerStatusTitle(otherPeerId)}"></span>
-                <span>${this.escapeHtml(this.getPeerAlias(otherPeerId))}</span>
-                ${unreadWsDM > 0 ? `<span class="unread-badge">${unreadWsDM > 99 ? '99+' : unreadWsDM}</span>` : ''}
-              </div>
-            `;
-          }).join('') : ''}
         </div>
         ${ws && !isDMView ? `
         <div class="sidebar-section">
@@ -667,33 +655,13 @@ export class UIRenderer {
             </div>`;
           }).join('')}
         </div>
-        <div class="sidebar-section" data-testid="ws-direct-messages-section">
-          <div class="sidebar-section-header">
-            Direct Messages
-            <button class="add-btn" id="start-ws-dm-btn" title="Start DM">+</button>
-          </div>
-          ${this.cachedDirectConversations.length > 0
-            ? this.cachedDirectConversations.map(conv => {
-                const dmName = this.getPeerAlias(conv.contactPeerId);
-                const isActiveDMConv = this.state.activeDirectConversationId === conv.id;
-                const unreadDMConv = this.callbacks.getUnreadCount?.(conv.id) || 0;
-                return `
-                <div class="sidebar-item ${isActiveDMConv ? 'active' : ''} ${unreadDMConv > 0 ? 'has-unread' : ''}" data-direct-conv-id="${conv.id}" data-testid="ws-direct-conversation-item">
-                  <span class="dm-status ${this.peerStatusClass(conv.contactPeerId)}" title="${this.peerStatusTitle(conv.contactPeerId)}"></span>
-                  <span>${this.escapeHtml(dmName)}</span>
-                  ${unreadDMConv > 0 ? `<span class="unread-badge">${unreadDMConv > 99 ? '99+' : unreadDMConv}</span>` : ''}
-                </div>`;
-              }).join('')
-            : '<div class="sidebar-item" style="font-size:12px; opacity:0.5;">No direct messages yet</div>'
-          }
-        </div>
         ` : ''}
         <div class="sidebar-section">
           <div class="sidebar-section-header">Members</div>
           <div class="sidebar-item" id="connect-peer-btn" style="color: var(--sidebar-text); opacity: 0.8;">
             + Connect to peer...
           </div>
-          ${(ws ? ws.members : []).filter((m: any) => m.peerId !== this.state.myPeerId).map((m: any) => {
+          ${(ws ? ws.members : []).filter((m: any) => m.peerId !== this.state.myPeerId && !this.cachedDirectConversations.some(c => c.contactPeerId === m.peerId)).map((m: any) => {
             const name = this.getPeerAlias(m.peerId);
             return `
               <div class="sidebar-item member-row" data-member-peer-id="${m.peerId}">

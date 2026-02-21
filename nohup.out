@@ -707,3 +707,11 @@ Config updatnutý, gateway reštartnutý. Teraz beží test sub-agent na overeni
 [90m2026-02-19T17:35:16.040Z[39m [35m[whatsapp][39m [36mListening for personal WhatsApp inbound messages.[39m
 [90m2026-02-19T17:36:27.416Z[39m [33m[agent/embedded][39m [33mworkspace bootstrap file MEMORY.md is 21299 chars (limit 20000); truncating in injected context (sessionKey=agent:main:slack:channel:c0afdrzbz34)[39m
 2026-02-19T18:38:41.894+01:00 typing TTL reached (2m); stopping typing indicator
+2026-02-21T22:57:53.715+01:00 Gateway failed to start: gateway already running (pid 14248); lock timeout after 5000ms
+If the gateway is supervised, stop it with: openclaw gateway stop
+2026-02-21T22:57:53.853+01:00 Port 18789 is already in use.
+2026-02-21T22:57:53.854+01:00 - pid 14248 claw: openclaw-gateway (127.0.0.1:18789)
+2026-02-21T22:57:53.855+01:00 - Gateway already running locally. Stop it (openclaw gateway stop) or use a different port.
+2026-02-21T22:57:53.860+01:00 Gateway service appears loaded. Stop it first.
+2026-02-21T22:57:53.861+01:00 Tip: openclaw gateway stop
+2026-02-21T22:57:53.862+01:00 Or: launchctl bootout gui/$UID/ai.openclaw.gateway

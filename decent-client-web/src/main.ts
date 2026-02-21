@@ -260,6 +260,10 @@ async function init(): Promise<void> {
       ui.onHuddleStateChange(state, channelId),
     onHuddleParticipantsChange: (participants) =>
       ui.onHuddleParticipantsChange(participants),
+    showBotTyping: (channelId) =>
+      ui.showBotTyping(channelId),
+    onBotBridgeStatus: (connected) =>
+      ui.onBotBridgeStatus(connected),
   });
 
   // Wire typing indicator

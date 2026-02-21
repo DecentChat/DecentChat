@@ -1,10 +1,12 @@
 {
-  "name": "decent-openclaw",
+  "name": "decentchat",
   "version": "0.1.0",
   "description": "OpenClaw channel plugin for DecentChat",
   "main": "index.ts",
   "openclaw": {
-    "extensions": ["./index.ts"],
+    "extensions": [
+      "./index.ts"
+    ],
     "channel": {
       "id": "decentchat",
       "label": "DecentChat",
@@ -14,6 +16,7 @@
     }
   },
   "dependencies": {
+    "openclaw": "file:/Users/claw/.npm-global/lib/node_modules/openclaw",
     "ws": "^8.18.0"
   },
   "devDependencies": {

@@ -1,4 +1,5 @@
 import { WebSocketServer, WebSocket } from "ws";
+import { createServer } from "node:http";
 import { createReplyPrefixOptions, type OpenClawConfig } from "openclaw/plugin-sdk";
 import { getDecentChatRuntime } from "./runtime.js";
 import type {
@@ -19,16 +20,48 @@ export async function startDecentChatBridge(ctx: {
   };
   setStatus: (patch: Record<string, unknown>) => void;
   abortSignal?: AbortSignal;
-}): Promise<{ stop: () => void }> {
+}): Promise<void> {
   const core = getDecentChatRuntime();
   const port = ctx.account.port ?? 4242;
   const secret = ctx.account.secret;
 
   const authenticated = new Map<WebSocket, boolean>();
 
-  const wss = new WebSocketServer({ port });
+  const httpServer = createServer();
+  const wss = new WebSocketServer({ noServer: true });
+
+  // Handle WebSocket upgrades manually so error events stay on httpServer
+  httpServer.on("upgrade", (req, socket, head) => {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  });
+
+  // Prevent unhandled 'error' events on either emitter from crashing the process
+  httpServer.on("error", (err) => {
+    ctx.log?.error?.(`[decentchat] server error: ${err.message}`);
+  });
+  wss.on("error", (err) => {
+    ctx.log?.error?.(`[decentchat] wss error: ${err.message}`);
+  });
+
+  // Wait for the port to bind (or fail)
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: Error) => {
+      httpServer.removeListener("listening", onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      httpServer.removeListener("error", onError);
+      resolve();
+    };
+    httpServer.once("error", onError);
+    httpServer.once("listening", onListening);
+    httpServer.listen(port);
+  });
+
   ctx.log?.info(`[decentchat] WebSocket server listening on port ${port}`);
-  ctx.setStatus({ running: true, port });
+  ctx.setStatus({ running: true, port, lastError: null });
 
   wss.on("connection", (ws) => {
     authenticated.set(ws, !secret);
@@ -79,15 +112,22 @@ export async function startDecentChatBridge(ctx: {
     });
   });
 
-  const shutdown = () => {
-    wss.close();
-    ctx.setStatus({ running: false });
-    ctx.log?.info("[decentchat] WebSocket server stopped");
-  };
+  // Keep the promise pending until the gateway signals us to stop.
+  // Resolving = "channel exited" which triggers auto-restart.
+  return new Promise<void>((resolve) => {
+    const shutdown = () => {
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      wss.close();
+      httpServer.close();
+      ctx.setStatus({ running: false });
+      ctx.log?.info("[decentchat] WebSocket server stopped");
+      resolve();
+    };
 
-  ctx.abortSignal?.addEventListener("abort", shutdown);
-
-  return { stop: shutdown };
+    ctx.abortSignal?.addEventListener("abort", shutdown);
+  });
 }
 
 async function handleInboundMessage(

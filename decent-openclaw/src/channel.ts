@@ -1,22 +1,10 @@
 import {
-  buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
-import { z } from "zod";
 import { startDecentChatBridge } from "./monitor.js";
 import type { ResolvedDecentChatAccount } from "./types.js";
-
-const DecentChatConfigSchema = z
-  .object({
-    port: z.number().int().min(1024).max(65535).default(4242).optional(),
-    secret: z.string().optional(),
-    enabled: z.boolean().default(true).optional(),
-    dmPolicy: z.enum(["open", "allowlist", "pairing", "disabled"]).default("open").optional(),
-    channels: z.record(z.object({ requireMention: z.boolean().optional() })).optional(),
-  })
-  .passthrough();
 
 function resolveDecentChatAccount(cfg: any, accountId?: string | null): ResolvedDecentChatAccount {
   const ch = cfg?.channels?.decentchat ?? {};
@@ -42,7 +30,6 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
   },
   capabilities: { chatTypes: ["direct", "group"] },
   reload: { configPrefixes: ["channels.decentchat"] },
-  configSchema: buildChannelConfigSchema(DecentChatConfigSchema),
 
   config: {
     listAccountIds: () => [DEFAULT_ACCOUNT_ID],
@@ -107,7 +94,7 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
   gateway: {
     startAccount: async (ctx) => {
       ctx.setStatus({ accountId: ctx.accountId, running: false });
-      return startDecentChatBridge({
+      await startDecentChatBridge({
         account: ctx.account,
         accountId: ctx.accountId,
         log: ctx.log,

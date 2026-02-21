@@ -6,7 +6,8 @@
   "workspaces": [
     "decent-protocol",
     "decent-transport-webrtc",
-    "decent-client-web"
+    "decent-client-web",
+    "decent-openclaw"
   ],
   "scripts": {
     "test": "cd decent-protocol && bun test",
