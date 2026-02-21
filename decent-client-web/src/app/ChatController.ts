@@ -833,6 +833,7 @@ export class ChatController {
         !this.state.connectingPeers.has(member.peerId)
       ) {
         this.state.connectingPeers.add(member.peerId);
+        this.ui?.updateSidebar();
         this.transport.connect(member.peerId);
       }
     }
@@ -1103,8 +1104,10 @@ export class ChatController {
 
       attempted++;
       this.state.connectingPeers.add(member.peerId);
+      this.ui?.updateSidebar();
       this.transport.connect(member.peerId).catch(() => {
         this.state.connectingPeers.delete(member.peerId);
+        this.ui?.updateSidebar();
       });
     }
 

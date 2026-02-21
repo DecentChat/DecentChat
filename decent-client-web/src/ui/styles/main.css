@@ -22,6 +22,7 @@
   --success: #00b894;
   --warning: #fdcb6e;
   --online: #00b894;
+  --connecting: #f39c12;
   --mine-bg: #e8f4fd;
   --theirs-bg: #f4f5f7;
 
@@ -360,6 +361,15 @@ body {
   border: 1.5px solid var(--sidebar-text); flex-shrink: 0;
 }
 .sidebar-item .dm-status.online { background: var(--online); border-color: var(--online); }
+.sidebar-item .dm-status.connecting {
+  background: var(--connecting);
+  border-color: var(--connecting);
+  animation: pulse-connecting 1.2s ease-in-out infinite;
+}
+@keyframes pulse-connecting {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
 
 .sidebar-item .sidebar-item-meta {
   margin-left: auto;

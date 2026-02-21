@@ -580,10 +580,9 @@ export class UIRenderer {
 
     // Build contacts section
     const contactsHTML = this.cachedContacts.map(c => {
-      const isOnline = this.state.readyPeers.has(c.peerId);
       return `
         <div class="sidebar-item contact-card" data-contact-peer-id="${c.peerId}" data-testid="contact-card" title="${this.escapeHtml(c.peerId)}">
-          <span class="dm-status ${isOnline ? 'online' : ''}"></span>
+          <span class="dm-status ${this.peerStatusClass(c.peerId)}" title="${this.peerStatusTitle(c.peerId)}"></span>
           <span>${this.escapeHtml(c.displayName)}</span>
         </div>`;
     }).join('');
@@ -594,7 +593,6 @@ export class UIRenderer {
       .sort((a, b) => b.lastMessageAt - a.lastMessageAt);
     const directDMsHTML = sortedDirectConversations.map(conv => {
       const name = this.getPeerAlias(conv.contactPeerId);
-      const isOnline = this.state.readyPeers.has(conv.contactPeerId);
       const isActive = this.state.activeDirectConversationId === conv.id;
       const unreadDM = this.callbacks.getUnreadCount?.(conv.id) || 0;
       const meta = conv.lastMessageAt
@@ -602,7 +600,7 @@ export class UIRenderer {
         : 'No messages';
       return `
         <div class="sidebar-item ${isActive ? 'active' : ''} ${unreadDM > 0 ? 'has-unread' : ''}" data-direct-conv-id="${conv.id}" data-testid="direct-conversation-item">
-          <span class="dm-status ${isOnline ? 'online' : ''}"></span>
+          <span class="dm-status ${this.peerStatusClass(conv.contactPeerId)}" title="${this.peerStatusTitle(conv.contactPeerId)}"></span>
           <span>${this.escapeHtml(name)}</span>
           ${unreadDM > 0
             ? `<span class="unread-badge">${unreadDM > 99 ? '99+' : unreadDM}</span>`
@@ -639,12 +637,11 @@ export class UIRenderer {
           </div>
           ${!isDMView ? dms.map(dm => {
             const otherPeerId = dm.members.find((m: string) => m !== this.state.myPeerId) || '???';
-            const isOnline = this.state.readyPeers.has(otherPeerId);
             const unreadWsDM = this.callbacks.getUnreadCount?.(dm.id) || 0;
             const isActiveDM = dm.id === this.state.activeChannelId && !this.state.activeDirectConversationId;
             return `
               <div class="sidebar-item ${isActiveDM ? 'active' : ''} ${unreadWsDM > 0 ? 'has-unread' : ''}" data-channel-id="${dm.id}">
-                <span class="dm-status ${isOnline ? 'online' : ''}"></span>
+                <span class="dm-status ${this.peerStatusClass(otherPeerId)}" title="${this.peerStatusTitle(otherPeerId)}"></span>
                 <span>${this.escapeHtml(this.getPeerAlias(otherPeerId))}</span>
                 ${unreadWsDM > 0 ? `<span class="unread-badge">${unreadWsDM > 99 ? '99+' : unreadWsDM}</span>` : ''}
               </div>
@@ -676,12 +673,11 @@ export class UIRenderer {
           ${this.cachedDirectConversations.length > 0
             ? this.cachedDirectConversations.map(conv => {
                 const dmName = this.getPeerAlias(conv.contactPeerId);
-                const isOnlineDM = this.state.readyPeers.has(conv.contactPeerId);
                 const isActiveDMConv = this.state.activeDirectConversationId === conv.id;
                 const unreadDMConv = this.callbacks.getUnreadCount?.(conv.id) || 0;
                 return `
                 <div class="sidebar-item ${isActiveDMConv ? 'active' : ''} ${unreadDMConv > 0 ? 'has-unread' : ''}" data-direct-conv-id="${conv.id}" data-testid="ws-direct-conversation-item">
-                  <span class="dm-status ${isOnlineDM ? 'online' : ''}"></span>
+                  <span class="dm-status ${this.peerStatusClass(conv.contactPeerId)}" title="${this.peerStatusTitle(conv.contactPeerId)}"></span>
                   <span>${this.escapeHtml(dmName)}</span>
                   ${unreadDMConv > 0 ? `<span class="unread-badge">${unreadDMConv > 99 ? '99+' : unreadDMConv}</span>` : ''}
                 </div>`;
@@ -696,11 +692,10 @@ export class UIRenderer {
             + Connect to peer...
           </div>
           ${(ws ? ws.members : []).filter((m: any) => m.peerId !== this.state.myPeerId).map((m: any) => {
-            const isOnline = this.state.readyPeers.has(m.peerId);
             const name = this.getPeerAlias(m.peerId);
             return `
               <div class="sidebar-item member-row" data-member-peer-id="${m.peerId}">
-                <span class="dm-status ${isOnline ? 'online' : ''}"></span>
+                <span class="dm-status ${this.peerStatusClass(m.peerId)}" title="${this.peerStatusTitle(m.peerId)}"></span>
                 <span class="member-name">${this.escapeHtml(name)}</span>
                 <button class="member-dm-btn" data-peer-id="${m.peerId}" title="Send direct message">✉</button>
               </div>
@@ -710,7 +705,7 @@ export class UIRenderer {
             .filter(peerId => !ws?.members.some((m: any) => m.peerId === peerId))
             .map(peerId => `
               <div class="sidebar-item" style="font-size:13px;">
-                <span class="dm-status ${this.state.readyPeers.has(peerId) ? 'online' : ''}"></span>
+                <span class="dm-status ${this.peerStatusClass(peerId)}" title="${this.peerStatusTitle(peerId)}"></span>
                 ${this.escapeHtml(this.getPeerAlias(peerId))}
               </div>
             `).join('')}
@@ -1833,7 +1828,7 @@ export class UIRenderer {
       .map(
         (m: import('decent-protocol').WorkspaceMember) =>
           `<div class="sidebar-item" data-peer-id="${m.peerId}" style="background: var(--surface); margin: 4px 0; border-radius: 6px; color: var(--text); padding: 10px 12px; cursor: pointer;">
-        <span class="dm-status ${this.state.readyPeers.has(m.peerId) ? 'online' : ''}"></span>
+        <span class="dm-status ${this.peerStatusClass(m.peerId)}" title="${this.peerStatusTitle(m.peerId)}"></span>
         ${this.escapeHtml(m.alias)} (${m.peerId.slice(0, 8)})
       </div>`,
       )
@@ -1929,9 +1924,8 @@ export class UIRenderer {
 
     const contactOptions = this.cachedContacts
       .map(c => {
-        const isOnline = this.state.readyPeers.has(c.peerId);
         return `<div class="sidebar-item" data-peer-id="${c.peerId}" style="background: var(--surface); margin: 4px 0; border-radius: 6px; color: var(--text); padding: 10px 12px; cursor: pointer;">
-          <span class="dm-status ${isOnline ? 'online' : ''}"></span>
+          <span class="dm-status ${this.peerStatusClass(c.peerId)}" title="${this.peerStatusTitle(c.peerId)}"></span>
           ${this.escapeHtml(c.displayName)} (${c.peerId.slice(0, 8)})
         </div>`;
       })
@@ -2272,6 +2266,20 @@ export class UIRenderer {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  /** 3-state presence CSS class: 'online' | 'connecting' | '' */
+  private peerStatusClass(peerId: string): string {
+    if (this.state.readyPeers.has(peerId)) return 'online';
+    if (this.state.connectingPeers.has(peerId)) return 'connecting';
+    return '';
+  }
+
+  /** Tooltip text for the presence dot */
+  private peerStatusTitle(peerId: string): string {
+    if (this.state.readyPeers.has(peerId)) return 'Online';
+    if (this.state.connectingPeers.has(peerId)) return 'Connecting...';
+    return 'Offline';
   }
 
   private getPeerAlias(peerId: string): string {
