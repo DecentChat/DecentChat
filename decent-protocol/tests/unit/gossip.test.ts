@@ -289,6 +289,92 @@ describe('DEP-008 Gossip — seen-set cleanup', () => {
   });
 });
 
+describe('DEP-008 Gossip — dedup both orderings (fix: early-check only, no early-set)', () => {
+  /**
+   * These tests verify the restructured dedup logic:
+   *   - Early check: if _originalMessageId in seen → drop (no set)
+   *   - Post-decryption check: if msg.id in seen → drop (no set)
+   *   - On success: set seen[msg.id] (uniform, covers both direct and relayed)
+   *
+   * The critical invariant: seen-set is ONLY written after successful processing,
+   * so a gossip copy with _originalMessageId = "X" never blocks itself from processing.
+   */
+
+  function makeDedupSm() {
+    const seen = new Map<string, number>();
+    const processed: string[] = [];
+
+    function earlyCheck(originalMessageId: string | undefined): boolean {
+      if (!originalMessageId) return false; // no early check for direct messages
+      return seen.has(originalMessageId);   // true = drop
+    }
+
+    function postDecryptionCheck(msgId: string): boolean {
+      return seen.has(msgId); // true = drop
+    }
+
+    function onSuccess(msgId: string) {
+      seen.set(msgId, Date.now());
+      processed.push(msgId);
+    }
+
+    return { seen, processed, earlyCheck, postDecryptionCheck, onSuccess };
+  }
+
+  test('direct-first: direct sets seen-set, gossip dropped by early check', () => {
+    const sm = makeDedupSm();
+
+    // Direct arrives (no _originalMessageId), msg.id = "orig-123"
+    expect(sm.earlyCheck(undefined)).toBe(false);          // no early check
+    expect(sm.postDecryptionCheck('orig-123')).toBe(false); // not in seen
+    sm.onSuccess('orig-123');                               // seeds seen-set
+
+    // Gossip arrives (_originalMessageId = "orig-123")
+    expect(sm.earlyCheck('orig-123')).toBe(true);           // ← DROPPED ✓
+    expect(sm.processed).toHaveLength(1);
+  });
+
+  test('gossip-first: gossip processes, direct dropped by post-decryption check', () => {
+    const sm = makeDedupSm();
+
+    // Gossip arrives (_originalMessageId = "orig-123"), msg.id = "orig-123" (with messageId in relay)
+    expect(sm.earlyCheck('orig-123')).toBe(false);          // not in seen yet
+    expect(sm.postDecryptionCheck('orig-123')).toBe(false); // not in seen
+    sm.onSuccess('orig-123');                               // seeds seen-set
+
+    // Direct arrives (no _originalMessageId), msg.id = "orig-123"
+    expect(sm.earlyCheck(undefined)).toBe(false);           // no early check
+    expect(sm.postDecryptionCheck('orig-123')).toBe(true);  // ← DROPPED ✓
+    expect(sm.processed).toHaveLength(1);
+  });
+
+  test('gossip early check does NOT block the gossip copy itself', () => {
+    const sm = makeDedupSm();
+
+    // Gossip arrives — early check should NOT add to seen (only checks)
+    sm.earlyCheck('orig-123'); // check only — returns false, does NOT set
+
+    // Post-decryption: msg.id = "orig-123" → should NOT be in seen yet
+    expect(sm.postDecryptionCheck('orig-123')).toBe(false); // not blocked ✓
+    sm.onSuccess('orig-123');
+    expect(sm.processed).toHaveLength(1);
+  });
+
+  test('two different messages are both processed independently', () => {
+    const sm = makeDedupSm();
+
+    sm.earlyCheck(undefined);
+    sm.postDecryptionCheck('msg-A');
+    sm.onSuccess('msg-A');
+
+    sm.earlyCheck(undefined);
+    sm.postDecryptionCheck('msg-B');
+    sm.onSuccess('msg-B');
+
+    expect(sm.processed).toEqual(['msg-A', 'msg-B']);
+  });
+});
+
 describe('DEP-008 Gossip — GOSSIP_TTL constant', () => {
   test('GOSSIP_TTL is 2', () => {
     expect(GOSSIP_TTL).toBe(2);
