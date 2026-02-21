@@ -1700,6 +1700,7 @@ export class UIRenderer {
         if (!alias) return;
 
         this.state.myAlias = alias;
+        this.callbacks.persistSetting('myAlias', alias);
         this.callbacks.joinWorkspace(workspaceName || inviteCode, alias, peerId, inviteData);
         this.showToast(`Joining ${workspaceName || 'workspace'}...`);
       },
@@ -1761,6 +1762,7 @@ export class UIRenderer {
         }
 
         this.state.myAlias = alias;
+        this.callbacks.persistSetting('myAlias', alias);
         // Use decoded workspace name if available, otherwise use invite code
         const wsName = inviteData?.workspaceName || code;
         this.callbacks.joinWorkspace(wsName, alias, peerId!, inviteData);

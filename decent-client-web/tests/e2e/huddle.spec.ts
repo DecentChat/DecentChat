@@ -369,3 +369,139 @@ test.describe('Huddle — Multi User', () => {
     await expect(bob.locator('#huddle-join-banner')).not.toBeVisible();
   });
 });
+
+// ─── Audio / WebRTC Diagnostic Tests ────────────────────────────────────────
+// These tests check the actual WebRTC connection state and audio element state
+// to catch audio playback bugs that don't surface in UI-only tests.
+
+test.describe('Huddle — Audio & WebRTC Diagnostics', () => {
+  let aliceContext: BrowserContext;
+  let bobContext: BrowserContext;
+  let alice: Page;
+  let bob: Page;
+
+  /** Mock getUserMedia with a real OscillatorNode so there's actual audio data flowing */
+  async function mockWithOscillator(context: BrowserContext) {
+    await context.grantPermissions(['microphone']);
+    await context.addInitScript(() => {
+      navigator.mediaDevices.getUserMedia = async () => {
+        const audioCtx = new AudioContext();
+        const oscillator = audioCtx.createOscillator();
+        oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
+        const dest = audioCtx.createMediaStreamDestination();
+        oscillator.connect(dest);
+        oscillator.start();
+        return dest.stream;
+      };
+    });
+  }
+
+  test.beforeEach(async ({ browser }) => {
+    aliceContext = await browser.newContext();
+    bobContext = await browser.newContext();
+    await mockWithOscillator(aliceContext);
+    await mockWithOscillator(bobContext);
+    alice = await aliceContext.newPage();
+    bob = await bobContext.newPage();
+    await clearStorage(alice);
+    await clearStorage(bob);
+    await waitForApp(alice);
+    await waitForApp(bob);
+    const inviteUrl = await createWorkspaceAndGetInvite(alice, 'Audio Test', 'Alice');
+    await joinViaInvite(bob, inviteUrl, 'Bob');
+    await waitForApp(bob);
+    await waitForPeerConnection(alice);
+  });
+
+  test.afterEach(async () => {
+    await aliceContext?.close();
+    await bobContext?.close();
+  });
+
+  test('WebRTC audio connection reaches connected state and audio elements play', async () => {
+    // Capture console messages from both pages for diagnostics
+    const aliceLogs: string[] = [];
+    const bobLogs: string[] = [];
+    alice.on('console', msg => { if (msg.text().includes('[Huddle]')) aliceLogs.push(`Alice: ${msg.text()}`); });
+    bob.on('console', msg => { if (msg.text().includes('[Huddle]')) bobLogs.push(`Bob: ${msg.text()}`); });
+
+    // Alice starts huddle
+    await alice.click('#huddle-start-btn');
+    await alice.waitForFunction(() => {
+      const bar = document.getElementById('huddle-bar');
+      return bar && bar.style.display !== 'none';
+    }, { timeout: 10000 });
+
+    // Bob sees join banner and joins
+    await bob.waitForFunction(() => {
+      const banner = document.getElementById('huddle-join-banner');
+      return banner && banner.style.display !== 'none';
+    }, { timeout: 15000 });
+    await bob.click('#huddle-join-btn');
+    await bob.waitForFunction(() => {
+      const bar = document.getElementById('huddle-bar');
+      return bar && bar.style.display !== 'none';
+    }, { timeout: 10000 });
+
+    // Give WebRTC time to complete ICE and reach 'connected'
+    await alice.waitForTimeout(5000);
+
+    // ── Check RTCPeerConnection states ────────────────────────────────────────
+    const aliceConnStates = await alice.evaluate(() => {
+      return Array.from(document.querySelectorAll('audio')).map(a => ({
+        hasSrcObject: !!a.srcObject,
+        paused: a.paused,
+        readyState: a.readyState,
+        srcObjectActive: a.srcObject ? (a.srcObject as MediaStream).active : null,
+        tracks: a.srcObject ? (a.srcObject as MediaStream).getTracks().map(t => ({
+          kind: t.kind, enabled: t.enabled, readyState: t.readyState, muted: t.muted,
+        })) : [],
+      }));
+    });
+
+    const bobConnStates = await bob.evaluate(() => {
+      return Array.from(document.querySelectorAll('audio')).map(a => ({
+        hasSrcObject: !!a.srcObject,
+        paused: a.paused,
+        readyState: a.readyState,
+        srcObjectActive: a.srcObject ? (a.srcObject as MediaStream).active : null,
+        tracks: a.srcObject ? (a.srcObject as MediaStream).getTracks().map(t => ({
+          kind: t.kind, enabled: t.enabled, readyState: t.readyState, muted: t.muted,
+        })) : [],
+      }));
+    });
+
+    // Log diagnostics so failures are debuggable
+    console.log('\n=== HUDDLE AUDIO DIAGNOSTICS ===');
+    console.log('Alice audio elements:', JSON.stringify(aliceConnStates, null, 2));
+    console.log('Bob audio elements:', JSON.stringify(bobConnStates, null, 2));
+    console.log('Alice huddle logs:\n', aliceLogs.join('\n'));
+    console.log('Bob huddle logs:\n', bobLogs.join('\n'));
+
+    // ── Assertions ────────────────────────────────────────────────────────────
+
+    // Each side should have received the other's audio track → one <audio> element
+    expect(aliceConnStates.length).toBeGreaterThanOrEqual(1);
+    expect(bobConnStates.length).toBeGreaterThanOrEqual(1);
+
+    // srcObject must be set (stream attached)
+    const aliceAudio = aliceConnStates[aliceConnStates.length - 1];
+    const bobAudio = bobConnStates[bobConnStates.length - 1];
+    expect(aliceAudio.hasSrcObject).toBe(true);
+    expect(bobAudio.hasSrcObject).toBe(true);
+
+    // Stream must be active
+    expect(aliceAudio.srcObjectActive).toBe(true);
+    expect(bobAudio.srcObjectActive).toBe(true);
+
+    // Audio element must NOT be paused (play() succeeded)
+    expect(aliceAudio.paused).toBe(false);
+    expect(bobAudio.paused).toBe(false);
+
+    // Audio tracks must be live and enabled
+    const aliceTrack = aliceAudio.tracks.find(t => t.kind === 'audio');
+    const bobTrack = bobAudio.tracks.find(t => t.kind === 'audio');
+    expect(aliceTrack?.readyState).toBe('live');
+    expect(bobTrack?.readyState).toBe('live');
+  });
+});

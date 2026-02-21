@@ -69,7 +69,9 @@ export class HuddleManager {
 
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    } catch {
+      console.log('[Huddle] startHuddle: got mic, tracks:', this.localStream.getTracks().map(t => `${t.kind}(enabled=${t.enabled},readyState=${t.readyState})`));
+    } catch (err) {
+      console.error('[Huddle] startHuddle: getUserMedia failed', err);
       this.callbacks.onError('Microphone access denied. Please allow microphone in browser settings.');
       return;
     }
@@ -100,7 +102,9 @@ export class HuddleManager {
 
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    } catch {
+      console.log('[Huddle] joinHuddle: got mic, tracks:', this.localStream.getTracks().map(t => `${t.kind}(enabled=${t.enabled},readyState=${t.readyState})`));
+    } catch (err) {
+      console.error('[Huddle] joinHuddle: getUserMedia failed', err);
       this.callbacks.onError('Microphone access denied. Please allow microphone in browser settings.');
       return;
     }
@@ -272,6 +276,7 @@ export class HuddleManager {
   }
 
   private async handleOffer(fromPeerId: string, data: any): Promise<void> {
+    console.log('[Huddle] handleOffer from', fromPeerId, 'state:', this.state, 'channel match:', this.activeChannelId === data.channelId);
     if (this.state !== 'in-call' || this.activeChannelId !== data.channelId) return;
 
     const pc = this.getOrCreatePeerConnection(fromPeerId);
@@ -288,8 +293,9 @@ export class HuddleManager {
   }
 
   private async handleAnswer(fromPeerId: string, data: any): Promise<void> {
+    console.log('[Huddle] handleAnswer from', fromPeerId);
     const pc = this.connections.get(fromPeerId);
-    if (!pc) return;
+    if (!pc) { console.warn('[Huddle] handleAnswer: no PC found for', fromPeerId); return; }
     await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
   }
 
@@ -311,12 +317,14 @@ export class HuddleManager {
   }
 
   private async initiateConnectionTo(peerId: string): Promise<void> {
-    if (!this.localStream) return;
+    if (!this.localStream) { console.warn('[Huddle] initiateConnectionTo: no localStream!'); return; }
 
+    console.log('[Huddle] initiateConnectionTo', peerId);
     const pc = this.getOrCreatePeerConnection(peerId);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
+    console.log('[Huddle] sending huddle-offer to', peerId, 'sdp type:', offer.type);
     this.callbacks.sendSignal(peerId, {
       type: 'huddle-offer',
       channelId: this.activeChannelId,
@@ -341,6 +349,7 @@ export class HuddleManager {
     }
 
     pc.ontrack = (event) => {
+      console.log('[Huddle] ontrack fired for peer', peerId, '— track kind:', event.track.kind, 'streams:', event.streams.length, 'track.readyState:', event.track.readyState);
       const remoteStream = event.streams[0] ?? new MediaStream([event.track]);
       let audioEl = this.audioElements.get(peerId);
       if (!audioEl) {
@@ -351,26 +360,40 @@ export class HuddleManager {
       }
       audioEl.srcObject = remoteStream;
       // Explicit play() required — autoplay alone is blocked by Chrome's autoplay policy
-      audioEl.play().catch(err => {
-        console.warn('[Huddle] Audio autoplay blocked, retrying on user gesture:', err);
-        // Queue a one-shot retry on the next user interaction
-        const retry = () => { audioEl!.play().catch(() => {}); document.removeEventListener('click', retry); };
-        document.addEventListener('click', retry, { once: true });
-      });
+      audioEl.play()
+        .then(() => console.log('[Huddle] audio play() succeeded for peer', peerId))
+        .catch(err => {
+          console.warn('[Huddle] Audio autoplay blocked, retrying on user gesture:', err);
+          // Queue a one-shot retry on the next user interaction
+          const retry = () => { audioEl!.play().catch(() => {}); document.removeEventListener('click', retry); };
+          document.addEventListener('click', retry, { once: true });
+        });
     };
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log('[Huddle] ICE candidate for', peerId, ':', event.candidate.type, event.candidate.protocol);
         this.callbacks.sendSignal(peerId, {
           type: 'huddle-ice',
           channelId: this.activeChannelId,
           candidate: event.candidate,
           fromPeerId: this.myPeerId,
         });
+      } else {
+        console.log('[Huddle] ICE gathering complete for', peerId);
       }
     };
 
+    pc.onicegatheringstatechange = () => {
+      console.log('[Huddle] ICE gathering state for', peerId, ':', pc.iceGatheringState);
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log('[Huddle] ICE connection state for', peerId, ':', pc.iceConnectionState);
+    };
+
     pc.onconnectionstatechange = () => {
+      console.log('[Huddle] connection state for', peerId, ':', pc.connectionState);
       if (pc.connectionState === 'connected') {
         const p = this.participants.get(peerId);
         if (!p) {
