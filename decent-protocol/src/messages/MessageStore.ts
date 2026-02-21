@@ -102,6 +102,27 @@ export class MessageStore {
   }
 
   /**
+   * Force-add a message without hash chain validation.
+   * ONLY use for restoring from trusted local storage.
+   * The hash chain was already verified when messages were first received.
+   */
+  forceAdd(message: PlaintextMessage): void {
+    if (!this.channels.has(message.channelId)) {
+      this.channels.set(message.channelId, []);
+    }
+    const msgs = this.channels.get(message.channelId)!;
+    // Avoid duplicates
+    if (msgs.some(m => m.id === message.id)) return;
+    // Insert in timestamp order
+    const insertIdx = msgs.findIndex(m => m.timestamp > message.timestamp);
+    if (insertIdx === -1) {
+      msgs.push(message);
+    } else {
+      msgs.splice(insertIdx, 0, message);
+    }
+  }
+
+  /**
    * Get messages for a channel
    */
   getMessages(channelId: string): PlaintextMessage[] {
