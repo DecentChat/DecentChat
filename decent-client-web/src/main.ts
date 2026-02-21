@@ -500,6 +500,12 @@ async function init(): Promise<void> {
         ctrl.notifications.setFocusedChannel(state.activeChannelId);
       }
     }
+
+    // Mark app as fully initialised — the controllerchange handler uses this
+    // to decide whether to reload (safe after init) or skip (mid-startup reload
+    // would cause a double-registration race with the PeerJS signaling server).
+    (window as any).__appInitialized = true;
+
   } catch (error) {
     console.error('[DecentChat] Initialization failed:', error);
     
@@ -668,9 +674,18 @@ if ('serviceWorker' in navigator) {
     });
   }
 
-  // When SW takes control (after SKIP_WAITING), reload so new assets are used
+  // When SW takes control (after SKIP_WAITING), reload so new assets are used.
+  // Guard: only reload once the app has fully initialised. If controllerchange
+  // fires during the startup sequence (e.g. waiting SW activates the moment
+  // the old tab closes during a dual-browser refresh after a deploy) we would
+  // reload mid-init, causing a second PeerJS registration with the same peer
+  // ID that results in an unavailable-id error and a stale yellow-dot state.
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    window.location.reload();
+    if ((window as any).__appInitialized) {
+      window.location.reload();
+    }
+    // If not yet initialized, the page is already loading the newest assets
+    // from the newly-activated SW — no reload needed.
   });
 
   navigator.serviceWorker.ready.then(reg => {

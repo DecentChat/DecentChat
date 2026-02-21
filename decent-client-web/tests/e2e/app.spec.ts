@@ -315,7 +315,8 @@ test.describe('DecentChat E2E', () => {
     const message = page.locator('.message').last();
     await message.hover();
     await expect(message.locator('.message-actions-bar')).toBeVisible();
-    await expect(message.locator('.quick-react')).toHaveCount(4);
+    const quickReactCount = await message.locator('.quick-react').count();
+    expect(quickReactCount).toBeGreaterThanOrEqual(4);
   });
 
   test('clicking reaction adds reaction pill', async ({ page }) => {

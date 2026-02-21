@@ -77,6 +77,14 @@ export interface Transport {
   getConnectedPeers(): string[];
 
   /**
+   * Return true if a connection attempt to this peer is currently in flight
+   * (i.e. connect() was called but has not resolved/rejected yet, OR a
+   * scheduled auto-reconnect timer is pending). Used by maintenance routines
+   * to avoid queuing duplicate attempts without relying on app-level state.
+   */
+  isConnectingToPeer(peerId: string): boolean;
+
+  /**
    * Tear down all connections and release resources.
    * After calling this, the transport instance must not be reused.
    */

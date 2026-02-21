@@ -1010,11 +1010,14 @@ export class ChatController {
   /** Start the peer maintenance sweep (every 60s) */
   startPeerMaintenance(): void {
     if (this._peerMaintenanceInterval) return;
-    // Run immediately, then every 60s
+    // Run immediately, then every 20 s.
+    // 20 s is fast enough to recover from a simultaneous dual-browser refresh
+    // (where both browsers finish loading within a few seconds of each other)
+    // without generating excessive signaling traffic.
     this._runPeerMaintenance();
     this._peerMaintenanceInterval = setInterval(() => {
       this._runPeerMaintenance();
-    }, 60_000);
+    }, 20_000);
   }
 
   // =========================================================================
@@ -1120,15 +1123,27 @@ export class ChatController {
     for (const member of ws.members) {
       if (member.peerId === this.state.myPeerId) continue;
       if (connectedPeers.has(member.peerId)) continue;
-      if (this.state.connectingPeers.has(member.peerId)) continue;
+      // Use the transport's own in-flight state (connectingTo + pending reconnect
+      // timers) instead of app-level connectingPeers, which can go stale when
+      // connect() returns immediately (dedup early-return, no catch fired).
+      if (this.transport.isConnectingToPeer(member.peerId)) {
+        this.state.connectingPeers.add(member.peerId); // keep UI in sync
+        continue;
+      }
 
       attempted++;
       this.state.connectingPeers.add(member.peerId);
       this.ui?.updateSidebar();
-      this.transport.connect(member.peerId).catch(() => {
-        this.state.connectingPeers.delete(member.peerId);
-        this.ui?.updateSidebar();
-      });
+      this.transport.connect(member.peerId)
+        .catch(() => { /* auto-reconnect handles retries */ })
+        .finally(() => {
+          // Always clean up — onConnect will remove from connectingPeers on success;
+          // on failure we need to clear it so the next maintenance cycle can retry.
+          if (!this.state.connectedPeers.has(member.peerId)) {
+            this.state.connectingPeers.delete(member.peerId);
+            this.ui?.updateSidebar();
+          }
+        });
     }
 
     if (attempted > 0) {

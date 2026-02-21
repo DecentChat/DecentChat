@@ -312,6 +312,15 @@ export class PeerTransport implements Transport {
       .map(([id]) => id);
   }
 
+  /**
+   * Returns true if connect() is currently in-flight OR an auto-reconnect
+   * timer is pending for this peer. Lets maintenance routines avoid
+   * double-scheduling without relying on app-level state.
+   */
+  isConnectingToPeer(peerId: string): boolean {
+    return this.connectingTo.has(peerId) || this._reconnectTimers.has(peerId);
+  }
+
   destroy(): void {
     this._reconnectTimers.forEach(t => clearTimeout(t));
     this._reconnectTimers.clear();
@@ -354,13 +363,9 @@ export class PeerTransport implements Transport {
     if (this._reconnectTimers.has(peerId)) return; // already scheduled
 
     const attempt = this._reconnectAttempts.get(peerId) ?? 0;
-    if (attempt >= this._reconnectDelays.length) {
-      // Give up after max attempts
-      this._reconnectAttempts.delete(peerId);
-      return;
-    }
-
-    const delay = this._reconnectDelays[attempt];
+    // After exhausting the back-off table, keep retrying at the longest
+    // delay (120 s) indefinitely — connectivity can return at any time.
+    const delay = this._reconnectDelays[Math.min(attempt, this._reconnectDelays.length - 1)];
     const timer = setTimeout(async () => {
       this._reconnectTimers.delete(peerId);
 
