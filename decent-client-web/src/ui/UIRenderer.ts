@@ -856,7 +856,7 @@ export class UIRenderer {
           <div class="message-reactions" id="reactions-${msg.id}"></div>
           <div class="message-actions-bar">
             ${QUICK_REACTIONS.map(e => `<button class="quick-react" data-msg-id="${msg.id}" data-emoji="${e}">${e}</button>`).join('')}
-            <button class="message-thread-btn" data-thread-id="${msg.id}" title="Reply in thread">💬</button>
+            <button class="message-thread-btn" data-thread-id="${msg.id}" title="Reply in thread">💬 Reply</button>
           </div>
         </div>
       `;
