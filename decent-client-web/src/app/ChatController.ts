@@ -21,6 +21,7 @@ import {
   verifyHandshakeKey,
   hashBlob,
   createAttachmentMeta,
+  generateImageThumbnail,
   CHUNK_SIZE,
   InviteURI,
   MemoryContactStore,
@@ -394,13 +395,12 @@ export class ChatController {
         }
 
         // --- T3.2: Gossip dedup — drop if we already processed this message via another path ---
-        // _originalMessageId is set by the gossip relay on relayed copies.
-        // We always check it first (fast path, before decryption).
+        // _originalMessageId is set on relayed copies; plain direct messages have none.
+        // IMPORTANT: only CHECK here — don't set.  The seen-set is seeded uniformly
+        // after successful processing (result.success block) so that the canonical msg.id
+        // is the key regardless of whether the copy was direct or relayed.
         const _gossipOrigId: string | undefined = (rawData as any)?._originalMessageId;
-        if (_gossipOrigId) {
-          if (this._gossipSeen.has(_gossipOrigId)) return; // already processed via gossip
-          this._gossipSeen.set(_gossipOrigId, Date.now());
-        }
+        if (_gossipOrigId && this._gossipSeen.has(_gossipOrigId)) return;
 
         // --- Encrypted chat message ---
         // Use persistentStore as the single source of truth for peer public keys.
@@ -1016,9 +1016,12 @@ export class ChatController {
     const hop = (envelope._gossipHop ?? 0) + 1;
     if (hop > ChatController.GOSSIP_TTL) return;
 
-    const ws = this.state.activeWorkspaceId
-      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-      : null;
+    // Fix #4: look up the workspace the message belongs to, not just the active one.
+    // A background workspace message should still be relayed correctly.
+    const workspaceId: string = (envelope.workspaceId as string | undefined)
+      ?? this.state.activeWorkspaceId
+      ?? '';
+    const ws = workspaceId ? this.workspaceManager.getWorkspace(workspaceId) : null;
     if (!ws) return;
 
     const connectedPeers = new Set(this.transport.getConnectedPeers());
@@ -1037,11 +1040,12 @@ export class ChatController {
           envelope.metadata,
         );
         // Attach relay metadata (unencrypted, alongside the encrypted payload)
+        (relayEnv as any).messageId = originalMsgId;             // canonical ID — ensures all peers store same msg.id for reaction sync
         (relayEnv as any).channelId = channelId;
-        (relayEnv as any).workspaceId = envelope.workspaceId ?? this.state.activeWorkspaceId;
+        (relayEnv as any).workspaceId = workspaceId;
         (relayEnv as any).threadId = envelope.threadId;
         (relayEnv as any).vectorClock = envelope.vectorClock;
-        (relayEnv as any)._originalMessageId = originalMsgId;    // dedup key
+        (relayEnv as any)._originalMessageId = originalMsgId;    // dedup key (checked before decryption)
         (relayEnv as any)._gossipOriginalSender = originalSenderId; // real author
         (relayEnv as any)._gossipHop = hop;
         this.transport.send(targetPeerId, relayEnv);
@@ -1653,9 +1657,6 @@ export class ChatController {
 
     if (file.type.startsWith('image/')) {
       try {
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore — generateImageThumbnail is not yet exported; gracefully skipped
-        const { generateImageThumbnail } = await import('decent-protocol');
         const result = await generateImageThumbnail(file);
         if (result) {
           thumbnail = result.data;

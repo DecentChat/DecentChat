@@ -44,7 +44,7 @@ export {
   CHUNK_SIZE, MAX_THUMBNAIL_SIZE,
   MediaStore, MemoryBlobStorage,
   ChunkedSender, ChunkedReceiver,
-  generateWaveform, encodeWaveform, decodeWaveform, waveformToSVG, getFileTypeIcon,
+  generateWaveform, encodeWaveform, decodeWaveform, waveformToSVG, getFileTypeIcon, generateImageThumbnail,
 } from './media';
 export type {
   AttachmentType, AttachmentStatus, AttachmentMeta, Attachment,

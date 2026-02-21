@@ -2755,3 +2755,114 @@ body:has(.landing-page) #app {
 }
 
 #sw-update-later:hover { opacity: 0.7; }
+
+/* === Lightbox === */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lightbox-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  cursor: pointer;
+}
+
+.lightbox-img {
+  position: relative;
+  max-width: 90vw;
+  max-height: 80vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+}
+
+.lightbox-close {
+  position: fixed;
+  top: 16px;
+  right: 20px;
+  z-index: 1001;
+  background: rgba(255, 255, 255, 0.15);
+  border: none;
+  color: #fff;
+  font-size: 20px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.lightbox-close:hover { background: rgba(255, 255, 255, 0.28); }
+
+.lightbox-name {
+  position: relative;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 13px;
+  text-align: center;
+  max-width: 80vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* === Attachment image - WhatsApp style === */
+.attachment-image {
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  max-width: 280px;
+}
+
+.attachment-image:hover {
+  background: transparent;
+}
+
+.attachment-image .attachment-thumbnail {
+  max-width: 280px;
+  max-height: 280px;
+  width: 100%;
+  object-fit: cover;
+  border-radius: 12px;
+  cursor: zoom-in;
+  display: block;
+  transition: opacity 0.1s;
+}
+
+.attachment-image .attachment-thumbnail:hover {
+  opacity: 0.92;
+}
+
+.attachment-image .attachment-info {
+  padding: 4px 2px;
+}
+
+/* === Drag & Drop overlay === */
+.messages-area { position: relative; }
+
+.messages-area.drag-active::after {
+  content: 'Drop files to send';
+  position: absolute;
+  inset: 0;
+  background: rgba(108, 92, 231, 0.12);
+  border: 2px dashed var(--primary);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--primary);
+  z-index: 10;
+  pointer-events: none;
+}

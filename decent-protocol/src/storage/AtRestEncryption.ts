@@ -63,9 +63,12 @@ export class AtRestEncryption {
       encoded,
     );
 
-    return ENC_PREFIX +
-      btoa(String.fromCharCode(...iv)) + ':' +
-      btoa(String.fromCharCode(...new Uint8Array(ciphertext)));
+    // Use Array.from + join instead of spread (...) to avoid call-stack overflow
+    // on large messages (spread pushes every byte onto the stack).
+    const toBase64 = (buf: Uint8Array) =>
+      btoa(Array.from(buf).map(b => String.fromCharCode(b)).join(''));
+
+    return ENC_PREFIX + toBase64(iv) + ':' + toBase64(new Uint8Array(ciphertext));
   }
 
   /**

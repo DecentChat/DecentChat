@@ -208,12 +208,23 @@ export class SeedPhraseManager {
    *   -> export public key as SPKI -> SHA-256 -> first 9 bytes -> hex (18 chars)
    */
   async derivePeerId(seedPhrase: string): Promise<string> {
+    const { peerId } = await this.deriveAll(seedPhrase);
+    return peerId;
+  }
+
+  /**
+   * Derive both the peer ID and full key material in a single PBKDF2 call.
+   * Use this when you need both (e.g., startup — peer ID + at-rest encryption key).
+   * Avoids running PBKDF2 twice.
+   */
+  async deriveAll(seedPhrase: string): Promise<{ peerId: string; keys: DerivedKeys }> {
     const keys = await this.deriveKeys(seedPhrase);
     const spki = await crypto.subtle.exportKey('spki', keys.ecdhKeyPair.publicKey);
     const hash = await crypto.subtle.digest('SHA-256', spki);
-    return Array.from(new Uint8Array(hash).slice(0, 9))
+    const peerId = Array.from(new Uint8Array(hash).slice(0, 9))
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
+    return { peerId, keys };
   }
 
   // === HD Key Derivation ===

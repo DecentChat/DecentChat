@@ -101,6 +101,19 @@ describe('AtRestEncryption — encrypt()', () => {
     expect(result.startsWith('enc:v1:')).toBe(true);
   });
 
+  test('encrypts very large content without stack overflow (btoa spread fix)', async () => {
+    // 200KB of text — would overflow call stack with String.fromCharCode(...spread)
+    const large = 'x'.repeat(200_000);
+    let threw = false;
+    let result = '';
+    try { result = await enc.encrypt(large); } catch { threw = true; }
+    expect(threw).toBe(false);
+    expect(result.startsWith('enc:v1:')).toBe(true);
+    // Verify round-trip
+    const decrypted = await enc.decrypt(result);
+    expect(decrypted).toBe(large);
+  });
+
   test('encrypts unicode content', async () => {
     const unicode = '🔐 šifrovanie správ ❤️ 中文测试';
     const result = await enc.encrypt(unicode);

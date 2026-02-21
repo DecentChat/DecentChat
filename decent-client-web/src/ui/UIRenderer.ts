@@ -441,6 +441,12 @@ export class UIRenderer {
             </div>
           </div>
         </div>
+        <div class="lightbox" id="lightbox" style="display:none">
+          <div class="lightbox-backdrop" id="lightbox-backdrop"></div>
+          <button class="lightbox-close" id="lightbox-close">✕</button>
+          <img class="lightbox-img" id="lightbox-img" src="" alt="" />
+          <div class="lightbox-name" id="lightbox-name"></div>
+        </div>
       </div>
     `;
 
@@ -1251,12 +1257,65 @@ export class UIRenderer {
 
     document.getElementById('thread-close')?.addEventListener('click', () => this.closeThread());
 
+    // Paste images from clipboard
+    document.addEventListener('paste', (e) => {
+      const items = Array.from((e as ClipboardEvent).clipboardData?.items || []);
+      const imageItems = items.filter(item => item.type.startsWith('image/'));
+      if (imageItems.length > 0 && this.state.activeChannelId) {
+        e.preventDefault();
+        for (const item of imageItems) {
+          const file = item.getAsFile();
+          if (file) this.callbacks.sendAttachment(file);
+        }
+      }
+    });
+
+    // Drag & drop file support
+    const messagesArea = document.querySelector('.messages-area') as HTMLElement;
+    if (messagesArea) {
+      messagesArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        messagesArea.classList.add('drag-active');
+      });
+      messagesArea.addEventListener('dragleave', (e) => {
+        if (!messagesArea.contains(e.relatedTarget as Node)) {
+          messagesArea.classList.remove('drag-active');
+        }
+      });
+      messagesArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        messagesArea.classList.remove('drag-active');
+        const files = Array.from(e.dataTransfer?.files || []);
+        if (this.state.activeChannelId) {
+          for (const file of files) {
+            this.callbacks.sendAttachment(file);
+          }
+        }
+      });
+    }
+
+    // Lightbox close events
+    document.getElementById('lightbox-close')?.addEventListener('click', () => this.closeLightbox());
+    document.getElementById('lightbox-backdrop')?.addEventListener('click', () => this.closeLightbox());
+
+    // Thumbnail click -> open lightbox (event delegation)
+    const messagesList = document.getElementById('messages-list');
+    messagesList?.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      if (target.classList.contains('attachment-thumbnail')) {
+        const img = target as HTMLImageElement;
+        const name = img.getAttribute('data-attachment-name') || '';
+        this.openLightbox(img.src, name);
+      }
+    });
+
     this.setupThreadResize();
 
     // Global keyboard shortcuts
     document.addEventListener('keydown', (e) => {
-      // Escape: close thread panel, close modals, remove autocomplete
+      // Escape: close lightbox, thread panel, modals, autocomplete
       if (e.key === 'Escape') {
+        if (document.getElementById('lightbox')?.style.display !== 'none') { this.closeLightbox(); return; }
         document.getElementById('command-autocomplete')?.remove();
         document.querySelector('.modal-overlay')?.remove();
         if (this.state.threadOpen) this.closeThread();
@@ -2018,6 +2077,22 @@ export class UIRenderer {
     });
   }
 
+  private openLightbox(src: string, name: string): void {
+    const lb = document.getElementById('lightbox')!;
+    const img = document.getElementById('lightbox-img') as HTMLImageElement;
+    const nameEl = document.getElementById('lightbox-name')!;
+    img.src = src;
+    nameEl.textContent = name;
+    lb.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+  }
+
+  private closeLightbox(): void {
+    const lb = document.getElementById('lightbox')!;
+    lb.style.display = 'none';
+    document.body.style.overflow = '';
+  }
+
   /** Render attachment previews for a message */
   private renderAttachments(attachments?: any[]): string {
     if (!attachments || attachments.length === 0) return '';
@@ -2028,7 +2103,7 @@ export class UIRenderer {
       if (att.type === 'image' && att.thumbnail) {
         return `
           <div class="attachment attachment-image" data-attachment-id="${att.id}">
-            <img src="data:image/jpeg;base64,${att.thumbnail}" alt="${this.escapeHtml(att.name)}" class="attachment-thumbnail" />
+            <img src="data:image/jpeg;base64,${att.thumbnail}" alt="${this.escapeHtml(att.name)}" class="attachment-thumbnail" data-attachment-name="${this.escapeHtml(att.name)}" />
             <div class="attachment-info">
               <span class="attachment-name">${this.escapeHtml(att.name)}</span>
               <span class="attachment-size">${sizeStr}</span>

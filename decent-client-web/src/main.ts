@@ -338,12 +338,13 @@ async function init(): Promise<void> {
       try {
         const { SeedPhraseManager, AtRestEncryption } = await import('decent-protocol');
         const seedPhraseManager = new SeedPhraseManager();
-        derivedPeerId = await seedPhraseManager.derivePeerId(seedPhrase);
+        // Single PBKDF2 call — returns both peer ID and key material (fix #3)
+        const { peerId, keys } = await seedPhraseManager.deriveAll(seedPhrase);
+        derivedPeerId = peerId;
 
-        // T3.5: Derive at-rest encryption key from master seed
-        const derivedKeys = await seedPhraseManager.deriveKeys(seedPhrase);
+        // T3.5: Derive at-rest encryption key from master seed (reuses same PBKDF2 result)
         const atRest = new AtRestEncryption();
-        await atRest.init(derivedKeys.masterSeed);
+        await atRest.init(keys.masterSeed);
         ctrl.persistentStore.setAtRestEncryption(atRest);
         console.log('[DecentChat] At-rest encryption enabled');
       } catch (err) {
