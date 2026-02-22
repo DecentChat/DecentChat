@@ -9,7 +9,7 @@ import type {
   WireMessage,
 } from "./types.js";
 
-export async function startDecentChatBridge(ctx: {
+type BridgeContext = {
   account: ResolvedDecentChatAccount;
   accountId: string;
   log?: {
@@ -20,7 +20,80 @@ export async function startDecentChatBridge(ctx: {
   };
   setStatus: (patch: Record<string, unknown>) => void;
   abortSignal?: AbortSignal;
-}): Promise<void> {
+};
+
+export async function startDecentChatBridge(ctx: BridgeContext): Promise<void> {
+  if (ctx.account.mode === "peer") {
+    if (!ctx.account.seedPhrase) {
+      ctx.log?.warn?.("[decentchat] peer mode requested without seedPhrase; falling back to bridge mode");
+    } else {
+      try {
+        return await startNodePeerMode(ctx);
+      } catch (err) {
+        ctx.log?.warn?.(`[decentchat] peer mode failed; falling back to bridge mode: ${String(err)}`);
+      }
+    }
+  }
+
+  return startBridgeMode(ctx);
+}
+
+async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
+  const { NodeXenaPeer } = await import("./peer/NodeXenaPeer.js");
+  const core = getDecentChatRuntime();
+
+  let xenaPeer: InstanceType<typeof NodeXenaPeer>;
+
+  xenaPeer = new NodeXenaPeer({
+    account: ctx.account,
+    onIncomingMessage: async (params) => {
+      await processInboundMessage(
+        {
+          messageId: params.messageId,
+          channelId: params.channelId,
+          workspaceId: params.workspaceId,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          content: params.content,
+          chatType: params.chatType,
+          timestamp: params.timestamp,
+        },
+        ctx,
+        core,
+        async (replyText) => {
+          await xenaPeer.sendMessage(params.channelId, params.workspaceId, replyText);
+        },
+      );
+    },
+    onReply: () => {},
+    log: ctx.log,
+  });
+
+  await xenaPeer.start();
+  ctx.setStatus({
+    running: true,
+    mode: "peer",
+    peerId: xenaPeer.peerId,
+    lastError: null,
+  });
+
+  return new Promise<void>((resolve) => {
+    const shutdown = () => {
+      xenaPeer.destroy();
+      ctx.setStatus({ running: false, mode: "peer" });
+      resolve();
+    };
+
+    if (ctx.abortSignal?.aborted) {
+      shutdown();
+      return;
+    }
+
+    ctx.abortSignal?.addEventListener("abort", shutdown);
+  });
+}
+
+async function startBridgeMode(ctx: BridgeContext): Promise<void> {
   const core = getDecentChatRuntime();
   const port = ctx.account.port ?? 4242;
   const secret = ctx.account.secret;
@@ -30,14 +103,12 @@ export async function startDecentChatBridge(ctx: {
   const httpServer = createServer();
   const wss = new WebSocketServer({ noServer: true });
 
-  // Handle WebSocket upgrades manually so error events stay on httpServer
   httpServer.on("upgrade", (req, socket, head) => {
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);
     });
   });
 
-  // Prevent unhandled 'error' events on either emitter from crashing the process
   httpServer.on("error", (err) => {
     ctx.log?.error?.(`[decentchat] server error: ${err.message}`);
   });
@@ -45,7 +116,6 @@ export async function startDecentChatBridge(ctx: {
     ctx.log?.error?.(`[decentchat] wss error: ${err.message}`);
   });
 
-  // Wait for the port to bind (or fail)
   await new Promise<void>((resolve, reject) => {
     const onError = (err: Error) => {
       httpServer.removeListener("listening", onListening);
@@ -61,7 +131,7 @@ export async function startDecentChatBridge(ctx: {
   });
 
   ctx.log?.info(`[decentchat] WebSocket server listening on port ${port}`);
-  ctx.setStatus({ running: true, port, lastError: null });
+  ctx.setStatus({ running: true, mode: "bridge", port, lastError: null });
 
   wss.on("connection", (ws) => {
     authenticated.set(ws, !secret);
@@ -112,8 +182,6 @@ export async function startDecentChatBridge(ctx: {
     });
   });
 
-  // Keep the promise pending until the gateway signals us to stop.
-  // Resolving = "channel exited" which triggers auto-restart.
   return new Promise<void>((resolve) => {
     const shutdown = () => {
       for (const client of wss.clients) {
@@ -121,7 +189,7 @@ export async function startDecentChatBridge(ctx: {
       }
       wss.close();
       httpServer.close();
-      ctx.setStatus({ running: false });
+      ctx.setStatus({ running: false, mode: "bridge" });
       ctx.log?.info("[decentchat] WebSocket server stopped");
       resolve();
     };
@@ -136,24 +204,54 @@ async function handleInboundMessage(
   ctx: { account: ResolvedDecentChatAccount; accountId: string; log?: any },
   core: ReturnType<typeof getDecentChatRuntime>,
 ): Promise<void> {
-  const { messageId, channelId, senderId, senderName, content, chatType, timestamp } = msg;
-  const rawBody = content?.trim() ?? "";
+  send(ws, { type: "typing", channelId: msg.channelId, messageId: msg.messageId });
+
+  await processInboundMessage(msg, ctx, core, async (text) => {
+    send(ws, {
+      type: "reply",
+      inReplyToId: msg.messageId,
+      channelId: msg.channelId,
+      content: text,
+      timestamp: Date.now(),
+    });
+  }, (reason) => {
+    send(ws, { type: "error", inReplyToId: msg.messageId, reason });
+  });
+}
+
+async function processInboundMessage(
+  msg: {
+    messageId: string;
+    channelId: string;
+    workspaceId: string;
+    senderId: string;
+    senderName: string;
+    content: string;
+    chatType: "channel" | "direct";
+    timestamp: number;
+  },
+  ctx: { accountId: string; log?: any },
+  core: ReturnType<typeof getDecentChatRuntime>,
+  deliver: (text: string) => Promise<void>,
+  onDeliverError?: (reason: string) => void,
+): Promise<void> {
+  const rawBody = msg.content?.trim() ?? "";
   if (!rawBody) {
     return;
   }
 
   const cfg = core.config.loadConfig() as OpenClawConfig;
   const channel = "decentchat";
-  const peerId = chatType === "direct" ? senderId : channelId;
+  const peerId = msg.chatType === "direct" ? msg.senderId : msg.channelId;
 
   const route = core.channel.routing.resolveAgentRoute({
     cfg,
     channel,
     accountId: ctx.accountId,
-    peer: { kind: chatType === "direct" ? "direct" : "group", id: peerId },
+    peer: { kind: msg.chatType === "direct" ? "direct" : "group", id: peerId },
   });
 
-  const fromLabel = chatType === "direct" ? senderName : `${senderName} in ${channelId}`;
+  const fromLabel = msg.chatType === "direct" ? msg.senderName : `${msg.senderName} in ${msg.channelId}`;
   const storePath = core.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId });
   const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
   const previousTimestamp = core.channel.session.readSessionUpdatedAt({
@@ -164,7 +262,7 @@ async function handleInboundMessage(
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "DecentChat",
     from: fromLabel,
-    timestamp,
+    timestamp: msg.timestamp,
     previousTimestamp,
     envelope: envelopeOptions,
     body: rawBody,
@@ -174,21 +272,21 @@ async function handleInboundMessage(
     Body: body,
     RawBody: rawBody,
     CommandBody: rawBody,
-    From: chatType === "direct" ? `decentchat:${senderId}` : `decentchat:channel:${channelId}`,
+    From: msg.chatType === "direct" ? `decentchat:${msg.senderId}` : `decentchat:channel:${msg.channelId}`,
     To: "decentchat:bot",
     SessionKey: route.sessionKey,
     AccountId: route.accountId,
-    ChatType: chatType === "direct" ? "direct" : "group",
+    ChatType: msg.chatType === "direct" ? "direct" : "group",
     ConversationLabel: fromLabel,
-    SenderName: senderName,
-    SenderId: senderId,
-    GroupSubject: chatType === "channel" ? channelId : undefined,
+    SenderName: msg.senderName,
+    SenderId: msg.senderId,
+    GroupSubject: msg.chatType === "channel" ? msg.channelId : undefined,
     Provider: channel,
     Surface: channel,
-    MessageSid: messageId,
-    Timestamp: timestamp,
+    MessageSid: msg.messageId,
+    Timestamp: msg.timestamp,
     OriginatingChannel: channel,
-    OriginatingTo: chatType === "direct" ? `decentchat:${senderId}` : `decentchat:channel:${channelId}`,
+    OriginatingTo: msg.chatType === "direct" ? `decentchat:${msg.senderId}` : `decentchat:channel:${msg.channelId}`,
   });
 
   await core.channel.session.recordInboundSession({
@@ -197,8 +295,6 @@ async function handleInboundMessage(
     ctx: ctxPayload,
     onRecordError: (err) => ctx.log?.error?.(`[decentchat] session record error: ${String(err)}`),
   });
-
-  send(ws, { type: "typing", channelId, messageId });
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
@@ -217,17 +313,12 @@ async function handleInboundMessage(
         if (!text) {
           return;
         }
-        send(ws, {
-          type: "reply",
-          inReplyToId: messageId,
-          channelId,
-          content: text,
-          timestamp: Date.now(),
-        });
+        await deliver(text);
       },
       onError: (err, info) => {
-        ctx.log?.error?.(`[decentchat] ${info.kind} reply error: ${String(err)}`);
-        send(ws, { type: "error", inReplyToId: messageId, reason: String(err) });
+        const reason = String(err);
+        ctx.log?.error?.(`[decentchat] ${info.kind} reply error: ${reason}`);
+        onDeliverError?.(reason);
       },
     },
     replyOptions: { onModelSelected },

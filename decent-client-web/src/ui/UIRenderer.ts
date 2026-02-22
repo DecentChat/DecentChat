@@ -31,7 +31,7 @@ export interface UICallbacks {
   /** Create a new workspace and return it */
   createWorkspace: (name: string, alias: string) => import('decent-protocol').Workspace;
   /** Initiate join flow (connect to a peer with invite code) */
-  joinWorkspace: (code: string, alias: string, peerId: string, inviteData?: import('decent-protocol').InviteData) => void;
+  joinWorkspace: (code: string, alias: string, peerId: string, inviteData?: import('decent-protocol').InviteData) => Promise<void>;
   /** Create a channel inside the active workspace */
   createChannel: (name: string) => { success: boolean; channel?: import('decent-protocol').Channel; error?: string };
   /** Open a DM channel */

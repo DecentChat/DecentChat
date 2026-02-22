@@ -760,11 +760,15 @@ export class ChatController {
     // If our active workspace's invite code matches the remote one, or we have only 1 workspace
     if (!localWs) return;
 
+    // Tracks the stale workspace ID to delete AFTER the new one is safely persisted.
+    let _staleId: string | null = null;
+
     // Remap workspace ID so both peers agree on the same ID.
     // Deterministic rule: the lexicographically smaller ID wins.
     // Both peers see both IDs and converge on the same canonical one.
     if (remoteWorkspaceId && localWs.id !== remoteWorkspaceId && remoteWorkspaceId < localWs.id) {
       const oldId = localWs.id;
+      _staleId = oldId;
       console.log(`[Sync] Remapping workspace ID: ${oldId.slice(0, 8)} → ${remoteWorkspaceId.slice(0, 8)}`);
 
       // Remove old entry and re-insert with canonical ID
@@ -786,8 +790,7 @@ export class ChatController {
         this.state.activeWorkspaceId = remoteWorkspaceId;
       }
 
-      // Delete old persisted workspace and persist with new ID
-      this.persistentStore.deleteWorkspace(oldId).catch(() => {});
+      // Old entry will be deleted AFTER new ID is safely persisted (see below).
     }
 
     // Update workspace name if it was using the invite code as name
@@ -879,8 +882,12 @@ export class ChatController {
       }
     }
 
-    // Persist and re-render
+    // Persist with new ID first, then delete the stale entry — guarantees the DB
+    // never has a window where the workspace exists under neither ID.
     await this.persistWorkspace(localWs.id);
+    if (_staleId) {
+      await this.persistentStore.deleteWorkspace(_staleId).catch(() => {});
+    }
     this.ui?.renderApp();
     console.log(`[Sync] Workspace state synced from ${peerId.slice(0, 8)}`);
   }
@@ -1514,7 +1521,7 @@ export class ChatController {
     return ws;
   }
 
-  joinWorkspace(code: string, alias: string, peerId: string, inviteData?: InviteData): void {
+  async joinWorkspace(code: string, alias: string, peerId: string, inviteData?: InviteData): Promise<void> {
     console.log('[DecentChat] joinWorkspace called:', { code, alias, peerId, hasUI: !!this.ui });
     // Create the workspace locally for the joining user
     const ws = this.workspaceManager.createWorkspace(
@@ -1564,8 +1571,8 @@ export class ChatController {
     this.state.activeWorkspaceId = ws.id;
     this.state.activeChannelId = ws.channels[0]?.id || null;
 
-    // Persist the workspace
-    this.persistWorkspace(ws.id);
+    // Persist BEFORE rendering — if this fails the workspace would be lost on refresh
+    await this.persistWorkspace(ws.id);
 
     // Render the app UI
     this.ui?.renderApp();

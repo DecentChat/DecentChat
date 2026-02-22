@@ -3,6 +3,12 @@ export type DecentChatChannelConfig = {
   secret?: string;
   enabled?: boolean;
   dmPolicy?: string;
+  seedPhrase?: string;
+  signalingServer?: string;
+  invites?: string[];
+  alias?: string;
+  dataDir?: string;
+  mode?: "bridge" | "peer";
   channels?: Record<string, { requireMention?: boolean }>;
 };
 
@@ -13,6 +19,12 @@ export type ResolvedDecentChatAccount = {
   enabled: boolean;
   dmPolicy: string;
   configured: boolean;
+  seedPhrase?: string;
+  signalingServer?: string;
+  invites: string[];
+  alias: string;
+  dataDir?: string;
+  mode: "bridge" | "peer";
 };
 
 export type WireMessage = {
