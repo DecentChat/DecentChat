@@ -433,11 +433,17 @@ export class SeedPhraseManager {
    * but without the optional public key component (which Web Crypto can recompute)
    */
   private buildP256Pkcs8(d: Uint8Array): ArrayBuffer {
-    // Build ECPrivateKey (RFC 5915) without optional public key
-    // SEQUENCE { INTEGER 1, OCTET STRING <d> }
+    // Build ECPrivateKey (RFC 5915):
+    // SEQUENCE { INTEGER 1, OCTET STRING <d>, [0] OID P-256 }
+    // The [0] parameters field is optional per RFC 5915 but Safari WebCrypto
+    // requires it — Chrome is lenient, Safari/iOS is not.
     const ecVersion = new Uint8Array([0x02, 0x01, 0x01]);
     const dOctet = this.derOctetString(d);
-    const ecPrivKey = this.derSequence([ecVersion, dOctet]);
+    // P-256 OID: 1.2.840.10045.3.1.7
+    const p256OidValue = new Uint8Array([0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]);
+    // [0] EXPLICIT context tag wrapping the OID
+    const params0 = new Uint8Array([0xa0, p256OidValue.length, ...p256OidValue]);
+    const ecPrivKey = this.derSequence([ecVersion, dOctet, params0]);
 
     // AlgorithmIdentifier: SEQUENCE { OID ecPublicKey, OID P-256 }
     const ecPubOid = new Uint8Array([0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01]);
