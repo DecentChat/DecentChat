@@ -9,7 +9,9 @@
  * multiple signaling servers, only one connection is kept.
  */
 
-import Peer from 'peerjs';
+// Use named import for Node.js/jiti CJS interop compatibility
+// (default import `import Peer from 'peerjs'` breaks under jiti's ESM transform)
+import { Peer } from 'peerjs';
 import type { DataConnection } from 'peerjs';
 import type { Transport } from 'decent-protocol';
 

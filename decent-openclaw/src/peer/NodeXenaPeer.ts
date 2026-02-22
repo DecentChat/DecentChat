@@ -2,8 +2,8 @@
  * NodeXenaPeer — Xena as a permanent DecentChat P2P peer.
  */
 
-import { installWebRTCPolyfill } from './polyfill.js';
-installWebRTCPolyfill();
+// MUST be first import — installs RTCPeerConnection globals before PeerJS loads
+import './polyfill.js';
 
 import {
   CryptoManager,

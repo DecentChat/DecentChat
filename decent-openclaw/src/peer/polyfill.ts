@@ -1,27 +1,43 @@
 /**
  * polyfill.ts — install node-datachannel globals so PeerJS works in Node.js
- * MUST be imported before any peerjs or decent-transport-webrtc import.
+ *
+ * This file SELF-INSTALLS as a side effect when imported.
+ * Import it first so RTCPeerConnection is set before PeerJS loads.
+ *
+ * Under jiti (OpenClaw's TypeScript loader), all static imports are hoisted
+ * to require() calls in order — so the FIRST import wins. Keep this as the
+ * very first import in NodeXenaPeer.ts.
  */
-export function installWebRTCPolyfill(): void {
-  if (typeof RTCPeerConnection !== 'undefined') return;
 
+if (typeof RTCPeerConnection === 'undefined') {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const dc = require('node-datachannel/polyfill');
+    const dc = require('node-datachannel/polyfill') as Record<string, unknown>;
 
-    if (dc.RTCPeerConnection) {
-      (globalThis as any).RTCPeerConnection = dc.RTCPeerConnection;
-    }
-    if (dc.RTCIceCandidate) {
-      (globalThis as any).RTCIceCandidate = dc.RTCIceCandidate;
-    }
-    if (dc.RTCSessionDescription) {
-      (globalThis as any).RTCSessionDescription = dc.RTCSessionDescription;
-    }
-    if (dc.MediaStream) {
-      (globalThis as any).MediaStream = dc.MediaStream;
+    const globals: Record<string, unknown> = {
+      RTCPeerConnection: dc['RTCPeerConnection'],
+      RTCIceCandidate: dc['RTCIceCandidate'],
+      RTCSessionDescription: dc['RTCSessionDescription'],
+      RTCDataChannel: dc['RTCDataChannel'],
+      RTCDataChannelEvent: dc['RTCDataChannelEvent'],
+      RTCIceTransport: dc['RTCIceTransport'],
+      RTCPeerConnectionIceEvent: dc['RTCPeerConnectionIceEvent'],
+      MediaStream: dc['MediaStream'],
+    };
+
+    for (const [key, val] of Object.entries(globals)) {
+      if (val !== undefined) {
+        (globalThis as Record<string, unknown>)[key] = val;
+      }
     }
   } catch (e) {
-    throw new Error(`node-datachannel not available. Run: bun add node-datachannel\nOriginal: ${e}`);
+    throw new Error(
+      `node-datachannel not available. Run: npm install node-datachannel\nOriginal: ${e}`,
+    );
   }
+}
+
+// Legacy export for backward compatibility
+export function installWebRTCPolyfill(): void {
+  // No-op: installation happens at module load time (side effect above)
 }
