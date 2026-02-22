@@ -56,7 +56,7 @@ const PROTOCOL_VERSION = 2;
 
 const DEV_SIGNAL_PORT = Number((import.meta as any).env?.VITE_SIGNAL_PORT || 9000);
 const DEV_SIGNAL_WS = `ws://localhost:${DEV_SIGNAL_PORT}`;
-const PROD_SIGNAL_WS = 'wss://0.peerjs.com/peerjs'; // Free PeerJS cloud service (path must be /peerjs)
+const PROD_SIGNAL_WS = 'wss://0.peerjs.com/'; // Free PeerJS cloud service (root path → PeerJS appends /peerjs)
 
 // Get the appropriate signaling server based on environment
 function getDefaultSignalingServer(): string {

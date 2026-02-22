@@ -695,7 +695,7 @@ export class PeerTransport implements Transport {
       const peerConfig: any = {
         host: url.hostname,
         port: url.port ? parseInt(url.port, 10) : url.protocol === 'https:' || url.protocol === 'wss:' ? 443 : 80,
-        path: url.pathname === '/' ? '/peerjs' : url.pathname,
+        path: url.pathname,  // PeerJS appends /peerjs internally; pass as-is
         secure: url.protocol === 'https:' || url.protocol === 'wss:',
         debug: this.config.debug ?? 1,
         config: { iceServers: this._resolveIceServers(isLocalhost) },
