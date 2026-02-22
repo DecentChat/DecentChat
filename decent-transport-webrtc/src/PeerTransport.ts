@@ -842,6 +842,8 @@ export class PeerTransport implements Transport {
     return new Promise((resolve, reject) => {
       const conn = instance.peer.connect(peerId, { reliable: true });
       const timeout = setTimeout(() => {
+        // Timed out handshaking this DataConnection — close to avoid stale half-open state.
+        conn.close();
         reject(new Error(`Connection to ${peerId} via ${instance.label} timed out`));
       }, 10000);
 
@@ -931,7 +933,20 @@ export class PeerTransport implements Transport {
     });
 
     conn.on('error', (err) => {
-      active.status = 'failed';
+      // Error does not always guarantee a subsequent 'close' event in all browsers.
+      // Clean up active mapping here so future connect attempts are not blocked by stale entries.
+      const current = this.connections.get(peerId);
+      if (current?.conn === conn) {
+        const wasConnected = current.status === 'connected';
+        this._stopHeartbeat(peerId);
+        current.status = 'failed';
+        this.connections.delete(peerId);
+        if (wasConnected) {
+          this.onDisconnect?.(peerId);
+        }
+        this._scheduleReconnect(peerId);
+      }
+
       this.onError?.(err);
     });
   }

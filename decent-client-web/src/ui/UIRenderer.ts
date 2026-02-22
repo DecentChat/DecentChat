@@ -24,8 +24,8 @@ import { renderMarkdown } from './renderMarkdown';
 export interface UICallbacks {
   /** Send a chat message (optionally in a thread) */
   sendMessage: (content: string, threadId?: string) => Promise<void>;
-  /** Send a file attachment with optional text */
-  sendAttachment: (file: File, text?: string) => Promise<void>;
+  /** Send a file attachment with optional text/thread */
+  sendAttachment: (file: File, text?: string, threadId?: string) => Promise<void>;
   /** Initiate a WebRTC connection to a peer */
   connectPeer: (peerId: string) => void;
   /** Create a new workspace and return it */
@@ -1299,9 +1299,18 @@ export class UIRenderer {
       const imageItems = items.filter(item => item.type.startsWith('image/'));
       if (imageItems.length > 0 && this.state.activeChannelId) {
         e.preventDefault();
+
+        // Route paste to thread when user is pasting from thread context.
+        const pasteTarget = e.target as HTMLElement | null;
+        const isThreadInputFocused = document.activeElement === threadInput;
+        const isThreadTarget = !!pasteTarget?.closest?.('#thread-panel');
+        const targetThreadId = (isThreadInputFocused || isThreadTarget)
+          ? (this.state.activeThreadId || undefined)
+          : undefined;
+
         for (const item of imageItems) {
           const file = item.getAsFile();
-          if (file) this.callbacks.sendAttachment(file);
+          if (file) this.callbacks.sendAttachment(file, undefined, targetThreadId);
         }
       }
     });

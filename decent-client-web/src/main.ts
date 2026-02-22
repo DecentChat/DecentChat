@@ -149,7 +149,7 @@ async function init(): Promise<void> {
       }
       return ctrl.sendMessage(content, threadId);
     },
-    sendAttachment: (file, text) => ctrl.sendAttachment(file, text),
+    sendAttachment: (file, text, threadId) => ctrl.sendAttachment(file, text, threadId),
     connectPeer: (peerId) => ctrl.connectPeer(peerId),
     createWorkspace: (name, alias) => ctrl.createWorkspace(name, alias),
     joinWorkspace: (code, alias, peerId, inviteData) => ctrl.joinWorkspace(code, alias, peerId, inviteData),

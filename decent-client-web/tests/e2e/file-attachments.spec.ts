@@ -35,8 +35,8 @@ async function dropFileOnMessagesArea(page: Page, name: string, base64: string, 
 }
 
 /** Dispatch a synthetic paste event with an image File */
-async function pasteImageFile(page: Page) {
-  await page.evaluate(async (base64: string) => {
+async function pasteImageFile(page: Page, targetSelector?: string) {
+  await page.evaluate(async ({ base64, targetSelector }) => {
     const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -45,9 +45,28 @@ async function pasteImageFile(page: Page) {
     const dt = new DataTransfer();
     dt.items.add(file);
 
-    document.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: dt as unknown as DataTransfer }));
-  }, TINY_PNG_B64);
+    const target = targetSelector
+      ? (document.querySelector(targetSelector) as HTMLElement | null)
+      : null;
+
+    if (target) {
+      target.focus();
+      target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: dt as unknown as DataTransfer }));
+    } else {
+      document.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: dt as unknown as DataTransfer }));
+    }
+  }, { base64: TINY_PNG_B64, targetSelector });
   await page.waitForSelector('.attachment', { timeout: 8000 });
+}
+
+/** Open thread panel for message containing text */
+async function openThreadFor(page: Page, messageText: string): Promise<void> {
+  const msgEl = page.locator('.message-content', { hasText: messageText }).first();
+  await msgEl.hover();
+  const msgDiv = msgEl.locator('..').locator('..');
+  const threadBtn = msgDiv.locator('.message-thread-btn').first();
+  await threadBtn.click();
+  await page.waitForSelector('#thread-panel.open, #thread-panel:not(.hidden)', { timeout: 5000 });
 }
 
 // ─── Setup ─────────────────────────────────────────────────────────────────
@@ -251,6 +270,26 @@ test.describe('File Attachments', () => {
     await pasteImageFile(page);
     // Should have a thumbnail since it's an image
     await expect(page.locator('.attachment-thumbnail')).toBeVisible({ timeout: 6000 });
+  });
+
+  test('pasting image with thread input focused sends attachment into thread (not main channel)', async ({ page }) => {
+    // Create parent message in main channel
+    await page.locator('#compose-input').fill('parent message for paste-thread test');
+    await page.locator('#compose-input').press('Enter');
+    await expect(page.locator('.message-content', { hasText: 'parent message for paste-thread test' }).first()).toBeVisible();
+
+    // Open thread and focus thread input
+    await openThreadFor(page, 'parent message for paste-thread test');
+    await expect(page.locator('#thread-input')).toBeVisible();
+
+    // Paste image while thread input is active
+    await pasteImageFile(page, '#thread-input');
+
+    // Attachment should be in thread panel
+    await expect(page.locator('#thread-messages .attachment-name', { hasText: 'pasted-image.png' })).toBeVisible({ timeout: 8000 });
+
+    // Main channel should NOT contain pasted attachment message
+    await expect(page.locator('#messages-list .attachment-name', { hasText: 'pasted-image.png' })).toHaveCount(0);
   });
 
   // ─── Persistence ────────────────────────────────────────────────────────
