@@ -151,7 +151,30 @@ export class NodeXenaPeer {
     this.opts.log?.info(`[xena-peer] online as ${this.myPeerId}, signaling: ${allServers.join(', ')}`);
 
     for (const inviteUri of this.opts.account.invites ?? []) {
-      await this.joinWorkspace(inviteUri);
+      // Try immediately; if the peer is offline, retry with backoff
+      void this.joinWorkspaceWithRetry(inviteUri);
+    }
+  }
+
+  private async joinWorkspaceWithRetry(inviteUri: string, maxAttempts = 5): Promise<void> {
+    const delays = [5000, 15000, 30000, 60000, 120000];
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (this.destroyed) return;
+      try {
+        await this.joinWorkspace(inviteUri);
+        return; // success — stop retrying
+      } catch {
+        // joinWorkspace() catches internally and logs; we just check if we're connected
+      }
+      // If already connected to this peer (inbound connection arrived first), stop retrying
+      const invite = (() => { try { return InviteURI.decode(inviteUri); } catch { return null; } })();
+      if (invite?.peerId && this.transport?.getConnectedPeers().includes(invite.peerId)) return;
+
+      if (attempt < maxAttempts - 1) {
+        const delay = delays[Math.min(attempt, delays.length - 1)];
+        this.opts.log?.info?.(`[xena-peer] join retry in ${delay / 1000}s (attempt ${attempt + 1}/${maxAttempts})`);
+        await new Promise(r => setTimeout(r, delay));
+      }
     }
   }
 

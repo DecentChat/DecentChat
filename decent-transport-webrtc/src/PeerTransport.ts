@@ -787,8 +787,16 @@ export class PeerTransport implements Transport {
     // This is a per-connection issue, not a signaling server failure.
     instance.peer.on('error', (error: any) => {
       this.onError?.(new Error(`[${instance.label}] ${error.message || error}`));
-      // For network/server-error, the 'disconnected' event will fire and handle reconnect.
-      // Do NOT call peer.destroy() here — that would kill the entire signaling connection.
+      // peer-unavailable can silently flip peer.disconnected=true without emitting
+      // the 'disconnected' event, bypassing the auto-reconnect in that handler.
+      // Explicitly reconnect if that happened.
+      if (instance.peer.disconnected && !instance.peer.destroyed) {
+        setTimeout(() => {
+          if (instance.peer.disconnected && !instance.peer.destroyed) {
+            instance.peer.reconnect();
+          }
+        }, 1000);
+      }
     });
   }
 
