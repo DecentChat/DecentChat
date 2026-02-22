@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk";
 import { z } from "zod";
 import { startDecentChatBridge } from "./monitor.js";
+import { getActivePeer } from "./peer-registry.js";
 import type { ResolvedDecentChatAccount } from "./types.js";
 
 const DecentChatConfigSchema = z.object({
@@ -112,7 +113,31 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
 
   outbound: {
     deliveryMode: "direct",
-    sendText: async () => ({ ok: true }),
+    sendText: async (ctx) => {
+      const peer = getActivePeer();
+      if (!peer) return { ok: false, error: new Error("DecentChat peer not running") };
+
+      const { to, text, replyToId, threadId } = ctx;
+      // In DecentChat, threadId = the root message of the thread.
+      // If we already have a threadId (we're inside an existing thread), use it.
+      // Otherwise use replyToId (the message we're replying to) as the thread root.
+      const threadIdStr = threadId != null ? String(threadId) : (replyToId ?? undefined);
+
+      try {
+        if (to.startsWith("decentchat:channel:")) {
+          // Group channel message: to = "decentchat:channel:<channelId>"
+          const channelId = to.slice("decentchat:channel:".length);
+          await peer.sendToChannel(channelId, text, threadIdStr, replyToId ?? undefined);
+        } else {
+          // Direct message: to = "decentchat:<peerId>" or just "<peerId>"
+          const peerId = to.startsWith("decentchat:") ? to.slice("decentchat:".length) : to;
+          await peer.sendDirectToPeer(peerId, text, threadIdStr, replyToId ?? undefined);
+        }
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err : new Error(String(err)) };
+      }
+    },
   },
 
   status: {

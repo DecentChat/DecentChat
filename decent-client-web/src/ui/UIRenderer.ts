@@ -15,6 +15,7 @@ import { ContactURI, InviteURI } from 'decent-protocol';
 import type { PlaintextMessage, Contact, ContactURIData, DirectConversation } from 'decent-protocol';
 import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
 import type { AppState } from '../main';
+import { renderMarkdown } from './renderMarkdown';
 
 // ---------------------------------------------------------------------------
 // Callback interfaces
@@ -852,7 +853,7 @@ export class UIRenderer {
             <span class="message-time">${time}</span>
             ${isMine ? `<span class="msg-delivery-status ${msg.status || 'pending'}" data-message-id="${msg.id}" title="${msg.status === 'delivered' ? 'Delivered' : msg.status === 'sent' ? 'Sent' : 'Sending…'}">${msg.status === 'delivered' ? '✓✓' : msg.status === 'sent' ? '✓' : '⏳'}</span>` : ''}
           </div>
-          <div class="message-content">${this.escapeHtml(msg.content)}</div>
+          <div class="message-content markdown-body">${renderMarkdown(msg.content)}</div>
           ${this.renderAttachments((msg as any).attachments)}
           <div class="message-thread-indicator${threadReplies.length > 0 ? ' has-replies' : ''}" data-thread-id="${msg.id}">
             ${threadReplies.length > 0 ? this.renderThreadIndicatorContent(threadReplies) : ''}

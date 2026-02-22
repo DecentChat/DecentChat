@@ -509,7 +509,32 @@ export class NodeXenaPeer {
     this.store.set(`messages-${channelId}`, this.messageStore.getMessages(channelId));
   }
 
-  private findWorkspaceIdForChannel(channelId: string): string {
+  /** Public convenience: resolve workspace by channelId then call sendMessage. */
+  async sendToChannel(channelId: string, content: string, threadId?: string, replyToId?: string): Promise<void> {
+    const workspaceId = this.findWorkspaceIdForChannel(channelId);
+    return this.sendMessage(channelId, workspaceId, content, threadId, replyToId);
+  }
+
+  /** Send a direct (non-workspace) message to a specific peer with isDirect=true. */
+  async sendDirectToPeer(peerId: string, content: string, threadId?: string, replyToId?: string): Promise<void> {
+    if (!this.transport || !this.messageProtocol || !content.trim()) return;
+    if (!this.transport.getConnectedPeers().includes(peerId)) return;
+
+    try {
+      const envelope = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text');
+      (envelope as any).isDirect = true;
+      (envelope as any).senderId = this.myPeerId;
+      (envelope as any).senderName = this.opts.account.alias;
+      if (threadId) (envelope as any).threadId = threadId;
+      if (replyToId) (envelope as any).replyToId = replyToId;
+      this.transport.send(peerId, envelope);
+    } catch (err) {
+      this.opts.log?.error?.(`[xena-peer] DM to ${peerId} failed: ${String(err)}`);
+    }
+  }
+
+  /** Public: find the workspace ID that owns a given channel. Returns '' if none found. */
+  findWorkspaceIdForChannel(channelId: string): string {
     const ws = this.workspaceManager
       .getAllWorkspaces()
       .find((workspace) => workspace.channels.some((ch) => ch.id === channelId));

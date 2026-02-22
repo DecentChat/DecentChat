@@ -56,6 +56,13 @@ export interface PeerTransportConfig {
   retryDelayMs?: number;
 }
 
+export interface NormalizedPeerJsServer {
+  host: string;
+  port: number;
+  path: string;
+  secure: boolean;
+}
+
 /**
  * Default STUN servers for NAT traversal.
  */
@@ -94,6 +101,21 @@ export const ICE_SERVERS_WITH_TURN: RTCIceServer[] = [
   ...DEFAULT_ICE_SERVERS,
   ...DEFAULT_TURN_SERVERS,
 ];
+
+/**
+ * Normalize a signaling server URL into PeerJS constructor fields.
+ * Default ports are stripped by URL parsing, then reapplied as numeric defaults.
+ */
+export function normalizePeerJsServer(serverUrl: string): NormalizedPeerJsServer {
+  const url = new URL(serverUrl);
+  const secure = url.protocol === 'https:' || url.protocol === 'wss:';
+  return {
+    host: url.hostname,
+    port: url.port ? parseInt(url.port, 10) : secure ? 443 : 80,
+    path: url.pathname || '/',
+    secure,
+  };
+}
 
 interface ActiveConnection {
   conn: DataConnection;
@@ -633,6 +655,13 @@ export class PeerTransport implements Transport {
     return servers;
   }
 
+  /**
+   * Peer factory seam for tests. Production uses real PeerJS constructor.
+   */
+  protected _createPeer(peerId: string | null | undefined, peerConfig: Record<string, unknown>): Peer {
+    return peerId ? new Peer(peerId, peerConfig as any) : new Peer(peerConfig as any);
+  }
+
   private _initSingleServer(peerId?: string, attempt = 0): Promise<string> {
     return new Promise((resolve, reject) => {
       const configuredPort = Number(
@@ -658,7 +687,7 @@ export class PeerTransport implements Transport {
         (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
       peerConfig.config = { iceServers: this._resolveIceServers(isLocalhost) };
 
-      const peer = peerId ? new Peer(peerId, peerConfig as any) : new Peer(peerConfig as any);
+      const peer = this._createPeer(peerId, peerConfig);
 
       // Named init handler so we can remove it once 'open' fires.
       // Without this, the handler persists and calls peer.destroy() on any
@@ -693,22 +722,22 @@ export class PeerTransport implements Transport {
 
   private _initServer(server: { url: string; label: string }, peerId?: string, attempt = 0): Promise<string> {
     return new Promise((resolve, reject) => {
-      const url = new URL(server.url);
+      const normalized = normalizePeerJsServer(server.url);
       const isLocalhost = typeof window !== 'undefined' && 
         (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
       const peerConfig: any = {
-        host: url.hostname,
-        port: url.port ? parseInt(url.port, 10) : url.protocol === 'https:' || url.protocol === 'wss:' ? 443 : 80,
-        path: url.pathname,  // PeerJS appends /peerjs internally; pass as-is
-        secure: url.protocol === 'https:' || url.protocol === 'wss:',
+        host: normalized.host,
+        port: normalized.port,
+        path: normalized.path,  // PeerJS appends /peerjs internally; pass as-is
+        secure: normalized.secure,
         debug: this.config.debug ?? 1,
         config: { iceServers: this._resolveIceServers(isLocalhost) },
       };
 
       // Use the same peer ID on all servers (or let first server assign one)
       const id = peerId || this.myPeerId;
-      const peer = id ? new Peer(id, peerConfig) : new Peer(peerConfig);
+      const peer = this._createPeer(id, peerConfig);
 
       const timeout = setTimeout(() => {
         peer.destroy();

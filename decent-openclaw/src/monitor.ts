@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createReplyPrefixOptions, type OpenClawConfig } from "openclaw/plugin-sdk";
 import { getDecentChatRuntime } from "./runtime.js";
+import { setActivePeer } from "./peer-registry.js";
 import type {
   InboundWireMessage,
   OutboundWireMessage,
@@ -77,11 +78,18 @@ async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
         ctx,
         core,
         async (replyText) => {
+          // Threading: for channel messages always reply in a thread.
+          // - existing thread reply → keep same thread root
+          // - root channel message → start new thread anchored at this message
+          // - DMs → no threading
+          const outThreadId = params.chatType === "direct"
+            ? undefined
+            : (params.threadId ?? params.messageId);
           await xenaPeer.sendMessage(
             params.channelId,
             params.workspaceId,
             replyText,
-            params.threadId ?? undefined,
+            outThreadId,
             params.messageId,
           );
         },
@@ -94,6 +102,7 @@ async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
   });
 
   await xenaPeer.start();
+  setActivePeer(xenaPeer);
   ctx.setStatus({
     running: true,
     mode: "peer",
@@ -103,6 +112,7 @@ async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
 
   return new Promise<void>((resolve) => {
     const shutdown = () => {
+      setActivePeer(null);
       xenaPeer.destroy();
       ctx.setStatus({ running: false, mode: "peer" });
       resolve();
@@ -377,7 +387,13 @@ async function processInboundMessage(
     Timestamp: msg.timestamp,
     OriginatingChannel: channel,
     OriginatingTo: msg.chatType === "direct" ? `decentchat:${msg.senderId}` : `decentchat:channel:${msg.channelId}`,
-    ReplyToId: isThreadReply ? msg.threadId : undefined,
+    // For channel messages: always set ReplyToId so the agent's reply lands in a thread.
+    // - If already a thread reply: anchor to the thread root (msg.threadId)
+    // - If a root channel message: anchor to this message (msg.messageId) to start a new thread
+    // - For DMs: no threading
+    ReplyToId: msg.chatType === "direct"
+      ? undefined
+      : (isThreadReply ? msg.threadId : msg.messageId),
     MessageThreadId: isThreadReply ? msg.threadId : undefined,
     ParentSessionKey: threadKeys.parentSessionKey,
     IsFirstThreadTurn: isThreadReply && !previousTimestamp ? true : undefined,

@@ -6,6 +6,7 @@
  */
 
 import { describe, test, expect, beforeEach } from 'bun:test';
+import { PeerTransport } from '../src/PeerTransport';
 
 // ---------------------------------------------------------------------------
 // Minimal reconnect state machine — mirrors PeerTransport's logic exactly
@@ -238,5 +239,114 @@ describe('PeerTransport auto-reconnect', () => {
     expect(sm.reconnectTimers.size).toBe(0);
     expect(sm.reconnectAttempts.size).toBe(0);
     expect(sm.manuallyDisconnected.size).toBe(0);
+  });
+});
+
+type Handler = (...args: any[]) => void;
+
+class FakePeer {
+  disconnected = false;
+  destroyed = false;
+  destroyCalls = 0;
+  reconnectCalls = 0;
+  private listeners = new Map<string, Set<Handler>>();
+
+  on(event: string, handler: Handler): this {
+    if (!this.listeners.has(event)) this.listeners.set(event, new Set());
+    this.listeners.get(event)!.add(handler);
+    return this;
+  }
+
+  off(event: string, handler: Handler): this {
+    this.listeners.get(event)?.delete(handler);
+    return this;
+  }
+
+  emit(event: string, ...args: any[]): void {
+    const handlers = this.listeners.get(event);
+    if (!handlers) return;
+    for (const handler of handlers) handler(...args);
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    this.destroyCalls++;
+  }
+
+  reconnect(): void {
+    this.reconnectCalls++;
+  }
+}
+
+class TestPeerTransport extends PeerTransport {
+  private fakePeers: FakePeer[] = [];
+
+  enqueue(peer: FakePeer): void {
+    this.fakePeers.push(peer);
+  }
+
+  protected override _createPeer(): any {
+    const peer = this.fakePeers.shift();
+    if (!peer) throw new Error('No fake peer queued');
+    return peer;
+  }
+}
+
+describe('PeerTransport init/error behavior', () => {
+  test('peer-unavailable post-init does not destroy peer', async () => {
+    const transport = new TestPeerTransport();
+    const peer = new FakePeer();
+    transport.enqueue(peer);
+
+    const init = (transport as any)._initSingleServer('alice');
+    peer.emit('open', 'alice');
+    await init;
+
+    peer.emit('error', { type: 'peer-unavailable', message: 'remote peer offline' });
+
+    expect(peer.destroyCalls).toBe(0);
+  });
+
+  test('reconnect() is triggered when peer.disconnected=true after error', async () => {
+    const transport = new TestPeerTransport();
+    const peer = new FakePeer();
+    transport.enqueue(peer);
+
+    const init = (transport as any)._initSingleServer('alice');
+    peer.emit('open', 'alice');
+    await init;
+
+    peer.disconnected = true;
+    peer.emit('error', { type: 'network', message: 'socket hiccup' });
+
+    await sleep(1100);
+    expect(peer.reconnectCalls).toBe(1);
+    expect(peer.destroyCalls).toBe(0);
+  });
+
+  test('init error handler is removed after open in _initSingleServer', async () => {
+    const transport = new TestPeerTransport();
+    const peer = new FakePeer();
+    transport.enqueue(peer);
+
+    const init = (transport as any)._initSingleServer('alice');
+    peer.emit('open', 'alice');
+    await init;
+
+    peer.emit('error', { type: 'post-init', message: 'should not destroy' });
+    expect(peer.destroyCalls).toBe(0);
+  });
+
+  test('init error handler is removed after open in _initServer', async () => {
+    const transport = new TestPeerTransport();
+    const peer = new FakePeer();
+    transport.enqueue(peer);
+
+    const init = (transport as any)._initServer({ url: 'https://example.com/peerjs', label: 'example' }, 'alice');
+    peer.emit('open', 'alice');
+    await init;
+
+    peer.emit('error', { type: 'post-init', message: 'should not destroy' });
+    expect(peer.destroyCalls).toBe(0);
   });
 });

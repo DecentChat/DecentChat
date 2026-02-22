@@ -628,4 +628,195 @@ test.describe('Thread P2P Sync', () => {
       await closeUser(bob);
     }
   });
+
+  // ── 8. Thread reply stores parent threadId on receiver ───────────────────
+  test('agent reply arrives under original message with threadId set', async ({ browser }) => {
+    const [alice, bob] = await setupConnectedPair(browser, 'Thread Id Test 1');
+    try {
+      await sendMessage(alice.page, 'Original prompt for agent');
+      await waitForMessage(bob.page, 'Original prompt for agent');
+
+      await openThreadFor(bob.page, 'Original prompt for agent');
+      await sendThreadReply(bob.page, 'Agent-style reply #1');
+
+      await alice.page.waitForFunction(
+        () => {
+          const ctrl = (window as any).__ctrl;
+          const state = (window as any).__state;
+          if (!ctrl || !state?.activeChannelId) return false;
+          const msgs = ctrl.messageStore.getMessages(state.activeChannelId);
+          const parent = msgs.find((m: any) => m.content?.includes('Original prompt for agent'));
+          if (!parent) return false;
+          const reply = msgs.find((m: any) => m.content?.includes('Agent-style reply #1'));
+          if (!reply) return false;
+          return reply.threadId === parent.id;
+        },
+        { timeout: 15000 },
+      );
+
+      const threadMeta = await alice.page.evaluate(() => {
+        const ctrl = (window as any).__ctrl;
+        const state = (window as any).__state;
+        const msgs = ctrl.messageStore.getMessages(state.activeChannelId);
+        const parent = msgs.find((m: any) => m.content?.includes('Original prompt for agent'));
+        const reply = msgs.find((m: any) => m.content?.includes('Agent-style reply #1'));
+        const thread = parent ? ctrl.messageStore.getThread(state.activeChannelId, parent.id) : [];
+        return {
+          parentId: parent?.id || '',
+          replyThreadId: reply?.threadId || '',
+          threadCount: thread.length,
+        };
+      });
+
+      expect(threadMeta.parentId).toBeTruthy();
+      expect(threadMeta.replyThreadId).toBe(threadMeta.parentId);
+      expect(threadMeta.threadCount).toBe(1);
+    } finally {
+      await closeUser(alice);
+      await closeUser(bob);
+    }
+  });
+
+  // ── 9. Second thread reply stays on same thread ──────────────────────────
+  test('second reply goes to same thread (does not create a new thread)', async ({ browser }) => {
+    const [alice, bob] = await setupConnectedPair(browser, 'Thread Id Test 2');
+    try {
+      await sendMessage(alice.page, 'Root for two replies');
+      await waitForMessage(bob.page, 'Root for two replies');
+
+      await openThreadFor(bob.page, 'Root for two replies');
+      await sendThreadReply(bob.page, 'Agent reply one');
+      await sendThreadReply(bob.page, 'Agent reply two');
+
+      await alice.page.waitForFunction(
+        () => {
+          const ctrl = (window as any).__ctrl;
+          const state = (window as any).__state;
+          if (!ctrl || !state?.activeChannelId) return false;
+          const msgs = ctrl.messageStore.getMessages(state.activeChannelId);
+          const parent = msgs.find((m: any) => m.content?.includes('Root for two replies'));
+          if (!parent) return false;
+          const thread = ctrl.messageStore.getThread(state.activeChannelId, parent.id);
+          const one = thread.find((m: any) => m.content?.includes('Agent reply one'));
+          const two = thread.find((m: any) => m.content?.includes('Agent reply two'));
+          return !!one && !!two && one.threadId === parent.id && two.threadId === parent.id;
+        },
+        { timeout: 15000 },
+      );
+
+      const threadMeta = await alice.page.evaluate(() => {
+        const ctrl = (window as any).__ctrl;
+        const state = (window as any).__state;
+        const msgs = ctrl.messageStore.getMessages(state.activeChannelId);
+        const parent = msgs.find((m: any) => m.content?.includes('Root for two replies'));
+        const thread = parent ? ctrl.messageStore.getThread(state.activeChannelId, parent.id) : [];
+        return {
+          parentId: parent?.id || '',
+          threadIds: thread.map((m: any) => m.threadId || null),
+          contents: thread.map((m: any) => m.content || ''),
+          threadCount: thread.length,
+        };
+      });
+
+      expect(threadMeta.parentId).toBeTruthy();
+      expect(threadMeta.contents.some(c => c.includes('Agent reply one'))).toBe(true);
+      expect(threadMeta.contents.some(c => c.includes('Agent reply two'))).toBe(true);
+      expect(threadMeta.threadIds.every(id => id === threadMeta.parentId)).toBe(true);
+      expect(threadMeta.threadCount).toBeGreaterThanOrEqual(2);
+    } finally {
+      await closeUser(alice);
+      await closeUser(bob);
+    }
+  });
+
+  // ── 10. DM messages/replies must not carry threadId ──────────────────────
+  test('DM replies have no threadId', async ({ browser }) => {
+    const [alice, bob] = await setupConnectedPair(browser, 'Thread Id DM Test');
+    try {
+      const alicePeerId = await alice.page.evaluate(() => (window as any).__state?.myPeerId || '');
+      const bobPeerId = await bob.page.evaluate(() => (window as any).__state?.myPeerId || '');
+      expect(alicePeerId).toBeTruthy();
+      expect(bobPeerId).toBeTruthy();
+
+      const aliceConversationId = await alice.page.evaluate(async (peerId: string) => {
+        const ctrl = (window as any).__ctrl;
+        await ctrl.addContact({
+          peerId,
+          displayName: 'Bob',
+          publicKey: '',
+          signalingServers: [],
+          addedAt: Date.now(),
+          lastSeen: Date.now(),
+        });
+        const conv = await ctrl.startDirectMessage(peerId);
+        await ctrl.sendDirectMessage(conv.id, 'DM from Alice');
+        return conv.id as string;
+      }, bobPeerId);
+
+      expect(aliceConversationId).toBeTruthy();
+
+      await bob.page.waitForFunction(
+        (peerId: string) => {
+          const ctrl = (window as any).__ctrl;
+          return ctrl.directConversationStore.getByContact(peerId)
+            .then((conv: any) => {
+              if (!conv) return false;
+              const msgs = ctrl.messageStore.getMessages(conv.id);
+              return msgs.some((m: any) => m.content?.includes('DM from Alice'));
+            })
+            .catch(() => false);
+        },
+        alicePeerId,
+        { timeout: 15000 },
+      );
+
+      const bobInboundMeta = await bob.page.evaluate(async (peerId: string) => {
+        const ctrl = (window as any).__ctrl;
+        const conv = await ctrl.directConversationStore.getByContact(peerId);
+        if (!conv) return { exists: false, threadId: 'missing' };
+        const msg = ctrl.messageStore.getMessages(conv.id).find((m: any) => m.content?.includes('DM from Alice'));
+        return {
+          exists: !!msg,
+          threadId: msg?.threadId ?? null,
+          conversationId: conv.id,
+        };
+      }, alicePeerId);
+
+      expect(bobInboundMeta.exists).toBe(true);
+      expect(bobInboundMeta.threadId).toBeNull();
+
+      await bob.page.evaluate(async (peerId: string) => {
+        const ctrl = (window as any).__ctrl;
+        const conv = await ctrl.directConversationStore.getByContact(peerId);
+        if (!conv) throw new Error('No direct conversation to reply in');
+        await ctrl.sendDirectMessage(conv.id, 'DM reply from Bob');
+      }, alicePeerId);
+
+      await alice.page.waitForFunction(
+        (conversationId: string) => {
+          const ctrl = (window as any).__ctrl;
+          const msgs = ctrl.messageStore.getMessages(conversationId);
+          return msgs.some((m: any) => m.content?.includes('DM reply from Bob'));
+        },
+        aliceConversationId,
+        { timeout: 15000 },
+      );
+
+      const aliceReplyMeta = await alice.page.evaluate((conversationId: string) => {
+        const ctrl = (window as any).__ctrl;
+        const msg = ctrl.messageStore.getMessages(conversationId)
+          .find((m: any) => m.content?.includes('DM reply from Bob'));
+        return {
+          exists: !!msg,
+          threadId: msg?.threadId ?? null,
+        };
+      }, aliceConversationId);
+
+      expect(aliceReplyMeta.exists).toBe(true);
+      expect(aliceReplyMeta.threadId).toBeNull();
+    } finally {
+      await closeUser(alice);
+      await closeUser(bob);
+    }
+  });
 });
