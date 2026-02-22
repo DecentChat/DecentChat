@@ -148,7 +148,7 @@ export class NodeXenaPeer {
     };
 
     this.myPeerId = await this.transport.init(this.myPeerId);
-    this.opts.log?.info(`[xena-peer] online as ${this.myPeerId}, signaling: ${signalingServer}`);
+    this.opts.log?.info(`[xena-peer] online as ${this.myPeerId}, signaling: ${allServers.join(', ')}`);
 
     for (const inviteUri of this.opts.account.invites ?? []) {
       await this.joinWorkspace(inviteUri);
