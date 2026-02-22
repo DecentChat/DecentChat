@@ -30,6 +30,8 @@ export interface NodeXenaPeerOptions {
     messageId: string;
     chatType: 'channel' | 'direct';
     timestamp: number;
+    replyToId?: string;
+    threadId?: string;
   }) => Promise<void>;
   onReply: (params: {
     channelId: string;
@@ -93,11 +95,29 @@ export class NodeXenaPeer {
     this.restoreWorkspaces();
     this.restoreMessages();
 
-    const signalingServer = this.opts.account.signalingServer ?? 'https://decentchat.app/peerjs';
+    const configServer = this.opts.account.signalingServer ?? 'https://decentchat.app/peerjs';
+    const allServers: string[] = [configServer];
+
+    // Collect signaling servers from all invites so we can find peers
+    // regardless of which PeerJS server they registered on.
+    for (const inviteUri of this.opts.account.invites ?? []) {
+      try {
+        const invite = InviteURI.decode(inviteUri);
+        const scheme = invite.secure ? 'https' : 'http';
+        const inviteServer = `${scheme}://${invite.host}:${invite.port}${invite.path}`;
+        if (!allServers.includes(inviteServer)) {
+          allServers.push(inviteServer);
+        }
+      } catch {
+        // malformed invite — skip
+      }
+    }
+
     this.transport = new PeerTransport({
-      signalingServers: [signalingServer],
+      signalingServers: allServers,
       useTurn: false,
     });
+    this.opts.log?.info(`[xena-peer] signaling servers: ${allServers.join(', ')}`);
 
     this.syncProtocol = new SyncProtocol(
       this.workspaceManager,
@@ -276,6 +296,8 @@ export class NodeXenaPeer {
       messageId: created.id,
       chatType: msg.isDirect ? 'direct' : 'channel',
       timestamp: created.timestamp,
+      replyToId: msg.replyToId as string | undefined,
+      threadId: msg.threadId as string | undefined,
     });
   }
 
@@ -313,6 +335,8 @@ export class NodeXenaPeer {
           messageId: event.message.id,
           chatType: 'channel',
           timestamp: event.message.timestamp,
+          replyToId: (event.message as any).replyToId,
+          threadId: (event.message as any).threadId,
         });
         break;
       }
