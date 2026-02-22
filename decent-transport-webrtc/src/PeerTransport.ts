@@ -730,7 +730,9 @@ export class PeerTransport implements Transport {
         resolve(assignedId);
       });
 
-      peer.on('error', (error: any) => {
+      // Use once() so this init-time handler auto-removes after first error.
+      // Post-init errors are handled by _setupPeerEvents instead.
+      peer.once('error', (error: any) => {
         clearTimeout(timeout);
         peer.destroy();
         if (error.type === 'unavailable-id' && attempt < 3) {
@@ -778,6 +780,15 @@ export class PeerTransport implements Transport {
 
     instance.peer.on('close', () => {
       instance.connected = false;
+    });
+
+    // Post-init error handler: report but NEVER destroy the peer.
+    // peer-unavailable = a specific peer we tried to reach is gone (phone locked, etc.)
+    // This is a per-connection issue, not a signaling server failure.
+    instance.peer.on('error', (error: any) => {
+      this.onError?.(new Error(`[${instance.label}] ${error.message || error}`));
+      // For network/server-error, the 'disconnected' event will fire and handle reconnect.
+      // Do NOT call peer.destroy() here — that would kill the entire signaling connection.
     });
   }
 
