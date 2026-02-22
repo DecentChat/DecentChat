@@ -145,6 +145,33 @@ export class ReactionManager {
     return `<div class="reactions-row">${pills.join('')}</div>`;
   }
 
+  /** Serialize reaction state for persistence. */
+  toJSON(): Record<string, Reaction[]> {
+    const out: Record<string, Reaction[]> = {};
+    for (const [messageId, reactions] of this.reactions.entries()) {
+      out[messageId] = reactions;
+    }
+    return out;
+  }
+
+  /** Restore reaction state from persistence snapshot. */
+  loadFromJSON(snapshot: unknown): void {
+    this.reactions.clear();
+    if (!snapshot || typeof snapshot !== 'object') return;
+
+    for (const [messageId, value] of Object.entries(snapshot as Record<string, unknown>)) {
+      if (!Array.isArray(value)) continue;
+      const cleaned: Reaction[] = value
+        .filter((r: any) => r && typeof r.emoji === 'string' && typeof r.userId === 'string')
+        .map((r: any) => ({
+          emoji: r.emoji,
+          userId: r.userId,
+          timestamp: typeof r.timestamp === 'number' ? r.timestamp : Date.now(),
+        }));
+      if (cleaned.length > 0) this.reactions.set(messageId, cleaned);
+    }
+  }
+
   private notifyChanged(messageId: string): void {
     this.onReactionsChanged?.(messageId, this.getReactions(messageId));
   }

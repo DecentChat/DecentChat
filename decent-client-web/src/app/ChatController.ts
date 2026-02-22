@@ -147,6 +147,7 @@ export class ChatController {
   myPublicKey: string = '';
   huddle: HuddleManager | null = null;
   private ui: UIUpdater | null = null;
+  private reactionsPersistTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private state: AppState) {
     this.cryptoManager = new CryptoManager();
@@ -176,6 +177,7 @@ export class ChatController {
           });
         });
       }
+      this.schedulePersistReactions();
     };
     this.contactStore = new MemoryContactStore();
     this.directConversationStore = new MemoryDirectConversationStore();
@@ -1416,6 +1418,14 @@ export class ChatController {
   // Persistence
   // =========================================================================
 
+  private schedulePersistReactions(): void {
+    if (this.reactionsPersistTimer) clearTimeout(this.reactionsPersistTimer);
+    this.reactionsPersistTimer = setTimeout(() => {
+      this.reactionsPersistTimer = null;
+      void this.persistSetting('reactions', this.reactions.toJSON());
+    }, 200);
+  }
+
   async restoreFromStorage(): Promise<void> {
     const savedAlias = await this.persistentStore.getSetting('myAlias');
     if (savedAlias) this.state.myAlias = savedAlias;
@@ -1458,6 +1468,11 @@ export class ChatController {
       }
     }
 
+    const savedReactions = await this.persistentStore.getSetting('reactions');
+    if (savedReactions) {
+      this.reactions.loadFromJSON(savedReactions);
+    }
+
     // DEP-002: Start periodic PEX broadcasts
     if (workspaces.length > 0) {
       this.startPEXBroadcasts();
@@ -1482,6 +1497,12 @@ export class ChatController {
 
   async persistSetting(key: string, value: unknown): Promise<void> {
     await this.persistentStore.saveSetting(key, value);
+
+    // Keep aggregate app-settings in sync (SettingsPanel reads via getSettings()).
+    if (key !== 'app-settings') {
+      const current = await this.persistentStore.getSettings<Record<string, any>>({});
+      await this.persistentStore.saveSettings({ ...current, [key]: value });
+    }
 
     if (key === 'myAlias' && typeof value === 'string' && value.trim()) {
       const alias = value.trim();

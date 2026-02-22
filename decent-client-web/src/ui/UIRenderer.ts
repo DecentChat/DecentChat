@@ -2109,15 +2109,18 @@ export class UIRenderer {
         activeWorkspaceId: wsId,
         workspaceAlias: wsId ? (this.state.workspaceAliases?.[wsId] || '') : '',
       }),
-      (key, value) => {
+      async (key, value) => {
         if (key === 'workspaceAlias' && wsId) {
           this.callbacks.setWorkspaceAlias?.(wsId, value as string);
-          return Promise.resolve();
+          return;
         }
         if (key === 'myAlias' && typeof value === 'string' && value.trim()) {
           this.state.myAlias = value.trim();
         }
-        return this.callbacks.persistSetting(key, value);
+        await this.callbacks.persistSetting(key, value);
+        if (key === 'showLiveReconnectActivity') {
+          this.updateSidebar();
+        }
       },
       async (action) => {
         if (action === 'generateSeed') {
@@ -2306,14 +2309,16 @@ export class UIRenderer {
   /** 3-state presence CSS class: 'online' | 'connecting' | '' */
   private peerStatusClass(peerId: string): string {
     if (this.state.readyPeers.has(peerId)) return 'online';
-    if (this.state.connectingPeers.has(peerId)) return 'connecting';
+    const showReconnect = (window as any).__DECENT_SHOW_RECONNECT_ACTIVITY === true;
+    if (showReconnect && this.state.connectingPeers.has(peerId)) return 'connecting';
     return '';
   }
 
   /** Tooltip text for the presence dot */
   private peerStatusTitle(peerId: string): string {
     if (this.state.readyPeers.has(peerId)) return 'Online';
-    if (this.state.connectingPeers.has(peerId)) return 'Reconnecting';
+    const showReconnect = (window as any).__DECENT_SHOW_RECONNECT_ACTIVITY === true;
+    if (showReconnect && this.state.connectingPeers.has(peerId)) return 'Reconnecting';
     return 'Offline';
   }
 

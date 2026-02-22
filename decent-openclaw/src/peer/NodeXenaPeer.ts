@@ -16,6 +16,7 @@ import {
 } from 'decent-protocol';
 import type { SyncEvent, Workspace, WorkspaceMember } from 'decent-protocol';
 import { PeerTransport } from 'decent-transport-webrtc';
+import { randomUUID } from 'node:crypto';
 import { FileStore } from './FileStore.js';
 import { NodeMessageProtocol } from './NodeMessageProtocol.js';
 import type { ResolvedDecentChatAccount } from '../types.js';
@@ -278,6 +279,17 @@ export class NodeXenaPeer {
         continue;
       }
       try {
+        await this.queuePendingAck(peerId, {
+          content: content.trim(),
+          channelId,
+          workspaceId,
+          senderId: this.myPeerId,
+          senderName: this.opts.account.alias,
+          messageId: msg.id,
+          threadId,
+          replyToId,
+          isDirect: false,
+        });
         const envelope = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text');
         (envelope as any).channelId = channelId;
         (envelope as any).workspaceId = workspaceId;
@@ -354,7 +366,13 @@ export class NodeXenaPeer {
 
     const msg = rawData as any;
 
-    if (msg?.type === 'ack') return;
+    if (msg?.type === 'ack') {
+      const ackMessageId = typeof msg.messageId === 'string' ? msg.messageId : '';
+      if (ackMessageId) {
+        await this.removePendingAck(fromPeerId, ackMessageId);
+      }
+      return;
+    }
 
     if (msg?.type === 'handshake') {
       await this.messageProtocol.processHandshake(fromPeerId, msg);
@@ -367,6 +385,7 @@ export class NodeXenaPeer {
         this.updateWorkspaceMemberAlias(fromPeerId, msg.alias as string);
       }
       await this.flushOfflineQueue(fromPeerId);
+      await this.resendPendingAcks(fromPeerId);
       return;
     }
 
@@ -594,11 +613,13 @@ export class NodeXenaPeer {
   /** Send a direct (non-workspace) message to a specific peer with isDirect=true. */
   async sendDirectToPeer(peerId: string, content: string, threadId?: string, replyToId?: string): Promise<void> {
     if (!this.transport || !this.messageProtocol || !content.trim()) return;
+    const outboundMessageId = randomUUID();
     if (!this.transport.getConnectedPeers().includes(peerId)) {
       await this.enqueueOffline(peerId, {
         content: content.trim(),
         senderId: this.myPeerId,
         senderName: this.opts.account.alias,
+        messageId: outboundMessageId,
         threadId,
         replyToId,
         isDirect: true,
@@ -607,10 +628,20 @@ export class NodeXenaPeer {
     }
 
     try {
+      await this.queuePendingAck(peerId, {
+        content: content.trim(),
+        senderId: this.myPeerId,
+        senderName: this.opts.account.alias,
+        messageId: outboundMessageId,
+        threadId,
+        replyToId,
+        isDirect: true,
+      });
       const envelope = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text');
       (envelope as any).isDirect = true;
       (envelope as any).senderId = this.myPeerId;
       (envelope as any).senderName = this.opts.account.alias;
+      (envelope as any).messageId = outboundMessageId;
       if (threadId) (envelope as any).threadId = threadId;
       if (replyToId) (envelope as any).replyToId = replyToId;
       this.transport.send(peerId, envelope);
@@ -780,6 +811,62 @@ export class NodeXenaPeer {
     return `offline-queue-${peerId}`;
   }
 
+  private pendingAckKey(peerId: string): string {
+    return `pending-ack-${peerId}`;
+  }
+
+  private async queuePendingAck(peerId: string, payload: any): Promise<void> {
+    if (!payload?.messageId) return;
+    const key = this.pendingAckKey(peerId);
+    const current = this.store.get<any[]>(key, []);
+    const existingIndex = current.findIndex((entry) => entry?.messageId === payload.messageId);
+    const entry = {
+      ...payload,
+      queuedAt: Date.now(),
+    };
+    if (existingIndex >= 0) current[existingIndex] = entry;
+    else current.push(entry);
+    this.store.set(key, current);
+  }
+
+  private async removePendingAck(peerId: string, messageId: string): Promise<void> {
+    const key = this.pendingAckKey(peerId);
+    const current = this.store.get<any[]>(key, []);
+    const next = current.filter((entry) => entry?.messageId !== messageId);
+    if (next.length === 0) this.store.delete(key);
+    else this.store.set(key, next);
+  }
+
+  private async resendPendingAcks(peerId: string): Promise<void> {
+    if (!this.transport || !this.messageProtocol) return;
+    if (!this.transport.getConnectedPeers().includes(peerId)) return;
+
+    const key = this.pendingAckKey(peerId);
+    const pending = this.store.get<any[]>(key, []);
+    if (pending.length === 0) return;
+
+    for (const item of pending) {
+      if (!item || typeof item.content !== 'string') continue;
+      try {
+        const envelope = await this.messageProtocol.encryptMessage(peerId, item.content, 'text');
+        (envelope as any).senderId = item.senderId ?? this.myPeerId;
+        (envelope as any).senderName = item.senderName ?? this.opts.account.alias;
+        (envelope as any).messageId = item.messageId;
+        if (item.isDirect) {
+          (envelope as any).isDirect = true;
+        } else {
+          (envelope as any).channelId = item.channelId;
+          (envelope as any).workspaceId = item.workspaceId;
+        }
+        if (item.threadId) (envelope as any).threadId = item.threadId;
+        if (item.replyToId) (envelope as any).replyToId = item.replyToId;
+        this.transport.send(peerId, envelope);
+      } catch (err) {
+        this.opts.log?.warn?.(`[xena-peer] resend pending failed for ${peerId}: ${String(err)}`);
+      }
+    }
+  }
+
   private async enqueueOffline(peerId: string, payload: any): Promise<void> {
     try {
       await this.offlineQueue.enqueue(peerId, payload);
@@ -800,15 +887,17 @@ export class NodeXenaPeer {
     for (const item of queued) {
       if (!item || typeof item !== 'object' || typeof item.content !== 'string') continue;
       try {
+        if (!item.messageId) item.messageId = randomUUID();
+        await this.queuePendingAck(peerId, item);
         const envelope = await this.messageProtocol.encryptMessage(peerId, item.content, 'text');
         (envelope as any).senderId = item.senderId ?? this.myPeerId;
         (envelope as any).senderName = item.senderName ?? this.opts.account.alias;
+        (envelope as any).messageId = item.messageId;
         if (item.isDirect) {
           (envelope as any).isDirect = true;
         } else {
           (envelope as any).channelId = item.channelId;
           (envelope as any).workspaceId = item.workspaceId;
-          if (item.messageId) (envelope as any).messageId = item.messageId;
         }
         if (item.threadId) (envelope as any).threadId = item.threadId;
         if (item.replyToId) (envelope as any).replyToId = item.replyToId;

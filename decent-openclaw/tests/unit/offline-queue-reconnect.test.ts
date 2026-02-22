@@ -60,8 +60,8 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
     });
 
     expect(processHandshake).toHaveBeenCalledTimes(1);
-    expect(encryptMessage).toHaveBeenCalledTimes(1);
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(encryptMessage).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(2);
     expect(sent[0]?.peerId).toBe('peer-1');
     expect(sent[0]?.msg.isDirect).toBe(true);
     expect((await (peer as any).offlineQueue.getQueued('peer-1')).length).toBe(0);
@@ -108,11 +108,47 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
       peerId: 'peer-2',
     });
 
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(2);
     expect(sent[0]?.peerId).toBe('peer-2');
     expect(sent[0]?.msg.channelId).toBe('channel-1');
     expect(sent[0]?.msg.workspaceId).toBe('workspace-1');
     expect(typeof sent[0]?.msg.messageId).toBe('string');
     expect((await (peer as any).offlineQueue.getQueued('peer-2')).length).toBe(0);
+  });
+
+  test('keeps pending message until ack and clears after ack', async () => {
+    const peer = new NodeXenaPeer({
+      account: makeAccount(),
+      onIncomingMessage: async () => {},
+      onReply: () => {},
+    });
+
+    const sent: Array<{ peerId: string; msg: any }> = [];
+    const send = mock((peerId: string, msg: any) => {
+      sent.push({ peerId, msg });
+      return true;
+    });
+    const getConnectedPeers = mock(() => ['peer-ack'] as string[]);
+    (peer as any).transport = { send, getConnectedPeers };
+    (peer as any).syncProtocol = {};
+    (peer as any).messageProtocol = {
+      processHandshake: mock(async () => {}),
+      encryptMessage: mock(async () => ({ id: 'env-ack', type: 'text' })),
+    };
+
+    await peer.sendDirectToPeer('peer-ack', 'ack me');
+
+    expect(sent).toHaveLength(1);
+    const messageId = sent[0]?.msg?.messageId as string;
+    expect(typeof messageId).toBe('string');
+
+    const pendingKey = (peer as any).pendingAckKey('peer-ack');
+    const beforeAck = (peer as any).store.get<any[]>(pendingKey, []);
+    expect(beforeAck.some((m) => m?.messageId === messageId)).toBe(true);
+
+    await (peer as any).handlePeerMessage('peer-ack', { type: 'ack', messageId, channelId: 'peer-ack' });
+
+    const afterAck = (peer as any).store.get<any[]>(pendingKey, []);
+    expect(afterAck.some((m) => m?.messageId === messageId)).toBe(false);
   });
 });

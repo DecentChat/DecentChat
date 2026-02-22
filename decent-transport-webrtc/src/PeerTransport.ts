@@ -151,10 +151,14 @@ export class PeerTransport implements Transport {
 
   // ── DEP-004: Heartbeat state ────────────────────────────────────────────
   private static readonly PING_INTERVAL_MS = 30_000;
-  private static readonly PONG_TIMEOUT_MS = 10_000;
+  private static readonly PONG_TIMEOUT_MS = 20_000;
+  private static readonly HEARTBEAT_FAIL_THRESHOLD = 2;
+  private static readonly RECOVERY_COOLDOWN_MS = 30_000;
   private _pingTimers = new Map<string, ReturnType<typeof setInterval>>();
   private _pongTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
   private _pendingPing = new Map<string, number>();
+  private _missedPongs = new Map<string, number>();
+  private _lastRecoveryAt = new Map<string, number>();
   private _heartbeatEnabled = true;
   private _networkListenersSetup = false;
 
@@ -444,6 +448,8 @@ export class PeerTransport implements Transport {
     this._pongTimeouts.delete(peerId);
 
     this._pendingPing.delete(peerId);
+    this._missedPongs.delete(peerId);
+    this._lastRecoveryAt.delete(peerId);
   }
 
   private _sendPing(peerId: string): void {
@@ -470,12 +476,28 @@ export class PeerTransport implements Transport {
     if (pending !== ts) return; // Stale pong
 
     this._pendingPing.delete(peerId);
+    this._missedPongs.set(peerId, 0);
     const timeout = this._pongTimeouts.get(peerId);
     if (timeout) clearTimeout(timeout);
     this._pongTimeouts.delete(peerId);
   }
 
   private _onPingTimeout(peerId: string): void {
+    const missed = (this._missedPongs.get(peerId) ?? 0) + 1;
+    this._missedPongs.set(peerId, missed);
+
+    if (missed < PeerTransport.HEARTBEAT_FAIL_THRESHOLD) {
+      console.warn(`[Heartbeat] Peer ${peerId.slice(0, 8)} missed pong (${missed}/${PeerTransport.HEARTBEAT_FAIL_THRESHOLD})`);
+      return;
+    }
+
+    const now = Date.now();
+    const lastRecovery = this._lastRecoveryAt.get(peerId) ?? 0;
+    if (now - lastRecovery < PeerTransport.RECOVERY_COOLDOWN_MS) {
+      return;
+    }
+    this._lastRecoveryAt.set(peerId, now);
+
     console.warn(`[Heartbeat] Peer ${peerId.slice(0, 8)} unresponsive — attempting recovery`);
     const active = this.connections.get(peerId);
     if (!active) return;
@@ -904,6 +926,9 @@ export class PeerTransport implements Transport {
       // Only process data from the active connection for this peer
       const current = this.connections.get(peerId);
       if (current?.conn !== conn) return;
+
+      // Any inbound payload means the peer is alive.
+      this._missedPongs.set(peerId, 0);
 
       // DEP-004: Intercept heartbeat messages (transport-internal)
       const msg = data as any;

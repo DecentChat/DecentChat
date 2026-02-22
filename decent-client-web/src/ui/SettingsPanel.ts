@@ -416,7 +416,9 @@ export class SettingsPanel {
       document.body.classList.toggle('compact', value);
     }
     if (key === 'showLiveReconnectActivity') {
-      document.body.classList.toggle('show-reconnect-activity', value);
+      const enabled = value === true;
+      document.body.classList.toggle('show-reconnect-activity', enabled);
+      (window as any).__DECENT_SHOW_RECONNECT_ACTIVITY = enabled;
     }
     if (key === 'debug') {
       document.body.classList.toggle('debug-mode', value);

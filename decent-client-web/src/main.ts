@@ -330,7 +330,9 @@ async function init(): Promise<void> {
     const settings = await ctrl.persistentStore.getSettings<AppSettings>(settingsDefaults);
 
     // Apply lightweight visual preferences on boot
-    document.body.classList.toggle('show-reconnect-activity', !!(settings as any).showLiveReconnectActivity);
+    const showReconnect = !!(settings as any).showLiveReconnectActivity;
+    document.body.classList.toggle('show-reconnect-activity', showReconnect);
+    (window as any).__DECENT_SHOW_RECONNECT_ACTIVITY = showReconnect;
 
     let seedPhrase = await ctrl.persistentStore.getSetting('seedPhrase');
 
