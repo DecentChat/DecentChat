@@ -98,6 +98,18 @@ export class NodeXenaPeer {
     const configServer = this.opts.account.signalingServer ?? 'https://decentchat.app/peerjs';
     const allServers: string[] = [configServer];
 
+    // Normalize a signaling URL for deduplication: strip default ports so
+    // https://0.peerjs.com/ and https://0.peerjs.com:443/ are treated as identical.
+    const normalizeUrl = (url: string): string => {
+      try {
+        const u = new URL(url);
+        const defaultPort = u.protocol === 'https:' || u.protocol === 'wss:' ? '443' : '80';
+        if (u.port === defaultPort) u.port = '';
+        return u.toString();
+      } catch { return url; }
+    };
+    const normalizedServers = new Set(allServers.map(normalizeUrl));
+
     // Collect signaling servers from all invites so we can find peers
     // regardless of which PeerJS server they registered on.
     for (const inviteUri of this.opts.account.invites ?? []) {
@@ -105,7 +117,8 @@ export class NodeXenaPeer {
         const invite = InviteURI.decode(inviteUri);
         const scheme = invite.secure ? 'https' : 'http';
         const inviteServer = `${scheme}://${invite.host}:${invite.port}${invite.path}`;
-        if (!allServers.includes(inviteServer)) {
+        if (!normalizedServers.has(normalizeUrl(inviteServer))) {
+          normalizedServers.add(normalizeUrl(inviteServer));
           allServers.push(inviteServer);
         }
       } catch {
