@@ -567,21 +567,6 @@ body {
   color: var(--text);
 }
 
-.message--bot {
-  border-left: 3px solid rgba(79, 142, 247, 0.4);
-  padding-left: 9px;
-}
-
-.message-bot-badge {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: #4f8ef7;
-  border: 1px solid rgba(79, 142, 247, 0.35);
-  border-radius: 999px;
-  padding: 1px 6px;
-}
-
 /* Message actions */
 .message-thread-btn {
   display: none;
@@ -1695,14 +1680,6 @@ body {
 
 .settings-value {
   font-size: 13px;
-  color: var(--text-muted);
-}
-
-#s-openclaw-status.connected {
-  color: #2ea44f;
-}
-
-#s-openclaw-status.disconnected {
   color: var(--text-muted);
 }
 

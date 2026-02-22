@@ -51,8 +51,6 @@ import { NotificationManager } from '../ui/NotificationManager';
 import { HuddleManager } from '../huddle/HuddleManager';
 import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
 import type { AppState } from '../main';
-import { BotBridge, type BotMessage } from '../bridge/BotBridge';
-import { getOrCreateBotIdentity, type BotIdentity } from '../bridge/BotIdentity';
 
 const PROTOCOL_VERSION = 2;
 
@@ -85,10 +83,6 @@ export interface UIUpdater {
   onHuddleStateChange?: (state: HuddleState, channelId: string | null) => void;
   /** Huddle participants list updated */
   onHuddleParticipantsChange?: (participants: HuddleParticipant[]) => void;
-  /** Show typing signal for AI bot */
-  showBotTyping?: (channelId: string) => void;
-  /** Report OpenClaw bridge connectivity */
-  onBotBridgeStatus?: (connected: boolean) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,10 +132,6 @@ export class ChatController {
 
   myPublicKey: string = '';
   huddle: HuddleManager | null = null;
-  botBridge: BotBridge | null = null;
-  botIdentity: BotIdentity | null = null;
-  private botBridgeInitialized = false;
-
   private ui: UIUpdater | null = null;
 
   constructor(private state: AppState) {
@@ -187,7 +177,6 @@ export class ChatController {
   /** Inject UI callbacks after construction (breaks circular dep). */
   setUI(ui: UIUpdater): void {
     this.ui = ui;
-    this.ui.onBotBridgeStatus?.(this.botBridge?.isConnected ?? false);
   }
 
   // =========================================================================
@@ -1268,8 +1257,6 @@ export class ChatController {
       this.startQuotaChecks();      // T2.4
       this.startGossipCleanup();    // T3.2
     }
-
-    await this.initBotBridge();
   }
 
   async persistWorkspace(workspaceId: string): Promise<void> {
@@ -1316,104 +1303,10 @@ export class ChatController {
       this.ui?.renderMessages();
     }
 
-    if (key === 'openclaw' && value && typeof value === 'object') {
-      const cfg = value as any;
-      if (this.botBridge) {
-        this.botBridge.reconfigure({
-          enabled: cfg.enabled ?? false,
-          url: cfg.url ?? 'ws://localhost:4242',
-          secret: cfg.secret,
-        });
-      } else if (cfg.enabled) {
-        this.botBridgeInitialized = false;
-        await this.initBotBridge();
-      }
-    }
   }
 
   async getSettings(): Promise<any> {
     return this.persistentStore.getSettings<any>({});
-  }
-
-  async initBotBridge(): Promise<void> {
-    if (this.botBridgeInitialized) return;
-    this.botBridgeInitialized = true;
-
-    const settings = await this.getSettings();
-    const botEnabled = (settings as any).openclaw?.enabled ?? false;
-    const botUrl = (settings as any).openclaw?.url ?? 'ws://localhost:4242';
-    const botSecret = (settings as any).openclaw?.secret;
-
-    if (!botEnabled) return;
-
-    this.botIdentity = await getOrCreateBotIdentity();
-    this.botBridge = new BotBridge({ url: botUrl, secret: botSecret, enabled: true });
-
-    this.botBridge.onReply(async (reply) => {
-      await this.injectBotMessage(reply);
-    });
-
-    this.botBridge.onTyping((evt) => {
-      this.ui?.showBotTyping?.(evt.channelId);
-    });
-
-    this.botBridge.onCommandAck((ack) => {
-      this.ui?.showToast(`AI: ${ack.text}`, 'info');
-    });
-
-    this.botBridge.onStatus((connected) => {
-      this.ui?.onBotBridgeStatus?.(connected);
-    });
-
-    this.botBridge.start();
-  }
-
-  async injectBotMessage(reply: BotMessage): Promise<void> {
-    if (!this.botIdentity) return;
-    const { channelId, content, timestamp } = reply;
-
-    const msg = await this.messageStore.createMessage(
-      channelId,
-      this.botIdentity.peerId,
-      content,
-      'text',
-    );
-    (msg as any).senderName = this.botIdentity.alias;
-    (msg as any).isBot = true;
-    (msg as any).timestamp = timestamp;
-
-    const result = await this.messageStore.addMessage(msg);
-    if (!result.success) return;
-
-    await this.persistMessage(msg);
-
-    if (this.state.activeChannelId === channelId) {
-      this.ui?.appendMessageToDOM(msg);
-    }
-
-    if (!this.messageProtocol || !this.state.activeWorkspaceId) {
-      return;
-    }
-
-    for (const peerId of this.getWorkspaceRecipientPeerIds()) {
-      try {
-        const envelope = await this.messageProtocol.encryptMessage(peerId, content, 'text');
-        (envelope as any).channelId = channelId;
-        (envelope as any).workspaceId = this.state.activeWorkspaceId;
-        (envelope as any).senderId = this.botIdentity.peerId;
-        (envelope as any).senderName = this.botIdentity.alias;
-        (envelope as any).messageId = msg.id;
-        (envelope as any).isBot = true;
-
-        if (this.state.readyPeers.has(peerId)) {
-          this.transport.send(peerId, envelope);
-        } else {
-          await this.offlineQueue.enqueue(peerId, envelope);
-        }
-      } catch (err) {
-        console.error('Bot broadcast to', peerId, 'failed:', err);
-      }
-    }
   }
 
   // =========================================================================
@@ -1482,20 +1375,6 @@ export class ChatController {
       this.ui?.updateMessageStatus?.(msg.id, 'sent');
     }
 
-    // Forward to AI bot if bridge is connected
-    if (this.botBridge?.isConnected && this.state.activeWorkspaceId && this.state.activeChannelId) {
-      this.botBridge.sendMessage({
-        messageId: msg.id,
-        channelId: this.state.activeChannelId,
-        workspaceId: this.state.activeWorkspaceId,
-        senderId: this.state.myPeerId,
-        senderName: this.state.myAlias || this.state.myPeerId,
-        content: content.trim(),
-        chatType: 'channel',
-        timestamp: msg.timestamp,
-        replyToId: threadId,
-      });
-    }
   }
 
   // =========================================================================
@@ -1726,19 +1605,6 @@ export class ChatController {
       console.error('Direct message send failed:', err);
     }
 
-    if (this.botBridge?.isConnected) {
-      this.botBridge.sendMessage({
-        messageId: msg.id,
-        channelId: conversationId,
-        workspaceId: this.state.activeWorkspaceId ?? 'direct',
-        senderId: this.state.myPeerId,
-        senderName: this.state.myAlias || this.state.myPeerId,
-        content: content.trim(),
-        chatType: 'direct',
-        timestamp: msg.timestamp,
-        replyToId: threadId,
-      });
-    }
   }
 
   async restoreContacts(): Promise<void> {

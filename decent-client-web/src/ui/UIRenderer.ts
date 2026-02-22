@@ -15,7 +15,6 @@ import { ContactURI, InviteURI } from 'decent-protocol';
 import type { PlaintextMessage, Contact, ContactURIData, DirectConversation } from 'decent-protocol';
 import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
 import type { AppState } from '../main';
-import { getBotPeerId } from '../bridge/BotIdentity';
 
 // ---------------------------------------------------------------------------
 // Callback interfaces
@@ -116,7 +115,6 @@ export class UIRenderer {
   private huddleChannelId: string | null = null;
   private huddleParticipants: HuddleParticipant[] = [];
   private huddleMuted = false;
-  private botBridgeConnected = false;
 
   constructor(
     private state: AppState,
@@ -815,15 +813,13 @@ export class UIRenderer {
     if (emptyState) emptyState.remove();
 
     const isMine = msg.senderId === this.state.myPeerId;
-    const botPeerId = getBotPeerId();
-    const isBotMessage = Boolean(botPeerId && msg.senderId === botPeerId);
     const myDisplayName = (this.state.activeWorkspaceId && this.state.workspaceAliases?.[this.state.activeWorkspaceId])
       || this.state.myAlias
       || 'You';
     const senderName = isMine
       ? myDisplayName
       : ((msg as any).senderName || this.getPeerAlias(msg.senderId));
-    const senderLabel = isBotMessage ? `🤖 ${senderName}` : senderName;
+    const senderLabel = senderName;
     const initial = senderName.slice(0, 2).toUpperCase();
     const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -840,7 +836,7 @@ export class UIRenderer {
       : [];
 
     const div = document.createElement('div');
-    div.className = `message ${msg.type === 'system' ? 'system' : ''} ${isGrouped ? 'grouped' : ''} ${isBotMessage ? 'message--bot' : ''}`;
+    div.className = `message ${msg.type === 'system' ? 'system' : ''} ${isGrouped ? 'grouped' : ''}`;
     div.dataset.messageId = msg.id;
     div.dataset.senderId = msg.senderId;
     div.dataset.timestamp = String(msg.timestamp);
@@ -853,7 +849,6 @@ export class UIRenderer {
         <div class="message-body">
           <div class="message-header">
             <span class="message-sender">${this.escapeHtml(senderLabel)}</span>
-            ${isBotMessage ? '<span class="message-bot-badge">AI</span>' : ''}
             <span class="message-time">${time}</span>
             ${isMine ? `<span class="msg-delivery-status ${msg.status || 'pending'}" data-message-id="${msg.id}" title="${msg.status === 'delivered' ? 'Delivered' : msg.status === 'sent' ? 'Sent' : 'Sending…'}">${msg.status === 'delivered' ? '✓✓' : msg.status === 'sent' ? '✓' : '⏳'}</span>` : ''}
           </div>
@@ -2098,9 +2093,7 @@ export class UIRenderer {
         }
       },
     );
-    this.settingsPanel.show().then(() => {
-      this.onBotBridgeStatus(this.botBridgeConnected);
-    });
+    void this.settingsPanel.show();
   }
 
   /** Update typing indicator display */
@@ -2113,26 +2106,6 @@ export class UIRenderer {
     } else {
       el.classList.remove('visible');
     }
-  }
-
-  showBotTyping(channelId: string): void {
-    if (channelId !== this.state.activeChannelId) return;
-    this.updateTypingIndicator('Xena AI is typing…');
-    setTimeout(() => {
-      const el = document.getElementById('typing-indicator');
-      if (el?.textContent === 'Xena AI is typing…') {
-        this.updateTypingIndicator('');
-      }
-    }, 1500);
-  }
-
-  onBotBridgeStatus(connected: boolean): void {
-    this.botBridgeConnected = connected;
-    const statusEl = document.getElementById('s-openclaw-status');
-    if (!statusEl) return;
-    statusEl.textContent = connected ? '🟢 Connected' : '⚪ Not connected';
-    statusEl.classList.toggle('connected', connected);
-    statusEl.classList.toggle('disconnected', !connected);
   }
 
   /** Get placeholder text for compose input */

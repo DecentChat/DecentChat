@@ -26,12 +26,6 @@ export interface AppSettings {
   showReadReceipts?: boolean;
   showTypingIndicators?: boolean;
   debug?: boolean;
-  openclaw?: {
-    enabled?: boolean;
-    /** Full WebSocket URL, e.g. ws://192.168.1.100:4242 */
-    url?: string;
-    secret?: string;
-  };
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -50,7 +44,6 @@ const DEFAULT_SETTINGS: AppSettings = {
   showReadReceipts: true,
   showTypingIndicators: true,
   debug: false,
-  openclaw: { enabled: false, url: 'ws://localhost:4242' },
 };
 
 export class SettingsPanel {
@@ -187,26 +180,6 @@ export class SettingsPanel {
             </div>
           </div>
 
-          <div class="settings-section">
-            <h3>🤖 AI Integration (OpenClaw)</h3>
-            <div class="setting-row">
-              <label>Enable AI</label>
-              <input type="checkbox" id="s-openclaw-enabled" ${settings.openclaw?.enabled ? 'checked' : ''} />
-            </div>
-            <div class="setting-row">
-              <label>Bridge URL</label>
-              <input type="text" id="s-openclaw-url" value="${settings.openclaw?.url ?? 'ws://localhost:4242'}" placeholder="ws://192.168.x.x:4242" style="width:200px;font-family:monospace;font-size:12px" />
-            </div>
-            <div class="setting-row">
-              <label>Secret</label>
-              <input type="password" id="s-openclaw-secret" value="${settings.openclaw?.secret ?? ''}" placeholder="optional" style="width:160px" />
-            </div>
-            <div class="setting-row">
-              <label>Status</label>
-              <span id="s-openclaw-status" class="settings-value disconnected">⚪ Not connected</span>
-            </div>
-          </div>
-
           <div class="settings-section" style="border:2px solid #e74c3c; border-radius:var(--radius); padding:16px; margin-top:12px;">
             <h3 style="color:#e74c3c; margin-top:0;">⚠️ Danger Zone</h3>
             <p style="font-size:13px; color:var(--text-muted); margin:0 0 12px 0;">
@@ -293,18 +266,7 @@ export class SettingsPanel {
       });
     });
 
-    const saveOpenClaw = async () => {
-      const enabled = (this.overlay?.querySelector('#s-openclaw-enabled') as HTMLInputElement | null)?.checked ?? false;
-      const urlRaw = (this.overlay?.querySelector('#s-openclaw-url') as HTMLInputElement | null)?.value?.trim() ?? '';
-      const url = urlRaw || 'ws://localhost:4242';
-      const secret = (this.overlay?.querySelector('#s-openclaw-secret') as HTMLInputElement | null)?.value ?? '';
-      const next = { enabled, url, secret: secret.trim() || undefined };
-      await this.saveSetting('openclaw', next);
-    };
-
-    this.overlay.querySelector('#s-openclaw-enabled')?.addEventListener('change', () => { void saveOpenClaw(); });
-    this.overlay.querySelector('#s-openclaw-url')?.addEventListener('change', () => { void saveOpenClaw(); });
-    this.overlay.querySelector('#s-openclaw-secret')?.addEventListener('change', () => { void saveOpenClaw(); });
+    // (bot bridge removed — OpenClaw connects as a native P2P peer)
   }
 
   close(): void {
