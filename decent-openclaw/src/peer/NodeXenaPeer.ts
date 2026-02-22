@@ -240,6 +240,15 @@ export class NodeXenaPeer {
       return;
     }
 
+    // Handle name-announce (unencrypted) — must be before the encrypted guard
+    if (msg?.type === 'name-announce' && msg.alias) {
+      const alias = msg.alias as string;
+      this.updateWorkspaceMemberAlias(fromPeerId, alias);
+      // Also cache directly so resolveSenderName can find it even before workspace sync
+      this.store.set(`peer-alias-${fromPeerId}`, alias);
+      return;
+    }
+
     if (msg?.type === 'workspace-sync' && msg.sync) {
       const merged = msg.workspaceId ? { ...msg.sync, workspaceId: msg.workspaceId } : msg.sync;
       await this.syncProtocol.handleMessage(fromPeerId, merged);
@@ -311,7 +320,9 @@ export class NodeXenaPeer {
     if (!this.transport || !this.messageProtocol) return;
     try {
       const handshake = await this.messageProtocol.createHandshake();
-      this.transport.send(peerId, { type: 'handshake', ...handshake, alias: this.opts.account.alias });
+      this.transport.send(peerId, { type: 'handshake', ...handshake });
+      // Announce display name (separate unencrypted message — same pattern as the web client)
+      this.transport.send(peerId, { type: 'name-announce', alias: this.opts.account.alias });
     } catch (err) {
       this.opts.log?.error?.(`[xena-peer] handshake failed for ${peerId}: ${String(err)}`);
     }
@@ -394,7 +405,8 @@ export class NodeXenaPeer {
   private resolveSenderName(workspaceId: string, peerId: string, fallback?: string): string {
     const ws = workspaceId ? this.workspaceManager.getWorkspace(workspaceId) : undefined;
     const alias = ws?.members.find((m) => m.peerId === peerId)?.alias;
-    return alias ?? fallback ?? peerId.slice(0, 8);
+    const cachedAlias = this.store.get<string>(`peer-alias-${peerId}`, '');
+    return alias || cachedAlias || fallback || peerId.slice(0, 8);
   }
 
   private getPeerPublicKey(peerId: string): string | null {
