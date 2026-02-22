@@ -128,7 +128,7 @@ export class NodeXenaPeer {
 
     this.transport = new PeerTransport({
       signalingServers: allServers,
-      useTurn: false,
+      // useTurn defaults to true → uses STUN + open-relay TURN for NAT traversal
     });
     this.opts.log?.info(`[xena-peer] signaling servers: ${allServers.join(', ')}`);
 
