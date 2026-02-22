@@ -7,12 +7,24 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "port": { "type": "number", "default": 4242 },
-      "secret": { "type": "string" }
+      "enabled": { "type": "boolean", "default": true },
+      "seedPhrase": { "type": "string" },
+      "signalingServer": { "type": "string", "default": "https://decentchat.app/peerjs" },
+      "invites": { "type": "array", "items": { "type": "string" } },
+      "alias": { "type": "string", "default": "Xena AI" },
+      "dataDir": { "type": "string" },
+      "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist", "disabled"], "default": "open" },
+      "channels": { "type": "object" }
     }
   },
   "uiHints": {
-    "port": { "label": "WebSocket Port", "placeholder": "4242" },
-    "secret": { "label": "Shared Secret", "sensitive": true }
+    "enabled": { "label": "Enabled" },
+    "seedPhrase": { "label": "Seed Phrase (12 words)", "sensitive": true },
+    "signalingServer": { "label": "Signaling Server", "placeholder": "https://decentchat.app/peerjs" },
+    "invites": { "label": "Invite URLs" },
+    "alias": { "label": "Bot Display Name", "placeholder": "Xena AI" },
+    "dataDir": { "label": "Data Directory" },
+    "dmPolicy": { "label": "DM Policy" },
+    "channels": { "label": "Channel Rules" }
   }
 }

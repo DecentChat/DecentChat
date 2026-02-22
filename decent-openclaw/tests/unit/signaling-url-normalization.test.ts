@@ -41,7 +41,6 @@ const VALID_SEED = new SeedPhraseManager().generate().mnemonic;
 function makeAccount(overrides: Partial<any> = {}): any {
   return {
     accountId: 'acct-1',
-    port: 9000,
     enabled: true,
     dmPolicy: 'allow',
     configured: true,
@@ -50,7 +49,6 @@ function makeAccount(overrides: Partial<any> = {}): any {
     invites: [],
     alias: 'Xena',
     dataDir: mkdtempSync(join(tmpdir(), 'openclaw-nodepeer-test-')),
-    mode: 'peer',
     ...overrides,
   };
 }

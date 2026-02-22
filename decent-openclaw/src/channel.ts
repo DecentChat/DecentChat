@@ -5,15 +5,12 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
 import { z } from "zod";
-import { startDecentChatBridge } from "./monitor.js";
+import { startDecentChatPeer } from "./monitor.js";
 import { getActivePeer } from "./peer-registry.js";
 import type { ResolvedDecentChatAccount } from "./types.js";
 
 const DecentChatConfigSchema = z.object({
   enabled: z.boolean().optional(),
-  mode: z.enum(["bridge", "peer"]).optional().default("peer"),
-  port: z.number().int().positive().optional().default(4242),
-  secret: z.string().optional(),
   seedPhrase: z.string().optional(),
   signalingServer: z.string().optional(),
   invites: z.array(z.string()).optional(),
@@ -27,20 +24,17 @@ const DecentChatConfigSchema = z.object({
 
 function resolveDecentChatAccount(cfg: any, accountId?: string | null): ResolvedDecentChatAccount {
   const ch = cfg?.channels?.decentchat ?? {};
-  const mode: "bridge" | "peer" = ch.mode ?? "peer";
+  const seedPhrase = typeof ch.seedPhrase === "string" ? ch.seedPhrase : undefined;
   return {
     accountId: accountId ?? DEFAULT_ACCOUNT_ID,
-    port: ch.port ?? 4242,
-    secret: ch.secret,
     enabled: ch.enabled !== false,
     dmPolicy: ch.dmPolicy ?? "open",
-    configured: !!ch.seedPhrase || mode !== "peer",
-    seedPhrase: ch.seedPhrase,
+    configured: !!seedPhrase?.trim(),
+    seedPhrase,
     signalingServer: ch.signalingServer ?? "https://decentchat.app/peerjs",
     invites: ch.invites ?? [],
     alias: ch.alias ?? "Xena AI",
     dataDir: ch.dataDir,
-    mode,
   };
 }
 
@@ -51,7 +45,7 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
     label: "DecentChat",
     selectionLabel: "DecentChat (P2P)",
     docsPath: "/channels/decentchat",
-    blurb: "P2P encrypted chat via DecentChat WebSocket bridge.",
+    blurb: "P2P encrypted chat via DecentChat.",
     aliases: ["decent", "decentchat"],
   },
   capabilities: { chatTypes: ["direct", "group", "thread"] },
@@ -60,13 +54,10 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
     ...buildChannelConfigSchema(DecentChatConfigSchema),
     uiHints: {
       enabled: { label: "Enabled" },
-      mode: { label: "Mode", help: "peer: join P2P network directly; bridge: relay via WebSocket" },
       seedPhrase: { label: "Seed Phrase (12 words)", sensitive: true, help: "BIP39 seed phrase — determines your bot's identity on the network" },
-      secret: { label: "Bridge Secret", sensitive: true, help: "Shared secret for WebSocket bridge authentication (bridge mode only)" },
-      port: { label: "Bridge Port", placeholder: "4242", advanced: true, help: "Local WebSocket port (bridge mode only)" },
       signalingServer: { label: "Signaling Server", placeholder: "https://decentchat.app/peerjs", advanced: true },
       alias: { label: "Bot Display Name", placeholder: "Xena AI" },
-      dataDir: { label: "Data Directory", advanced: true, help: "Path for persistent peer storage (peer mode only)" },
+      dataDir: { label: "Data Directory", advanced: true, help: "Path for persistent peer storage" },
       dmPolicy: { label: "DM Policy" },
       invites: { label: "Invite URLs", advanced: true, help: "DecentChat invite URIs for workspaces to join on startup" },
     },
@@ -81,8 +72,6 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       accountId: account.accountId,
       enabled: account.enabled,
       configured: account.configured,
-      port: account.port,
-      mode: account.mode,
       signalingServer: account.signalingServer,
     }),
   },
@@ -148,15 +137,11 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
     defaultRuntime: {
       accountId: DEFAULT_ACCOUNT_ID,
       running: false,
-      port: 4242,
-      mode: "peer",
       lastError: null,
     },
     buildChannelSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
       running: snapshot.running ?? false,
-      port: snapshot.port ?? 4242,
-      mode: snapshot.mode ?? "peer",
       lastError: snapshot.lastError ?? null,
     }),
     buildAccountSnapshot: ({ account, runtime }) => ({
@@ -164,8 +149,6 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       enabled: account.enabled,
       configured: account.configured,
       running: runtime?.running ?? false,
-      port: account.port,
-      mode: runtime?.mode ?? account.mode,
       lastError: runtime?.lastError ?? null,
     }),
   },
@@ -176,16 +159,20 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
         accountId: ctx.accountId,
         running: false,
         configured: ctx.account.configured,
-        mode: ctx.account.mode,
-        port: ctx.account.port,
       });
-      await startDecentChatBridge({
-        account: ctx.account,
-        accountId: ctx.accountId,
-        log: ctx.log,
-        setStatus: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
-        abortSignal: ctx.abortSignal,
-      });
+      try {
+        await startDecentChatPeer({
+          account: ctx.account,
+          accountId: ctx.accountId,
+          log: ctx.log,
+          setStatus: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+          abortSignal: ctx.abortSignal,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        ctx.setStatus({ accountId: ctx.accountId, running: false, lastError: message });
+        throw err;
+      }
     },
   },
 };

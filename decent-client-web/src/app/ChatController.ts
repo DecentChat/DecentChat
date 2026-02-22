@@ -110,6 +110,9 @@ export class ChatController {
   readonly notifications: NotificationManager;
   readonly contactStore: MemoryContactStore;
   readonly directConversationStore: MemoryDirectConversationStore;
+  private networkOnlineListenerBound = false;
+  private transportReinitInFlight: Promise<boolean> | null = null;
+  private lastTransportReinitAt = 0;
 
   /** DEP-002: Peer Exchange for signaling server discovery */
   readonly storageQuota: StorageQuotaManager = new StorageQuotaManager();
@@ -782,11 +785,11 @@ export class ChatController {
     // ICE restart on network recovery (DEP-004)
     // PeerTransport's network listener handles heartbeat pings and signaling server probing.
     // At the app layer, show a toast to keep the user informed.
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && !this.networkOnlineListenerBound) {
+      this.networkOnlineListenerBound = true;
       window.addEventListener('online', () => {
         const peers = this.transport.getConnectedPeers();
         console.log(`[Network] Reconnected. Re-probing ${peers.length} peers...`);
-        this.ui?.showToast('Network reconnected — checking connections...', 'info');
       });
     }
   }
@@ -1180,6 +1183,66 @@ export class ChatController {
     }, 20_000);
   }
 
+  /** Number of known workspace peers (excluding self) that should be connected. */
+  getExpectedWorkspacePeerCount(): number {
+    const peerIds = new Set<string>();
+    for (const ws of this.workspaceManager.getAllWorkspaces()) {
+      for (const member of ws.members) {
+        if (member.peerId && member.peerId !== this.state.myPeerId) {
+          peerIds.add(member.peerId);
+        }
+      }
+    }
+    return peerIds.size;
+  }
+
+  /** Public one-shot maintenance hook for startup/resume reconnect bootstrap. */
+  runPeerMaintenanceNow(reason = 'manual'): number {
+    const attempted = this._runPeerMaintenance();
+    if (attempted > 0) {
+      console.log(`[Maintenance] ${reason}: attempted reconnect to ${attempted} peer(s)`);
+    }
+    return attempted;
+  }
+
+  /**
+   * Safety fallback: if signaling appears fully down after startup/resume,
+   * reinitialize the transport once with cooldown to avoid reconnect storms.
+   */
+  async reinitializeTransportIfStuck(reason = 'manual'): Promise<boolean> {
+    if (this.transportReinitInFlight) return this.transportReinitInFlight;
+    const now = Date.now();
+    if (now - this.lastTransportReinitAt < 15_000) return false;
+
+    this.transportReinitInFlight = (async () => {
+      this.lastTransportReinitAt = Date.now();
+      try {
+        const connectedPeers = this.transport.getConnectedPeers().length;
+        if (connectedPeers > 0) return false;
+
+        const signalingStatus = typeof this.transport.getSignalingStatus === 'function'
+          ? this.transport.getSignalingStatus()
+          : [];
+        const allSignalingDown = signalingStatus.length > 0 && signalingStatus.every((s: any) => !s.connected);
+        if (!allSignalingDown) return false;
+
+        console.warn(`[Reconnect] Reinitializing transport (${reason})`);
+        this.transport.destroy();
+        await this.transport.init(this.state.myPeerId || undefined);
+        this.setupTransportHandlers();
+        this.runPeerMaintenanceNow(`post-reinit:${reason}`);
+        return true;
+      } catch (error) {
+        console.warn('[Reconnect] Transport reinit failed:', (error as Error).message);
+        return false;
+      } finally {
+        this.transportReinitInFlight = null;
+      }
+    })();
+
+    return this.transportReinitInFlight;
+  }
+
   // =========================================================================
   // T3.2: Gossip Propagation
   // =========================================================================
@@ -1273,11 +1336,11 @@ export class ChatController {
    * Complements PeerTransport's auto-reconnect (which only fires on connection
    * drop) by also reaching out to members we've never connected to.
    */
-  private _runPeerMaintenance(): void {
+  private _runPeerMaintenance(): number {
     const ws = this.state.activeWorkspaceId
       ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
       : null;
-    if (!ws) return;
+    if (!ws) return 0;
 
     const connectedPeers = new Set(this.transport.getConnectedPeers());
     let attempted = 0;
@@ -1288,7 +1351,8 @@ export class ChatController {
       // Use the transport's own in-flight state (connectingTo + pending reconnect
       // timers) instead of app-level connectingPeers, which can go stale when
       // connect() returns immediately (dedup early-return, no catch fired).
-      if (this.transport.isConnectingToPeer(member.peerId)) {
+      if (typeof this.transport.isConnectingToPeer === 'function' &&
+          this.transport.isConnectingToPeer(member.peerId)) {
         this.state.connectingPeers.add(member.peerId); // keep UI in sync
         continue;
       }
@@ -1312,6 +1376,7 @@ export class ChatController {
     if (attempted > 0) {
       console.log(`[Maintenance] Attempting reconnect to ${attempted} workspace member(s)`);
     }
+    return attempted;
   }
 
   /**

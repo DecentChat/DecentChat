@@ -55,6 +55,35 @@ bun run dev:client
 bun run build:client
 ```
 
+## Local Perf + Integrity Runner
+
+Run local peer simulation scenarios (no CI required) with Bun:
+
+```bash
+# Baseline: all peers online
+bun run perf:smoke
+
+# Chaos: subset offline, then reconnect + queue flush
+bun run perf:reconnect
+```
+
+CLI flags (runner: `decent-protocol/tests/perf/run.ts`):
+
+- `--peers=<n>` number of simulated peers (default: `5`)
+- `--scenario=smoke|reconnect-chaos` scenario selection
+- `--check-integrity` fail process if any integrity check fails
+
+Report output:
+
+- `artifacts/perf-report.json`
+
+The report includes pass/fail checks for:
+- message/history integrity (missing/duplicate IDs, count consistency)
+- workspace integrity (channel/member consistency after settle)
+- thread integrity (`threadId`/`replyToId` linkage)
+- persistence integrity after restart (count + last IDs stable)
+- offline queue integrity (queued entries flush on reconnect)
+
 ## Protocol Design
 
 The protocol is transport-agnostic. WebRTC is the default, but you can swap in WebSocket, Bluetooth, or anything that implements the `Transport` interface:

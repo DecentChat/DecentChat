@@ -1,5 +1,3 @@
-import { WebSocketServer, WebSocket } from "ws";
-import { createServer } from "node:http";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -7,12 +5,7 @@ import { randomUUID } from "node:crypto";
 import { createReplyPrefixOptions, type OpenClawConfig } from "openclaw/plugin-sdk";
 import { getDecentChatRuntime } from "./runtime.js";
 import { setActivePeer } from "./peer-registry.js";
-import type {
-  InboundWireMessage,
-  OutboundWireMessage,
-  ResolvedDecentChatAccount,
-  WireMessage,
-} from "./types.js";
+import type { ResolvedDecentChatAccount } from "./types.js";
 
 type InboundAttachment = {
   id: string;
@@ -24,7 +17,7 @@ type InboundAttachment = {
   height?: number;
 };
 
-type BridgeContext = {
+type PeerContext = {
   account: ResolvedDecentChatAccount;
   accountId: string;
   log?: {
@@ -65,23 +58,16 @@ export async function finalizePeerStream(params: {
   });
 }
 
-export async function startDecentChatBridge(ctx: BridgeContext): Promise<void> {
-  if (ctx.account.mode === "peer") {
-    if (!ctx.account.seedPhrase) {
-      ctx.log?.warn?.("[decentchat] peer mode requested without seedPhrase; falling back to bridge mode");
-    } else {
-      try {
-        return await startNodePeerMode(ctx);
-      } catch (err) {
-        ctx.log?.warn?.(`[decentchat] peer mode failed; falling back to bridge mode: ${String(err)}`);
-      }
-    }
+export async function startDecentChatPeer(ctx: PeerContext): Promise<void> {
+  const seedPhrase = ctx.account.seedPhrase?.trim();
+  if (!seedPhrase) {
+    throw new Error("DecentChat seed phrase is required: set channels.decentchat.seedPhrase");
   }
 
-  return startBridgeMode(ctx);
+  return startNodePeerRuntime(ctx);
 }
 
-async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
+async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
   const { NodeXenaPeer } = await import("./peer/NodeXenaPeer.js");
   const core = getDecentChatRuntime();
   const TOOL_CALL_MISMATCH_RE = /^No tool call found for function call output with call_id\b/i;
@@ -175,7 +161,6 @@ async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
   setActivePeer(xenaPeer);
   ctx.setStatus({
     running: true,
-    mode: "peer",
     peerId: xenaPeer.peerId,
     lastError: null,
   });
@@ -184,7 +169,7 @@ async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
     const shutdown = () => {
       setActivePeer(null);
       xenaPeer.destroy();
-      ctx.setStatus({ running: false, mode: "peer" });
+      ctx.setStatus({ running: false });
       resolve();
     };
 
@@ -195,140 +180,6 @@ async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
 
     ctx.abortSignal?.addEventListener("abort", shutdown);
   });
-}
-
-async function startBridgeMode(ctx: BridgeContext): Promise<void> {
-  const core = getDecentChatRuntime();
-  const port = ctx.account.port ?? 4242;
-  const secret = ctx.account.secret;
-
-  const authenticated = new Map<WebSocket, boolean>();
-
-  const httpServer = createServer();
-  const wss = new WebSocketServer({ noServer: true });
-
-  httpServer.on("upgrade", (req, socket, head) => {
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit("connection", ws, req);
-    });
-  });
-
-  httpServer.on("error", (err) => {
-    ctx.log?.error?.(`[decentchat] server error: ${err.message}`);
-  });
-  wss.on("error", (err) => {
-    ctx.log?.error?.(`[decentchat] wss error: ${err.message}`);
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    const onError = (err: Error) => {
-      httpServer.removeListener("listening", onListening);
-      reject(err);
-    };
-    const onListening = () => {
-      httpServer.removeListener("error", onError);
-      resolve();
-    };
-    httpServer.once("error", onError);
-    httpServer.once("listening", onListening);
-    httpServer.listen(port);
-  });
-
-  ctx.log?.info(`[decentchat] WebSocket server listening on port ${port}`);
-  ctx.setStatus({ running: true, mode: "bridge", port, lastError: null });
-
-  wss.on("connection", (ws) => {
-    authenticated.set(ws, !secret);
-
-    const pingInterval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        send(ws, { type: "pong" });
-      }
-    }, 30_000);
-
-    ws.on("close", () => {
-      authenticated.delete(ws);
-      clearInterval(pingInterval);
-    });
-
-    ws.on("message", async (raw) => {
-      let msg: InboundWireMessage;
-      try {
-        msg = JSON.parse(raw.toString());
-      } catch {
-        return;
-      }
-
-      if (msg.type === "ping") {
-        send(ws, { type: "pong" });
-        return;
-      }
-
-      if (msg.type === "auth") {
-        if (!secret || msg.secret === secret) {
-          authenticated.set(ws, true);
-        }
-        return;
-      }
-
-      if (!authenticated.get(ws)) {
-        ctx.log?.warn?.("[decentchat] Unauthenticated client attempted to send message");
-        return;
-      }
-
-      if (msg.type === "message") {
-        await handleInboundMessage(ws, msg, ctx, core);
-      }
-    });
-
-    ws.on("error", (err) => {
-      ctx.log?.error?.(`[decentchat] WS error: ${err.message}`);
-    });
-  });
-
-  return new Promise<void>((resolve) => {
-    const shutdown = () => {
-      for (const client of wss.clients) {
-        client.terminate();
-      }
-      wss.close();
-      httpServer.close();
-      ctx.setStatus({ running: false, mode: "bridge" });
-      ctx.log?.info("[decentchat] WebSocket server stopped");
-      resolve();
-    };
-
-    ctx.abortSignal?.addEventListener("abort", shutdown);
-  });
-}
-
-async function handleInboundMessage(
-  ws: WebSocket,
-  msg: WireMessage,
-  ctx: { account: ResolvedDecentChatAccount; accountId: string; log?: any },
-  core: ReturnType<typeof getDecentChatRuntime>,
-): Promise<void> {
-  const TOOL_CALL_MISMATCH_RE = /^No tool call found for function call output with call_id\b/i;
-  send(ws, { type: "typing", channelId: msg.channelId, messageId: msg.messageId });
-
-  await processInboundMessage(msg, ctx, core, async (text) => {
-    if (TOOL_CALL_MISMATCH_RE.test(text.trim())) {
-      ctx.log?.warn?.("[decentchat] suppressed tool-call mismatch error text");
-      return;
-    }
-    send(ws, {
-      type: "reply",
-      inReplyToId: msg.messageId,
-      channelId: msg.channelId,
-      content: text,
-      timestamp: Date.now(),
-      threadId: msg.threadId,
-    });
-  }, (reason) => {
-    send(ws, { type: "error", inReplyToId: msg.messageId, reason });
-  }, Array.isArray((msg as WireMessage & { attachments?: InboundAttachment[] }).attachments)
-    ? (msg as WireMessage & { attachments?: InboundAttachment[] }).attachments
-    : undefined);
 }
 
 function resolveThreadSessionKeys(params: {
@@ -511,10 +362,4 @@ async function processInboundMessage(
     },
     replyOptions: { onModelSelected, suppressToolErrorWarnings: true },
   });
-}
-
-function send(ws: WebSocket, msg: OutboundWireMessage): void {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(msg));
-  }
 }

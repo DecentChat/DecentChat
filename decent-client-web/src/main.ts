@@ -11,6 +11,7 @@ import './ui/styles/tooltips.css';
 
 import { initTooltips } from './ui/TooltipManager';
 import { ChatController } from './app/ChatController';
+import { LifecycleReconnectGuard } from './app/LifecycleReconnectGuard';
 import { UIRenderer } from './ui/UIRenderer';
 import { CommandParser } from './commands/CommandParser';
 import { registerCommands } from './commands/registerCommands';
@@ -327,6 +328,10 @@ async function init(): Promise<void> {
     // Bootstrap transport + peer ID
     const settingsDefaults: AppSettings = { theme: 'auto', notifications: true };
     const settings = await ctrl.persistentStore.getSettings<AppSettings>(settingsDefaults);
+
+    // Apply lightweight visual preferences on boot
+    document.body.classList.toggle('show-reconnect-activity', !!(settings as any).showLiveReconnectActivity);
+
     let seedPhrase = await ctrl.persistentStore.getSetting('seedPhrase');
 
     // Auto-generate seed phrase if none exists — ensures deterministic peer ID from the start
@@ -510,6 +515,39 @@ async function init(): Promise<void> {
     // would cause a double-registration race with the PeerJS signaling server).
     (window as any).__appInitialized = true;
 
+    // Refresh/reload lifecycle hardening:
+    // - Ensure old sockets are torn down on real unload so peer ID is released promptly.
+    // - Bootstrap reconnect on pageshow/visibility/load in case browser restored a stale runtime.
+    const reconnectGuard = new LifecycleReconnectGuard({
+      windowTarget: window,
+      documentTarget: document,
+      getExpectedPeers: () => ctrl.getExpectedWorkspacePeerCount(),
+      getConnectedPeers: () => ctrl.transport.getConnectedPeers().length,
+      runPeerMaintenanceNow: (reason) => ctrl.runPeerMaintenanceNow(reason),
+      reinitializeTransportIfStuck: (reason) => ctrl.reinitializeTransportIfStuck(reason),
+      isOnline: () => navigator.onLine,
+    });
+    let tornDown = false;
+    reconnectGuard.start();
+
+    const teardownForUnload = () => {
+      if (tornDown) return;
+      tornDown = true;
+      reconnectGuard.stop();
+      try { ctrl.stopPEXBroadcasts(); } catch {}
+      try { ctrl.transport.destroy(); } catch {}
+    };
+
+    window.addEventListener('beforeunload', teardownForUnload, { capture: true });
+    window.addEventListener('pagehide', (event) => {
+      const pageEvent = event as PageTransitionEvent;
+      if (!pageEvent.persisted) {
+        teardownForUnload();
+      }
+    }, { capture: true });
+
+    reconnectGuard.scheduleCheck('load');
+
   } catch (error) {
     console.error('[DecentChat] Initialization failed:', error);
     
@@ -643,76 +681,41 @@ async function initWithTimeout() {
   }
 }
 
-// ─── Service Worker: Seamless update flow ────────────────────────────────────
-// Strategy:
-//  1. New SW downloads automatically in background (registerType: 'autoUpdate')
-//  2. New SW waits — won't disrupt an active chat session (no skipWaiting: true)
-//  3. When waiting SW detected → show sticky update banner at top of page
-//  4. User clicks "Update now" → SKIP_WAITING message → controllerchange → reload
-//  5. On next tab focus (visibilitychange) with a waiting SW → auto-apply silently
+// ─── Service Worker: deterministic activation handoff ────────────────────────
+const SW_RELOAD_SEEN_KEY = 'dc-sw-reload-seen-build';
+const CURRENT_BUILD_ID = `${__APP_VERSION__}:${__COMMIT_HASH__}`;
+
 if ('serviceWorker' in navigator) {
-  let waitingWorker: ServiceWorker | null = null;
+  let pendingReloadBuildId: string | null = null;
 
-  function showUpdateBanner(worker: ServiceWorker) {
-    waitingWorker = worker;
-    // Don't stack duplicate banners
-    if (document.getElementById('sw-update-banner')) return;
+  const maybeReloadForBuild = (buildId: unknown) => {
+    if (typeof buildId !== 'string' || !buildId.trim()) return;
+    if (buildId === CURRENT_BUILD_ID) return;
+    if (sessionStorage.getItem(SW_RELOAD_SEEN_KEY) === buildId) return;
 
-    const banner = document.createElement('div');
-    banner.id = 'sw-update-banner';
-    banner.innerHTML = `
-      <span>🐙 New version available</span>
-      <div class="sw-update-actions">
-        <button id="sw-update-now">Update now</button>
-        <button id="sw-update-later">Later</button>
-      </div>
-    `;
-    document.body.insertBefore(banner, document.body.firstChild);
-
-    document.getElementById('sw-update-now')!.addEventListener('click', () => {
-      if (waitingWorker) waitingWorker.postMessage({ type: 'SKIP_WAITING' });
-      banner.remove();
-    });
-    document.getElementById('sw-update-later')!.addEventListener('click', () => {
-      banner.remove();
-    });
-  }
-
-  // When SW takes control (after SKIP_WAITING), reload so new assets are used.
-  // Guard: only reload once the app has fully initialised. If controllerchange
-  // fires during the startup sequence (e.g. waiting SW activates the moment
-  // the old tab closes during a dual-browser refresh after a deploy) we would
-  // reload mid-init, causing a second PeerJS registration with the same peer
-  // ID that results in an unavailable-id error and a stale yellow-dot state.
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    pendingReloadBuildId = buildId;
     if ((window as any).__appInitialized) {
+      sessionStorage.setItem(SW_RELOAD_SEEN_KEY, buildId);
       window.location.reload();
     }
-    // If not yet initialized, the page is already loading the newest assets
-    // from the newly-activated SW — no reload needed.
+  };
+
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data?.type === 'DC_SW_ACTIVATED') {
+      maybeReloadForBuild(event.data.buildId);
+    }
+  });
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (pendingReloadBuildId && (window as any).__appInitialized) {
+      sessionStorage.setItem(SW_RELOAD_SEEN_KEY, pendingReloadBuildId);
+      window.location.reload();
+    }
   });
 
   navigator.serviceWorker.ready.then(reg => {
-    // Already a waiting worker when page loads (e.g. user had old tab open)
-    if (reg.waiting) showUpdateBanner(reg.waiting);
-
-    reg.addEventListener('updatefound', () => {
-      const newWorker = reg.installing;
-      if (!newWorker) return;
-      newWorker.addEventListener('statechange', () => {
-        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-          showUpdateBanner(newWorker);
-        }
-      });
-    });
-  });
-
-  // Auto-apply silently when user returns to tab (non-disruptive)
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && waitingWorker) {
-      waitingWorker.postMessage({ type: 'SKIP_WAITING' });
-      waitingWorker = null;
-    }
+    // Keep old behavior where update polling can nudge the registration.
+    reg.update().catch(() => {});
   });
 }
 

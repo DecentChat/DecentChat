@@ -2313,7 +2313,7 @@ export class UIRenderer {
   /** Tooltip text for the presence dot */
   private peerStatusTitle(peerId: string): string {
     if (this.state.readyPeers.has(peerId)) return 'Online';
-    if (this.state.connectingPeers.has(peerId)) return 'Connecting...';
+    if (this.state.connectingPeers.has(peerId)) return 'Reconnecting';
     return 'Offline';
   }
 

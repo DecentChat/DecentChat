@@ -7,7 +7,8 @@ OpenClaw channel plugin for DecentChat.
 1. Add this plugin path to your OpenClaw config under `plugins.load.paths`.
 2. Configure channel settings under `channels.decentchat`:
    - `enabled`
-   - `port` (default `4242`)
-   - `secret` (optional shared secret)
+   - `seedPhrase` (required; BIP39 mnemonic)
+   - `signalingServer` (optional; default `https://decentchat.app/peerjs`)
+   - `invites` (optional DecentChat invite URIs)
 3. Enable OpenClaw in the DecentChat settings panel.
 4. Use `/activation` in any channel if you want responses to all messages.

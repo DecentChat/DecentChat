@@ -137,6 +137,17 @@ describe('Deploy smoke — service worker', () => {
       expect(urlMatches.length).toBeGreaterThan(3);
     }
   });
+
+  test('sw.js includes deterministic activation handoff hooks', () => {
+    if (!distExists) return;
+    const swPath = join(DIST, 'sw.js');
+    if (!existsSync(swPath)) return;
+
+    const content = readFileSync(swPath, 'utf-8');
+    expect(content).toContain('skipWaiting');
+    expect(content.includes('clients.claim') || content.includes('self.clients.claim')).toBe(true);
+    expect(content).toContain('DC_SW_ACTIVATED');
+  });
 });
 
 describe('Deploy smoke — security', () => {

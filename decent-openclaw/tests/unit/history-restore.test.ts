@@ -9,7 +9,6 @@ const VALID_SEED = 'abandon abandon abandon abandon abandon abandon abandon aban
 function makeAccount(overrides: Partial<any> = {}): any {
   return {
     accountId: 'acct-1',
-    port: 9000,
     enabled: true,
     dmPolicy: 'allow',
     configured: true,
@@ -18,7 +17,6 @@ function makeAccount(overrides: Partial<any> = {}): any {
     invites: [],
     alias: 'Xena',
     dataDir: mkdtempSync(join(tmpdir(), 'openclaw-restore-test-')),
-    mode: 'peer',
     ...overrides,
   };
 }

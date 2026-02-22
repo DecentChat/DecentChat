@@ -19,10 +19,6 @@
     "decent-protocol": "file:../decent-protocol",
     "decent-transport-webrtc": "file:../decent-transport-webrtc",
     "node-datachannel": "^0.32.1",
-    "openclaw": "file:/Users/claw/.npm-global/lib/node_modules/openclaw",
-    "ws": "^8.18.0"
-  },
-  "devDependencies": {
-    "@types/ws": "^8.5.14"
+    "openclaw": "file:/Users/claw/.npm-global/lib/node_modules/openclaw"
   }
 }

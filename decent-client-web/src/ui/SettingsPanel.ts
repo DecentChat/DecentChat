@@ -26,6 +26,7 @@ export interface AppSettings {
   showReadReceipts?: boolean;
   showTypingIndicators?: boolean;
   debug?: boolean;
+  showLiveReconnectActivity?: boolean;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -44,6 +45,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   showReadReceipts: true,
   showTypingIndicators: true,
   debug: false,
+  showLiveReconnectActivity: false,
 };
 
 export class SettingsPanel {
@@ -174,6 +176,10 @@ export class SettingsPanel {
 
           <div class="settings-section">
             <h3>Advanced</h3>
+            <div class="setting-row">
+              <label>Show live reconnect activity</label>
+              <input type="checkbox" data-key="showLiveReconnectActivity" ${settings.showLiveReconnectActivity ? 'checked' : ''} />
+            </div>
             <div class="setting-row">
               <label>Debug mode</label>
               <input type="checkbox" data-key="debug" ${settings.debug ? 'checked' : ''} />
@@ -408,6 +414,9 @@ export class SettingsPanel {
     }
     if (key === 'compactMode') {
       document.body.classList.toggle('compact', value);
+    }
+    if (key === 'showLiveReconnectActivity') {
+      document.body.classList.toggle('show-reconnect-activity', value);
     }
     if (key === 'debug') {
       document.body.classList.toggle('debug-mode', value);
