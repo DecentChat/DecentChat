@@ -58,12 +58,8 @@ export interface PeerTransportConfig {
  * Default STUN servers for NAT traversal.
  */
 export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
-  // Google STUN servers (public, widely used)
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  
-  // Cloudflare STUN (fast, reliable)
-  { urls: 'stun:stun.cloudflare.com:3478' },
+  // Two Google STUN servers as a single entry (browser treats as fallbacks, not parallel)
+  { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
 ];
 
 /**
@@ -78,11 +74,8 @@ export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
  */
 export const DEFAULT_TURN_SERVERS: RTCIceServer[] = [
   {
-    urls: [
-      'turn:openrelay.metered.ca:80',
-      'turn:openrelay.metered.ca:443',
-      'turn:openrelay.metered.ca:443?transport=tcp',
-    ],
+    // Two URLs in one entry = browser picks fastest, not parallel probe
+    urls: ['turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp'],
     username: 'openrelayproject',
     credential: 'openrelayproject',
   },
