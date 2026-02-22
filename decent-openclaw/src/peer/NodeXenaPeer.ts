@@ -155,10 +155,10 @@ export class NodeXenaPeer {
     }
   }
 
-  async sendMessage(channelId: string, workspaceId: string, content: string): Promise<void> {
+  async sendMessage(channelId: string, workspaceId: string, content: string, threadId?: string, replyToId?: string): Promise<void> {
     if (!this.transport || !this.messageProtocol || !content.trim()) return;
 
-    const msg = await this.messageStore.createMessage(channelId, this.myPeerId, content.trim(), 'text');
+    const msg = await this.messageStore.createMessage(channelId, this.myPeerId, content.trim(), 'text', threadId);
     const added = await this.messageStore.addMessage(msg);
     if (added.success) {
       this.persistMessagesForChannel(channelId);
@@ -178,6 +178,8 @@ export class NodeXenaPeer {
         (envelope as any).senderId = this.myPeerId;
         (envelope as any).senderName = this.opts.account.alias;
         (envelope as any).messageId = msg.id;
+        if (threadId) (envelope as any).threadId = threadId;
+        if (replyToId) (envelope as any).replyToId = replyToId;
         this.transport.send(peerId, envelope);
       } catch (err) {
         this.opts.log?.error?.(`[xena-peer] failed to encrypt for ${peerId}: ${String(err)}`);
@@ -231,6 +233,10 @@ export class NodeXenaPeer {
       knownKeys[fromPeerId] = msg.publicKey;
       this.store.set('peer-public-keys', knownKeys);
       this.updateWorkspaceMemberKey(fromPeerId, msg.publicKey);
+      // Save sender's display name if provided
+      if (msg.alias) {
+        this.updateWorkspaceMemberAlias(fromPeerId, msg.alias as string);
+      }
       return;
     }
 
@@ -305,7 +311,7 @@ export class NodeXenaPeer {
     if (!this.transport || !this.messageProtocol) return;
     try {
       const handshake = await this.messageProtocol.createHandshake();
-      this.transport.send(peerId, { type: 'handshake', ...handshake });
+      this.transport.send(peerId, { type: 'handshake', ...handshake, alias: this.opts.account.alias });
     } catch (err) {
       this.opts.log?.error?.(`[xena-peer] handshake failed for ${peerId}: ${String(err)}`);
     }
@@ -409,6 +415,20 @@ export class NodeXenaPeer {
       const member = ws.members.find((m) => m.peerId === peerId);
       if (member && member.publicKey !== publicKey) {
         member.publicKey = publicKey;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.persistWorkspaces();
+    }
+  }
+
+  private updateWorkspaceMemberAlias(peerId: string, alias: string): void {
+    let changed = false;
+    for (const ws of this.workspaceManager.getAllWorkspaces()) {
+      const member = ws.members.find((m) => m.peerId === peerId);
+      if (member && member.alias !== alias) {
+        member.alias = alias;
         changed = true;
       }
     }

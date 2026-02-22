@@ -57,11 +57,19 @@ async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
           content: params.content,
           chatType: params.chatType,
           timestamp: params.timestamp,
+          replyToId: params.replyToId,
+          threadId: params.threadId,
         },
         ctx,
         core,
         async (replyText) => {
-          await xenaPeer.sendMessage(params.channelId, params.workspaceId, replyText);
+          await xenaPeer.sendMessage(
+            params.channelId,
+            params.workspaceId,
+            replyText,
+            params.threadId ?? undefined,
+            params.messageId,
+          );
         },
       );
     },
@@ -213,10 +221,26 @@ async function handleInboundMessage(
       channelId: msg.channelId,
       content: text,
       timestamp: Date.now(),
+      threadId: msg.threadId,
     });
   }, (reason) => {
     send(ws, { type: "error", inReplyToId: msg.messageId, reason });
   });
+}
+
+function resolveThreadSessionKeys(params: {
+  baseSessionKey: string;
+  threadId?: string | null;
+  parentSessionKey?: string;
+}): { sessionKey: string; parentSessionKey?: string } {
+  const threadId = (params.threadId ?? "").trim();
+  if (!threadId) {
+    return { sessionKey: params.baseSessionKey, parentSessionKey: undefined };
+  }
+  return {
+    sessionKey: `${params.baseSessionKey}:thread:${threadId.toLowerCase()}`,
+    parentSessionKey: params.parentSessionKey,
+  };
 }
 
 async function processInboundMessage(
@@ -229,6 +253,8 @@ async function processInboundMessage(
     content: string;
     chatType: "channel" | "direct";
     timestamp: number;
+    replyToId?: string;
+    threadId?: string;
   },
   ctx: { accountId: string; log?: any },
   core: ReturnType<typeof getDecentChatRuntime>,
@@ -242,7 +268,9 @@ async function processInboundMessage(
 
   const cfg = core.config.loadConfig() as OpenClawConfig;
   const channel = "decentchat";
-  const peerId = msg.chatType === "direct" ? msg.senderId : msg.channelId;
+  const peerId = msg.chatType === "direct"
+    ? msg.senderId
+    : `${msg.workspaceId}:${msg.channelId}`;
 
   const route = core.channel.routing.resolveAgentRoute({
     cfg,
@@ -251,12 +279,21 @@ async function processInboundMessage(
     peer: { kind: msg.chatType === "direct" ? "direct" : "group", id: peerId },
   });
 
+  const baseSessionKey = route.sessionKey;
+  const isThreadReply = Boolean(msg.threadId && msg.threadId !== msg.messageId);
+  const threadKeys = resolveThreadSessionKeys({
+    baseSessionKey,
+    threadId: isThreadReply ? msg.threadId : undefined,
+    parentSessionKey: isThreadReply ? baseSessionKey : undefined,
+  });
+  const sessionKey = threadKeys.sessionKey;
+
   const fromLabel = msg.chatType === "direct" ? msg.senderName : `${msg.senderName} in ${msg.channelId}`;
   const storePath = core.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId });
   const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
   const previousTimestamp = core.channel.session.readSessionUpdatedAt({
     storePath,
-    sessionKey: route.sessionKey,
+    sessionKey,
   });
 
   const body = core.channel.reply.formatAgentEnvelope({
@@ -274,7 +311,7 @@ async function processInboundMessage(
     CommandBody: rawBody,
     From: msg.chatType === "direct" ? `decentchat:${msg.senderId}` : `decentchat:channel:${msg.channelId}`,
     To: "decentchat:bot",
-    SessionKey: route.sessionKey,
+    SessionKey: sessionKey,
     AccountId: route.accountId,
     ChatType: msg.chatType === "direct" ? "direct" : "group",
     ConversationLabel: fromLabel,
@@ -287,11 +324,15 @@ async function processInboundMessage(
     Timestamp: msg.timestamp,
     OriginatingChannel: channel,
     OriginatingTo: msg.chatType === "direct" ? `decentchat:${msg.senderId}` : `decentchat:channel:${msg.channelId}`,
+    ReplyToId: isThreadReply ? msg.threadId : undefined,
+    MessageThreadId: isThreadReply ? msg.threadId : undefined,
+    ParentSessionKey: threadKeys.parentSessionKey,
+    IsFirstThreadTurn: isThreadReply && !previousTimestamp ? true : undefined,
   });
 
   await core.channel.session.recordInboundSession({
     storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+    sessionKey: ctxPayload.SessionKey ?? sessionKey,
     ctx: ctxPayload,
     onRecordError: (err) => ctx.log?.error?.(`[decentchat] session record error: ${String(err)}`),
   });
