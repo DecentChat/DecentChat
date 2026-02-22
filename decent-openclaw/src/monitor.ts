@@ -58,10 +58,29 @@ async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
   const core = getDecentChatRuntime();
 
   let xenaPeer: InstanceType<typeof NodeXenaPeer>;
+  let finalizeStream: () => Promise<void> = async () => {};
 
   xenaPeer = new NodeXenaPeer({
     account: ctx.account,
     onIncomingMessage: async (params) => {
+      let streamMessageId: string | null = null;
+      let streamAccumulated = "";
+      let streamTimer: ReturnType<typeof setTimeout> | null = null;
+
+      finalizeStream = async () => {
+        if (streamTimer) { clearTimeout(streamTimer); streamTimer = null; }
+        if (!streamMessageId) return;
+        const mid = streamMessageId;
+        streamMessageId = null;
+        if (params.chatType === "direct") {
+          await xenaPeer.sendDirectStreamDone({ peerId: params.senderId, messageId: mid });
+        } else {
+          await xenaPeer.sendStreamDone({ channelId: params.channelId, workspaceId: params.workspaceId, messageId: mid });
+        }
+        const outThreadId = params.chatType === "direct" ? undefined : (params.threadId ?? params.messageId);
+        await xenaPeer.sendMessage(params.channelId, params.workspaceId, streamAccumulated, outThreadId, params.messageId);
+      };
+
       await processInboundMessage(
         {
           messageId: params.messageId,
@@ -78,26 +97,39 @@ async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
         ctx,
         core,
         async (replyText) => {
-          // Threading: for channel messages always reply in a thread.
-          // - existing thread reply → keep same thread root
-          // - root channel message → start new thread anchored at this message
-          // - DMs → no threading
-          const outThreadId = params.chatType === "direct"
-            ? undefined
-            : (params.threadId ?? params.messageId);
-          await xenaPeer.sendMessage(
-            params.channelId,
-            params.workspaceId,
-            replyText,
-            outThreadId,
-            params.messageId,
-          );
+          const outThreadId = params.chatType === "direct" ? undefined : (params.threadId ?? params.messageId);
+          streamAccumulated = replyText;
+
+          if (!streamMessageId) {
+            streamMessageId = randomUUID();
+            if (params.chatType === "direct") {
+              await xenaPeer.startDirectStream({ peerId: params.senderId, messageId: streamMessageId });
+            } else {
+              await xenaPeer.startStream({
+                channelId: params.channelId,
+                workspaceId: params.workspaceId,
+                messageId: streamMessageId,
+                threadId: outThreadId,
+              });
+            }
+          }
+
+          if (params.chatType === "direct") {
+            await xenaPeer.sendDirectStreamDelta({ peerId: params.senderId, messageId: streamMessageId, content: replyText });
+          } else {
+            await xenaPeer.sendStreamDelta({ channelId: params.channelId, workspaceId: params.workspaceId, messageId: streamMessageId, content: replyText });
+          }
+
+          if (streamTimer) clearTimeout(streamTimer);
+          streamTimer = setTimeout(() => { void finalizeStream(); }, 2000);
         },
         undefined,
         params.attachments,
       );
+
+      await finalizeStream();
     },
-    onReply: () => {},
+    onReply: () => { void finalizeStream(); },
     log: ctx.log,
   });
 
@@ -387,13 +419,7 @@ async function processInboundMessage(
     Timestamp: msg.timestamp,
     OriginatingChannel: channel,
     OriginatingTo: msg.chatType === "direct" ? `decentchat:${msg.senderId}` : `decentchat:channel:${msg.channelId}`,
-    // For channel messages: always set ReplyToId so the agent's reply lands in a thread.
-    // - If already a thread reply: anchor to the thread root (msg.threadId)
-    // - If a root channel message: anchor to this message (msg.messageId) to start a new thread
-    // - For DMs: no threading
-    ReplyToId: msg.chatType === "direct"
-      ? undefined
-      : (isThreadReply ? msg.threadId : msg.messageId),
+    ReplyToId: isThreadReply ? msg.threadId : undefined,
     MessageThreadId: isThreadReply ? msg.threadId : undefined,
     ParentSessionKey: threadKeys.parentSessionKey,
     IsFirstThreadTurn: isThreadReply && !previousTimestamp ? true : undefined,

@@ -79,6 +79,8 @@ export interface UIUpdater {
   updateThreadIndicator: (parentMessageId: string, channelId: string) => void;
   /** DEP-005: Update delivery status tick on a specific message (avoids full re-render) */
   updateMessageStatus?: (messageId: string, status: 'pending' | 'sent' | 'delivered') => void;
+  updateStreamingMessage?: (messageId: string, content: string) => void;
+  finalizeStreamingMessage?: (messageId: string) => void;
   /** Huddle state changed (inactive / available / in-call) */
   onHuddleStateChange?: (state: HuddleState, channelId: string | null) => void;
   /** Huddle participants list updated */
@@ -230,6 +232,41 @@ export class ChatController {
               this.ui?.updateMessageStatus?.(messageId, 'delivered');
             }
           }
+          return;
+        }
+
+        if (data?.type === 'stream-start') {
+          const { messageId, channelId, senderId, senderName, isDirect, threadId } = data as any;
+          let targetChannelId = channelId as string;
+          const streamSenderId = (senderId ?? peerId) as string;
+
+          if (isDirect) {
+            let conv = await this.directConversationStore.getByContact(streamSenderId);
+            if (!conv) {
+              conv = await this.directConversationStore.create(streamSenderId);
+              await this.persistentStore.saveDirectConversation(conv);
+            }
+            targetChannelId = conv.id;
+          }
+
+          const msg = await this.messageStore.createMessage(targetChannelId, streamSenderId, '', 'text', threadId);
+          msg.id = messageId;
+          (msg as any).senderName = senderName;
+          (msg as any).streaming = true;
+          await this.messageStore.addMessage(msg);
+          if (targetChannelId === this.state.activeChannelId) {
+            this.ui?.appendMessageToDOM(msg);
+          }
+          return;
+        }
+        if (data?.type === 'stream-delta') {
+          const { messageId, content } = data as any;
+          this.ui?.updateStreamingMessage?.(messageId, content);
+          return;
+        }
+        if (data?.type === 'stream-done') {
+          const { messageId } = data as any;
+          this.ui?.finalizeStreamingMessage?.(messageId);
           return;
         }
 

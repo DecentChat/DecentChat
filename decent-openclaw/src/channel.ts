@@ -103,6 +103,10 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
     allowExplicitReplyTagsWhenOff: true,
   },
 
+  streaming: {
+    blockStreamingCoalesceDefaults: { minChars: 80, idleMs: 200 },
+  },
+
   groups: {
     resolveRequireMention: ({ cfg, groupId }) => {
       const chCfg = (cfg as any)?.channels?.decentchat;
@@ -118,10 +122,10 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       if (!peer) return { ok: false, error: new Error("DecentChat peer not running") };
 
       const { to, text, replyToId, threadId } = ctx;
-      // In DecentChat, threadId = the root message of the thread.
-      // If we already have a threadId (we're inside an existing thread), use it.
-      // Otherwise use replyToId (the message we're replying to) as the thread root.
-      const threadIdStr = threadId != null ? String(threadId) : (replyToId ?? undefined);
+      // In DecentChat, only pass threadId when we're already inside a thread.
+      // Do NOT auto-create threads for root messages — thread replies are hidden
+      // from the main message list (renderMessages filters !m.threadId).
+      const threadIdStr = threadId != null ? String(threadId) : undefined;
 
       try {
         if (to.startsWith("decentchat:channel:")) {

@@ -256,6 +256,10 @@ async function init(): Promise<void> {
       ui.updateThreadIndicator(parentMessageId, channelId),
     updateMessageStatus: (messageId, status) =>
       ui.updateMessageStatus(messageId, status),
+    updateStreamingMessage: (messageId, content) =>
+      ui.updateStreamingMessage(messageId, content),
+    finalizeStreamingMessage: (messageId) =>
+      ui.finalizeStreamingMessage(messageId),
     onHuddleStateChange: (state, channelId) =>
       ui.onHuddleStateChange(state, channelId),
     onHuddleParticipantsChange: (participants) =>

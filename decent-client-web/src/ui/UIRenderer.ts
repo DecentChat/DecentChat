@@ -914,6 +914,35 @@ export class UIRenderer {
     el.textContent = status === 'delivered' ? '✓✓' : status === 'sent' ? '✓' : '⏳';
   }
 
+  updateStreamingMessage(messageId: string, content: string): void {
+    const msgEl = document.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
+    if (!msgEl) return;
+    const contentEl = msgEl.querySelector('.message-content') as HTMLElement | null;
+    if (!contentEl) return;
+    contentEl.textContent = `${content} ▋`;
+    msgEl.classList.add('streaming');
+  }
+
+  finalizeStreamingMessage(messageId: string): void {
+    const msgEl = document.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
+    if (!msgEl) return;
+    const contentEl = msgEl.querySelector('.message-content') as HTMLElement | null;
+    if (!contentEl) return;
+    const finalText = contentEl.textContent?.replace(/ ▋$/, '') ?? '';
+    contentEl.textContent = finalText;
+
+    const activeChannelId = this.state.activeChannelId;
+    if (activeChannelId) {
+      const msg = this.messageStore.getMessages(activeChannelId).find((m: PlaintextMessage) => m.id === messageId);
+      if (msg) {
+        msg.content = finalText;
+        (msg as any).streaming = false;
+      }
+    }
+
+    msgEl.classList.remove('streaming');
+  }
+
   // =========================================================================
   // Thread open/close
   // =========================================================================

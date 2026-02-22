@@ -533,6 +533,106 @@ export class NodeXenaPeer {
     }
   }
 
+  /** Send stream-start to all workspace peers (or direct peer for DMs) */
+  async startStream(params: {
+    channelId: string;
+    workspaceId: string;
+    messageId: string;
+    threadId?: string;
+    isDirect?: false;
+  }): Promise<void> {
+    if (!this.transport) return;
+    const workspace = params.workspaceId ? this.workspaceManager.getWorkspace(params.workspaceId) : undefined;
+    const recipients = workspace
+      ? workspace.members.map((m) => m.peerId).filter((p) => p !== this.myPeerId)
+      : this.transport.getConnectedPeers().filter((p) => p !== this.myPeerId);
+    const envelope = {
+      type: 'stream-start',
+      messageId: params.messageId,
+      channelId: params.channelId,
+      workspaceId: params.workspaceId,
+      senderId: this.myPeerId,
+      senderName: this.opts.account.alias,
+      isDirect: false as const,
+      ...(params.threadId ? { threadId: params.threadId } : {}),
+    };
+    for (const peerId of recipients) {
+      if (this.transport.getConnectedPeers().includes(peerId)) {
+        this.transport.send(peerId, envelope);
+      }
+    }
+  }
+
+  async startDirectStream(params: {
+    peerId: string;
+    messageId: string;
+  }): Promise<void> {
+    if (!this.transport || !this.transport.getConnectedPeers().includes(params.peerId)) return;
+    this.transport.send(params.peerId, {
+      type: 'stream-start',
+      messageId: params.messageId,
+      channelId: params.peerId,
+      workspaceId: '',
+      senderId: this.myPeerId,
+      senderName: this.opts.account.alias,
+      isDirect: true,
+    });
+  }
+
+  async sendStreamDelta(params: {
+    channelId: string;
+    workspaceId: string;
+    messageId: string;
+    content: string;
+  }): Promise<void> {
+    if (!this.transport) return;
+    const workspace = params.workspaceId ? this.workspaceManager.getWorkspace(params.workspaceId) : undefined;
+    const recipients = workspace
+      ? workspace.members.map((m) => m.peerId).filter((p) => p !== this.myPeerId)
+      : this.transport.getConnectedPeers().filter((p) => p !== this.myPeerId);
+    const envelope = { type: 'stream-delta', messageId: params.messageId, content: params.content };
+    for (const peerId of recipients) {
+      if (this.transport.getConnectedPeers().includes(peerId)) {
+        this.transport.send(peerId, envelope);
+      }
+    }
+  }
+
+  async sendDirectStreamDelta(params: {
+    peerId: string;
+    messageId: string;
+    content: string;
+  }): Promise<void> {
+    if (!this.transport || !this.transport.getConnectedPeers().includes(params.peerId)) return;
+    this.transport.send(params.peerId, { type: 'stream-delta', messageId: params.messageId, content: params.content });
+  }
+
+  async sendStreamDone(params: {
+    channelId: string;
+    workspaceId: string;
+    messageId: string;
+  }): Promise<void> {
+    if (!this.transport) return;
+    const workspace = params.workspaceId ? this.workspaceManager.getWorkspace(params.workspaceId) : undefined;
+    const recipients = workspace
+      ? workspace.members.map((m) => m.peerId).filter((p) => p !== this.myPeerId)
+      : this.transport.getConnectedPeers().filter((p) => p !== this.myPeerId);
+    const envelope = { type: 'stream-done', messageId: params.messageId };
+    for (const peerId of recipients) {
+      if (this.transport.getConnectedPeers().includes(peerId)) {
+        this.transport.send(peerId, envelope);
+      }
+    }
+  }
+
+  async sendDirectStreamDone(params: {
+    peerId: string;
+    messageId: string;
+  }): Promise<void> {
+    if (!this.transport || !this.transport.getConnectedPeers().includes(params.peerId)) return;
+    this.transport.send(params.peerId, { type: 'stream-done', messageId: params.messageId });
+  }
+
   /** Public: find the workspace ID that owns a given channel. Returns '' if none found. */
   findWorkspaceIdForChannel(channelId: string): string {
     const ws = this.workspaceManager
