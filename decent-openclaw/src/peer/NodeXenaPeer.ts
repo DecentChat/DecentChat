@@ -32,6 +32,15 @@ export interface NodeXenaPeerOptions {
     timestamp: number;
     replyToId?: string;
     threadId?: string;
+    attachments?: Array<{
+      id: string;
+      name: string;
+      type: string;
+      size?: number;
+      thumbnail?: string;
+      width?: number;
+      height?: number;
+    }>;
   }) => Promise<void>;
   onReply: (params: {
     channelId: string;
@@ -52,6 +61,7 @@ export class NodeXenaPeer {
   private myPeerId = '';
   private myPublicKey = '';
   private destroyed = false;
+  private _maintenanceInterval: ReturnType<typeof setInterval> | null = null;
   private readonly opts: NodeXenaPeerOptions;
 
   constructor(opts: NodeXenaPeerOptions) {
@@ -144,6 +154,10 @@ export class NodeXenaPeer {
 
     this.transport.onConnect = (peerId) => {
       this.opts.log?.info(`[xena-peer] peer connected: ${peerId}`);
+      // Clear ALL ratchet state (not just shared secret) so processHandshake always reinitializes
+      void this.messageProtocol?.clearRatchetState(peerId);
+      this.messageProtocol?.clearSharedSecret(peerId);
+      this.store.delete(`ratchet-${peerId}`);
       void this.sendHandshake(peerId);
     };
 
@@ -162,6 +176,7 @@ export class NodeXenaPeer {
 
     this.myPeerId = await this.transport.init(this.myPeerId);
     this.opts.log?.info(`[xena-peer] online as ${this.myPeerId}, signaling: ${allServers.join(', ')}`);
+    this.startPeerMaintenance();
 
     for (const inviteUri of this.opts.account.invites ?? []) {
       // Try immediately; if the peer is offline, retry with backoff
@@ -252,8 +267,31 @@ export class NodeXenaPeer {
 
   destroy(): void {
     this.destroyed = true;
+    if (this._maintenanceInterval) {
+      clearInterval(this._maintenanceInterval);
+      this._maintenanceInterval = null;
+    }
     this.transport?.destroy();
     this.opts.log?.info('[xena-peer] stopped');
+  }
+
+  private startPeerMaintenance(): void {
+    if (this._maintenanceInterval) return;
+    this._maintenanceInterval = setInterval(() => {
+      if (this.destroyed || !this.transport) return;
+      const connectedPeers = new Set(this.transport.getConnectedPeers());
+      const seen = new Set<string>();
+      for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+        for (const member of workspace.members) {
+          const peerId = member.peerId;
+          if (peerId === this.myPeerId) continue;
+          if (connectedPeers.has(peerId)) continue;
+          if (seen.has(peerId)) continue;
+          seen.add(peerId);
+          this.transport.connect(peerId).catch(() => {});
+        }
+      }
+    }, 30_000);
   }
 
   private async handlePeerMessage(fromPeerId: string, rawData: unknown): Promise<void> {
@@ -302,8 +340,24 @@ export class NodeXenaPeer {
     }
 
     const peerPublicKey = await this.cryptoManager.importPublicKey(peerPubKeyB64);
-    const content = await this.messageProtocol.decryptMessage(fromPeerId, msg, peerPublicKey);
-    if (!content) return;
+    let content: string | null;
+    try {
+      content = await this.messageProtocol.decryptMessage(fromPeerId, msg, peerPublicKey);
+    } catch (err) {
+      this.opts.log?.warn?.(`[xena-peer] decrypt threw for ${fromPeerId}, resetting ratchet: ${String(err)}`);
+      void this.messageProtocol?.clearRatchetState(fromPeerId);
+      this.messageProtocol?.clearSharedSecret(fromPeerId);
+      this.store.delete(`ratchet-${fromPeerId}`);
+      return;
+    }
+    if (!content) {
+      // decryptMessage returned null (internal error) — ratchet desynced, reset it
+      this.opts.log?.warn?.(`[xena-peer] decrypt returned null for ${fromPeerId}, resetting ratchet`);
+      void this.messageProtocol?.clearRatchetState(fromPeerId);
+      this.messageProtocol?.clearSharedSecret(fromPeerId);
+      this.store.delete(`ratchet-${fromPeerId}`);
+      return;
+    }
 
     const channelId = msg.channelId as string | undefined;
     if (!channelId) return;
@@ -337,6 +391,17 @@ export class NodeXenaPeer {
 
     const workspaceId = (msg.workspaceId as string | undefined) ?? '';
     const senderName = this.resolveSenderName(workspaceId, fromPeerId, msg.senderName as string | undefined);
+    const attachments = Array.isArray(msg.attachments)
+      ? (msg.attachments as Array<{
+        id: string;
+        name: string;
+        type: string;
+        size?: number;
+        thumbnail?: string;
+        width?: number;
+        height?: number;
+      }>)
+      : undefined;
 
     await this.opts.onIncomingMessage({
       channelId,
@@ -349,6 +414,7 @@ export class NodeXenaPeer {
       timestamp: created.timestamp,
       replyToId: msg.replyToId as string | undefined,
       threadId: msg.threadId as string | undefined,
+      attachments,
     });
   }
 
@@ -379,6 +445,17 @@ export class NodeXenaPeer {
       }
       case 'message-received': {
         this.persistMessagesForChannel(event.channelId);
+        const attachments = Array.isArray((event.message as any).attachments)
+          ? ((event.message as any).attachments as Array<{
+            id: string;
+            name: string;
+            type: string;
+            size?: number;
+            thumbnail?: string;
+            width?: number;
+            height?: number;
+          }>)
+          : undefined;
         await this.opts.onIncomingMessage({
           channelId: event.channelId,
           workspaceId: this.findWorkspaceIdForChannel(event.channelId),
@@ -390,6 +467,7 @@ export class NodeXenaPeer {
           timestamp: event.message.timestamp,
           replyToId: (event.message as any).replyToId,
           threadId: (event.message as any).threadId,
+          attachments,
         });
         break;
       }

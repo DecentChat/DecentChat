@@ -260,6 +260,8 @@ export class ChatController {
             return;
           }
 
+          await this.messageProtocol?.clearRatchetState(peerId);
+          this.messageProtocol?.clearSharedSecret(peerId);
           await this.messageProtocol!.processHandshake(peerId, data);
 
           // Protocol version check (DEP-004)
@@ -434,7 +436,14 @@ export class ChatController {
         if (!peerData) return;
 
         const peerPublicKey = await this.cryptoManager.importPublicKey(peerData.publicKey);
-        const content = await this.messageProtocol!.decryptMessage(peerId, data, peerPublicKey);
+        let content: string | null;
+        try {
+          content = await this.messageProtocol!.decryptMessage(peerId, data, peerPublicKey);
+        } catch (error) {
+          this.messageProtocol?.clearSharedSecret(peerId);
+          console.warn(`[Crypto] Decrypt failed for ${peerId.slice(0, 8)}; cleared ratchet state.`, error);
+          return;
+        }
         if (!content) return;
 
         // Direct message from a contact (outside workspace)
@@ -522,6 +531,42 @@ export class ChatController {
           }
 
           if (!targetWs) {
+            // Fallback: if the sender is a known contact, treat as a DM (handles the case
+            // where isDirect flag was lost in transit or sender used wrong send path).
+            const fallbackConv = await this.directConversationStore.getByContact(peerId);
+            if (fallbackConv) {
+              console.warn(`[Security] Message from ${peerId.slice(0, 8)} missing isDirect/workspace — falling back to DM`, data);
+              const channelId = fallbackConv.id;
+              const msg = await this.messageStore.createMessage(channelId, peerId, content);
+              {
+                const lastLocalTs = this.messageStore.getMessages(channelId).slice(-1)[0]?.timestamp ?? 0;
+                msg.timestamp = Math.max(data.timestamp ?? Date.now(), lastLocalTs + 1);
+              }
+              (msg as any).vectorClock = data.vectorClock;
+              if ((data as any).attachments?.length) {
+                (msg as any).attachments = (data as any).attachments;
+              }
+              const result = await this.messageStore.addMessage(msg);
+              if (result.success) {
+                const crdt = this.getOrCreateCRDT(channelId);
+                crdt.addMessage({
+                  id: msg.id, channelId: msg.channelId, senderId: msg.senderId,
+                  content: msg.content, type: (msg.type || 'text') as any,
+                  vectorClock: data.vectorClock || {}, wallTime: msg.timestamp,
+                  prevHash: msg.prevHash || '',
+                });
+                await this.persistMessage(msg);
+                this.transport.send(peerId, { type: 'ack', messageId: msg.id, channelId });
+                await this.directConversationStore.updateLastMessage(channelId, msg.timestamp);
+                const updatedConv = await this.directConversationStore.get(channelId);
+                if (updatedConv) await this.persistentStore.saveDirectConversation(updatedConv);
+                if (channelId === this.state.activeChannelId) this.ui?.appendMessageToDOM(msg);
+                const senderName = this.getDisplayNameForPeer(peerId);
+                this.notifications.notify(channelId, senderName, senderName, content);
+                this.ui?.updateSidebar();
+              }
+              return;
+            }
             console.warn(`[Security] Dropping message from ${peerId.slice(0, 8)}: workspace/channel not found`, data);
             return;
           }
@@ -1082,9 +1127,11 @@ export class ChatController {
 
     // Fix #4: look up the workspace the message belongs to, not just the active one.
     // A background workspace message should still be relayed correctly.
-    const workspaceId: string = (envelope.workspaceId as string | undefined)
+    // NOTE: do NOT fall back to '' — empty string is falsy but serializes as '""' on the wire,
+    // which confuses the receiver's isDirect detection. Use null so the property is absent/null.
+    const workspaceId: string | null = (envelope.workspaceId as string | undefined | null)
       ?? this.state.activeWorkspaceId
-      ?? '';
+      ?? null;
     const ws = workspaceId ? this.workspaceManager.getWorkspace(workspaceId) : null;
     if (!ws) return;
 

@@ -38,6 +38,7 @@ export type WireMessage = {
   chatType: "channel" | "direct";
   timestamp: number;
   replyToId?: string;
+  threadId?: string;
 };
 
 export type WireTyping = {
@@ -52,6 +53,7 @@ export type WireReply = {
   channelId: string;
   content: string;
   timestamp: number;
+  threadId?: string;
 };
 
 export type WireCommandAck = {

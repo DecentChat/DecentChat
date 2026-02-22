@@ -53,7 +53,7 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
     blurb: "P2P encrypted chat via DecentChat WebSocket bridge.",
     aliases: ["decent", "decentchat"],
   },
-  capabilities: { chatTypes: ["direct", "group"] },
+  capabilities: { chatTypes: ["direct", "group", "thread"] },
   reload: { configPrefixes: ["channels.decentchat"] },
   configSchema: {
     ...buildChannelConfigSchema(DecentChatConfigSchema),
@@ -95,6 +95,11 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       approveHint: formatPairingApproveHint("decentchat"),
       normalizeEntry: (raw: string) => raw.trim(),
     }),
+  },
+
+  threading: {
+    resolveReplyToMode: () => "all",
+    allowExplicitReplyTagsWhenOff: true,
   },
 
   groups: {

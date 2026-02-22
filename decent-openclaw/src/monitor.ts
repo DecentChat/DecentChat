@@ -1,5 +1,9 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "node:http";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import { createReplyPrefixOptions, type OpenClawConfig } from "openclaw/plugin-sdk";
 import { getDecentChatRuntime } from "./runtime.js";
 import type {
@@ -8,6 +12,16 @@ import type {
   ResolvedDecentChatAccount,
   WireMessage,
 } from "./types.js";
+
+type InboundAttachment = {
+  id: string;
+  name: string;
+  type: string;
+  size?: number;
+  thumbnail?: string;
+  width?: number;
+  height?: number;
+};
 
 type BridgeContext = {
   account: ResolvedDecentChatAccount;
@@ -71,6 +85,8 @@ async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
             params.messageId,
           );
         },
+        undefined,
+        params.attachments,
       );
     },
     onReply: () => {},
@@ -225,7 +241,9 @@ async function handleInboundMessage(
     });
   }, (reason) => {
     send(ws, { type: "error", inReplyToId: msg.messageId, reason });
-  });
+  }, Array.isArray((msg as WireMessage & { attachments?: InboundAttachment[] }).attachments)
+    ? (msg as WireMessage & { attachments?: InboundAttachment[] }).attachments
+    : undefined);
 }
 
 function resolveThreadSessionKeys(params: {
@@ -260,9 +278,42 @@ async function processInboundMessage(
   core: ReturnType<typeof getDecentChatRuntime>,
   deliver: (text: string) => Promise<void>,
   onDeliverError?: (reason: string) => void,
+  attachments?: InboundAttachment[],
 ): Promise<void> {
-  const rawBody = msg.content?.trim() ?? "";
-  if (!rawBody) {
+  let rawBody = msg.content?.trim() ?? "";
+  const thumbnailAttachments = (attachments ?? []).filter(
+    (attachment): attachment is InboundAttachment & { thumbnail: string } =>
+      attachment.type === "image" && typeof attachment.thumbnail === "string" && attachment.thumbnail.length > 0,
+  );
+
+  const mediaPaths: string[] = [];
+  if (thumbnailAttachments.length > 0) {
+    const inboundMediaDir = path.join(os.homedir(), ".openclaw", "media", "inbound");
+    fs.mkdirSync(inboundMediaDir, { recursive: true });
+    for (const attachment of thumbnailAttachments) {
+      try {
+        const filePath = path.join(inboundMediaDir, `${randomUUID()}.jpg`);
+        fs.writeFileSync(filePath, Buffer.from(attachment.thumbnail, "base64"));
+        mediaPaths.push(filePath);
+      } catch (err) {
+        ctx.log?.warn?.(`[decentchat] failed to persist inbound thumbnail for ${attachment.id}: ${String(err)}`);
+      }
+    }
+  }
+
+  if (!rawBody && attachments && attachments.length > 0) {
+    const imageLabels = attachments
+      .filter((attachment) => attachment.type === "image")
+      .map((attachment, index) => {
+        const name = attachment.name?.trim();
+        return name ? `[Image: ${name}]` : `[Image ${index + 1}]`;
+      });
+    if (imageLabels.length > 0) {
+      rawBody = imageLabels.join("\n");
+    }
+  }
+
+  if (!rawBody && mediaPaths.length === 0) {
     return;
   }
 
@@ -305,6 +356,8 @@ async function processInboundMessage(
     body: rawBody,
   });
 
+  const mediaType = mediaPaths.length > 0 ? "image/jpeg" : undefined;
+
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
     RawBody: rawBody,
@@ -328,6 +381,10 @@ async function processInboundMessage(
     MessageThreadId: isThreadReply ? msg.threadId : undefined,
     ParentSessionKey: threadKeys.parentSessionKey,
     IsFirstThreadTurn: isThreadReply && !previousTimestamp ? true : undefined,
+    MediaPath: mediaPaths[0],
+    MediaType: mediaType,
+    MediaPaths: mediaPaths.length > 1 ? mediaPaths : undefined,
+    MediaTypes: mediaPaths.length > 1 ? mediaPaths.map(() => "image/jpeg") : undefined,
   });
 
   await core.channel.session.recordInboundSession({
