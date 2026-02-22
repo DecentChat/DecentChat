@@ -1,6 +1,7 @@
 {
   "id": "decentchat",
   "name": "DecentChat",
+  "channels": ["decentchat"],
   "description": "DecentChat P2P channel plugin for OpenClaw",
   "configSchema": {
     "type": "object",
