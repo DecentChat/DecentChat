@@ -710,8 +710,30 @@ export class PeerTransport implements Transport {
         reject(new Error(`Signaling server ${server.label} timed out`));
       }, 15000);
 
+      // Init-time error handler — must be removed once 'open' fires so it
+      // doesn't interfere with post-init peer-unavailable / network errors.
+      const initErrHandler = (error: any) => {
+        clearTimeout(timeout);
+        peer.destroy();
+        if (error.type === 'unavailable-id' && attempt < 3) {
+          const delay = (attempt + 1) * 3000;
+          console.warn(`[PeerTransport] [${server.label}] Peer ID temporarily taken, retrying in ${delay / 1000}s (attempt ${attempt + 1}/3)...`);
+          setTimeout(() => {
+            this._initServer(server, peerId, attempt + 1).then(resolve).catch(reject);
+          }, delay);
+        } else {
+          if (error.type !== 'unavailable-id') {
+            this.onError?.(new Error(`[${server.label}] ${error.message || error}`));
+          }
+          reject(error);
+        }
+      };
+      peer.on('error', initErrHandler);
+
       peer.on('open', (assignedId) => {
         clearTimeout(timeout);
+        // Remove the init error handler — post-init errors go to _setupPeerEvents
+        peer.off('error', initErrHandler);
 
         // If this is the first server to connect, set our peer ID
         if (!this.myPeerId) {
@@ -728,26 +750,6 @@ export class PeerTransport implements Transport {
         this._setupPeerEvents(instance);
 
         resolve(assignedId);
-      });
-
-      // Use once() so this init-time handler auto-removes after first error.
-      // Post-init errors are handled by _setupPeerEvents instead.
-      peer.once('error', (error: any) => {
-        clearTimeout(timeout);
-        peer.destroy();
-        if (error.type === 'unavailable-id' && attempt < 3) {
-          // Transient: stale session still registered on this server — retry.
-          const delay = (attempt + 1) * 3000;
-          console.warn(`[PeerTransport] [${server.label}] Peer ID temporarily taken, retrying in ${delay / 1000}s (attempt ${attempt + 1}/3)...`);
-          setTimeout(() => {
-            this._initServer(server, peerId, attempt + 1).then(resolve).catch(reject);
-          }, delay);
-        } else {
-          if (error.type !== 'unavailable-id') {
-            this.onError?.(new Error(`[${server.label}] ${error.message || error}`));
-          }
-          reject(error);
-        }
       });
     });
   }
