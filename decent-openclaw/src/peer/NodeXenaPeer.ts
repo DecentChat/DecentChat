@@ -9,6 +9,7 @@ import {
   CryptoManager,
   InviteURI,
   MessageStore,
+  OfflineQueue,
   SeedPhraseManager,
   SyncProtocol,
   WorkspaceManager,
@@ -62,6 +63,7 @@ export class NodeXenaPeer {
   private myPublicKey = '';
   private destroyed = false;
   private _maintenanceInterval: ReturnType<typeof setInterval> | null = null;
+  private readonly offlineQueue: OfflineQueue;
   private readonly opts: NodeXenaPeerOptions;
 
   constructor(opts: NodeXenaPeerOptions) {
@@ -70,6 +72,46 @@ export class NodeXenaPeer {
     this.workspaceManager = new WorkspaceManager();
     this.messageStore = new MessageStore();
     this.cryptoManager = new CryptoManager();
+    this.offlineQueue = new OfflineQueue();
+    this.offlineQueue.setPersistence(
+      async (peerId, data) => {
+        const key = this.offlineQueueKey(peerId);
+        const seqKey = 'offline-queue-seq';
+        const seq = this.store.get<number>(seqKey, 1);
+        const queue = this.store.get<any[]>(key, []);
+        queue.push({
+          id: seq,
+          targetPeerId: peerId,
+          data,
+          createdAt: Date.now(),
+          attempts: 0,
+        });
+        this.store.set(key, queue);
+        this.store.set(seqKey, seq + 1);
+      },
+      async (peerId) => this.store.get<any[]>(this.offlineQueueKey(peerId), []),
+      async (id) => {
+        for (const key of this.store.keys('offline-queue-')) {
+          if (key === 'offline-queue-seq') continue;
+          const queue = this.store.get<any[]>(key, []);
+          const idx = queue.findIndex((msg) => msg?.id === id);
+          if (idx < 0) continue;
+          queue.splice(idx, 1);
+          if (queue.length === 0) {
+            this.store.delete(key);
+          } else {
+            this.store.set(key, queue);
+          }
+          break;
+        }
+      },
+      async (peerId) => {
+        const key = this.offlineQueueKey(peerId);
+        const queue = this.store.get<any[]>(key, []);
+        this.store.delete(key);
+        return queue;
+      },
+    );
   }
 
   get peerId(): string {
@@ -221,7 +263,20 @@ export class NodeXenaPeer {
       : this.transport.getConnectedPeers().filter((p) => p !== this.myPeerId);
 
     for (const peerId of recipients) {
-      if (!this.transport.getConnectedPeers().includes(peerId)) continue;
+      if (!this.transport.getConnectedPeers().includes(peerId)) {
+        await this.enqueueOffline(peerId, {
+          content: content.trim(),
+          channelId,
+          workspaceId,
+          senderId: this.myPeerId,
+          senderName: this.opts.account.alias,
+          messageId: msg.id,
+          threadId,
+          replyToId,
+          isDirect: false,
+        });
+        continue;
+      }
       try {
         const envelope = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text');
         (envelope as any).channelId = channelId;
@@ -311,6 +366,7 @@ export class NodeXenaPeer {
       if (msg.alias) {
         this.updateWorkspaceMemberAlias(fromPeerId, msg.alias as string);
       }
+      await this.flushOfflineQueue(fromPeerId);
       return;
     }
 
@@ -491,13 +547,33 @@ export class NodeXenaPeer {
   }
 
   private restoreMessages(): void {
+    const restoredKeys = new Set<string>();
     for (const ws of this.workspaceManager.getAllWorkspaces()) {
       for (const ch of ws.channels) {
-        const messages = this.store.get<any[]>(`messages-${ch.id}`, []);
-        for (const message of messages) {
-          this.messageStore.forceAdd(message as any);
-        }
+        const key = `messages-${ch.id}`;
+        this.restoreMessagesForKey(key);
+        restoredKeys.add(key);
       }
+    }
+
+    // Also restore any persisted message buckets not currently linked from
+    // workspace state (e.g. channel-id drift during sync/remap).
+    for (const key of this.store.keys('messages-')) {
+      if (restoredKeys.has(key)) continue;
+      this.restoreMessagesForKey(key);
+    }
+  }
+
+  private restoreMessagesForKey(key: string): void {
+    const messages = this.store.get<any[]>(key, []);
+    const fallbackChannelId = key.startsWith('messages-') ? key.slice('messages-'.length) : '';
+    for (const message of messages) {
+      if (!message || typeof message !== 'object') continue;
+      if (typeof message.channelId !== 'string' || message.channelId.length === 0) {
+        if (!fallbackChannelId) continue;
+        message.channelId = fallbackChannelId;
+      }
+      this.messageStore.forceAdd(message as any);
     }
   }
 
@@ -518,7 +594,17 @@ export class NodeXenaPeer {
   /** Send a direct (non-workspace) message to a specific peer with isDirect=true. */
   async sendDirectToPeer(peerId: string, content: string, threadId?: string, replyToId?: string): Promise<void> {
     if (!this.transport || !this.messageProtocol || !content.trim()) return;
-    if (!this.transport.getConnectedPeers().includes(peerId)) return;
+    if (!this.transport.getConnectedPeers().includes(peerId)) {
+      await this.enqueueOffline(peerId, {
+        content: content.trim(),
+        senderId: this.myPeerId,
+        senderName: this.opts.account.alias,
+        threadId,
+        replyToId,
+        isDirect: true,
+      });
+      return;
+    }
 
     try {
       const envelope = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text');
@@ -539,6 +625,7 @@ export class NodeXenaPeer {
     workspaceId: string;
     messageId: string;
     threadId?: string;
+    replyToId?: string;
     isDirect?: false;
   }): Promise<void> {
     if (!this.transport) return;
@@ -555,6 +642,7 @@ export class NodeXenaPeer {
       senderName: this.opts.account.alias,
       isDirect: false as const,
       ...(params.threadId ? { threadId: params.threadId } : {}),
+      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     };
     for (const peerId of recipients) {
       if (this.transport.getConnectedPeers().includes(peerId)) {
@@ -685,6 +773,58 @@ export class NodeXenaPeer {
     }
     if (changed) {
       this.persistWorkspaces();
+    }
+  }
+
+  private offlineQueueKey(peerId: string): string {
+    return `offline-queue-${peerId}`;
+  }
+
+  private async enqueueOffline(peerId: string, payload: any): Promise<void> {
+    try {
+      await this.offlineQueue.enqueue(peerId, payload);
+      this.opts.log?.info?.(`[xena-peer] queued outbound message for offline peer ${peerId}`);
+    } catch (err) {
+      this.opts.log?.error?.(`[xena-peer] failed to queue outbound message for ${peerId}: ${String(err)}`);
+    }
+  }
+
+  private async flushOfflineQueue(peerId: string): Promise<void> {
+    if (!this.transport || !this.messageProtocol) return;
+    if (!this.transport.getConnectedPeers().includes(peerId)) return;
+
+    const queued = await this.offlineQueue.flush(peerId);
+    if (queued.length === 0) return;
+
+    const retry: any[] = [];
+    for (const item of queued) {
+      if (!item || typeof item !== 'object' || typeof item.content !== 'string') continue;
+      try {
+        const envelope = await this.messageProtocol.encryptMessage(peerId, item.content, 'text');
+        (envelope as any).senderId = item.senderId ?? this.myPeerId;
+        (envelope as any).senderName = item.senderName ?? this.opts.account.alias;
+        if (item.isDirect) {
+          (envelope as any).isDirect = true;
+        } else {
+          (envelope as any).channelId = item.channelId;
+          (envelope as any).workspaceId = item.workspaceId;
+          if (item.messageId) (envelope as any).messageId = item.messageId;
+        }
+        if (item.threadId) (envelope as any).threadId = item.threadId;
+        if (item.replyToId) (envelope as any).replyToId = item.replyToId;
+        this.transport.send(peerId, envelope);
+      } catch {
+        retry.push(item);
+      }
+    }
+
+    for (const item of retry) {
+      await this.offlineQueue.enqueue(peerId, item);
+    }
+
+    const sentCount = queued.length - retry.length;
+    if (sentCount > 0) {
+      this.opts.log?.info?.(`[xena-peer] flushed ${sentCount} queued messages to ${peerId}`);
     }
   }
 }

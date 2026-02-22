@@ -68,16 +68,18 @@ export class OfflineQueue {
       attempts: 0,
     };
 
-    // In-memory
+    // Persisted mode is source of truth; avoid mirroring into in-memory
+    // to prevent stale duplicates after flush/removeAll.
+    if (this.saveFn) {
+      await this.saveFn(targetPeerId, data);
+      return;
+    }
+
+    // In-memory fallback
     if (!this.inMemoryQueue.has(targetPeerId)) {
       this.inMemoryQueue.set(targetPeerId, []);
     }
     this.inMemoryQueue.get(targetPeerId)!.push(msg);
-
-    // Persist
-    if (this.saveFn) {
-      await this.saveFn(targetPeerId, data);
-    }
   }
 
   /**

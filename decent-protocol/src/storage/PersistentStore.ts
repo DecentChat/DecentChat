@@ -190,6 +190,17 @@ export class PersistentStore {
     });
   }
 
+  /**
+   * Re-key all persisted messages from one channel ID to another.
+   * Keeps message IDs intact (upsert by primary key), only updates channelId.
+   */
+  async remapChannelMessages(oldChannelId: string, newChannelId: string): Promise<void> {
+    if (!oldChannelId || !newChannelId || oldChannelId === newChannelId) return;
+    const messages = await this.getChannelMessages(oldChannelId);
+    if (messages.length === 0) return;
+    await this.saveMessages(messages.map((m) => ({ ...m, channelId: newChannelId })));
+  }
+
   async deleteMessage(messageId: string): Promise<void> {
     await this.delete('messages', messageId);
   }

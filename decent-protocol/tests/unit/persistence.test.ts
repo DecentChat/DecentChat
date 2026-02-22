@@ -98,6 +98,24 @@ describe('PersistentStore', () => {
     expect(messages[2].content).toBe('Third');
   });
 
+  test('remaps persisted channel messages to a new channel ID', async () => {
+    await store.saveMessage({ id: 'msg-1', channelId: 'old-ch', content: 'First', timestamp: 1000 });
+    await store.saveMessage({ id: 'msg-2', channelId: 'old-ch', content: 'Second', timestamp: 2000 });
+    await store.saveMessage({ id: 'msg-3', channelId: 'other-ch', content: 'Other', timestamp: 1500 });
+
+    await store.remapChannelMessages('old-ch', 'new-ch');
+
+    const oldMessages = await store.getChannelMessages('old-ch');
+    const newMessages = await store.getChannelMessages('new-ch');
+    const otherMessages = await store.getChannelMessages('other-ch');
+
+    expect(oldMessages).toHaveLength(0);
+    expect(newMessages).toHaveLength(2);
+    expect(newMessages[0].id).toBe('msg-1');
+    expect(newMessages[1].id).toBe('msg-2');
+    expect(otherMessages).toHaveLength(1);
+  });
+
   // === Identity ===
 
   test('saves and retrieves identity data', async () => {

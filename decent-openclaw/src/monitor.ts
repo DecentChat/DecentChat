@@ -37,6 +37,34 @@ type BridgeContext = {
   abortSignal?: AbortSignal;
 };
 
+export async function finalizePeerStream(params: {
+  xenaPeer: {
+    sendDirectStreamDone: (args: { peerId: string; messageId: string }) => Promise<void>;
+    sendStreamDone: (args: { channelId: string; workspaceId: string; messageId: string }) => Promise<void>;
+  };
+  chatType: "direct" | "group";
+  senderId: string;
+  channelId: string;
+  workspaceId: string;
+  streamMessageId: string | null;
+}): Promise<void> {
+  if (!params.streamMessageId) return;
+
+  if (params.chatType === "direct") {
+    await params.xenaPeer.sendDirectStreamDone({
+      peerId: params.senderId,
+      messageId: params.streamMessageId,
+    });
+    return;
+  }
+
+  await params.xenaPeer.sendStreamDone({
+    channelId: params.channelId,
+    workspaceId: params.workspaceId,
+    messageId: params.streamMessageId,
+  });
+}
+
 export async function startDecentChatBridge(ctx: BridgeContext): Promise<void> {
   if (ctx.account.mode === "peer") {
     if (!ctx.account.seedPhrase) {
@@ -56,6 +84,7 @@ export async function startDecentChatBridge(ctx: BridgeContext): Promise<void> {
 async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
   const { NodeXenaPeer } = await import("./peer/NodeXenaPeer.js");
   const core = getDecentChatRuntime();
+  const TOOL_CALL_MISMATCH_RE = /^No tool call found for function call output with call_id\b/i;
 
   let xenaPeer: InstanceType<typeof NodeXenaPeer>;
   let finalizeStream: () => Promise<void> = async () => {};
@@ -64,21 +93,44 @@ async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
     account: ctx.account,
     onIncomingMessage: async (params) => {
       let streamMessageId: string | null = null;
-      let streamAccumulated = "";
       let streamTimer: ReturnType<typeof setTimeout> | null = null;
+      let streamedReply = '';
 
       finalizeStream = async () => {
         if (streamTimer) { clearTimeout(streamTimer); streamTimer = null; }
-        if (!streamMessageId) return;
         const mid = streamMessageId;
         streamMessageId = null;
-        if (params.chatType === "direct") {
-          await xenaPeer.sendDirectStreamDone({ peerId: params.senderId, messageId: mid });
-        } else {
-          await xenaPeer.sendStreamDone({ channelId: params.channelId, workspaceId: params.workspaceId, messageId: mid });
+        await finalizePeerStream({
+          xenaPeer,
+          chatType: params.chatType,
+          senderId: params.senderId,
+          channelId: params.channelId,
+          workspaceId: params.workspaceId,
+          streamMessageId: mid,
+        });
+
+        const finalReply = streamedReply.trim();
+        streamedReply = '';
+        if (!finalReply) {
+          ctx.log?.warn?.('[decentchat] finalizeStream: empty final reply, skipping persistence');
+          return;
         }
-        const outThreadId = params.chatType === "direct" ? undefined : (params.threadId ?? params.messageId);
-        await xenaPeer.sendMessage(params.channelId, params.workspaceId, streamAccumulated, outThreadId, params.messageId);
+
+        // Persist assistant replies as normal messages too (stream UI can be ephemeral on refresh).
+        try {
+          const persistThreadId = params.chatType === 'direct'
+            ? params.threadId
+            : (params.threadId ?? params.messageId);
+
+          if (params.chatType === 'direct') {
+            await xenaPeer.sendDirectToPeer(params.senderId, finalReply, persistThreadId, params.messageId);
+          } else {
+            await xenaPeer.sendToChannel(params.channelId, finalReply, persistThreadId, params.messageId);
+          }
+          ctx.log?.info?.(`[decentchat] persisted assistant reply (${finalReply.length} chars) in ${params.chatType}`);
+        } catch (err) {
+          ctx.log?.error?.(`[decentchat] failed to persist assistant reply: ${String(err)}`);
+        }
       };
 
       await processInboundMessage(
@@ -97,31 +149,17 @@ async function startNodePeerMode(ctx: BridgeContext): Promise<void> {
         ctx,
         core,
         async (replyText) => {
-          const outThreadId = params.chatType === "direct" ? undefined : (params.threadId ?? params.messageId);
-          streamAccumulated = replyText;
-
-          if (!streamMessageId) {
-            streamMessageId = randomUUID();
-            if (params.chatType === "direct") {
-              await xenaPeer.startDirectStream({ peerId: params.senderId, messageId: streamMessageId });
-            } else {
-              await xenaPeer.startStream({
-                channelId: params.channelId,
-                workspaceId: params.workspaceId,
-                messageId: streamMessageId,
-                threadId: outThreadId,
-              });
-            }
+          if (TOOL_CALL_MISMATCH_RE.test(replyText.trim())) {
+            ctx.log?.warn?.("[decentchat] suppressed tool-call mismatch error text");
+            return;
           }
 
-          if (params.chatType === "direct") {
-            await xenaPeer.sendDirectStreamDelta({ peerId: params.senderId, messageId: streamMessageId, content: replyText });
-          } else {
-            await xenaPeer.sendStreamDelta({ channelId: params.channelId, workspaceId: params.workspaceId, messageId: streamMessageId, content: replyText });
-          }
+          // Avoid duplicate live renders (stream + final persisted message).
+          // Buffer chunks and emit exactly one persisted reply at finalize.
+          streamedReply += replyText;
 
           if (streamTimer) clearTimeout(streamTimer);
-          streamTimer = setTimeout(() => { void finalizeStream(); }, 2000);
+          streamTimer = setTimeout(() => { void finalizeStream(); }, 200);
         },
         undefined,
         params.attachments,
@@ -270,9 +308,14 @@ async function handleInboundMessage(
   ctx: { account: ResolvedDecentChatAccount; accountId: string; log?: any },
   core: ReturnType<typeof getDecentChatRuntime>,
 ): Promise<void> {
+  const TOOL_CALL_MISMATCH_RE = /^No tool call found for function call output with call_id\b/i;
   send(ws, { type: "typing", channelId: msg.channelId, messageId: msg.messageId });
 
   await processInboundMessage(msg, ctx, core, async (text) => {
+    if (TOOL_CALL_MISMATCH_RE.test(text.trim())) {
+      ctx.log?.warn?.("[decentchat] suppressed tool-call mismatch error text");
+      return;
+    }
     send(ws, {
       type: "reply",
       inReplyToId: msg.messageId,
@@ -453,6 +496,11 @@ async function processInboundMessage(
         if (!text) {
           return;
         }
+        // Drop upstream tool-call mismatch errors from being posted into chat.
+        if (/^No tool call found for function call output with call_id\b/i.test(text.trim())) {
+          ctx.log?.warn?.("[decentchat] suppressed tool-call mismatch error text");
+          return;
+        }
         await deliver(text);
       },
       onError: (err, info) => {
@@ -461,7 +509,7 @@ async function processInboundMessage(
         onDeliverError?.(reason);
       },
     },
-    replyOptions: { onModelSelected },
+    replyOptions: { onModelSelected, suppressToolErrorWarnings: true },
   });
 }
 

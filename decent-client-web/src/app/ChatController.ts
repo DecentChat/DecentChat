@@ -127,6 +127,15 @@ export class ChatController {
   /** Cleanup interval for the seen-set (every 5 min) */
   private _gossipCleanupInterval: ReturnType<typeof setInterval> | null = null;
 
+  /** Pending stream metadata until the first delta arrives */
+  private pendingStreams = new Map<string, {
+    channelId: string;
+    senderId: string;
+    senderName?: string;
+    threadId?: string;
+    isDirect: boolean;
+  }>();
+
   /** Active chunked transfers (receiving) */
   private activeTransfers = new Map<string, ChunkedReceiver>();
   /** Active chunked transfers (sending) */
@@ -236,7 +245,7 @@ export class ChatController {
         }
 
         if (data?.type === 'stream-start') {
-          const { messageId, channelId, senderId, senderName, isDirect, threadId } = data as any;
+          const { messageId, channelId, senderId, senderName, isDirect, threadId, replyToId } = data as any;
           let targetChannelId = channelId as string;
           const streamSenderId = (senderId ?? peerId) as string;
 
@@ -249,23 +258,61 @@ export class ChatController {
             targetChannelId = conv.id;
           }
 
-          const msg = await this.messageStore.createMessage(targetChannelId, streamSenderId, '', 'text', threadId);
-          msg.id = messageId;
-          (msg as any).senderName = senderName;
-          (msg as any).streaming = true;
-          await this.messageStore.addMessage(msg);
-          if (targetChannelId === this.state.activeChannelId) {
-            this.ui?.appendMessageToDOM(msg);
-          }
+          const streamThreadId = isDirect ? undefined : (threadId ?? replyToId);
+          this.pendingStreams.set(messageId, {
+            channelId: targetChannelId,
+            senderId: streamSenderId,
+            senderName,
+            threadId: streamThreadId,
+            isDirect: !!isDirect,
+          });
           return;
         }
         if (data?.type === 'stream-delta') {
           const { messageId, content } = data as any;
-          this.ui?.updateStreamingMessage?.(messageId, content);
+          const normalizedContent = typeof content === 'string' ? content : '';
+          if (!normalizedContent.trim()) {
+            // Ignore empty deltas to avoid creating empty placeholder messages.
+            return;
+          }
+          const pending = this.pendingStreams.get(messageId);
+          if (pending) {
+            let existing = this.findMessageById(messageId);
+            if (!existing) {
+              const msg = await this.messageStore.createMessage(
+                pending.channelId,
+                pending.senderId,
+                '',
+                'text',
+                pending.threadId,
+              );
+              msg.id = messageId;
+              (msg as any).senderName = pending.senderName;
+              (msg as any).streaming = true;
+              msg.content = normalizedContent;
+              await this.messageStore.addMessage(msg);
+              await this.persistMessage(msg);
+              if (pending.channelId === this.state.activeChannelId) {
+                this.ui?.appendMessageToDOM(msg);
+              }
+              existing = msg;
+            } else {
+              existing.content = normalizedContent;
+              (existing as any).streaming = true;
+              await this.persistMessage(existing);
+            }
+          }
+          this.ui?.updateStreamingMessage?.(messageId, normalizedContent);
           return;
         }
         if (data?.type === 'stream-done') {
           const { messageId } = data as any;
+          this.pendingStreams.delete(messageId);
+          const msg = this.findMessageById(messageId);
+          if (msg) {
+            (msg as any).streaming = false;
+            await this.persistMessage(msg);
+          }
           this.ui?.finalizeStreamingMessage?.(messageId);
           return;
         }
@@ -892,6 +939,7 @@ export class ChatController {
 
           // Migrate messages and CRDTs to the new channel ID
           this.messageStore.remapChannel(oldId, remoteCh.id);
+          await this.persistentStore.remapChannelMessages(oldId, remoteCh.id);
           if (this.messageCRDTs.has(oldId)) {
             const crdt = this.messageCRDTs.get(oldId)!;
             this.messageCRDTs.set(remoteCh.id, crdt);
@@ -1778,6 +1826,14 @@ export class ChatController {
     return isLocal ? url.replace('https://', 'http://') : url;
   }
 
+  private findMessageById(messageId: string): PlaintextMessage | null {
+    for (const channelId of this.messageStore.getAllChannelIds()) {
+      const msg = this.messageStore.getMessages(channelId).find(m => m.id === messageId);
+      if (msg) return msg;
+    }
+    return null;
+  }
+
   /** Parse a WebSocket signaling URL into host/port/secure/path components */
   private parseSignalingURL(url: string): { host: string; port: number; secure: boolean; path: string } {
     // Handle ws://host:port/path or wss://host:port/path
@@ -1889,7 +1945,7 @@ export class ChatController {
    * Encrypts blob, creates metadata + thumbnail, sends message,
    * then streams chunks to peers on demand.
    */
-  async sendAttachment(file: File, text?: string): Promise<void> {
+  async sendAttachment(file: File, text?: string, threadId?: string): Promise<void> {
     if (!this.state.activeChannelId) return;
 
     // Read file
@@ -1942,6 +1998,7 @@ export class ChatController {
       this.state.myPeerId,
       content,
       'text',
+      threadId,
     );
     (msg as any).attachments = [meta];
 
@@ -1953,7 +2010,12 @@ export class ChatController {
     (msg as any).vectorClock = crdtResult.vectorClock;
 
     await this.persistMessage(msg);
-    this.ui?.appendMessageToDOM(msg);
+    if (threadId && this.state.threadOpen) {
+      this.ui?.renderThreadMessages();
+      this.ui?.updateThreadIndicator(threadId, this.state.activeChannelId);
+    } else if (!threadId) {
+      this.ui?.appendMessageToDOM(msg);
+    }
 
     // Send to workspace peers
     for (const peerId of this.getWorkspaceRecipientPeerIds()) {
@@ -1961,6 +2023,7 @@ export class ChatController {
         const envelope = await this.messageProtocol!.encryptMessage(peerId, content, 'text');
         (envelope as any).channelId = this.state.activeChannelId;
         (envelope as any).workspaceId = this.state.activeWorkspaceId;
+        (envelope as any).threadId = threadId;
         (envelope as any).messageId = msg.id;  // receiver must use same ID so reactions sync
         (envelope as any).timestamp = msg.timestamp;
         (envelope as any).vectorClock = (msg as any).vectorClock;

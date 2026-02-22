@@ -277,6 +277,53 @@ test.describe('P2P Messaging', () => {
     }
   });
 
+  test('channel remap keeps messages after page reload', async ({ browser }) => {
+    const alice = await createUser(browser, 'Alice');
+    try {
+      await createWorkspace(alice.page, 'Remap Persist', 'Alice');
+      await sendMessage(alice.page, 'Before remap');
+
+      const remapResult = await alice.page.evaluate(async () => {
+        const s = (window as any).__state;
+        const ctrl = (window as any).__ctrl;
+        const ws = ctrl.workspaceManager.getWorkspace(s.activeWorkspaceId);
+        if (!ws || !ws.channels[0]) return { ok: false };
+
+        const localCh = ws.channels[0];
+        const oldId = localCh.id as string;
+        const newId = `0000-${oldId}`;
+
+        await ctrl.handleWorkspaceStateSync('peer-remap', ws.id, {
+          name: ws.name,
+          channels: [{ id: newId, name: localCh.name, type: localCh.type }],
+          members: [],
+        });
+
+        const oldMessages = await ctrl.persistentStore.getChannelMessages(oldId);
+        const newMessages = await ctrl.persistentStore.getChannelMessages(newId);
+        return { ok: true, oldCount: oldMessages.length, newCount: newMessages.length };
+      });
+
+      expect(remapResult.ok).toBe(true);
+      expect(remapResult.oldCount).toBe(0);
+      expect(remapResult.newCount).toBeGreaterThanOrEqual(1);
+
+      await sendMessage(alice.page, 'After remap');
+
+      await alice.page.reload();
+      await alice.page.waitForFunction(() => {
+        const loading = document.getElementById('loading');
+        return !loading || loading.style.opacity === '0';
+      }, { timeout: 15000 });
+      await alice.page.waitForSelector('.sidebar-header', { timeout: 15000 });
+
+      await waitForMessage(alice.page, 'Before remap', 15000);
+      await waitForMessage(alice.page, 'After remap', 15000);
+    } finally {
+      await closeUser(alice);
+    }
+  });
+
   test('typing indicator shows when other user types', async ({ browser }) => {
     const [alice, bob] = await setupConnectedPair(browser, 'Typing Test');
     try {
