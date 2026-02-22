@@ -643,6 +643,10 @@ export class ChatController {
       // Signaling server briefly dropped — PeerTransport auto-reconnects within ~3s.
       if (error.message?.includes('disconnecting from server') ||
           error.message?.includes('disconnected from server')) return;
+      // Peer is simply offline — expected, no need to disturb the user.
+      if (error.message?.includes('Could not connect to peer') ||
+          error.message?.includes('Failed to connect to') ||
+          error.message?.includes('peer-unavailable')) return;
       this.ui?.showToast(error.message, 'error');
     };
 
@@ -867,7 +871,13 @@ export class ChatController {
       ) {
         this.state.connectingPeers.add(member.peerId);
         this.ui?.updateSidebar();
-        this.transport.connect(member.peerId);
+        this.transport.connect(member.peerId).catch(() => {});
+        setTimeout(() => {
+          if (!this.state.connectedPeers.has(member.peerId)) {
+            this.state.connectingPeers.delete(member.peerId);
+            this.ui?.updateSidebar();
+          }
+        }, 4000);
       }
     }
 
@@ -1154,16 +1164,17 @@ export class ChatController {
       attempted++;
       this.state.connectingPeers.add(member.peerId);
       this.ui?.updateSidebar();
-      this.transport.connect(member.peerId)
-        .catch(() => { /* auto-reconnect handles retries */ })
-        .finally(() => {
-          // Always clean up — onConnect will remove from connectingPeers on success;
-          // on failure we need to clear it so the next maintenance cycle can retry.
-          if (!this.state.connectedPeers.has(member.peerId)) {
-            this.state.connectingPeers.delete(member.peerId);
-            this.ui?.updateSidebar();
-          }
-        });
+      // Stop the pulsating indicator quickly — if the peer doesn't answer in
+      // 4s, show them as offline rather than spinning forever. PeerTransport
+      // keeps retrying silently in the background; onConnect will light them
+      // up green the moment they come back.
+      setTimeout(() => {
+        if (!this.state.connectedPeers.has(member.peerId)) {
+          this.state.connectingPeers.delete(member.peerId);
+          this.ui?.updateSidebar();
+        }
+      }, 4000);
+      this.transport.connect(member.peerId).catch(() => { /* retries handled by PeerTransport */ });
     }
 
     if (attempted > 0) {
