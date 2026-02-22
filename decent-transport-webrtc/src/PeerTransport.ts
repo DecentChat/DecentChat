@@ -660,16 +660,10 @@ export class PeerTransport implements Transport {
 
       const peer = peerId ? new Peer(peerId, peerConfig as any) : new Peer(peerConfig as any);
 
-      peer.on('open', (id) => {
-        this.myPeerId = id;
-        const instance: SignalingInstance = { peer, url: 'default', label: 'default', connected: true };
-        this.signalingInstances.push(instance);
-        this._setupPeerEvents(instance);
-        this._setupNetworkListeners();
-        resolve(id);
-      });
-
-      peer.on('error', (error: any) => {
+      // Named init handler so we can remove it once 'open' fires.
+      // Without this, the handler persists and calls peer.destroy() on any
+      // post-init error (e.g. peer-unavailable when a member goes offline).
+      const initErrHandler = (error: any) => {
         peer.destroy();
         if (error.type === 'unavailable-id' && attempt < 3) {
           // Transient: previous WebSocket session still alive on the server — retry.
@@ -682,6 +676,17 @@ export class PeerTransport implements Transport {
           if (error.type !== 'unavailable-id') this.onError?.(error);
           reject(error);
         }
+      };
+      peer.on('error', initErrHandler);
+
+      peer.on('open', (id) => {
+        peer.off('error', initErrHandler); // Remove init handler — post-init errors go to _setupPeerEvents
+        this.myPeerId = id;
+        const instance: SignalingInstance = { peer, url: 'default', label: 'default', connected: true };
+        this.signalingInstances.push(instance);
+        this._setupPeerEvents(instance);
+        this._setupNetworkListeners();
+        resolve(id);
       });
     });
   }
