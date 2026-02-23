@@ -461,6 +461,7 @@ export class NodeXenaPeer {
       }
       await this.flushOfflineQueue(fromPeerId);
       await this.resendPendingAcks(fromPeerId);
+      await this.flushPendingReadReceipts(fromPeerId);
       return;
     }
 
@@ -739,6 +740,28 @@ export class NodeXenaPeer {
     }
   }
 
+  async sendReadReceipt(peerId: string, channelId: string, messageId: string): Promise<void> {
+    if (!this.transport || !peerId || !channelId || !messageId) return;
+
+    const payload = {
+      type: 'read',
+      channelId,
+      messageId,
+    } as const;
+
+    if (!this.transport.getConnectedPeers().includes(peerId)) {
+      await this.queuePendingReadReceipt(peerId, channelId, messageId);
+      return;
+    }
+
+    try {
+      this.transport.send(peerId, payload);
+    } catch (err) {
+      this.opts.log?.warn?.(`[xena-peer] failed to send read receipt to ${peerId}: ${String(err)}`);
+      await this.queuePendingReadReceipt(peerId, channelId, messageId);
+    }
+  }
+
   /** Send stream-start to all workspace peers (or direct peer for DMs) */
   async startStream(params: {
     channelId: string;
@@ -997,6 +1020,45 @@ export class NodeXenaPeer {
 
   private pendingAckKey(peerId: string): string {
     return `pending-ack-${peerId}`;
+  }
+
+  private pendingReadReceiptKey(peerId: string): string {
+    return `pending-read-${peerId}`;
+  }
+
+  private async queuePendingReadReceipt(peerId: string, channelId: string, messageId: string): Promise<void> {
+    const key = this.pendingReadReceiptKey(peerId);
+    const current = this.store.get<Array<{ channelId: string; messageId: string; queuedAt: number }>>(key, []);
+    const exists = current.some((entry) => entry?.channelId === channelId && entry?.messageId === messageId);
+    if (exists) return;
+    current.push({ channelId, messageId, queuedAt: Date.now() });
+    this.store.set(key, current);
+  }
+
+  private async flushPendingReadReceipts(peerId: string): Promise<void> {
+    if (!this.transport) return;
+    if (!this.transport.getConnectedPeers().includes(peerId)) return;
+
+    const key = this.pendingReadReceiptKey(peerId);
+    const queued = this.store.get<Array<{ channelId: string; messageId: string; queuedAt: number }>>(key, []);
+    if (queued.length === 0) return;
+
+    const retry: Array<{ channelId: string; messageId: string; queuedAt: number }> = [];
+    for (const item of queued) {
+      if (!item?.channelId || !item?.messageId) continue;
+      try {
+        this.transport.send(peerId, {
+          type: 'read',
+          channelId: item.channelId,
+          messageId: item.messageId,
+        });
+      } catch {
+        retry.push(item);
+      }
+    }
+
+    if (retry.length === 0) this.store.delete(key);
+    else this.store.set(key, retry);
   }
 
   private async queuePendingAck(peerId: string, payload: any): Promise<void> {

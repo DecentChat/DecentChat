@@ -251,6 +251,8 @@ export class PersistentStore {
       targetPeerId,
       data,
       createdAt: Date.now(),
+      attempts: 0,
+      lastAttempt: 0,
     });
   }
 
@@ -266,6 +268,12 @@ export class PersistentStore {
 
   async dequeueMessage(id: number): Promise<void> {
     await this.delete('outbox', id);
+  }
+
+  async updateQueuedMessage(id: number, patch: Record<string, any>): Promise<void> {
+    const existing = await this.get('outbox', id);
+    if (!existing) return;
+    await this.put('outbox', { ...existing, ...patch });
   }
 
   async dequeueAllForPeer(targetPeerId: string): Promise<any[]> {

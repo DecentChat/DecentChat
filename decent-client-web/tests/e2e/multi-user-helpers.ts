@@ -146,10 +146,14 @@ export async function waitForMessageCount(page: Page, count: number, timeoutMs =
 
 // ─── Peer Connection ──────────────────────────────────────────────────────────
 
-/** Wait for the encrypted connection toast to appear (indicates successful P2P handshake) */
+/** Wait for successful P2P handshake (connectedPeers > 0); toast is fallback for older builds */
 export async function waitForPeerConnection(page: Page, timeoutMs = 30000): Promise<void> {
   await page.waitForFunction(
     () => {
+      const state = (window as any).__state;
+      const connected = state?.connectedPeers && typeof state.connectedPeers.size === 'number' && state.connectedPeers.size > 0;
+      if (connected) return true;
+
       const toasts = document.querySelectorAll('.toast');
       return Array.from(toasts).some(t =>
         t.textContent?.includes('Encrypted connection') ||

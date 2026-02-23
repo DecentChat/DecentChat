@@ -383,7 +383,8 @@ describe('Multi-Peer Scenarios', () => {
       joinedAt: Date.now(), role: 'member',
     });
 
-    // Create channels
+    // Bob gets admin role, then both owner/admin create channels
+    wm.promoteMember(ws.id, 'alice', 'bob', 'admin');
     wm.createChannel(ws.id, 'engineering', 'alice');
     wm.createChannel(ws.id, 'random', 'bob');
 

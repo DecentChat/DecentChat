@@ -100,11 +100,13 @@ export type {
   NegentropyQuery,
   NegentropyResponse,
 } from './crdt/Negentropy';
+export { WorkspaceRole, DEFAULT_WORKSPACE_PERMISSIONS } from './workspace/types';
 export type {
   Workspace,
   WorkspaceMember,
   Channel,
   WorkspaceInvite,
+  WorkspacePermissions,
   SyncMessage,
   PEXServer,
 } from './workspace/types';

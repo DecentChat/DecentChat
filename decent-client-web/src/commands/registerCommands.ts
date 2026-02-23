@@ -185,6 +185,19 @@ export function registerCommands(parser: CommandParser, ctrl: ChatController, st
     },
   });
 
+  parser.register({
+    name: 'delete-workspace',
+    description: 'Delete active workspace (owner only)',
+    usage: '/delete-workspace',
+    category: 'workspace',
+    execute: async () => {
+      if (!state.activeWorkspaceId) return { handled: true, error: 'No active workspace' };
+      const ok = await ctrl.deleteWorkspace(state.activeWorkspaceId);
+      if (!ok) return { handled: true, error: 'Only owner can delete workspace' };
+      return { handled: true, output: '🗑️ Workspace deleted' };
+    },
+  });
+
   // ═══════════════════════════════════════════════════════════════════════════
   // 💬 CHANNEL
   // ═══════════════════════════════════════════════════════════════════════════
@@ -226,6 +239,21 @@ export function registerCommands(parser: CommandParser, ctrl: ChatController, st
         await ctrl.persistWorkspace(state.activeWorkspaceId);
       }
       return { handled: true, output: `📌 Topic set to: ${rawArgs}` };
+    },
+  });
+
+  parser.register({
+    name: 'remove-channel',
+    description: 'Remove current channel (admins/owner only)',
+    usage: '/remove-channel',
+    category: 'channel',
+    execute: async () => {
+      if (!state.activeWorkspaceId || !state.activeChannelId) {
+        return { handled: true, error: 'No active channel' };
+      }
+      const res = await ctrl.removeChannel(state.activeChannelId);
+      if (!res.success) return { handled: true, error: res.error || 'Failed to remove channel' };
+      return { handled: true, output: '🗑️ Channel removed' };
     },
   });
 

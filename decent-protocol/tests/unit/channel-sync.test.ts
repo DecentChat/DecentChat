@@ -93,6 +93,7 @@ beforeEach(() => {
   // Add Bob and Carol as members via the proper API
   wmAlice.addMember(WS_ID, { peerId: BOB,   alias: 'Bob',   publicKey: '', joinedAt: Date.now(), role: 'member' });
   wmAlice.addMember(WS_ID, { peerId: CAROL, alias: 'Carol', publicKey: '', joinedAt: Date.now(), role: 'member' });
+  wmAlice.promoteMember(WS_ID, ALICE, BOB, 'admin');
 
   // Bob's local copy: deep-clone Alice's workspace so both start identical
   const clone = JSON.parse(JSON.stringify(wmAlice.getWorkspace(WS_ID)!));

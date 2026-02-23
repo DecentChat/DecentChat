@@ -682,3 +682,31 @@ describe('Edge Case: Large history sync cap (message-level)', () => {
     }
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// Workspace deletion sync
+// ---------------------------------------------------------------------------
+
+describe('Edge Case: Workspace deletion sync', () => {
+  test('owner deletion is broadcast and peer removes workspace', async () => {
+    const alice = createPeer('alice');
+    const bob = createPeer('bob');
+
+    const ws = alice.wm.createWorkspace('DeleteMe', 'alice', 'Alice', 'alice-key');
+    alice.wm.addMember(ws.id, {
+      peerId: 'bob', alias: 'Bob', publicKey: 'bob-key',
+      joinedAt: Date.now(), role: 'member',
+    });
+    bob.wm.importWorkspace(JSON.parse(JSON.stringify(alice.wm.exportWorkspace(ws.id)!)));
+
+    expect(alice.wm.getWorkspace(ws.id)).toBeDefined();
+    expect(bob.wm.getWorkspace(ws.id)).toBeDefined();
+
+    alice.sync.broadcastWorkspaceDeleted(ws.id, 'alice', ['bob']);
+    await deliver(alice, bob);
+
+    expect(bob.wm.getWorkspace(ws.id)).toBeUndefined();
+    expect(bob.events.some(e => e.type === 'workspace-deleted' && (e as any).workspaceId === ws.id)).toBe(true);
+  });
+});

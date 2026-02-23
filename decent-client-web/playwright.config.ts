@@ -1,6 +1,8 @@
 import { defineConfig } from '@playwright/test';
 
-const SIGNAL_PORT = Number(process.env.PW_SIGNAL_PORT || '19090');
+const SIGNAL_PORT = Number(
+  process.env.PW_SIGNAL_PORT || String(20000 + Math.floor(Math.random() * 20000)),
+);
 process.env.PW_SIGNAL_PORT = String(SIGNAL_PORT);
 
 export default defineConfig({
@@ -18,7 +20,7 @@ export default defineConfig({
     {
       command: `SIGNAL_PORT=${SIGNAL_PORT} bun run scripts/signaling-server.ts`,
       url: `http://localhost:${SIGNAL_PORT}/peerjs`,
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       timeout: 10000,
       cwd: '..',
     },

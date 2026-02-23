@@ -16,6 +16,7 @@ DEPs are design documents that describe new features, protocol changes, or proce
 | [001](DEP-001.md) | Negentropy Set Reconciliation | Core | Active |
 | [002](DEP-002.md) | Peer Exchange (PEX) for Signaling Server Discovery | Transport | Final |
 | [003](DEP-003-derived-peer-id.md) | Derived Peer ID from Seed Phrase | Core | Active |
+| [012](DEP-012-reliable-multi-recipient-delivery.md) | Reliable Multi-Recipient Delivery & Reconnect Replay | Core | Draft |
 
 ## How to Submit a DEP
 

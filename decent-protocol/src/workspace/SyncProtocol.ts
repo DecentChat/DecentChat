@@ -21,6 +21,8 @@ export type SyncEvent =
   | { type: 'member-joined'; workspaceId: string; member: WorkspaceMember }
   | { type: 'member-left'; workspaceId: string; peerId: string }
   | { type: 'channel-created'; workspaceId: string; channel: Channel }
+  | { type: 'channel-removed'; workspaceId: string; channelId: string }
+  | { type: 'workspace-deleted'; workspaceId: string; deletedBy: string }
   // Message history sent during sync intentionally omits plaintext `content`.
   | { type: 'workspace-joined'; workspace: Workspace; messageHistory: Record<string, SyncedHistoryMessage[]> }
   | { type: 'join-rejected'; reason: string }
@@ -77,6 +79,12 @@ export class SyncProtocol {
       case 'channel-created':
         this.handleChannelCreated(msg);
         break;
+      case 'channel-removed':
+        this.handleChannelRemoved(msg);
+        break;
+      case 'workspace-deleted':
+        this.handleWorkspaceDeleted(msg);
+        break;
       case 'channel-message':
         await this.handleChannelMessage(fromPeerId, msg);
         break;
@@ -124,6 +132,18 @@ export class SyncProtocol {
    */
   broadcastChannelCreated(workspaceId: string, channel: Channel, connectedPeerIds: string[]): void {
     const msg: SyncMessage = { type: 'channel-created', channel };
+    for (const peerId of connectedPeerIds) {
+      if (peerId !== this.myPeerId) {
+        this.sendFn(peerId, { type: 'workspace-sync', sync: msg, workspaceId });
+      }
+    }
+  }
+
+  /**
+   * Broadcast workspace deletion to all connected workspace peers
+   */
+  broadcastWorkspaceDeleted(workspaceId: string, deletedBy: string, connectedPeerIds: string[]): void {
+    const msg: SyncMessage = { type: 'workspace-deleted', workspaceId, deletedBy } as any;
     for (const peerId of connectedPeerIds) {
       if (peerId !== this.myPeerId) {
         this.sendFn(peerId, { type: 'workspace-sync', sync: msg, workspaceId });
@@ -262,6 +282,33 @@ export class SyncProtocol {
       ws.channels.push(msg.channel);
       this.onEvent({ type: 'channel-created', workspaceId: ws.id, channel: msg.channel });
     }
+  }
+
+  private handleChannelRemoved(msg: Extract<SyncMessage, { type: 'channel-removed' }> & { workspaceId?: string }): void {
+    if (!msg.workspaceId) {
+      console.warn('handleChannelRemoved: missing workspaceId, ignoring message');
+      return;
+    }
+
+    const ws = this.workspaceManager.getWorkspace(msg.workspaceId);
+    if (!ws) return;
+
+    const idx = ws.channels.findIndex((c: Channel) => c.id === msg.channelId && c.type === 'channel');
+    if (idx >= 0) {
+      ws.channels.splice(idx, 1);
+      this.onEvent({ type: 'channel-removed', workspaceId: ws.id, channelId: msg.channelId });
+    }
+  }
+
+  private handleWorkspaceDeleted(msg: Extract<SyncMessage, { type: 'workspace-deleted' }> & { workspaceId?: string }): void {
+    const wsId = msg.workspaceId;
+    if (!wsId) {
+      console.warn('handleWorkspaceDeleted: missing workspaceId, ignoring message');
+      return;
+    }
+
+    this.workspaceManager.removeWorkspace(wsId);
+    this.onEvent({ type: 'workspace-deleted', workspaceId: wsId, deletedBy: msg.deletedBy });
   }
 
   private async handleChannelMessage(fromPeerId: string, msg: Extract<SyncMessage, { type: 'channel-message' }>): Promise<void> {

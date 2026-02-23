@@ -159,6 +159,11 @@ async function init(): Promise<void> {
     createChannel: (name) => ctrl.createChannel(name),
     createDM: (peerId) => ctrl.createDM(peerId),
     removeWorkspaceMember: (peerId) => ctrl.removeWorkspaceMember(peerId),
+    promoteMember: (peerId, newRole) => ctrl.promoteMember(peerId, newRole),
+    demoteMember: (peerId) => ctrl.demoteMember(peerId),
+    updateWorkspacePermissions: (permissions) => ctrl.updateWorkspacePermissions(permissions),
+    updateWorkspaceInfo: (updates) => ctrl.updateWorkspaceInfo(updates),
+    deleteWorkspace: (wsId) => ctrl.deleteWorkspace(wsId),
     persistWorkspace: (wsId) => ctrl.persistWorkspace(wsId),
     persistSetting: (key, value) => ctrl.persistSetting(key, value),
     getCommandSuggestions: (prefix) => commandParser.autocomplete(prefix).map(c => ({
@@ -209,9 +214,16 @@ async function init(): Promise<void> {
     getAllWorkspaces: () => ctrl.workspaceManager.getAllWorkspaces(),
     setWorkspaceAlias: (wsId, alias) => ctrl.setWorkspaceAlias(wsId, alias),
     getUnreadCount: (channelId) => ctrl.notifications.getUnreadCount(channelId),
+    getActivityItems: () => ctrl.getActivityItems(),
+    getActivityUnreadCount: () => ctrl.getActivityUnreadCount(),
+    markActivityRead: (id) => ctrl.markActivityRead(id),
+    markAllActivityRead: () => ctrl.markAllActivityRead(),
+    markThreadActivityRead: (channelId, threadId) => ctrl.markThreadActivityRead(channelId, threadId),
     setFocusedChannel: (channelId) => ctrl.notifications.setFocusedChannel(channelId),
     markChannelRead: (channelId) => ctrl.notifications.markRead(channelId),
+    onChannelViewed: (channelId) => ctrl.onChannelViewed(channelId),
     getDisplayNameForPeer: (peerId) => ctrl.getDisplayNameForPeer(peerId),
+    getMessageReceiptInfo: (messageId) => ctrl.getMessageReceiptInfo(messageId),
 
     // Identity restore / transfer
     getCurrentSeed: () => ctrl.persistentStore.getSetting('seedPhrase') as Promise<string | null>,
@@ -311,6 +323,7 @@ async function init(): Promise<void> {
       (peerId) => ctrl.persistentStore.getQueuedMessages(peerId),
       (id) => ctrl.persistentStore.dequeueMessage(id),
       (peerId) => ctrl.persistentStore.dequeueAllForPeer(peerId),
+      (id, patch) => ctrl.persistentStore.updateQueuedMessage(id, patch),
     );
 
     // Generate / load crypto keys
@@ -430,6 +443,7 @@ async function init(): Promise<void> {
       myPeerId,
     );
     await ctrl.messageProtocol.init(ecdsaKeyPair);
+    ctrl.setSigningKeyPair(ecdsaKeyPair);
 
     // Wire Double Ratchet state persistence via PersistentStore
     ctrl.messageProtocol.setPersistence({
@@ -521,6 +535,7 @@ async function init(): Promise<void> {
       // Tell NotificationManager which channel is currently focused on startup
       if (state.activeChannelId) {
         ctrl.notifications.setFocusedChannel(state.activeChannelId);
+        void ctrl.onChannelViewed(state.activeChannelId);
       }
     }
 

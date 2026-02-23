@@ -28,6 +28,7 @@ type SaveFn = (targetPeerId: string, data: any) => Promise<void>;
 type LoadFn = (targetPeerId: string) => Promise<QueuedMessage[]>;
 type RemoveFn = (id: number) => Promise<void>;
 type RemoveAllFn = (targetPeerId: string) => Promise<QueuedMessage[]>;
+type UpdateFn = (id: number, patch: Partial<QueuedMessage>) => Promise<void>;
 
 export class OfflineQueue {
   private inMemoryQueue = new Map<string, QueuedMessage[]>(); // peerId → messages
@@ -38,6 +39,7 @@ export class OfflineQueue {
   private loadFn?: LoadFn;
   private removeFn?: RemoveFn;
   private removeAllFn?: RemoveAllFn;
+  private updateFn?: UpdateFn;
 
   constructor(config: OfflineQueueConfig = {}) {
     this.config = {
@@ -50,11 +52,12 @@ export class OfflineQueue {
   /**
    * Wire up persistence (optional — call before using)
    */
-  setPersistence(save: SaveFn, load: LoadFn, remove: RemoveFn, removeAll: RemoveAllFn): void {
+  setPersistence(save: SaveFn, load: LoadFn, remove: RemoveFn, removeAll: RemoveAllFn, update?: UpdateFn): void {
     this.saveFn = save;
     this.loadFn = load;
     this.removeFn = remove;
     this.removeAllFn = removeAll;
+    this.updateFn = update;
   }
 
   /**
@@ -89,15 +92,14 @@ export class OfflineQueue {
     // Try persistent store first
     if (this.loadFn) {
       const persisted = await this.loadFn(targetPeerId);
-      if (persisted.length > 0) return persisted;
+      if (persisted.length > 0) {
+        return this.filterDeliverable(targetPeerId, persisted);
+      }
     }
 
     // Fall back to in-memory
     const messages = this.inMemoryQueue.get(targetPeerId) || [];
-
-    // Filter out expired messages
-    const now = Date.now();
-    return messages.filter(m => (now - m.createdAt) < this.config.maxAgeMs);
+    return this.filterDeliverable(targetPeerId, messages);
   }
 
   /**
@@ -161,6 +163,67 @@ export class OfflineQueue {
     return Array.from(this.inMemoryQueue.entries())
       .filter(([, msgs]) => msgs.length > 0)
       .map(([peerId]) => peerId);
+  }
+
+  async markAttempt(targetPeerId: string, messageId: number): Promise<void> {
+    const now = Date.now();
+
+    if (this.updateFn) {
+      // Persisted source of truth
+      const persisted = await this.loadFn?.(targetPeerId) || [];
+      const current = persisted.find((m) => m.id === messageId);
+      const nextAttempts = (current?.attempts ?? 0) + 1;
+      await this.updateFn(messageId, { attempts: nextAttempts, lastAttempt: now });
+
+      // Dead-letter policy: drop after max retries.
+      if (nextAttempts >= this.config.maxRetries) {
+        await this.removeFn?.(messageId);
+      }
+      return;
+    }
+
+    const queue = this.inMemoryQueue.get(targetPeerId);
+    if (!queue) return;
+    const msg = queue.find((m) => m.id === messageId);
+    if (!msg) return;
+
+    msg.attempts = (msg.attempts || 0) + 1;
+    msg.lastAttempt = now;
+
+    if (msg.attempts >= this.config.maxRetries) {
+      const idx = queue.findIndex((m) => m.id === messageId);
+      if (idx >= 0) queue.splice(idx, 1);
+    }
+  }
+
+  private filterDeliverable(targetPeerId: string, messages: QueuedMessage[]): QueuedMessage[] {
+    const now = Date.now();
+    const deliverable: QueuedMessage[] = [];
+
+    for (const m of messages) {
+      const attempts = m.attempts ?? 0;
+      const ageMs = now - m.createdAt;
+      const backoffMs = Math.min(this.config.retryDelayMs * Math.pow(2, attempts), 60_000);
+      const dueAt = (m.lastAttempt ?? 0) + backoffMs;
+
+      const expired = ageMs >= this.config.maxAgeMs;
+      const exhausted = attempts >= this.config.maxRetries;
+
+      if (expired || exhausted) {
+        // Dead-letter drop
+        if (typeof m.id === 'number') {
+          // Fire and forget cleanup; caller still gets filtered result.
+          this.remove(targetPeerId, m.id).catch(() => {});
+        }
+        continue;
+      }
+
+      if (now >= dueAt) {
+        deliverable.push(m);
+      }
+    }
+
+    return deliverable;
   }
 
   /**

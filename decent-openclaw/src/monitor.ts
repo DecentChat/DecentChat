@@ -68,6 +68,7 @@ type StreamingPeerAdapter = {
   sendStreamDone: (args: { channelId: string; workspaceId: string; messageId: string }) => Promise<void>;
   sendDirectToPeer: (peerId: string, content: string, threadId?: string, replyToId?: string) => Promise<void>;
   sendToChannel: (channelId: string, content: string, threadId?: string, replyToId?: string) => Promise<void>;
+  sendReadReceipt: (peerId: string, channelId: string, messageId: string) => Promise<void>;
   requestFullImage: (peerId: string, attachmentId: string) => Promise<Buffer | null>;
 };
 
@@ -216,6 +217,7 @@ export async function relayInboundMessageToPeer(params: {
     },
     { accountId: ctx.accountId, log: ctx.log },
     core,
+    xenaPeer,
     async (replyText) => {
       if (TOOL_CALL_MISMATCH_RE.test(replyText.trim())) {
         ctx.log?.warn?.("[decentchat] suppressed tool-call mismatch error text");
@@ -367,6 +369,7 @@ async function processInboundMessage(
   },
   ctx: { accountId: string; log?: any },
   core: ReturnType<typeof getDecentChatRuntime>,
+  xenaPeer: Pick<StreamingPeerAdapter, "sendReadReceipt"> | { sendReadReceipt?: (peerId: string, channelId: string, messageId: string) => Promise<void> },
   deliver: (text: string) => Promise<void>,
   onDeliverError?: (reason: string) => void,
   attachments?: InboundAttachment[],
@@ -562,4 +565,7 @@ async function processInboundMessage(
       disableBlockStreaming: options?.streamEnabled,
     },
   });
+
+  await xenaPeer.sendReadReceipt?.(msg.senderId, msg.channelId, msg.messageId);
 }
+

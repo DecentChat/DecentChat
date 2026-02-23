@@ -25,18 +25,16 @@ describe('Split-Brain Channels — duplicate #dev created offline', () => {
     const ws = aliceManager.createWorkspace('TestWS', 'alice', 'Alice', 'pk-alice');
     workspaceId = ws.id;
 
-    // Add Bob to Alice's workspace
+    // Add Bob to Alice's workspace and make him admin (channel create/remove policy)
     aliceManager.addMember(workspaceId, {
       peerId: 'bob', alias: 'Bob', publicKey: 'pk-bob',
       joinedAt: Date.now(), role: 'member',
     });
+    aliceManager.promoteMember(workspaceId, 'alice', 'bob', 'admin');
 
     // Bob imports a copy of the workspace
-    bobManager.importWorkspace(JSON.parse(JSON.stringify(ws)));
-    bobManager.addMember(workspaceId, {
-      peerId: 'bob', alias: 'Bob', publicKey: 'pk-bob',
-      joinedAt: Date.now(), role: 'member',
-    });
+    const clone = JSON.parse(JSON.stringify(aliceManager.getWorkspace(workspaceId)!));
+    bobManager.importWorkspace(clone);
   });
 
   test('both peers can create #dev independently without crash', () => {
