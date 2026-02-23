@@ -161,6 +161,9 @@ export class PeerTransport implements Transport {
   private _lastRecoveryAt = new Map<string, number>();
   private _heartbeatEnabled = true;
   private _networkListenersSetup = false;
+  private _networkListenersCleanup: (() => void) | null = null;
+  private _managedTimeouts = new Set<ReturnType<typeof setTimeout>>();
+  private _destroyed = false;
 
   // ── Transport callbacks ───────────────────────────────────────────────────
   public onConnect: ((peerId: string) => void) | null = null;
@@ -180,6 +183,9 @@ export class PeerTransport implements Transport {
    * Resolves once at least ONE server connects successfully.
    */
   async init(peerId?: string): Promise<string> {
+    if (this._destroyed) {
+      throw new Error('PeerTransport has been destroyed');
+    }
     const servers = this._resolveSignalingServers();
 
     if (servers.length === 0) {
@@ -343,6 +349,12 @@ export class PeerTransport implements Transport {
   }
 
   destroy(): void {
+    if (this._destroyed) return;
+    this._destroyed = true;
+
+    this._managedTimeouts.forEach(t => clearTimeout(t));
+    this._managedTimeouts.clear();
+
     this._reconnectTimers.forEach(t => clearTimeout(t));
     this._reconnectTimers.clear();
     this._reconnectAttempts.clear();
@@ -354,12 +366,34 @@ export class PeerTransport implements Transport {
     this._pongTimeouts.forEach(t => clearTimeout(t));
     this._pongTimeouts.clear();
     this._pendingPing.clear();
+    this._missedPongs.clear();
+    this._lastRecoveryAt.clear();
+
+    if (this._networkListenersCleanup) {
+      this._networkListenersCleanup();
+      this._networkListenersCleanup = null;
+    }
+    this._networkListenersSetup = false;
 
     this.connections.forEach(({ conn }) => conn.close());
     this.connections.clear();
     this.connectingTo.clear();
     for (const instance of this.signalingInstances) {
-      instance.peer.destroy();
+      try {
+        if (!instance.peer.destroyed && typeof (instance.peer as any).disconnect === 'function') {
+          (instance.peer as any).disconnect();
+        }
+      } catch {
+        // Ignore disconnect errors during teardown.
+      }
+      try {
+        if (!instance.peer.destroyed) {
+          instance.peer.destroy();
+        }
+      } catch {
+        // Ignore destroy errors during teardown.
+      }
+      instance.connected = false;
     }
     this.signalingInstances = [];
     this.myPeerId = null;
@@ -557,6 +591,14 @@ export class PeerTransport implements Transport {
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', onVisibilityChange);
     }
+
+    this._networkListenersCleanup = () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
+    };
   }
 
   /** T1.5: Try to reconnect disconnected signaling servers */
@@ -720,7 +762,7 @@ export class PeerTransport implements Transport {
           // Transient: previous WebSocket session still alive on the server — retry.
           const delay = (attempt + 1) * 3000;
           console.warn(`[PeerTransport] Peer ID temporarily taken, retrying in ${delay / 1000}s (attempt ${attempt + 1}/3)...`);
-          setTimeout(() => {
+          this._setManagedTimeout(() => {
             this._initSingleServer(peerId, attempt + 1).then(resolve).catch(reject);
           }, delay);
         } else {
@@ -774,7 +816,7 @@ export class PeerTransport implements Transport {
         if (error.type === 'unavailable-id' && attempt < 3) {
           const delay = (attempt + 1) * 3000;
           console.warn(`[PeerTransport] [${server.label}] Peer ID temporarily taken, retrying in ${delay / 1000}s (attempt ${attempt + 1}/3)...`);
-          setTimeout(() => {
+          this._setManagedTimeout(() => {
             this._initServer(server, peerId, attempt + 1).then(resolve).catch(reject);
           }, delay);
         } else {
@@ -828,7 +870,7 @@ export class PeerTransport implements Transport {
 
       // Auto-reconnect
       if (!instance.peer.destroyed) {
-        setTimeout(() => {
+        this._setManagedTimeout(() => {
           if (!instance.peer.destroyed) {
             instance.peer.reconnect();
           }
@@ -849,7 +891,7 @@ export class PeerTransport implements Transport {
       // the 'disconnected' event, bypassing the auto-reconnect in that handler.
       // Explicitly reconnect if that happened.
       if (instance.peer.disconnected && !instance.peer.destroyed) {
-        setTimeout(() => {
+        this._setManagedTimeout(() => {
           if (instance.peer.disconnected && !instance.peer.destroyed) {
             instance.peer.reconnect();
           }
@@ -974,5 +1016,15 @@ export class PeerTransport implements Transport {
 
       this.onError?.(err);
     });
+  }
+
+  private _setManagedTimeout(callback: () => void, delayMs: number): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(() => {
+      this._managedTimeouts.delete(timer);
+      if (this._destroyed) return;
+      callback();
+    }, delayMs);
+    this._managedTimeouts.add(timer);
+    return timer;
   }
 }

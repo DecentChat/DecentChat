@@ -4,10 +4,12 @@ const SIGNAL_PORT = Number(process.env.PW_SIGNAL_PORT || '19090');
 process.env.PW_SIGNAL_PORT = String(SIGNAL_PORT);
 
 export default defineConfig({
-  testDir: './tests',
-  testIgnore: ['**/*.live-smoke.spec.ts'],
-  timeout: 30000,
+  testDir: './tests/e2e',
+  testMatch: '**/*.live-smoke.spec.ts',
+  timeout: 90000,
   retries: 0,
+  workers: 1,
+  fullyParallel: false,
   use: {
     baseURL: 'http://localhost:5173',
     headless: true,

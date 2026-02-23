@@ -15,6 +15,7 @@ function createControllerStub(overrides: Record<string, unknown> = {}): any {
     destroy: mock(() => {}),
     init: mock(async () => 'me-peer'),
   };
+  ctrl.recreateTransportAndInit = mock(async () => 'me-peer');
   ctrl.setupTransportHandlers = mock(() => {});
   ctrl.runPeerMaintenanceNow = mock(() => 0);
   Object.assign(ctrl, overrides);
@@ -58,46 +59,37 @@ describe('ChatController reconnect guard helpers', () => {
 
     const didReinit = await ctrl.reinitializeTransportIfStuck('test');
     expect(didReinit).toBe(false);
-    expect(ctrl.transport.destroy).not.toHaveBeenCalled();
-    expect(ctrl.transport.init).not.toHaveBeenCalled();
+    expect(ctrl.recreateTransportAndInit).not.toHaveBeenCalled();
   });
 
-  test('reinitializeTransportIfStuck re-inits once when signaling is fully down', async () => {
-    const destroy = mock(() => {});
-    const init = mock(async () => 'me-peer');
-    const setupHandlers = mock(() => {});
+  test('reinitializeTransportIfStuck recreates transport once when signaling is fully down', async () => {
+    const recreate = mock(async () => 'me-peer');
     const runMaintenance = mock(() => 1);
 
     const ctrl = createControllerStub({
       transport: {
         getConnectedPeers: () => [],
         getSignalingStatus: () => [{ connected: false }, { connected: false }],
-        destroy,
-        init,
       },
-      setupTransportHandlers: setupHandlers,
+      recreateTransportAndInit: recreate,
       runPeerMaintenanceNow: runMaintenance,
     });
 
     const didReinit = await ctrl.reinitializeTransportIfStuck('test');
     expect(didReinit).toBe(true);
-    expect(destroy).toHaveBeenCalledTimes(1);
-    expect(init).toHaveBeenCalledTimes(1);
-    expect(setupHandlers).toHaveBeenCalledTimes(1);
+    expect(recreate).toHaveBeenCalledTimes(1);
     expect(runMaintenance).toHaveBeenCalledTimes(1);
   });
 
   test('reinitializeTransportIfStuck is cooldown-limited', async () => {
-    const destroy = mock(() => {});
-    const init = mock(async () => 'me-peer');
+    const recreate = mock(async () => 'me-peer');
 
     const ctrl = createControllerStub({
       transport: {
         getConnectedPeers: () => [],
         getSignalingStatus: () => [{ connected: false }],
-        destroy,
-        init,
       },
+      recreateTransportAndInit: recreate,
     });
 
     const first = await ctrl.reinitializeTransportIfStuck('first');
@@ -105,7 +97,36 @@ describe('ChatController reconnect guard helpers', () => {
 
     expect(first).toBe(true);
     expect(second).toBe(false);
-    expect(destroy).toHaveBeenCalledTimes(1);
-    expect(init).toHaveBeenCalledTimes(1);
+    expect(recreate).toHaveBeenCalledTimes(1);
+  });
+
+  test('recreateTransportAndInit replaces stale transport instance', async () => {
+    const oldDestroy = mock(() => {});
+    const newInit = mock(async () => 'new-peer');
+    const setupHandlers = mock(() => {});
+    const replacementTransport = {
+      init: newInit,
+      getConnectedPeers: () => [],
+      getSignalingStatus: () => [{ connected: true }],
+    };
+
+    const ctrl = createControllerStub({
+      transport: {
+        destroy: oldDestroy,
+        getConnectedPeers: () => [],
+        getSignalingStatus: () => [{ connected: false }],
+      },
+      setupTransportHandlers: setupHandlers,
+    });
+
+    ctrl.recreateTransportAndInit = ChatController.prototype.recreateTransportAndInit;
+    ctrl._buildTransport = mock(() => replacementTransport);
+    const assigned = await ctrl.recreateTransportAndInit('me-peer', 'test');
+
+    expect(assigned).toBe('new-peer');
+    expect(oldDestroy).toHaveBeenCalledTimes(1);
+    expect(ctrl.transport).toBe(replacementTransport);
+    expect(newInit).toHaveBeenCalledTimes(1);
+    expect(setupHandlers).toHaveBeenCalledTimes(1);
   });
 });

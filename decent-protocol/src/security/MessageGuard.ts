@@ -54,6 +54,10 @@ const KNOWN_TYPES = new Set([
   'media-request',
   'media-response',
   'media-chunk',
+  // Assistant streaming control frames
+  'stream-start',
+  'stream-delta',
+  'stream-done',
 ]);
 
 export class MessageGuard {
@@ -120,6 +124,16 @@ export class MessageGuard {
       const chunkData = data.data;
       if (typeof chunkData === 'string' && chunkData.length > this.sizeLimits.maxMediaBytes) {
         return { allowed: false, reason: 'media chunk too large' };
+      }
+      return this.checkRateLimit(peerId, 'media');
+    }
+
+    // Assistant streaming control frames can be frequent; use media bucket
+    // (higher throughput than generic message bucket) to avoid throttling token deltas.
+    if (type === 'stream-start' || type === 'stream-delta' || type === 'stream-done') {
+      // Guard obvious payload abuse on deltas.
+      if (type === 'stream-delta' && typeof data.content === 'string' && data.content.length > this.sizeLimits.maxTextBytes) {
+        return { allowed: false, reason: `stream delta too large: ${data.content.length} bytes` };
       }
       return this.checkRateLimit(peerId, 'media');
     }

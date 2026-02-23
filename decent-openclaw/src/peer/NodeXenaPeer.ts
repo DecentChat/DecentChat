@@ -52,6 +52,37 @@ export interface NodeXenaPeerOptions {
   log?: { info: (s: string) => void; warn?: (s: string) => void; error?: (s: string) => void };
 }
 
+type MediaChunk = {
+  type: 'media-chunk';
+  attachmentId: string;
+  chunkIndex: number;
+  total: number;
+  data: string;
+  chunkHash: string;
+};
+
+type MediaRequest = {
+  type: 'media-request';
+  attachmentId: string;
+  fromChunk?: number;
+};
+
+type MediaResponse = {
+  type: 'media-response';
+  attachmentId: string;
+  available: boolean;
+  totalChunks?: number;
+  suggestedPeers?: string[];
+};
+
+type PendingMediaRequest = {
+  attachmentId: string;
+  peerId: string;
+  resolve: (buffer: Buffer | null) => void;
+  chunks: Map<number, Buffer>;
+  timeout: ReturnType<typeof setTimeout>;
+};
+
 export class NodeXenaPeer {
   private readonly store: FileStore;
   private readonly workspaceManager: WorkspaceManager;
@@ -66,6 +97,8 @@ export class NodeXenaPeer {
   private _maintenanceInterval: ReturnType<typeof setInterval> | null = null;
   private readonly offlineQueue: OfflineQueue;
   private readonly opts: NodeXenaPeerOptions;
+  private readonly pendingMediaRequests = new Map<string, PendingMediaRequest>();
+  private readonly mediaChunkTimeout = 30000;
 
   constructor(opts: NodeXenaPeerOptions) {
     this.opts = opts;
@@ -338,8 +371,50 @@ export class NodeXenaPeer {
       clearInterval(this._maintenanceInterval);
       this._maintenanceInterval = null;
     }
+    // Clear all pending media request timeouts
+    for (const pending of this.pendingMediaRequests.values()) {
+      clearTimeout(pending.timeout);
+    }
+    this.pendingMediaRequests.clear();
     this.transport?.destroy();
     this.opts.log?.info('[xena-peer] stopped');
+  }
+
+  /**
+   * Request full-quality image from a peer.
+   * Returns a Buffer with the decrypted image data, or null if unavailable.
+   */
+  async requestFullImage(peerId: string, attachmentId: string): Promise<Buffer | null> {
+    if (!this.transport) return null;
+
+    // Check if we already have this image stored locally
+    const storedKey = `media-full:${attachmentId}`;
+    const stored = this.store.get<string>(storedKey, null);
+    if (stored) {
+      try {
+        return Buffer.from(stored, 'base64');
+      } catch {
+        // corrupted storage, continue to fetch
+      }
+    }
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingMediaRequests.delete(attachmentId);
+        resolve(null);
+      }, this.mediaChunkTimeout);
+
+      this.pendingMediaRequests.set(attachmentId, {
+        attachmentId,
+        peerId,
+        resolve,
+        chunks: new Map(),
+        timeout,
+      });
+
+      const request: MediaRequest = { type: 'media-request', attachmentId };
+      this.transport?.send(peerId, request);
+    });
   }
 
   private startPeerMaintenance(): void {
@@ -401,6 +476,20 @@ export class NodeXenaPeer {
     if (msg?.type === 'workspace-sync' && msg.sync) {
       const merged = msg.workspaceId ? { ...msg.sync, workspaceId: msg.workspaceId } : msg.sync;
       await this.syncProtocol.handleMessage(fromPeerId, merged);
+      return;
+    }
+
+    // Handle media requests (unencrypted, similar to web client)
+    if (msg?.type === 'media-request') {
+      await this.handleMediaRequest(fromPeerId, msg as MediaRequest);
+      return;
+    }
+    if (msg?.type === 'media-response') {
+      await this.handleMediaResponse(fromPeerId, msg as MediaResponse);
+      return;
+    }
+    if (msg?.type === 'media-chunk') {
+      await this.handleMediaChunk(fromPeerId, msg as MediaChunk);
       return;
     }
 
@@ -750,6 +839,101 @@ export class NodeXenaPeer {
   }): Promise<void> {
     if (!this.transport || !this.transport.getConnectedPeers().includes(params.peerId)) return;
     this.transport.send(params.peerId, { type: 'stream-done', messageId: params.messageId });
+  }
+
+  // =========================================================================
+  // Media handling (full-quality image requests)
+  // =========================================================================
+
+  private async handleMediaRequest(fromPeerId: string, request: MediaRequest): Promise<void> {
+    if (!this.transport) return;
+
+    // Check if we have this attachment stored locally
+    const attachmentKey = `attachment-meta:${request.attachmentId}`;
+    const attachment = this.store.get<{ id: string; name: string; mimeType: string; size: number; totalChunks: number } | null>(attachmentKey, null);
+
+    if (!attachment) {
+      const response: MediaResponse = { type: 'media-response', attachmentId: request.attachmentId, available: false };
+      this.transport.send(fromPeerId, response);
+      return;
+    }
+
+    // Send response indicating availability
+    const response: MediaResponse = {
+      type: 'media-response',
+      attachmentId: request.attachmentId,
+      available: true,
+      totalChunks: attachment.totalChunks,
+    };
+    this.transport.send(fromPeerId, response);
+
+    // Send chunks
+    const startChunk = request.fromChunk ?? 0;
+    for (let i = startChunk; i < attachment.totalChunks; i++) {
+      const chunkKey = `media-chunk:${request.attachmentId}:${i}`;
+      const chunkData = this.store.get<string | null>(chunkKey, null);
+      if (chunkData) {
+        const chunk: MediaChunk = {
+          type: 'media-chunk',
+          attachmentId: request.attachmentId,
+          chunkIndex: i,
+          total: attachment.totalChunks,
+          data: chunkData,
+          chunkHash: '', // TODO: compute hash
+        };
+        this.transport.send(fromPeerId, chunk);
+      }
+    }
+  }
+
+  private async handleMediaResponse(fromPeerId: string, response: MediaResponse): Promise<void> {
+    const pending = this.pendingMediaRequests.get(response.attachmentId);
+    if (!pending) return;
+
+    if (!response.available) {
+      clearTimeout(pending.timeout);
+      this.pendingMediaRequests.delete(response.attachmentId);
+      pending.resolve(null);
+      return;
+    }
+
+    // Chunks will arrive via handleMediaChunk; just wait
+  }
+
+  private async handleMediaChunk(fromPeerId: string, chunk: MediaChunk): Promise<void> {
+    const pending = this.pendingMediaRequests.get(chunk.attachmentId);
+    if (!pending) return;
+
+    try {
+      const buffer = Buffer.from(chunk.data, 'base64');
+      pending.chunks.set(chunk.chunkIndex, buffer);
+
+      // Check if we have all chunks
+      if (pending.chunks.size === chunk.total) {
+        clearTimeout(pending.timeout);
+        this.pendingMediaRequests.delete(chunk.attachmentId);
+
+        // Reassemble
+        const chunks: Buffer[] = [];
+        for (let i = 0; i < chunk.total; i++) {
+          const c = pending.chunks.get(i);
+          if (!c) {
+            pending.resolve(null);
+            return;
+          }
+          chunks.push(c);
+        }
+        const fullBuffer = Buffer.concat(chunks);
+
+        // Store locally for future use
+        const storedKey = `media-full:${chunk.attachmentId}`;
+        this.store.set(storedKey, fullBuffer.toString('base64'));
+
+        pending.resolve(fullBuffer);
+      }
+    } catch {
+      // Invalid chunk data
+    }
   }
 
   /** Public: find the workspace ID that owns a given channel. Returns '' if none found. */

@@ -84,6 +84,19 @@ The report includes pass/fail checks for:
 - persistence integrity after restart (count + last IDs stable)
 - offline queue integrity (queued entries flush on reconnect)
 
+## Live Streaming Transport Smoke (Opt-in)
+
+For Alex: run this only when you want a real transport check for streamed assistant deltas.
+It uses 2 browser contexts and a local signaling server, so it is excluded from default Playwright runs.
+
+```bash
+# from repo root
+bun run test:e2e:live-smoke
+```
+
+This smoke verifies that a streamed assistant message is observed progressively on the receiving peer
+(multiple visible updates before finalization) over real peer transport, not direct event injection.
+
 ## Protocol Design
 
 The protocol is transport-agnostic. WebRTC is the default, but you can swap in WebSocket, Bluetooth, or anything that implements the `Transport` interface:

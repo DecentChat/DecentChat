@@ -16,6 +16,7 @@ const DecentChatConfigSchema = z.object({
   invites: z.array(z.string()).optional(),
   alias: z.string().optional().default("Xena AI"),
   dataDir: z.string().optional(),
+  streamEnabled: z.boolean().optional().default(true),
   dmPolicy: z.enum(["open", "pairing", "allowlist", "disabled"]).optional().default("open"),
   channels: z.record(z.string(), z.object({
     requireMention: z.boolean().optional(),
@@ -35,6 +36,7 @@ function resolveDecentChatAccount(cfg: any, accountId?: string | null): Resolved
     invites: ch.invites ?? [],
     alias: ch.alias ?? "Xena AI",
     dataDir: ch.dataDir,
+    streamEnabled: ch.streamEnabled !== false,
   };
 }
 
@@ -58,6 +60,7 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       signalingServer: { label: "Signaling Server", placeholder: "https://decentchat.app/peerjs", advanced: true },
       alias: { label: "Bot Display Name", placeholder: "Xena AI" },
       dataDir: { label: "Data Directory", advanced: true, help: "Path for persistent peer storage" },
+      streamEnabled: { label: "Enable streaming", help: "Stream token deltas to peers in real time" },
       dmPolicy: { label: "DM Policy" },
       invites: { label: "Invite URLs", advanced: true, help: "DecentChat invite URIs for workspaces to join on startup" },
     },
@@ -93,7 +96,8 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
   },
 
   streaming: {
-    blockStreamingCoalesceDefaults: { minChars: 80, idleMs: 200 },
+    // Preserve real provider streaming: do not aggressively coalesce token deltas.
+    blockStreamingCoalesceDefaults: { minChars: 1, idleMs: 0 },
   },
 
   groups: {

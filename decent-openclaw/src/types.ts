@@ -7,6 +7,7 @@ export type DecentChatChannelConfig = {
   alias?: string;
   dataDir?: string;
   channels?: Record<string, { requireMention?: boolean }>;
+  streamEnabled?: boolean;
 };
 
 export type ResolvedDecentChatAccount = {
@@ -19,4 +20,5 @@ export type ResolvedDecentChatAccount = {
   invites: string[];
   alias: string;
   dataDir?: string;
+  streamEnabled: boolean;
 };

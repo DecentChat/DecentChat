@@ -101,6 +101,7 @@ export interface AppState {
 // ---------------------------------------------------------------------------
 
 async function init(): Promise<void> {
+  const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
   const state: AppState = {
     myPeerId: '',
     myAlias: '',
@@ -151,11 +152,13 @@ async function init(): Promise<void> {
       return ctrl.sendMessage(content, threadId);
     },
     sendAttachment: (file, text, threadId) => ctrl.sendAttachment(file, text, threadId),
+    resolveAttachmentImageUrl: (attachmentId) => ctrl.resolveAttachmentImageUrl(attachmentId),
     connectPeer: (peerId) => ctrl.connectPeer(peerId),
     createWorkspace: (name, alias) => ctrl.createWorkspace(name, alias),
     joinWorkspace: (code, alias, peerId, inviteData) => ctrl.joinWorkspace(code, alias, peerId, inviteData),
     createChannel: (name) => ctrl.createChannel(name),
     createDM: (peerId) => ctrl.createDM(peerId),
+    removeWorkspaceMember: (peerId) => ctrl.removeWorkspaceMember(peerId),
     persistWorkspace: (wsId) => ctrl.persistWorkspace(wsId),
     persistSetting: (key, value) => ctrl.persistSetting(key, value),
     getCommandSuggestions: (prefix) => commandParser.autocomplete(prefix).map(c => ({
@@ -251,7 +254,10 @@ async function init(): Promise<void> {
     appendMessageToDOM: (msg) => ui.appendMessageToDOM(msg),
     showToast: (message, type) => ui.showToast(message, type),
     renderThreadMessages: () => ui.renderThreadMessages(),
-    renderMessages: () => ui.renderMessages(),
+    renderMessages: () => {
+      ui.renderMessages();
+      ctrl.syncReactionsToDOM();
+    },
     renderApp: () => ui.renderApp(),
     updateThreadIndicator: (parentMessageId, channelId) =>
       ui.updateThreadIndicator(parentMessageId, channelId),
@@ -374,24 +380,30 @@ async function init(): Promise<void> {
     // DEP-003: derived ID is canonical whenever a seed phrase exists.
     const preferredPeerId = derivedPeerId || settings.myPeerId;
 
-    let myPeerId: string;
-    try {
-      myPeerId = await ctrl.transport.init(preferredPeerId);
-    } catch (err) {
-      // Signaling server unavailable — work offline with a local ID
-      console.warn('[DecentChat] Signaling server unavailable, working offline:', (err as Error).message);
-      myPeerId = preferredPeerId || crypto.randomUUID();
-      // Schedule retry
-      const retryConnect = () => {
-        ctrl.transport.init(myPeerId).then(() => {
-          console.log('[DecentChat] Reconnected to signaling server');
-          ctrl.setupTransportHandlers();
-          ui.showToast('Connected to signaling server ✓', 'success');
-        }).catch(() => {
-          setTimeout(retryConnect, 15000);
-        });
-      };
-      setTimeout(retryConnect, 10000);
+    let myPeerId: string = preferredPeerId || crypto.randomUUID();
+    const initDelaysMs = [0, 800, 2000, 5000, 10_000];
+    let initError: Error | null = null;
+    for (let attempt = 0; attempt < initDelaysMs.length; attempt++) {
+      if (attempt > 0) {
+        await sleep(initDelaysMs[attempt]);
+      }
+      try {
+        myPeerId = attempt === 0
+          ? await ctrl.transport.init(preferredPeerId)
+          : await ctrl.recreateTransportAndInit(preferredPeerId, `startup-retry-${attempt}`);
+        initError = null;
+        break;
+      } catch (err) {
+        initError = err as Error;
+        console.warn(
+          `[DecentChat] Transport init attempt ${attempt + 1}/${initDelaysMs.length} failed:`,
+          initError.message,
+        );
+      }
+    }
+    if (initError) {
+      // Signaling server unavailable — work offline with a deterministic/local ID.
+      console.warn('[DecentChat] Signaling server unavailable, working offline:', initError.message);
     }
 
     state.myPeerId = myPeerId;
@@ -536,17 +548,39 @@ async function init(): Promise<void> {
       if (tornDown) return;
       tornDown = true;
       reconnectGuard.stop();
+      document.removeEventListener('visibilitychange', onVisibilityLifecycle, true);
+      window.removeEventListener('beforeunload', onBeforeUnload, true);
+      window.removeEventListener('pagehide', onPageHide, true);
       try { ctrl.stopPEXBroadcasts(); } catch {}
       try { ctrl.transport.destroy(); } catch {}
     };
 
-    window.addEventListener('beforeunload', teardownForUnload, { capture: true });
-    window.addEventListener('pagehide', (event) => {
+    const onVisibilityLifecycle = () => {
+      if (document.visibilityState === 'hidden') {
+        if (typeof ctrl.transport.setHeartbeatEnabled === 'function') {
+          ctrl.transport.setHeartbeatEnabled(false);
+        }
+        return;
+      }
+      if (typeof ctrl.transport.setHeartbeatEnabled === 'function') {
+        ctrl.transport.setHeartbeatEnabled(true);
+      }
+    };
+
+    const onBeforeUnload = () => {
+      teardownForUnload();
+    };
+
+    const onPageHide = (event: Event) => {
       const pageEvent = event as PageTransitionEvent;
       if (!pageEvent.persisted) {
         teardownForUnload();
       }
-    }, { capture: true });
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityLifecycle, { capture: true });
+    window.addEventListener('beforeunload', onBeforeUnload, { capture: true });
+    window.addEventListener('pagehide', onPageHide, { capture: true });
 
     reconnectGuard.scheduleCheck('load');
 
@@ -683,11 +717,24 @@ async function initWithTimeout() {
   }
 }
 
-// ─── Service Worker: deterministic activation handoff ────────────────────────
+// ─── Service Worker / PWA toggle ─────────────────────────────────────────────
 const SW_RELOAD_SEEN_KEY = 'dc-sw-reload-seen-build';
 const CURRENT_BUILD_ID = `${__APP_VERSION__}:${__COMMIT_HASH__}`;
 
-if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator && !__PWA_ENABLED__) {
+  // Dev mode: make sure previously installed SW is removed so deploys are instant.
+  navigator.serviceWorker.getRegistrations()
+    .then(async (regs) => {
+      for (const reg of regs) await reg.unregister();
+      if ('caches' in window) {
+        const names = await caches.keys();
+        await Promise.all(names.map((name) => caches.delete(name)));
+      }
+    })
+    .catch(() => {});
+}
+
+if ('serviceWorker' in navigator && __PWA_ENABLED__) {
   let pendingReloadBuildId: string | null = null;
 
   const maybeReloadForBuild = (buildId: unknown) => {
@@ -723,7 +770,7 @@ if ('serviceWorker' in navigator) {
 
 // Wire AutoUpdater — polls /version.json every 5 min as a backup mechanism.
 // If server has a newer version.json but SW hasn't picked it up yet, nudge it.
-if (typeof __APP_VERSION__ !== 'undefined') {
+if (typeof __APP_VERSION__ !== 'undefined' && __PWA_ENABLED__) {
   import('./updater/AutoUpdater').then(({ AutoUpdater }) => {
     const updater = new AutoUpdater(__APP_VERSION__, {
       checkIntervalMs: 5 * 60 * 1000,

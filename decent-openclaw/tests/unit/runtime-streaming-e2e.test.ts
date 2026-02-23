@@ -29,8 +29,11 @@ function makeRuntime(script: RuntimeScript): any {
         formatAgentEnvelope: (params: { body: string }) => params.body,
         finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
         dispatchReplyWithBufferedBlockDispatcher: async ({ dispatcherOptions, replyOptions }: any) => {
+          // onPartialReply sends CUMULATIVE text (like the real OpenClaw runtime)
+          let cumulative = "";
           for (const chunk of script.partials ?? []) {
-            await replyOptions?.onPartialReply?.({ text: chunk });
+            cumulative += chunk;
+            await replyOptions?.onPartialReply?.({ text: cumulative });
           }
           await dispatcherOptions.deliver({ text: script.finalText ?? "" });
         },

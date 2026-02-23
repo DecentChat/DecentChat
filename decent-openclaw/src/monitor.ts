@@ -68,6 +68,7 @@ type StreamingPeerAdapter = {
   sendStreamDone: (args: { channelId: string; workspaceId: string; messageId: string }) => Promise<void>;
   sendDirectToPeer: (peerId: string, content: string, threadId?: string, replyToId?: string) => Promise<void>;
   sendToChannel: (channelId: string, content: string, threadId?: string, replyToId?: string) => Promise<void>;
+  requestFullImage: (peerId: string, attachmentId: string) => Promise<Buffer | null>;
 };
 
 const TOOL_CALL_MISMATCH_RE = /^No tool call found for function call output with call_id\b/i;
@@ -179,6 +180,27 @@ export async function relayInboundMessageToPeer(params: {
 
   params.onFinalizeReady?.(finalizeStream);
 
+  // Request full-quality images for attachments before processing
+  const imageAttachments = (incoming.attachments ?? []).filter(
+    (att): att is InboundAttachment & { id: string; type: "image" } =>
+      att.type === "image" && typeof att.id === "string"
+  );
+
+  const fullImageBuffers: Map<string, Buffer> = new Map();
+  if (imageAttachments.length > 0) {
+    ctx.log?.info?.(`[decentchat] requesting ${imageAttachments.length} full-quality image(s) from ${incoming.senderId.slice(0, 8)}`);
+    const imageRequests = imageAttachments.map(async (att) => {
+      const buffer = await xenaPeer.requestFullImage(incoming.senderId, att.id);
+      if (buffer) {
+        fullImageBuffers.set(att.id, buffer);
+        ctx.log?.info?.(`[decentchat] received full image ${att.id.slice(0, 8)} (${buffer.length} bytes)`);
+      } else {
+        ctx.log?.warn?.(`[decentchat] failed to get full image ${att.id.slice(0, 8)}, will use thumbnail`);
+      }
+    });
+    await Promise.all(imageRequests);
+  }
+
   await processInboundMessage(
     {
       messageId: incoming.messageId,
@@ -250,6 +272,7 @@ export async function relayInboundMessageToPeer(params: {
     },
     undefined,
     incoming.attachments,
+    fullImageBuffers,
     { streamEnabled },
   );
 
@@ -347,25 +370,38 @@ async function processInboundMessage(
   deliver: (text: string) => Promise<void>,
   onDeliverError?: (reason: string) => void,
   attachments?: InboundAttachment[],
+  fullImageBuffers?: Map<string, Buffer>,
   options?: { streamEnabled?: boolean },
 ): Promise<void> {
   let rawBody = msg.content?.trim() ?? "";
-  const thumbnailAttachments = (attachments ?? []).filter(
-    (attachment): attachment is InboundAttachment & { thumbnail: string } =>
-      attachment.type === "image" && typeof attachment.thumbnail === "string" && attachment.thumbnail.length > 0,
-  );
 
   const mediaPaths: string[] = [];
-  if (thumbnailAttachments.length > 0) {
+  const imageAttachments = (attachments ?? []).filter((att) => att.type === "image");
+
+  if (imageAttachments.length > 0) {
     const inboundMediaDir = path.join(os.homedir(), ".openclaw", "media", "inbound");
     fs.mkdirSync(inboundMediaDir, { recursive: true });
-    for (const attachment of thumbnailAttachments) {
+
+    for (const attachment of imageAttachments) {
       try {
         const filePath = path.join(inboundMediaDir, `${randomUUID()}.jpg`);
-        fs.writeFileSync(filePath, Buffer.from(attachment.thumbnail, "base64"));
+
+        // Prefer full-quality image if available
+        const fullBuffer = fullImageBuffers?.get(attachment.id);
+        if (fullBuffer) {
+          fs.writeFileSync(filePath, fullBuffer);
+          ctx.log?.info?.(`[decentchat] saved full-quality image ${attachment.id.slice(0, 8)} (${fullBuffer.length} bytes)`);
+        } else if (attachment.thumbnail) {
+          // Fallback to thumbnail
+          fs.writeFileSync(filePath, Buffer.from(attachment.thumbnail, "base64"));
+          ctx.log?.info?.(`[decentchat] saved thumbnail for ${attachment.id.slice(0, 8)} (fallback)`);
+        } else {
+          continue; // Skip if no image data available
+        }
+
         mediaPaths.push(filePath);
       } catch (err) {
-        ctx.log?.warn?.(`[decentchat] failed to persist inbound thumbnail for ${attachment.id}: ${String(err)}`);
+        ctx.log?.warn?.(`[decentchat] failed to persist image for ${attachment.id}: ${String(err)}`);
       }
     }
   }
@@ -464,6 +500,7 @@ async function processInboundMessage(
   });
 
   let streamingActive = false;
+  let lastPartialLength = 0;
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
@@ -511,10 +548,14 @@ async function processInboundMessage(
       // must NOT also accumulate text — it should only finalize the stream.
       onPartialReply: options?.streamEnabled
         ? async (payload) => {
-            const text = (payload as any).text;
-            if (!text) return;
+            const fullText = (payload as any).text;
+            if (!fullText) return;
             streamingActive = true;
-            await deliver(text);
+            // onPartialReply gives CUMULATIVE text, not delta.
+            // Extract only the new portion before passing to deliver (which accumulates).
+            const delta = fullText.slice(lastPartialLength);
+            lastPartialLength = fullText.length;
+            if (delta) await deliver(delta);
           }
         : undefined,
       // Disable block streaming chunker — we handle streaming ourselves via onPartialReply.

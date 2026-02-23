@@ -6,6 +6,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PWA_ENABLED = false; // TEMP: disable SW/PWA during rapid development
 
 // Generate version.json on build
 const VERSION = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8')).version;
@@ -24,6 +25,7 @@ export default defineConfig({
     '__APP_VERSION__': JSON.stringify(VERSION),
     '__BUILD_TIME__': JSON.stringify(new Date().toISOString()),
     '__COMMIT_HASH__': JSON.stringify(commitHash),
+    '__PWA_ENABLED__': JSON.stringify(PWA_ENABLED),
   },
   appType: 'spa',  // All routes → index.html
   plugins: [
@@ -44,52 +46,54 @@ export default defineConfig({
         }
       },
     },
-    VitePWA({
-      registerType: 'autoUpdate',
-      // Use injectManifest so we control the SW entirely (src/sw.ts).
-      // This lets us handle SKIP_WAITING ourselves instead of the aggressive
-      // auto-skipWaiting that would disrupt active chat sessions.
-      strategies: 'injectManifest',
-      srcDir: 'src',
-      filename: 'sw.ts',
-      manifest: {
-        name: 'DecentChat',
-        short_name: 'DecentChat',
-        description: 'End-to-end encrypted, serverless P2P chat',
-        theme_color: '#6c5ce7',
-        background_color: '#ffffff',
-        display: 'standalone',
-        icons: [
-          {
-            src: '/icons/icon-192.png',
-            sizes: '192x192',
-            type: 'image/png',
-          },
-          {
-            src: '/icons/icon-512.png',
-            sizes: '512x512',
-            type: 'image/png',
-          },
-        ],
-      },
-      workbox: {
-        // No skipWaiting: true — controlled via SKIP_WAITING message in sw.ts
-        clientsClaim: true,
-        cleanupOutdatedCaches: true,
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-cache',
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365,
+    ...(PWA_ENABLED ? [
+      VitePWA({
+        registerType: 'autoUpdate',
+        // Use injectManifest so we control the SW entirely (src/sw.ts).
+        // This lets us handle SKIP_WAITING ourselves instead of the aggressive
+        // auto-skipWaiting that would disrupt active chat sessions.
+        strategies: 'injectManifest',
+        srcDir: 'src',
+        filename: 'sw.ts',
+        manifest: {
+          name: 'DecentChat',
+          short_name: 'DecentChat',
+          description: 'End-to-end encrypted, serverless P2P chat',
+          theme_color: '#6c5ce7',
+          background_color: '#ffffff',
+          display: 'standalone',
+          icons: [
+            {
+              src: '/icons/icon-192.png',
+              sizes: '192x192',
+              type: 'image/png',
+            },
+            {
+              src: '/icons/icon-512.png',
+              sizes: '512x512',
+              type: 'image/png',
+            },
+          ],
+        },
+        workbox: {
+          // No skipWaiting: true — controlled via SKIP_WAITING message in sw.ts
+          clientsClaim: true,
+          cleanupOutdatedCaches: true,
+          runtimeCaching: [
+            {
+              urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'google-fonts-cache',
+                expiration: {
+                  maxEntries: 10,
+                  maxAgeSeconds: 60 * 60 * 24 * 365,
+                },
               },
             },
-          },
-        ],
-      },
-    }),
+          ],
+        },
+      }),
+    ] : []),
   ],
 });

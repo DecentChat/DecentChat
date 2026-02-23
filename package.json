@@ -24,7 +24,8 @@
     "perf:smoke": "cd decent-protocol && bun run tests/perf/run.ts --scenario=smoke --check-integrity",
     "perf:reconnect": "cd decent-protocol && bun run tests/perf/run.ts --scenario=reconnect-chaos --check-integrity",
     "gate:predeploy": "cd decent-protocol && bun test tests/unit/perf-integrity-audit.test.ts && bun run tests/perf/run.ts --scenario=smoke --check-integrity --peers=20 && bun run tests/perf/run.ts --scenario=reconnect-chaos --check-integrity --peers=20",
-    "gate:quick": "cd decent-protocol && bun test tests/unit/perf-integrity-audit.test.ts && bun run tests/perf/run.ts --scenario=smoke --check-integrity --peers=5"
+    "gate:quick": "cd decent-protocol && bun test tests/unit/perf-integrity-audit.test.ts && bun run tests/perf/run.ts --scenario=smoke --check-integrity --peers=5",
+    "test:e2e:live-smoke": "cd decent-client-web && bun run test:e2e:live-smoke"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

@@ -248,6 +248,7 @@ class FakePeer {
   disconnected = false;
   destroyed = false;
   destroyCalls = 0;
+  disconnectCalls = 0;
   reconnectCalls = 0;
   private listeners = new Map<string, Set<Handler>>();
 
@@ -266,6 +267,11 @@ class FakePeer {
     const handlers = this.listeners.get(event);
     if (!handlers) return;
     for (const handler of handlers) handler(...args);
+  }
+
+  disconnect(): void {
+    this.disconnected = true;
+    this.disconnectCalls++;
   }
 
   destroy(): void {
@@ -348,5 +354,21 @@ describe('PeerTransport init/error behavior', () => {
 
     peer.emit('error', { type: 'post-init', message: 'should not destroy' });
     expect(peer.destroyCalls).toBe(0);
+  });
+
+  test('destroy is idempotent and tears down peer exactly once', async () => {
+    const transport = new TestPeerTransport();
+    const peer = new FakePeer();
+    transport.enqueue(peer);
+
+    const init = (transport as any)._initSingleServer('alice');
+    peer.emit('open', 'alice');
+    await init;
+
+    transport.destroy();
+    transport.destroy();
+
+    expect(peer.disconnectCalls).toBe(1);
+    expect(peer.destroyCalls).toBe(1);
   });
 });

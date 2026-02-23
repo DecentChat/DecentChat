@@ -130,6 +130,29 @@ export class RateLimiter {
       return { allowed: true, tokensRemaining: bucket.tokens };
     }
 
+    // Calculate retry time
+    const deficit = tokenCost - bucket.tokens;
+    const retryAfterMs = Math.ceil((deficit / bucket.config.refillRate) * 1000);
+
+    // Media should throttle only (no reputation escalation / no temp bans).
+    if (action === 'media') {
+      const violation: Violation = {
+        peerId,
+        action,
+        severity: 'warning',
+        timestamp: Date.now(),
+        tokensRequested: tokenCost,
+        tokensAvailable: bucket.tokens,
+      };
+      this.onViolation?.(violation);
+      return {
+        allowed: false,
+        tokensRemaining: bucket.tokens,
+        retryAfterMs,
+        violation,
+      };
+    }
+
     // Rate limited — record violation
     const severity = this.calculateSeverity(rep);
     const violation: Violation = {
@@ -140,10 +163,6 @@ export class RateLimiter {
     };
 
     this.recordViolation(rep, violation);
-
-    // Calculate retry time
-    const deficit = tokenCost - bucket.tokens;
-    const retryAfterMs = Math.ceil((deficit / bucket.config.refillRate) * 1000);
 
     return {
       allowed: false,

@@ -81,6 +81,7 @@ export interface UIUpdater {
   updateMessageStatus?: (messageId: string, status: 'pending' | 'sent' | 'delivered') => void;
   updateStreamingMessage?: (messageId: string, content: string) => void;
   finalizeStreamingMessage?: (messageId: string) => void;
+  openThread?: (messageId: string) => void;
   /** Huddle state changed (inactive / available / in-call) */
   onHuddleStateChange?: (state: HuddleState, channelId: string | null) => void;
   /** Huddle participants list updated */
@@ -95,7 +96,7 @@ export class ChatController {
   // Protocol instances
   readonly cryptoManager: CryptoManager;
   readonly keyStore: KeyStore;
-  readonly transport: PeerTransport | any;
+  transport: PeerTransport | any;
   messageProtocol: MessageProtocol | null = null;
   readonly messageStore: MessageStore;
   readonly workspaceManager: WorkspaceManager;
@@ -103,6 +104,7 @@ export class ChatController {
   readonly offlineQueue: OfflineQueue;
   readonly messageCRDTs: Map<string, MessageCRDT> = new Map();
   readonly mediaStore: MediaStore;
+  private readonly blobStorage: IndexedDBBlobStorage;
   readonly clockSync: ClockSync;
   readonly messageGuard: MessageGuard;
   readonly presence: PresenceManager;
@@ -152,15 +154,13 @@ export class ChatController {
   constructor(private state: AppState) {
     this.cryptoManager = new CryptoManager();
     this.keyStore = new KeyStore(this.cryptoManager);
-    const MockT = typeof window !== 'undefined' && (window as any).__MockTransport;
-    this.transport = MockT ? new MockT() : new PeerTransport({
-      iceServers: this.getIceServersFromEnv(),
-    });
+    this.transport = this._buildTransport();
     this.messageStore = new MessageStore();
     this.workspaceManager = new WorkspaceManager();
     this.persistentStore = new PersistentStore();
     this.offlineQueue = new OfflineQueue({ maxAgeMs: 7 * 24 * 60 * 60 * 1000 });
-    this.mediaStore = new MediaStore(new IndexedDBBlobStorage());
+    this.blobStorage = new IndexedDBBlobStorage();
+    this.mediaStore = new MediaStore(this.blobStorage);
     this.clockSync = new ClockSync();
     this.messageGuard = new MessageGuard();
     this.presence = new PresenceManager();
@@ -193,6 +193,34 @@ export class ChatController {
   /** Inject UI callbacks after construction (breaks circular dep). */
   setUI(ui: UIUpdater): void {
     this.ui = ui;
+  }
+
+  private _buildTransport(): PeerTransport | any {
+    const MockT = typeof window !== 'undefined' && (window as any).__MockTransport;
+    return MockT ? new MockT() : new PeerTransport({
+      iceServers: this.getIceServersFromEnv(),
+    });
+  }
+
+  private _replaceTransport(nextTransport: PeerTransport | any): void {
+    this.transport = nextTransport;
+    if (typeof window !== 'undefined') {
+      (window as any).__transport = this.transport;
+    }
+  }
+
+  async recreateTransportAndInit(peerId?: string, reason = 'manual'): Promise<string> {
+    try {
+      this.transport.destroy();
+    } catch {
+      // Best-effort teardown of stale transport before recreation.
+    }
+    const nextTransport = this._buildTransport();
+    this._replaceTransport(nextTransport);
+    const assignedId = await this.transport.init(peerId);
+    this.setupTransportHandlers();
+    console.log(`[Reconnect] Recreated transport (${reason})`);
+    return assignedId;
   }
 
   // =========================================================================
@@ -263,6 +291,7 @@ export class ChatController {
             targetChannelId = conv.id;
           }
 
+          // Slack-bot style: always thread. threadId is the thread root (explicit or inbound messageId).
           const streamThreadId = isDirect ? undefined : (threadId ?? replyToId);
           this.pendingStreams.set(messageId, {
             channelId: targetChannelId,
@@ -271,6 +300,34 @@ export class ChatController {
             threadId: streamThreadId,
             isDirect: !!isDirect,
           });
+
+          // === CREATE MESSAGE + DOM ELEMENT IN stream-start (not delta) ===
+          // This ensures exactly ONE element exists before any deltas arrive.
+          const msg = await this.messageStore.createMessage(
+            targetChannelId,
+            streamSenderId,
+            '',
+            'text',
+            streamThreadId,
+          );
+          msg.id = messageId;
+          (msg as any).senderName = senderName;
+          (msg as any).streaming = true;
+          await this.messageStore.addMessage(msg);
+
+          if (streamThreadId) {
+            // Auto-open thread panel (always, even if different channel is active)
+            // openThread internally calls renderThreadMessages, which will include our new empty msg.
+            this.ui?.openThread?.(streamThreadId);
+            // If thread was already open on this threadId, openThread might skip.
+            // Force re-render to include the new streaming message.
+            if (this.state.threadOpen && this.state.activeThreadId === streamThreadId) {
+              this.ui?.renderThreadMessages?.();
+            }
+            this.ui?.updateThreadIndicator?.(streamThreadId, targetChannelId);
+          } else if (targetChannelId === this.state.activeChannelId) {
+            this.ui?.appendMessageToDOM(msg);
+          }
           return;
         }
         if (data?.type === 'stream-delta') {
@@ -282,32 +339,15 @@ export class ChatController {
           }
           const pending = this.pendingStreams.get(messageId);
           if (pending) {
-            let existing = this.findMessageById(messageId);
-            if (!existing) {
-              const msg = await this.messageStore.createMessage(
-                pending.channelId,
-                pending.senderId,
-                '',
-                'text',
-                pending.threadId,
-              );
-              msg.id = messageId;
-              (msg as any).senderName = pending.senderName;
-              (msg as any).streaming = true;
-              msg.content = normalizedContent;
-              await this.messageStore.addMessage(msg);
-              await this.persistMessage(msg);
-              if (pending.channelId === this.state.activeChannelId) {
-                this.ui?.appendMessageToDOM(msg);
-              }
-              existing = msg;
-            } else {
+            // Update stored message content (element already created in stream-start)
+            const existing = this.findMessageById(messageId);
+            if (existing) {
               existing.content = normalizedContent;
               (existing as any).streaming = true;
-              await this.persistMessage(existing);
             }
+            // Replace DOM element text with latest cumulative content
+            this.ui?.updateStreamingMessage?.(messageId, normalizedContent);
           }
-          this.ui?.updateStreamingMessage?.(messageId, normalizedContent);
           return;
         }
         if (data?.type === 'stream-done') {
@@ -317,6 +357,10 @@ export class ChatController {
           if (msg) {
             (msg as any).streaming = false;
             await this.persistMessage(msg);
+          }
+
+          if (msg?.threadId) {
+            this.ui?.updateThreadIndicator?.(msg.threadId, msg.channelId);
           }
           this.ui?.finalizeStreamingMessage?.(messageId);
           return;
@@ -676,10 +720,12 @@ export class ChatController {
           }
         }
 
-        // Pass threadId so replies land in the correct thread (not the main channel)
+        // Pass threadId so replies land in the correct thread (not the main channel).
+        // Some envelopes carry only replyToId for thread replies, so normalize here.
+        const normalizedThreadId: string | undefined = (data.threadId as string | undefined) ?? (data.replyToId as string | undefined);
         // T3.2: For gossip-relayed messages, use the original sender's peerId (not the relay node)
         const actualSenderId: string = (data._gossipOriginalSender as string | undefined) ?? peerId;
-        const msg = await this.messageStore.createMessage(channelId, actualSenderId, content, 'text', data.threadId);
+        const msg = await this.messageStore.createMessage(channelId, actualSenderId, content, 'text', normalizedThreadId);
         // Use sender's timestamp but guarantee it's strictly after our last stored message.
         // Without this guard the hash-chain timestamp check rejects messages that arrive
         // out-of-order (e.g. Alice sent a thread reply at T=100, Bob meanwhile sent at
@@ -719,7 +765,7 @@ export class ChatController {
             senderId: msg.senderId,
             content: msg.content,
             type: (msg.type || 'text') as any,
-            threadId: data.threadId,     // propagate threadId to CRDT
+            threadId: normalizedThreadId,     // propagate threadId to CRDT
             vectorClock: data.vectorClock || {},
             wallTime: msg.timestamp,
             prevHash: msg.prevHash || '',
@@ -1229,9 +1275,7 @@ export class ChatController {
         if (!allSignalingDown) return false;
 
         console.warn(`[Reconnect] Reinitializing transport (${reason})`);
-        this.transport.destroy();
-        await this.transport.init(this.state.myPeerId || undefined);
-        this.setupTransportHandlers();
+        await this.recreateTransportAndInit(this.state.myPeerId || undefined, `stuck:${reason}`);
         this.runPeerMaintenanceNow(`post-reinit:${reason}`);
         return true;
       } catch (error) {
@@ -1426,6 +1470,22 @@ export class ChatController {
     }, 200);
   }
 
+  /** Re-render persisted reactions into currently visible DOM message slots. */
+  syncReactionsToDOM(): void {
+    const nodes = document.querySelectorAll<HTMLElement>('[id^="reactions-"]');
+    nodes.forEach((el) => {
+      const messageId = el.id.slice('reactions-'.length);
+      if (!messageId) return;
+      el.innerHTML = this.reactions.renderReactions(messageId, this.state.myPeerId);
+      el.querySelectorAll('.reaction-pill').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const emoji = (btn as HTMLElement).dataset.emoji!;
+          this.toggleReaction(messageId, emoji);
+        });
+      });
+    });
+  }
+
   async restoreFromStorage(): Promise<void> {
     const savedAlias = await this.persistentStore.getSetting('myAlias');
     if (savedAlias) this.state.myAlias = savedAlias;
@@ -1463,7 +1523,21 @@ export class ChatController {
             };
             crdt.addMessage(crdtMsg);
           } catch {}
-
+          // Register attachment metadata in MediaStore for images sent by us
+          if ((msg as any).attachments?.length) {
+            for (const att of (msg as any).attachments) {
+              // Only register if not already present (blob may or may not exist)
+              if (!this.mediaStore.getAttachment(att.id)) {
+                // Check if blob exists locally (for attachments we sent)
+                const blobKey = `media:${ws.id}:${att.id}`;
+                this.blobStorage.has(blobKey).then(hasBlob => {
+                  this.mediaStore.registerMeta(ws.id, att, hasBlob ? 'available' : 'pruned');
+                }).catch(() => {
+                  this.mediaStore.registerMeta(ws.id, att, 'pruned');
+                });
+              }
+            }
+          }
         }
       }
     }
@@ -1722,6 +1796,27 @@ export class ChatController {
       this.state.myPeerId,
       peerId,
     );
+  }
+
+  async removeWorkspaceMember(peerId: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
+
+    const wsId = this.state.activeWorkspaceId;
+    const result = this.workspaceManager.removeMember(wsId, peerId, this.state.myPeerId);
+    if (!result.success) return result;
+
+    await this.persistWorkspace(wsId);
+
+    // Broadcast the updated workspace state to connected peers (including removed peer if still connected)
+    for (const connectedPeerId of this.state.connectedPeers) {
+      this.sendWorkspaceState(connectedPeerId);
+    }
+
+    this.ui?.updateSidebar();
+    this.ui?.updateChannelHeader();
+    this.ui?.renderMessages();
+
+    return { success: true };
   }
 
   // =========================================================================
@@ -2132,6 +2227,33 @@ export class ChatController {
   requestMedia(peerId: string, attachmentId: string): void {
     const request: MediaRequest = { type: 'media-request', attachmentId };
     this.transport.send(peerId, request);
+  }
+
+  async resolveAttachmentImageUrl(attachmentId: string): Promise<string | null> {
+    const attachment = this.mediaStore.getAttachment(attachmentId) as AttachmentMeta | undefined;
+    if (!attachment) return null;
+
+    let encryptedBlob = await this.mediaStore.getBlob(attachmentId);
+
+    // If not available locally, request from currently connected peers and wait briefly.
+    if (!encryptedBlob) {
+      for (const peerId of this.state.connectedPeers) {
+        this.requestMedia(peerId, attachmentId);
+      }
+
+      const timeoutAt = Date.now() + 8000;
+      while (Date.now() < timeoutAt) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+        encryptedBlob = await this.mediaStore.getBlob(attachmentId);
+        if (encryptedBlob) break;
+      }
+    }
+
+    if (!encryptedBlob) return null;
+
+    const clearBlob = await this.decryptStoredAttachmentBlob(attachmentId, encryptedBlob);
+    const mimeType = attachment.mimeType || 'image/jpeg';
+    return URL.createObjectURL(new Blob([clearBlob], { type: mimeType }));
   }
 
   /** Handle incoming media request — start sending chunks */
