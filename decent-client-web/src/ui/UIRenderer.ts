@@ -13,6 +13,19 @@ import { QRCodeManager } from './QRCodeManager';
 import { QUICK_REACTIONS } from './ReactionManager';
 import { ContactURI, InviteURI } from 'decent-protocol';
 import type { PlaintextMessage, Contact, ContactURIData, DirectConversation } from 'decent-protocol';
+
+export interface ActivityItem {
+  id: string;
+  type: 'thread-reply' | 'mention';
+  workspaceId: string;
+  channelId: string;
+  threadId?: string;
+  messageId: string;
+  actorId: string;
+  snippet: string;
+  timestamp: number;
+  read: boolean;
+}
 import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
 import type { AppState } from '../main';
 import { renderMarkdown } from './renderMarkdown';
@@ -36,8 +49,18 @@ export interface UICallbacks {
   joinWorkspace: (code: string, alias: string, peerId: string, inviteData?: import('decent-protocol').InviteData) => Promise<void>;
   /** Create a channel inside the active workspace */
   createChannel: (name: string) => { success: boolean; channel?: import('decent-protocol').Channel; error?: string };
-  /** Remove a member from the active workspace (owner-only) */
+  /** Remove a member from the active workspace (owner/admin) */
   removeWorkspaceMember?: (peerId: string) => Promise<{ success: boolean; error?: string }>;
+  /** Promote a member's role */
+  promoteMember?: (peerId: string, newRole: 'admin') => Promise<{ success: boolean; error?: string }>;
+  /** Demote a member to regular member */
+  demoteMember?: (peerId: string) => Promise<{ success: boolean; error?: string }>;
+  /** Update workspace permissions */
+  updateWorkspacePermissions?: (permissions: Partial<import('decent-protocol').WorkspacePermissions>) => Promise<{ success: boolean; error?: string }>;
+  /** Update workspace name/description */
+  updateWorkspaceInfo?: (updates: { name?: string; description?: string }) => Promise<{ success: boolean; error?: string }>;
+  /** Delete workspace */
+  deleteWorkspace?: (workspaceId: string) => Promise<boolean>;
   /** Open a DM channel */
   createDM: (peerId: string) => { success: boolean; channel?: import('decent-protocol').Channel };
   /** Persist workspace state */
@@ -52,6 +75,15 @@ export interface UICallbacks {
   broadcastStopTyping?: () => void;
   /** Toggle reaction on a message */
   toggleReaction?: (messageId: string, emoji: string) => void;
+  /** WhatsApp-like message info (delivered/read breakdown) */
+  getMessageReceiptInfo?: (messageId: string) => {
+    messageId: string;
+    channelId: string;
+    recipients: Array<{ peerId: string; name: string; at?: number }>;
+    delivered: Array<{ peerId: string; name: string; at?: number }>;
+    read: Array<{ peerId: string; name: string; at?: number }>;
+    pending: Array<{ peerId: string; name: string; at?: number }>;
+  } | null;
   /** Get settings for settings panel */
   getSettings?: () => Promise<any>;
   /** Generate full invite URL for a workspace */
@@ -78,10 +110,22 @@ export interface UICallbacks {
   setWorkspaceAlias?: (wsId: string, alias: string) => void;
   /** Get unread message count for a channel */
   getUnreadCount?: (channelId: string) => number;
+  /** Activity feed items (thread replies, mentions, etc.) */
+  getActivityItems?: () => ActivityItem[];
+  /** Count unread activity items */
+  getActivityUnreadCount?: () => number;
+  /** Mark one activity item as read */
+  markActivityRead?: (id: string) => void;
+  /** Mark all activity as read */
+  markAllActivityRead?: () => void;
+  /** Mark activity entries for a specific thread as read */
+  markThreadActivityRead?: (channelId: string, threadId: string) => void;
   /** Notify the notification system which channel is currently active */
   setFocusedChannel?: (channelId: string | null) => void;
   /** Mark a channel as fully read */
   markChannelRead?: (channelId: string) => void;
+  /** Late-read receipt scan when opening a channel/conversation */
+  onChannelViewed?: (channelId: string) => void | Promise<void>;
   /** Resolve best display name for a peer — checks contacts, workspace members, fallback */
   getDisplayNameForPeer?: (peerId: string) => string;
   /** Get current seed phrase (for transfer QR) */
@@ -712,6 +756,14 @@ export class UIRenderer {
       : 'Select a channel';
     const memberCount = channel ? channel.members.length : 0;
 
+    // Show workspace settings gear only to admins/owners
+    const isAdminOrOwner = ws ? this.workspaceManager.isAdmin(ws.id, this.state.myPeerId) : false;
+    const wsSettingsBtn = isAdminOrOwner
+      ? `<button class="icon-btn" id="ws-settings-btn" title="Workspace Settings">🔧</button>`
+      : '';
+
+    const activityUnread = this.callbacks.getActivityUnreadCount?.() || 0;
+
     return `
       <div class="channel-header">
         <div class="channel-header-left">
@@ -721,7 +773,9 @@ export class UIRenderer {
         </div>
         <div class="channel-header-right">
           <button class="icon-btn${this.huddleState === 'in-call' && this.huddleChannelId === this.state.activeChannelId ? ' huddle-start-btn active' : ''}" id="huddle-start-btn" title="Start Huddle">🎧</button>
+          ${wsSettingsBtn}
           <button class="icon-btn" id="connect-peer-header-btn" title="Connect to peer">🔌</button>
+          <button class="icon-btn activity-btn" id="activity-btn" title="Activity">🔔${activityUnread > 0 ? `<span class="activity-badge">${activityUnread > 99 ? '99+' : activityUnread}</span>` : ''}</button>
           <button class="icon-btn" id="qr-btn" title="QR Code">📱</button>
           <button class="icon-btn" id="search-btn" title="Search messages (Ctrl+F)">🔍</button>
           <button class="icon-btn" id="invite-btn" title="Invite code">🔗</button>
@@ -779,6 +833,8 @@ export class UIRenderer {
     for (const msg of mainMessages) {
       this.appendMessageToDOM(msg);
     }
+
+    this.upgradeInlineImagePreviews(list);
   }
 
   appendMessageToDOM(msg: PlaintextMessage, container?: HTMLElement): void {
@@ -825,6 +881,28 @@ export class UIRenderer {
     div.dataset.senderId = msg.senderId;
     div.dataset.timestamp = String(msg.timestamp);
 
+    const recipientPeerIds = Array.isArray((msg as any).recipientPeerIds)
+      ? ((msg as any).recipientPeerIds as string[])
+      : [];
+    const ackedBy = Array.isArray((msg as any).ackedBy)
+      ? ((msg as any).ackedBy as string[])
+      : [];
+    const expectedAcks = recipientPeerIds.length;
+    const ackedCount = ackedBy.length;
+    const readBy = Array.isArray((msg as any).readBy)
+      ? ((msg as any).readBy as string[])
+      : [];
+    const readCount = readBy.length;
+    const statusClass = (msg as any).status === 'read' ? 'read' : ((msg as any).status || 'pending');
+    const statusSymbol = statusClass === 'read' ? '✓✓' : statusClass === 'delivered' ? '✓✓' : statusClass === 'sent' ? '✓' : '⏳';
+    const deliveryTitle = statusClass === 'read'
+      ? (expectedAcks > 0 ? `Read (${readCount}/${expectedAcks})` : 'Read')
+      : statusClass === 'delivered'
+        ? (expectedAcks > 0 ? `Delivered (${ackedCount}/${expectedAcks})` : 'Delivered')
+        : statusClass === 'sent'
+          ? (expectedAcks > 0 ? `Sent (${ackedCount}/${expectedAcks} delivered)` : 'Sent')
+          : 'Sending…';
+
     if (msg.type === 'system') {
       div.innerHTML = `<div class="message-content">${this.escapeHtml(msg.content)}</div>`;
     } else {
@@ -834,7 +912,7 @@ export class UIRenderer {
           <div class="message-header">
             <span class="message-sender">${this.escapeHtml(senderLabel)}</span>
             <span class="message-time">${time}</span>
-            ${isMine ? `<span class="msg-delivery-status ${msg.status || 'pending'}" data-message-id="${msg.id}" title="${msg.status === 'delivered' ? 'Delivered' : msg.status === 'sent' ? 'Sent' : 'Sending…'}">${msg.status === 'delivered' ? '✓✓' : msg.status === 'sent' ? '✓' : '⏳'}</span>` : ''}
+            ${isMine ? `<span class="msg-delivery-status ${statusClass}" data-message-id="${msg.id}" title="${deliveryTitle}">${statusSymbol}</span>${expectedAcks > 0 ? `<span class="msg-delivery-detail" data-message-id="${msg.id}">${statusClass === 'read' ? readCount : ackedCount}/${expectedAcks}</span>` : ''}` : ''}
           </div>
           <div class="message-content markdown-body">${renderMarkdown(msg.content)}</div>
           ${this.renderAttachments((msg as any).attachments)}
@@ -845,6 +923,7 @@ export class UIRenderer {
           <div class="message-actions-bar">
             ${QUICK_REACTIONS.map(e => `<button class="quick-react" data-msg-id="${msg.id}" data-emoji="${e}">${e}</button>`).join('')}
             <button class="message-thread-btn" data-thread-id="${msg.id}" title="Reply in thread">💬 Reply</button>
+            ${isMine ? `<button class="message-info-btn" data-message-id="${msg.id}" title="Message info">ℹ️ Info</button>` : ''}
           </div>
         </div>
       `;
@@ -862,10 +941,15 @@ export class UIRenderer {
           this.callbacks.toggleReaction?.(msgId, emoji);
         });
       });
+      div.querySelector('.message-info-btn')?.addEventListener('click', () =>
+        this.showMessageInfo(msg.id),
+      );
     }
 
     list.appendChild(div);
     list.scrollTop = list.scrollHeight;
+    this.upgradeInlineImagePreviews(div);
+
   }
 
   renderThreadMessages(): void {
@@ -889,12 +973,91 @@ export class UIRenderer {
    * DEP-005: Update the delivery status tick on a sent message without re-rendering everything.
    * Called when an ACK arrives from the recipient.
    */
-  updateMessageStatus(messageId: string, status: 'pending' | 'sent' | 'delivered'): void {
+  updateMessageStatus(
+    messageId: string,
+    status: 'pending' | 'sent' | 'delivered' | 'read',
+    detail?: { acked?: number; total?: number; read?: number },
+  ): void {
     const el = document.querySelector(`.msg-delivery-status[data-message-id="${messageId}"]`) as HTMLElement | null;
     if (!el) return;
     el.className = `msg-delivery-status ${status}`;
-    el.title = status === 'delivered' ? 'Delivered' : status === 'sent' ? 'Sent' : 'Sending…';
-    el.textContent = status === 'delivered' ? '✓✓' : status === 'sent' ? '✓' : '⏳';
+
+    const acked = detail?.acked;
+    const read = detail?.read;
+    const total = detail?.total;
+    const hasCounts = typeof total === 'number' && total > 0;
+
+    el.title = status === 'read'
+      ? (hasCounts ? `Read (${read ?? 0}/${total})` : 'Read')
+      : status === 'delivered'
+        ? (hasCounts ? `Delivered (${acked ?? 0}/${total})` : 'Delivered')
+        : status === 'sent'
+          ? (hasCounts ? `Sent (${acked ?? 0}/${total} delivered)` : 'Sent')
+          : 'Sending…';
+
+    el.textContent = status === 'read' ? '✓✓' : status === 'delivered' ? '✓✓' : status === 'sent' ? '✓' : '⏳';
+
+    const detailEl = document.querySelector(`.msg-delivery-detail[data-message-id="${messageId}"]`) as HTMLElement | null;
+    if (hasCounts) {
+      const value = status === 'read' ? (read ?? 0) : (acked ?? 0);
+      if (detailEl) {
+        detailEl.textContent = `${value}/${total}`;
+      } else if (el.parentElement) {
+        const span = document.createElement('span');
+        span.className = 'msg-delivery-detail';
+        span.dataset.messageId = messageId;
+        span.textContent = `${value}/${total}`;
+        el.insertAdjacentElement('afterend', span);
+      }
+    } else if (detailEl) {
+      detailEl.remove();
+    }
+  }
+
+  private showMessageInfo(messageId: string): void {
+    const info = this.callbacks.getMessageReceiptInfo?.(messageId);
+    if (!info) {
+      this.showToast('Message info unavailable', 'error');
+      return;
+    }
+
+    const fmt = (ts?: number) => ts ? new Date(ts).toLocaleString([], { hour12: false }) : '—';
+    const renderList = (title: string, items: Array<{ peerId: string; name: string; at?: number }>) => `
+      <div class="message-info-section">
+        <div class="message-info-title">${title} <span class="message-info-count">(${items.length})</span></div>
+        ${items.length > 0
+          ? `<ul class="message-info-list">${items.map((u) => `<li><span class="name">${this.escapeHtml(u.name)}</span> <span class="peer">${this.escapeHtml(u.peerId.slice(0, 8))}</span> <span class="at">${this.escapeHtml(fmt(u.at))}</span></li>`).join('')}</ul>`
+          : '<div class="message-info-empty">—</div>'}
+      </div>
+    `;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay message-info-overlay';
+    overlay.innerHTML = `
+      <div class="modal message-info-modal">
+        <h3>Message Info</h3>
+        ${renderList('Read by', info.read)}
+        ${renderList('Delivered to', info.delivered)}
+        ${renderList('Pending', info.pending)}
+        <div class="message-info-actions">
+          <button id="message-info-close" class="btn-secondary">Close</button>
+        </div>
+      </div>
+    `;
+
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onEsc);
+    };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close();
+    };
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+    overlay.querySelector('#message-info-close')?.addEventListener('click', close);
+    document.addEventListener('keydown', onEsc);
+    document.body.appendChild(overlay);
   }
 
   updateStreamingMessage(messageId: string, content: string): void {
@@ -966,6 +1129,10 @@ export class UIRenderer {
     }
 
     this.renderThreadMessages();
+    if (this.state.activeChannelId) {
+      this.callbacks.markThreadActivityRead?.(this.state.activeChannelId, messageId);
+      this.updateChannelHeader();
+    }
 
     // Focus the thread input
     setTimeout(() => {
@@ -1130,6 +1297,7 @@ export class UIRenderer {
     this.state.activeDirectConversationId = null;
     this.callbacks.setFocusedChannel?.(channelId);
     this.callbacks.markChannelRead?.(channelId);
+    void this.callbacks.onChannelViewed?.(channelId);
     this.closeThread();
     this.updateSidebar();
     this.updateChannelHeader();
@@ -1145,6 +1313,7 @@ export class UIRenderer {
     this.state.activeWorkspaceId = null;
     this.callbacks.setFocusedChannel?.(conversationId);
     this.callbacks.markChannelRead?.(conversationId);
+    void this.callbacks.onChannelViewed?.(conversationId);
     this.closeThread();
     this.updateSidebar();
     this.updateChannelHeader();
@@ -1576,7 +1745,9 @@ export class UIRenderer {
       }
     });
     document.getElementById('qr-btn')?.addEventListener('click', () => this.showMyQR());
+    document.getElementById('activity-btn')?.addEventListener('click', () => this.showActivityModal());
     document.getElementById('channel-members-btn')?.addEventListener('click', () => this.showChannelMembersModal());
+    document.getElementById('ws-settings-btn')?.addEventListener('click', () => this.showWorkspaceSettingsModal());
     document.getElementById('search-btn')?.addEventListener('click', () => this.showSearchPanel());
     document.getElementById('settings-btn')?.addEventListener('click', () => this.showSettings());
     document.getElementById('connect-peer-header-btn')?.addEventListener('click', () => this.showConnectPeerModal());
@@ -1661,6 +1832,65 @@ export class UIRenderer {
   // Modal helpers
   // =========================================================================
 
+  private showActivityModal(): void {
+    const items = (this.callbacks.getActivityItems?.() || []).sort((a, b) => b.timestamp - a.timestamp);
+
+    if (items.length === 0) {
+      this.showModal('Activity', `
+        <div class="empty-state" style="padding:20px 8px;">
+          <div class="emoji">🔔</div>
+          <h3>No activity yet</h3>
+          <p>Thread replies and mentions will appear here.</p>
+        </div>
+      `, () => true);
+      return;
+    }
+
+    const rows = items.map(item => {
+      const actorName = this.getPeerAlias(item.actorId);
+      const isUnread = !item.read;
+      const time = this.relativeTime(item.timestamp);
+      const meta = item.type === 'mention' ? '📣 Mention' : '💬 Thread reply';
+      return `
+        <button class="activity-row ${isUnread ? 'unread' : ''}" data-activity-id="${item.id}" data-channel-id="${item.channelId}" data-thread-id="${item.threadId || ''}">
+          <div class="activity-row-top">
+            <span class="activity-actor">${this.escapeHtml(actorName)}</span>
+            <span class="activity-time">${time}</span>
+          </div>
+          <div class="activity-snippet">${this.escapeHtml(item.snippet || 'New activity')}</div>
+          <div class="activity-meta">${meta}</div>
+        </button>
+      `;
+    }).join('');
+
+    this.showModal('Activity', `
+      <div class="activity-list">${rows}</div>
+      <div style="display:flex; justify-content:flex-end; margin-top:10px;">
+        <button type="button" class="btn-primary" id="activity-mark-all">Mark all as read</button>
+      </div>
+    `, () => true);
+
+    document.getElementById('activity-mark-all')?.addEventListener('click', () => {
+      this.callbacks.markAllActivityRead?.();
+      document.getElementById('modal-overlay')?.remove();
+      this.updateChannelHeader();
+    });
+
+    document.querySelectorAll('.activity-row').forEach(el => {
+      el.addEventListener('click', () => {
+        const activityId = (el as HTMLElement).getAttribute('data-activity-id');
+        const channelId = (el as HTMLElement).getAttribute('data-channel-id');
+        const threadId = (el as HTMLElement).getAttribute('data-thread-id');
+        if (activityId) this.callbacks.markActivityRead?.(activityId);
+        document.getElementById('modal-overlay')?.remove();
+
+        if (channelId) this.switchChannel(channelId);
+        if (threadId && threadId.trim()) this.openThread(threadId);
+        this.updateChannelHeader();
+      });
+    });
+  }
+
   private showChannelMembersModal(): void {
     if (!this.state.activeWorkspaceId || !this.state.activeChannelId) return;
 
@@ -1668,52 +1898,118 @@ export class UIRenderer {
     const channel = ws ? this.workspaceManager.getChannel(ws.id, this.state.activeChannelId) : null;
     if (!ws || !channel) return;
 
-    const isOwner = ws.createdBy === this.state.myPeerId;
-    const membersHTML = channel.members.map(peerId => {
+    const channelMembers = ws.members.filter(m => channel.members.includes(m.peerId));
+
+    const membersHTML = channelMembers.map(member => {
+      const { peerId } = member;
       const name = this.getPeerAlias(peerId);
+      const initial = name.charAt(0).toUpperCase();
+      const color = this.peerColor(peerId);
       const isYou = peerId === this.state.myPeerId;
-      const canRemove = isOwner && !isYou && peerId !== ws.createdBy;
+      const isOnline = this.state.connectedPeers.has(peerId) || isYou;
+
       return `
-        <div style="display:flex; align-items:center; gap:8px; justify-content:space-between; color:var(--text); background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin-bottom:6px;">
-          <div style="display:flex; align-items:center; gap:8px; min-width:0;">
-            <span class="dm-status ${this.peerStatusClass(peerId)}" title="${this.peerStatusTitle(peerId)}"></span>
-            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text);">${this.escapeHtml(name)}</span>
-          </div>
-          <div style="display:flex; align-items:center; gap:8px;">
-            ${isYou ? '<span style="font-size:12px; opacity:.65; color:var(--text-muted);">you</span>' : ''}
-            ${canRemove ? `<button type="button" class="btn-secondary remove-member-btn" data-remove-peer-id="${peerId}" style="padding:4px 8px; font-size:12px;">Remove</button>` : ''}
+        <div class="member-row">
+          <div class="member-info">
+            <div class="member-avatar" style="background:${color}">${this.escapeHtml(initial)}</div>
+            <div class="member-details">
+              <div class="member-name-line">
+                <span class="member-name">${this.escapeHtml(name)}</span>
+                ${isYou ? '<span class="you-badge">you</span>' : ''}
+              </div>
+              <span class="member-status ${isOnline ? 'online' : 'offline'}">${isOnline ? 'Online' : 'Offline'}</span>
+            </div>
           </div>
         </div>
       `;
     }).join('');
 
     this.showModal(
-      `Members · ${this.escapeHtml(channel.name)}`,
+      `Channel Members · #${this.escapeHtml(channel.name)}`,
       `
       <div class="form-group" style="margin-bottom: 8px;">
-        <div style="font-size: 13px; color: var(--text-muted);">${channel.members.length} member${channel.members.length === 1 ? '' : 's'}</div>
+        <div style="font-size: 13px; color: var(--text-muted);">${channelMembers.length} member${channelMembers.length === 1 ? '' : 's'}</div>
       </div>
-      <div style="max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 8px;">
+      <div class="members-list">
         ${membersHTML}
       </div>
     `,
       () => true,
     );
+  }
+
+  private showWorkspaceMembersModal(): void {
+    if (!this.state.activeWorkspaceId) return;
+
+    const ws = this.workspaceManager.getWorkspace(this.state.activeWorkspaceId);
+    if (!ws) return;
+
+    const myMember = ws.members.find(m => m.peerId === this.state.myPeerId);
+    const myRole = myMember?.role || 'member';
+    const isOwner = myRole === 'owner';
+    const isAdminOrOwner = myRole === 'owner' || myRole === 'admin';
+
+    const roleBadge = (role: string) => {
+      if (role === 'owner') return '<span class="role-badge role-owner" title="Owner">Owner</span>';
+      if (role === 'admin') return '<span class="role-badge role-admin" title="Admin">Admin</span>';
+      return '';
+    };
+
+    const membersHTML = ws.members.map(member => {
+      const { peerId, role } = member;
+      const name = this.getPeerAlias(peerId);
+      const initial = name.charAt(0).toUpperCase();
+      const color = this.peerColor(peerId);
+      const isYou = peerId === this.state.myPeerId;
+      const isOnline = this.state.connectedPeers.has(peerId) || isYou;
+      const canRemove = isAdminOrOwner && !isYou && role !== 'owner';
+      const canPromote = isOwner && !isYou && role === 'member';
+      const canDemote = isOwner && !isYou && role === 'admin';
+
+      let actionButtons = '';
+      if (canPromote) actionButtons += `<button type="button" class="btn-action promote-btn" data-peer-id="${peerId}" title="Promote to Admin">Promote</button>`;
+      if (canDemote) actionButtons += `<button type="button" class="btn-action demote-btn" data-peer-id="${peerId}" title="Demote to Member">Demote</button>`;
+      if (canRemove) actionButtons += `<button type="button" class="btn-action btn-danger remove-member-btn" data-remove-peer-id="${peerId}" title="Remove from workspace">Remove</button>`;
+
+      return `
+        <div class="member-row">
+          <div class="member-info">
+            <div class="member-avatar" style="background:${color}">${this.escapeHtml(initial)}</div>
+            <div class="member-details">
+              <div class="member-name-line">
+                <span class="member-name">${this.escapeHtml(name)}</span>
+                ${roleBadge(role)}
+                ${isYou ? '<span class="you-badge">you</span>' : ''}
+              </div>
+              <span class="member-status ${isOnline ? 'online' : 'offline'}">${isOnline ? 'Online' : 'Offline'}</span>
+            </div>
+          </div>
+          <div class="member-actions">${actionButtons}</div>
+        </div>
+      `;
+    }).join('');
+
+    this.showModal(
+      `Workspace Members`,
+      `
+      <div class="form-group" style="margin-bottom: 8px;">
+        <div style="font-size: 13px; color: var(--text-muted);">${ws.members.length} member${ws.members.length === 1 ? '' : 's'}</div>
+      </div>
+      <div class="members-list">${membersHTML}</div>
+    `,
+      () => true,
+    );
 
     const overlay = document.querySelector('.modal-overlay:last-of-type') as HTMLElement | null;
+
     overlay?.querySelectorAll('.remove-member-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         const peerId = (e.currentTarget as HTMLElement).getAttribute('data-remove-peer-id');
         if (!peerId || !this.callbacks.removeWorkspaceMember) return;
-
-        const confirmed = confirm(`Remove ${this.getPeerAlias(peerId)} from workspace?`);
-        if (!confirmed) return;
+        if (!confirm(`Remove ${this.getPeerAlias(peerId)} from workspace?`)) return;
 
         const res = await this.callbacks.removeWorkspaceMember(peerId);
-        if (!res.success) {
-          this.showToast(res.error || 'Failed to remove member', 'error');
-          return;
-        }
+        if (!res.success) return this.showToast(res.error || 'Failed to remove member', 'error');
 
         overlay.remove();
         this.showToast('Member removed', 'success');
@@ -1721,6 +2017,142 @@ export class UIRenderer {
         this.updateChannelHeader();
       });
     });
+
+    overlay?.querySelectorAll('.promote-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const peerId = (e.currentTarget as HTMLElement).getAttribute('data-peer-id');
+        if (!peerId || !this.callbacks.promoteMember) return;
+
+        const res = await this.callbacks.promoteMember(peerId, 'admin');
+        if (!res.success) return this.showToast(res.error || 'Failed to promote member', 'error');
+
+        overlay.remove();
+        this.showToast(`${this.getPeerAlias(peerId)} promoted to Admin`, 'success');
+        this.updateSidebar();
+        this.updateChannelHeader();
+      });
+    });
+
+    overlay?.querySelectorAll('.demote-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const peerId = (e.currentTarget as HTMLElement).getAttribute('data-peer-id');
+        if (!peerId || !this.callbacks.demoteMember) return;
+
+        const res = await this.callbacks.demoteMember(peerId);
+        if (!res.success) return this.showToast(res.error || 'Failed to demote member', 'error');
+
+        overlay.remove();
+        this.showToast(`${this.getPeerAlias(peerId)} demoted to Member`, 'success');
+        this.updateSidebar();
+        this.updateChannelHeader();
+      });
+    });
+  }
+
+  private showWorkspaceSettingsModal(): void {
+    if (!this.state.activeWorkspaceId) return;
+
+    const ws = this.workspaceManager.getWorkspace(this.state.activeWorkspaceId);
+    if (!ws) return;
+
+    const isOwner = this.workspaceManager.isOwner(ws.id, this.state.myPeerId);
+    const perms = ws.permissions ?? { whoCanCreateChannels: 'everyone', whoCanInviteMembers: 'everyone' };
+
+    const deleteSection = isOwner ? `
+      <div class="form-group" style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border);">
+        <button type="button" class="btn-danger" id="delete-workspace-btn" style="width:100%;">Delete Workspace</button>
+      </div>
+    ` : '';
+
+    this.showModal(
+      'Workspace Settings',
+      `
+      <div class="form-group">
+        <label>Workspace Name</label>
+        <input type="text" name="ws-name" value="${this.escapeHtml(ws.name)}" required />
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea name="ws-description" rows="2" placeholder="What's this workspace about?">${this.escapeHtml(ws.description || '')}</textarea>
+      </div>
+      <div class="form-group">
+        <label>Who can create channels?</label>
+        <select name="ws-create-channels" class="modal-select">
+          <option value="everyone" ${perms.whoCanCreateChannels === 'everyone' ? 'selected' : ''}>Everyone</option>
+          <option value="admins" ${perms.whoCanCreateChannels === 'admins' ? 'selected' : ''}>Admins only</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Who can invite members?</label>
+        <select name="ws-invite-members" class="modal-select">
+          <option value="everyone" ${perms.whoCanInviteMembers === 'everyone' ? 'selected' : ''}>Everyone</option>
+          <option value="admins" ${perms.whoCanInviteMembers === 'admins' ? 'selected' : ''}>Admins only</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <button type="button" class="btn-secondary" id="manage-members-btn" style="width:100%;">Manage Members</button>
+      </div>
+      ${deleteSection}
+    `,
+      async (form) => {
+        const name = (form.elements.namedItem('ws-name') as HTMLInputElement).value.trim();
+        const description = (form.elements.namedItem('ws-description') as HTMLTextAreaElement).value.trim();
+        const whoCanCreateChannels = (form.elements.namedItem('ws-create-channels') as HTMLSelectElement).value as 'everyone' | 'admins';
+        const whoCanInviteMembers = (form.elements.namedItem('ws-invite-members') as HTMLSelectElement).value as 'everyone' | 'admins';
+
+        if (!name) return false;
+
+        // Update workspace info
+        if (name !== ws.name || description !== (ws.description || '')) {
+          const infoRes = await this.callbacks.updateWorkspaceInfo?.({ name, description });
+          if (infoRes && !infoRes.success) {
+            this.showToast(infoRes.error || 'Failed to update workspace info', 'error');
+            return false;
+          }
+        }
+
+        // Update permissions
+        if (whoCanCreateChannels !== perms.whoCanCreateChannels || whoCanInviteMembers !== perms.whoCanInviteMembers) {
+          const permRes = await this.callbacks.updateWorkspacePermissions?.({ whoCanCreateChannels, whoCanInviteMembers });
+          if (permRes && !permRes.success) {
+            this.showToast(permRes.error || 'Failed to update permissions', 'error');
+            return false;
+          }
+        }
+
+        this.showToast('Workspace settings saved', 'success');
+        this.updateSidebar();
+        this.updateChannelHeader();
+        return true;
+      },
+    );
+
+    const overlay = document.querySelector('.modal-overlay:last-of-type') as HTMLElement | null;
+    overlay?.querySelector('#manage-members-btn')?.addEventListener('click', () => {
+      overlay.remove();
+      this.showWorkspaceMembersModal();
+    });
+
+    // Bind delete workspace button
+    if (isOwner) {
+      overlay?.querySelector('#delete-workspace-btn')?.addEventListener('click', async () => {
+        const confirmed = confirm(`Delete "${ws.name}"? This cannot be undone.`);
+        if (!confirmed) return;
+        const secondConfirm = confirm(`Are you sure? All channels and messages will be lost.`);
+        if (!secondConfirm) return;
+
+        const result = await this.callbacks.deleteWorkspace?.(ws.id);
+        if (result) {
+          overlay?.remove();
+          this.showToast('Workspace deleted', 'success');
+          this.state.activeWorkspaceId = null;
+          this.state.activeChannelId = null;
+          (this as any).renderApp?.() ?? this.updateSidebar();
+        } else {
+          this.showToast('Failed to delete workspace', 'error');
+        }
+      });
+    }
   }
 
   showModal(
@@ -2104,6 +2536,41 @@ export class UIRenderer {
   // =========================================================================
   // Utility helpers
   // =========================================================================
+
+  private upgradeInlineImagePreviews(container?: HTMLElement): void {
+    const root = container || document.getElementById('messages-list');
+    if (!root) return;
+
+    // Respect optional low-quality mode.
+    this.callbacks.getSettings?.().then(settings => {
+      if (settings?.lowQualityPreviews) return;
+
+      const imgs = root.querySelectorAll<HTMLImageElement>('img.attachment-thumbnail[data-attachment-id]');
+      for (const img of imgs) {
+        if (img.getAttribute('data-inline-upgrade') === 'done') continue;
+        const attachmentId = img.getAttribute('data-attachment-id');
+        if (!attachmentId) continue;
+
+        const tryResolve = (attempt = 1) => {
+          this.callbacks.resolveAttachmentImageUrl?.(attachmentId).then((fullUrl) => {
+            if (fullUrl) {
+              img.src = fullUrl;
+              img.setAttribute('data-inline-upgrade', 'done');
+              return;
+            }
+            if (attempt < 3) {
+              setTimeout(() => tryResolve(attempt + 1), 2500);
+            }
+          }).catch(() => {
+            if (attempt < 3) setTimeout(() => tryResolve(attempt + 1), 2500);
+          });
+        };
+
+        img.setAttribute('data-inline-upgrade', 'loading');
+        tryResolve(1);
+      }
+    }).catch(() => {});
+  }
 
   private addPendingAttachments(files: File[], target: 'main' | 'thread'): void {
     const list = target === 'thread' ? this.pendingThreadAttachments : this.pendingMainAttachments;

@@ -29,6 +29,7 @@ import {
   ServerDiscovery,
 } from 'decent-protocol';
 import type { InviteData } from 'decent-protocol';
+import { MessageCipher } from 'decent-protocol';
 import type {
   PlaintextMessage, Workspace, Channel,
   AttachmentMeta, Attachment, MediaChunk, MediaRequest, MediaResponse,
@@ -75,10 +76,16 @@ export interface UIUpdater {
   renderThreadMessages: () => void;
   renderMessages: () => void;
   renderApp: () => void;
+  updateWorkspaceRail?: () => void;
+  updateComposePlaceholder?: () => void;
   /** Update the thread reply indicator on a parent message in the main list */
   updateThreadIndicator: (parentMessageId: string, channelId: string) => void;
-  /** DEP-005: Update delivery status tick on a specific message (avoids full re-render) */
-  updateMessageStatus?: (messageId: string, status: 'pending' | 'sent' | 'delivered') => void;
+  /** DEP-005/012/013: Update message ticks (sent/delivered/read) without full re-render */
+  updateMessageStatus?: (
+    messageId: string,
+    status: 'pending' | 'sent' | 'delivered' | 'read',
+    detail?: { acked?: number; total?: number; read?: number },
+  ) => void;
   updateStreamingMessage?: (messageId: string, content: string) => void;
   finalizeStreamingMessage?: (messageId: string) => void;
   openThread?: (messageId: string) => void;
@@ -106,6 +113,8 @@ export class ChatController {
   readonly mediaStore: MediaStore;
   private readonly blobStorage: IndexedDBBlobStorage;
   readonly clockSync: ClockSync;
+  private signingKeyPair: { publicKey: CryptoKey; privateKey: CryptoKey } | null = null;
+  private lastRoleChangeTimestamp = new Map<string, number>(); // peerId → last accepted timestamp
   readonly messageGuard: MessageGuard;
   readonly presence: PresenceManager;
   readonly reactions: ReactionManager;
@@ -132,6 +141,20 @@ export class ChatController {
   /** Cleanup interval for the seen-set (every 5 min) */
   private _gossipCleanupInterval: ReturnType<typeof setInterval> | null = null;
 
+  /** Activity feed (local derived index for thread replies/mentions) */
+  private activityItems: Array<{
+    id: string;
+    type: 'thread-reply' | 'mention';
+    workspaceId: string;
+    channelId: string;
+    threadId?: string;
+    messageId: string;
+    actorId: string;
+    snippet: string;
+    timestamp: number;
+    read: boolean;
+  }> = [];
+
   /** Pending stream metadata until the first delta arrives */
   private pendingStreams = new Map<string, {
     channelId: string;
@@ -150,6 +173,8 @@ export class ChatController {
   huddle: HuddleManager | null = null;
   private ui: UIUpdater | null = null;
   private reactionsPersistTimer: ReturnType<typeof setTimeout> | null = null;
+  private channelViewInFlight = new Map<string, Promise<void>>();
+  private pendingReadReceiptKeys = new Set<string>();
 
   constructor(private state: AppState) {
     this.cryptoManager = new CryptoManager();
@@ -265,14 +290,71 @@ export class ChatController {
           const channelId = data.channelId as string;
           const messageId = data.messageId as string;
           if (channelId && messageId) {
-            const msgs = this.messageStore.getMessages(channelId);
-            const msg = msgs.find(m => m.id === messageId);
-            if (msg && msg.status !== 'delivered') {
-              msg.status = 'delivered';
-              await this.persistentStore.saveMessage({ ...msg, status: 'delivered' });
-              // Targeted DOM update — no full re-render needed
-              this.ui?.updateMessageStatus?.(messageId, 'delivered');
+            const validation = this.isValidInboundReceipt(peerId, channelId, messageId, 'ack');
+            if (!validation.valid) return;
+
+            const { msg, recipients } = validation;
+            const ackedBy = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
+            ackedBy.add(peerId);
+            (msg as any).ackedBy = Array.from(ackedBy);
+            const ackedAt: Record<string, number> = { ...((msg as any).ackedAt || {}) };
+            ackedAt[peerId] = Date.now();
+            (msg as any).ackedAt = ackedAt;
+
+            const expected = recipients.length;
+            const ackedCount = ackedBy.size;
+            const readBy = new Set<string>(Array.isArray((msg as any).readBy) ? (msg as any).readBy : []);
+            const readCount = readBy.size;
+            const deliveredToAll = expected > 0 && recipients.every((id) => ackedBy.has(id));
+            const readByAll = expected > 0 && recipients.every((id) => readBy.has(id));
+            const nextStatus: 'pending' | 'sent' | 'delivered' | 'read' = readByAll ? 'read' : (deliveredToAll ? 'delivered' : 'sent');
+
+            (msg as any).status = nextStatus;
+            this.ui?.updateMessageStatus?.(messageId, nextStatus, { acked: ackedCount, total: expected, read: readCount });
+
+            await this.persistentStore.saveMessage({ ...msg, status: nextStatus, recipientPeerIds: recipients, ackedBy: Array.from(ackedBy), ackedAt });
+          }
+          return;
+        }
+
+        // Message read receipt (WhatsApp-like message info)
+        if (data?.type === 'read') {
+          const channelId = data.channelId as string;
+          const messageId = data.messageId as string;
+          if (channelId && messageId) {
+            const validation = this.isValidInboundReceipt(peerId, channelId, messageId, 'read');
+            if (!validation.valid) return;
+
+            const { msg, recipients } = validation;
+            const readBy = new Set<string>(Array.isArray((msg as any).readBy) ? (msg as any).readBy : []);
+            readBy.add(peerId);
+            (msg as any).readBy = Array.from(readBy);
+            const readAt: Record<string, number> = { ...((msg as any).readAt || {}) };
+            readAt[peerId] = Date.now();
+            (msg as any).readAt = readAt;
+
+            // Read implies delivered for this peer.
+            const ackedBy = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
+            if (!ackedBy.has(peerId)) {
+              ackedBy.add(peerId);
+              (msg as any).ackedBy = Array.from(ackedBy);
             }
+            const ackedAt: Record<string, number> = { ...((msg as any).ackedAt || {}) };
+            if (!ackedAt[peerId]) ackedAt[peerId] = Date.now();
+            (msg as any).ackedAt = ackedAt;
+
+            const readByAll = recipients.length > 0 && recipients.every((id) => readBy.has(id));
+            const deliveredToAll = recipients.length > 0 && recipients.every((id) => ackedBy.has(id));
+            const nextStatus: 'pending' | 'sent' | 'delivered' | 'read' = readByAll ? 'read' : (deliveredToAll ? 'delivered' : 'sent');
+            (msg as any).status = nextStatus;
+
+            this.ui?.updateMessageStatus?.(messageId, nextStatus, {
+              acked: ackedBy.size,
+              total: recipients.length,
+              read: readBy.size,
+            });
+
+            await this.persistentStore.saveMessage({ ...msg, status: nextStatus, recipientPeerIds: recipients, ackedBy: Array.from(ackedBy), ackedAt, readBy: Array.from(readBy), readAt });
           }
           return;
         }
@@ -630,6 +712,10 @@ export class ChatController {
 
             if (channelId === this.state.activeChannelId) {
               this.ui?.appendMessageToDOM(msg);
+              // Message is immediately visible to user in active channel → emit read receipt.
+              this.transport.send(peerId, { type: 'read', messageId: msg.id, channelId });
+              (msg as any).localReadAt = Date.now();
+              await this.persistentStore.saveMessage({ ...(msg as any), localReadAt: (msg as any).localReadAt });
             }
 
             const senderName = this.getDisplayNameForPeer(peerId);
@@ -693,7 +779,12 @@ export class ChatController {
                 await this.directConversationStore.updateLastMessage(channelId, msg.timestamp);
                 const updatedConv = await this.directConversationStore.get(channelId);
                 if (updatedConv) await this.persistentStore.saveDirectConversation(updatedConv);
-                if (channelId === this.state.activeChannelId) this.ui?.appendMessageToDOM(msg);
+                if (channelId === this.state.activeChannelId) {
+                  this.ui?.appendMessageToDOM(msg);
+                  this.transport.send(peerId, { type: 'read', messageId: msg.id, channelId });
+                  (msg as any).localReadAt = Date.now();
+                  await this.persistentStore.saveMessage({ ...(msg as any), localReadAt: (msg as any).localReadAt });
+                }
                 const senderName = this.getDisplayNameForPeer(peerId);
                 this.notifications.notify(channelId, senderName, senderName, content);
                 this.ui?.updateSidebar();
@@ -784,6 +875,20 @@ export class ChatController {
           // T3.2: Gossip relay — re-encrypt and forward to workspace peers who might not have received this
           void this._gossipRelay(peerId, msg.id, msg.senderId, content, channelId, data);
 
+          const wsIdForMsg = this.resolveWorkspaceIdByChannelId(channelId);
+          let activityChanged = false;
+          if (wsIdForMsg) {
+            const before = this.activityItems.length;
+            this.maybeRecordMentionActivity(msg, channelId, wsIdForMsg);
+            if (this.activityItems.length !== before) activityChanged = true;
+          }
+          if (msg.threadId) {
+            const before = this.activityItems.length;
+            this.maybeRecordThreadActivity(msg, channelId);
+            if (this.activityItems.length !== before) activityChanged = true;
+          }
+          if (activityChanged) this.ui?.updateChannelHeader();
+
           if (channelId === this.state.activeChannelId) {
             if (msg.threadId) {
               // It's a thread reply — update the parent message's reply indicator and
@@ -795,6 +900,10 @@ export class ChatController {
             } else {
               this.ui?.appendMessageToDOM(msg);
             }
+            // Message is visible in active channel.
+            this.transport.send(peerId, { type: 'read', messageId: msg.id, channelId });
+            (msg as any).localReadAt = Date.now();
+            await this.persistentStore.saveMessage({ ...(msg as any), localReadAt: (msg as any).localReadAt });
           }
 
           // Notify
@@ -869,6 +978,41 @@ export class ChatController {
     this.ui?.updateSidebar();
   }
 
+  private async handleChannelRemoved(workspaceId: string, channelId: string): Promise<void> {
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (!ws) {
+      console.warn(`[Sync] channel-removed for unknown workspace ${workspaceId.slice(0, 8)}, ignoring`);
+      return;
+    }
+
+    const channel = ws.channels.find((c: Channel) => c.id === channelId);
+    if (!channel) return;
+
+    ws.channels = ws.channels.filter((c: Channel) => c.id !== channelId);
+    this.messageStore.clearChannel(channelId);
+    this.messageCRDTs.delete(channelId);
+
+    try {
+      const messages = await this.persistentStore.getChannelMessages(channelId);
+      if (messages.length > 0) {
+        await this.persistentStore.deleteMessages(messages.map((m: any) => m.id));
+      }
+      await this.persistentStore.saveWorkspace(ws);
+    } catch (err) {
+      console.error('[Sync] Failed to persist cleanup after channel-removed:', err);
+    }
+
+    if (this.state.activeWorkspaceId === workspaceId && this.state.activeChannelId === channelId) {
+      const fallback = ws.channels.find((c: Channel) => c.type === 'channel') || ws.channels[0] || null;
+      this.state.activeChannelId = fallback?.id || null;
+      this.ui?.renderMessages();
+      this.ui?.updateChannelHeader();
+      this.ui?.updateComposePlaceholder?.();
+    }
+
+    this.ui?.updateSidebar();
+  }
+
   private sendWorkspaceState(peerId: string): void {
     if (!this.state.activeWorkspaceId) return;
     const ws = this.workspaceManager.getWorkspace(this.state.activeWorkspaceId);
@@ -884,17 +1028,19 @@ export class ChatController {
       sync: {
         type: 'workspace-state',
         name: ws.name,
+        description: ws.description,
         channels: ws.channels.map(ch => ({ id: ch.id, name: ch.name, type: ch.type })),
-        members: ws.members.map(m => ({ peerId: m.peerId, alias: m.alias, publicKey: m.publicKey, role: m.role })),
+        members: ws.members.map(m => ({ peerId: m.peerId, alias: m.alias, publicKey: m.publicKey, signingPublicKey: m.signingPublicKey, role: m.role })),
         inviteCode: ws.inviteCode,
+        permissions: ws.permissions,
       },
     });
   }
 
-  private async handleSyncMessage(_peerId: string, msg: any): Promise<void> {
+  private async handleSyncMessage(peerId: string, msg: any): Promise<void> {
     // Handle workspace state sync (channels, members, name)
     if (msg.sync?.type === 'workspace-state' && msg.workspaceId) {
-      await this.handleWorkspaceStateSync(_peerId, msg.workspaceId, msg.sync);
+      await this.handleWorkspaceStateSync(peerId, msg.workspaceId, msg.sync);
       return;
     }
 
@@ -904,13 +1050,204 @@ export class ChatController {
       return;
     }
 
+    // Handle real-time channel removal broadcast
+    if (msg.sync?.type === 'channel-removed' && msg.workspaceId && msg.sync.channelId) {
+      await this.handleChannelRemoved(msg.workspaceId, msg.sync.channelId);
+      return;
+    }
+
+    // Handle workspace deletion broadcast
+    if (msg.sync?.type === 'workspace-deleted' && msg.workspaceId) {
+      const existed = this.workspaceManager.getWorkspace(msg.workspaceId);
+      if (existed) {
+        await this.cleanupWorkspaceLocalState(msg.workspaceId, existed);
+        this.workspaceManager.removeWorkspace(msg.workspaceId);
+        this.ui?.showToast('Workspace was deleted by owner', 'error');
+        this.ui?.updateWorkspaceRail?.();
+        this.ui?.updateSidebar();
+        this.ui?.updateChannelHeader();
+        this.ui?.renderMessages();
+        this.ui?.updateComposePlaceholder?.();
+      }
+      return;
+    }
+
+    // Handle role-changed event
+    // SECURITY: Verify ECDSA signature from workspace owner. Fallback to local-state check for backward compat.
+    if (msg.sync?.type === 'role-changed' && msg.workspaceId) {
+      const ws = this.workspaceManager.getWorkspace(msg.workspaceId);
+      if (ws) {
+        const changedBy = msg.sync.changedBy;
+        const validRoles = ['admin', 'member'];
+        if (!validRoles.includes(msg.sync.newRole)) {
+          console.warn(`[Security] Rejected role-changed: invalid role "${msg.sync.newRole}"`);
+          return;
+        }
+
+        // Replay protection: reject if timestamp is not newer than last accepted
+        const tsKey = `role:${msg.sync.peerId}`;
+        const lastTs = this.lastRoleChangeTimestamp.get(tsKey) || 0;
+        if (msg.sync.timestamp && msg.sync.timestamp <= lastTs) {
+          console.warn(`[Security] Rejected role-changed: replay detected (ts ${msg.sync.timestamp} <= ${lastTs})`);
+          return;
+        }
+
+        // ECDSA signature verification against LOCALLY STORED owner signing key
+        let signatureVerified = false;
+        if (msg.sync.signature) {
+          const ownerMember = ws.members.find((m: any) => m.role === 'owner');
+          if (ownerMember?.signingPublicKey) {
+            // Verify against the owner's signing key we already trust (stored locally)
+            signatureVerified = await this.verifyRoleEvent(
+              msg.workspaceId, changedBy,
+              { targetPeerId: msg.sync.peerId, newRole: msg.sync.newRole, timestamp: msg.sync.timestamp, signature: msg.sync.signature },
+              ownerMember.signingPublicKey,
+            );
+            if (!signatureVerified) {
+              console.warn(`[Security] Rejected role-changed: ECDSA signature verification failed against stored owner key`);
+              return;
+            }
+          }
+        }
+
+        // Fallback: if no signature, require that transport sender IS the owner
+        if (!signatureVerified) {
+          if (!this.workspaceManager.isOwner(ws.id, peerId)) {
+            console.warn(`[Security] Rejected role-changed from ${peerId.slice(0, 8)}: no valid signature and transport sender is not owner`);
+            return;
+          }
+        }
+
+        const member = ws.members.find((m: any) => m.peerId === msg.sync.peerId);
+        if (member && member.role !== 'owner') {
+          member.role = msg.sync.newRole;
+          if (msg.sync.timestamp) this.lastRoleChangeTimestamp.set(tsKey, msg.sync.timestamp);
+          this.persistWorkspace(ws.id).catch(() => {});
+          const alias = member.alias || msg.sync.peerId.slice(0, 8);
+          this.ui?.showToast(`${alias} is now ${msg.sync.newRole}`, 'info');
+          this.ui?.renderApp();
+        }
+      }
+      return;
+    }
+
+    // Handle workspace-settings-updated event
+    // SECURITY: Verify ECDSA signature from admin/owner. Fallback to local-state check.
+    if (msg.sync?.type === 'workspace-settings-updated' && msg.workspaceId) {
+      const ws = this.workspaceManager.getWorkspace(msg.workspaceId);
+      if (ws) {
+        const changedBy = msg.sync.changedBy;
+
+        // Validate settings shape
+        const settings = msg.sync.settings;
+        if (!settings || typeof settings !== 'object') return;
+        const validValues = ['everyone', 'admins'];
+        if (settings.whoCanCreateChannels && !validValues.includes(settings.whoCanCreateChannels)) return;
+        if (settings.whoCanInviteMembers && !validValues.includes(settings.whoCanInviteMembers)) return;
+
+        // Replay protection for settings events
+        const settingsTsKey = `settings:${msg.workspaceId}`;
+        const settingsLastTs = this.lastRoleChangeTimestamp.get(settingsTsKey) || 0;
+        if (msg.sync.timestamp && msg.sync.timestamp <= settingsLastTs) {
+          console.warn(`[Security] Rejected workspace-settings-updated: replay detected`);
+          return;
+        }
+
+        // ECDSA signature verification against locally stored admin/owner signing key
+        let signatureVerified = false;
+        if (msg.sync.signature) {
+          const actorMember = ws.members.find((m: any) => m.peerId === changedBy && (m.role === 'owner' || m.role === 'admin'));
+          if (actorMember?.signingPublicKey) {
+            signatureVerified = await this.verifySettingsEvent(
+              msg.workspaceId, changedBy,
+              { settings: msg.sync.settings, timestamp: msg.sync.timestamp, signature: msg.sync.signature },
+              actorMember.signingPublicKey,
+            );
+            if (!signatureVerified) {
+              console.warn(`[Security] Rejected workspace-settings-updated: ECDSA signature verification failed against stored key`);
+              return;
+            }
+          }
+        }
+
+        // Fallback: require transport sender IS an admin/owner
+        if (!signatureVerified) {
+          if (!this.workspaceManager.isAdmin(ws.id, peerId)) {
+            console.warn(`[Security] Rejected workspace-settings-updated: no valid signature and transport sender is not admin/owner`);
+            return;
+          }
+        }
+
+        ws.permissions = settings;
+        if (msg.sync.timestamp) this.lastRoleChangeTimestamp.set(settingsTsKey, msg.sync.timestamp);
+        this.persistWorkspace(ws.id).catch(() => {});
+        this.ui?.showToast('Workspace settings updated', 'info');
+      }
+      return;
+    }
+
+    // Handle member-removed event
+    // SECURITY: Verify ECDSA signature. Fallback to local-state permission check.
+    if (msg.sync?.type === 'member-removed' && msg.workspaceId) {
+      const ws = this.workspaceManager.getWorkspace(msg.workspaceId);
+      if (ws) {
+        const removedBy = msg.sync.removedBy;
+        const removedPeerId = msg.sync.peerId;
+
+        // Replay protection for member-removed events
+        const removeTsKey = `remove:${removedPeerId}`;
+        const removeLastTs = this.lastRoleChangeTimestamp.get(removeTsKey) || 0;
+        if (msg.sync.timestamp && msg.sync.timestamp <= removeLastTs) {
+          console.warn(`[Security] Rejected member-removed: replay detected`);
+          return;
+        }
+
+        // ECDSA signature verification against locally stored admin/owner signing key
+        let signatureVerified = false;
+        if (msg.sync.signature) {
+          const actorMember = ws.members.find((m: any) => m.peerId === removedBy && (m.role === 'owner' || m.role === 'admin'));
+          if (actorMember?.signingPublicKey) {
+            signatureVerified = await this.verifyRemoveEvent(
+              msg.workspaceId, removedBy,
+              { peerId: removedPeerId, timestamp: msg.sync.timestamp, signature: msg.sync.signature },
+              actorMember.signingPublicKey,
+            );
+            if (!signatureVerified) {
+              console.warn(`[Security] Rejected member-removed: ECDSA signature verification failed against stored key`);
+              return;
+            }
+          }
+        }
+
+        // Fallback: require transport sender has permission (use peerId, not claimed removedBy)
+        if (!signatureVerified) {
+          if (!this.workspaceManager.canRemoveMember(ws.id, peerId, removedPeerId)) {
+            console.warn(`[Security] Rejected member-removed: no valid signature and transport sender lacks permission`);
+            return;
+          }
+        }
+
+        ws.members = ws.members.filter((m: any) => m.peerId !== removedPeerId);
+        for (const ch of ws.channels) {
+          ch.members = ch.members.filter((id: string) => id !== removedPeerId);
+        }
+        this.persistWorkspace(ws.id).catch(() => {});
+
+        if (removedPeerId === this.state.myPeerId) {
+          this.ui?.showToast('You have been removed from this workspace', 'error');
+        }
+        this.ui?.renderApp();
+      }
+      return;
+    }
+
     // DEP-002: Handle peer-exchange messages
     if (msg.sync?.type === 'peer-exchange' && msg.workspaceId) {
       const discovery = this.serverDiscovery.get(msg.workspaceId);
       if (discovery && msg.sync.servers) {
         discovery.mergeReceivedServers(msg.sync.servers);
         this.saveServerDiscovery(msg.workspaceId); // Persist updated state
-        console.log(`[PEX] Merged ${msg.sync.servers.length} servers from ${_peerId.slice(0, 8)}`);
+        console.log(`[PEX] Merged ${msg.sync.servers.length} servers from ${peerId.slice(0, 8)}`);
 
         // Try to connect to new high-ranked servers
         await this.connectToDiscoveredServers(discovery);
@@ -933,37 +1270,15 @@ export class ChatController {
     // If our active workspace's invite code matches the remote one, or we have only 1 workspace
     if (!localWs) return;
 
-    // Tracks the stale workspace ID to delete AFTER the new one is safely persisted.
-    let _staleId: string | null = null;
-
-    // Remap workspace ID so both peers agree on the same ID.
-    // Deterministic rule: the lexicographically smaller ID wins.
-    // Both peers see both IDs and converge on the same canonical one.
-    if (remoteWorkspaceId && localWs.id !== remoteWorkspaceId && remoteWorkspaceId < localWs.id) {
-      const oldId = localWs.id;
-      _staleId = oldId;
-      console.log(`[Sync] Remapping workspace ID: ${oldId.slice(0, 8)} → ${remoteWorkspaceId.slice(0, 8)}`);
-
-      // Remove old entry and re-insert with canonical ID
-      this.workspaceManager.removeWorkspace(oldId);
-      localWs.id = remoteWorkspaceId;
-
-      // Update channel workspace references
-      for (const ch of localWs.channels) {
-        if ((ch as any).workspaceId === oldId) {
-          (ch as any).workspaceId = remoteWorkspaceId;
-        }
-      }
-
-      // Re-add with new ID
-      this.workspaceManager.importWorkspace(localWs);
-
-      // Update active state
-      if (this.state.activeWorkspaceId === oldId) {
-        this.state.activeWorkspaceId = remoteWorkspaceId;
-      }
-
-      // Old entry will be deleted AFTER new ID is safely persisted (see below).
+    // SECURITY: Never remap workspace ID. Each workspace has a unique identity.
+    // Sync is only allowed within the same workspace (verified by workspace ID).
+    // If remote workspace ID differs, it means we're talking to a peer from a
+    // different workspace - ignore the sync to prevent workspace "merging".
+    if (remoteWorkspaceId !== localWs.id) {
+      console.warn(`[Sync] Rejected workspace state from ${peerId.slice(0, 8)}: workspace ID mismatch. ` +
+        `Local: ${localWs.id.slice(0, 8)}, Remote: ${remoteWorkspaceId.slice(0, 8)}. ` +
+        `This peer may be from a different workspace.`);
+      return;
     }
 
     // Update workspace name if it was using the invite code as name
@@ -972,6 +1287,16 @@ export class ChatController {
       if (isPlaceholder) {
         localWs.name = sync.name;
       }
+    }
+
+    // Sync description
+    if (sync.description !== undefined) {
+      localWs.description = sync.description;
+    }
+
+    // Sync permissions — SECURITY: only accept from owner
+    if (sync.permissions && this.workspaceManager.isOwner(localWs.id, peerId)) {
+      localWs.permissions = sync.permissions;
     }
 
     // Sync channels: map remote channels to local ones
@@ -1022,12 +1347,17 @@ export class ChatController {
       for (const remoteMember of sync.members) {
         const existing = localWs.members.find((m: any) => m.peerId === remoteMember.peerId);
         if (!existing) {
+          // SECURITY: Only accept elevated roles from workspace owner
+          const isFromOwner = this.workspaceManager.isOwner(localWs.id, peerId);
+          const safeRole = isFromOwner && ['owner', 'admin', 'member'].includes(remoteMember.role)
+            ? remoteMember.role : 'member';
           localWs.members.push({
             peerId: remoteMember.peerId,
             alias: remoteMember.alias || remoteMember.peerId.slice(0, 8),
             publicKey: remoteMember.publicKey || '',
+            signingPublicKey: remoteMember.signingPublicKey || undefined,
             joinedAt: Date.now(),
-            role: remoteMember.role || 'member',
+            role: safeRole,
           });
         } else {
           // Update alias if the remote has a better (non-empty, non-hex-id) name
@@ -1035,6 +1365,18 @@ export class ChatController {
             existing.alias = remoteMember.alias;
           }
           if (remoteMember.publicKey) existing.publicKey = remoteMember.publicKey;
+          // Store signing public key from remote (trust-on-first-use: accept if not set yet)
+          if (remoteMember.signingPublicKey && !existing.signingPublicKey) {
+            existing.signingPublicKey = remoteMember.signingPublicKey;
+          }
+          // SECURITY: Only sync role from remote if the sender is the workspace owner.
+          // This prevents a rogue peer from escalating their own privileges via workspace-state sync.
+          if (remoteMember.role && this.workspaceManager.isOwner(localWs.id, peerId)) {
+            const validRoles = ['owner', 'admin', 'member'];
+            if (validRoles.includes(remoteMember.role)) {
+              existing.role = remoteMember.role;
+            }
+          }
         }
       }
     }
@@ -1062,12 +1404,8 @@ export class ChatController {
       }
     }
 
-    // Persist with new ID first, then delete the stale entry — guarantees the DB
-    // never has a window where the workspace exists under neither ID.
+    // Persist updated workspace state
     await this.persistWorkspace(localWs.id);
-    if (_staleId) {
-      await this.persistentStore.deleteWorkspace(_staleId).catch(() => {});
-    }
     this.ui?.renderApp();
     console.log(`[Sync] Workspace state synced from ${peerId.slice(0, 8)}`);
   }
@@ -1650,8 +1988,16 @@ export class ChatController {
     }
 
     // Deliver to workspace peers (or queue if offline)
-    let sentDirectly = false;
-    for (const peerId of this.getWorkspaceRecipientPeerIds()) {
+    // Snapshot recipients at send-time for deterministic group ACK semantics.
+    const recipientPeerIds = this.getWorkspaceRecipientPeerIds();
+    (msg as any).recipientPeerIds = recipientPeerIds;
+    (msg as any).ackedBy = [] as string[];
+    (msg as any).ackedAt = {} as Record<string, number>;
+    (msg as any).readBy = [] as string[];
+    (msg as any).readAt = {} as Record<string, number>;
+
+    let attemptedDispatch = false;
+    for (const peerId of recipientPeerIds) {
       try {
         const envelope = await this.messageProtocol!.encryptMessage(peerId, content.trim(), 'text');
         (envelope as any).channelId = this.state.activeChannelId;
@@ -1662,20 +2008,28 @@ export class ChatController {
 
         if (this.state.readyPeers.has(peerId)) {
           this.transport.send(peerId, envelope);
-          sentDirectly = true;
         } else {
           await this.offlineQueue.enqueue(peerId, envelope);
         }
+        attemptedDispatch = true;
       } catch (err) {
         console.error('Send to', peerId, 'failed:', err);
       }
     }
 
-    // DEP-005: Transition pending → sent once dispatched to at least one live peer
-    if (sentDirectly && msg.status !== 'sent' && msg.status !== 'delivered') {
+    // DEP-005 (+group semantics): pending → sent once dispatched or queued for at least one recipient
+    if (attemptedDispatch && msg.status !== 'sent' && msg.status !== 'delivered') {
       msg.status = 'sent';
-      await this.persistentStore.saveMessage({ ...msg, status: 'sent' });
-      this.ui?.updateMessageStatus?.(msg.id, 'sent');
+      await this.persistentStore.saveMessage({
+        ...msg,
+        status: 'sent',
+        recipientPeerIds,
+        ackedBy: [],
+        ackedAt: {},
+        readBy: [],
+        readAt: {},
+      });
+      this.ui?.updateMessageStatus?.(msg.id, 'sent', { acked: 0, total: recipientPeerIds.length });
     }
 
   }
@@ -1769,6 +2123,12 @@ export class ChatController {
 
   createChannel(name: string): { success: boolean; channel?: Channel; error?: string } {
     if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
+
+    // Permission guard
+    if (!this.workspaceManager.canCreateChannel(this.state.activeWorkspaceId, this.state.myPeerId)) {
+      return { success: false, error: 'Only admins can create channels' };
+    }
+
     const result = this.workspaceManager.createChannel(
       this.state.activeWorkspaceId,
       name,
@@ -1789,6 +2149,163 @@ export class ChatController {
     return result;
   }
 
+  getActivityItems() {
+    return [...this.activityItems].sort((a, b) => b.timestamp - a.timestamp);
+  }
+
+  getActivityUnreadCount(): number {
+    return this.activityItems.filter(i => !i.read).length;
+  }
+
+  markActivityRead(id: string): void {
+    const item = this.activityItems.find(i => i.id === id);
+    if (item) item.read = true;
+  }
+
+  markAllActivityRead(): void {
+    for (const item of this.activityItems) item.read = true;
+  }
+
+  markThreadActivityRead(channelId: string, threadId: string): void {
+    for (const item of this.activityItems) {
+      if (item.channelId === channelId && item.threadId === threadId) item.read = true;
+    }
+  }
+
+  private resolveWorkspaceIdByChannelId(channelId: string): string | null {
+    for (const ws of this.workspaceManager.getAllWorkspaces()) {
+      if (ws.channels.some((c: any) => c.id === channelId)) return ws.id;
+    }
+    return this.state.activeWorkspaceId || null;
+  }
+
+  private isMentioningMe(content: string, wsId: string | null): boolean {
+    if (!content || !content.includes('@')) return false;
+
+    const normalize = (v: string) => v.trim().toLowerCase();
+    const mine = new Set<string>();
+
+    const wsAlias = this.getMyAliasForWorkspace(wsId);
+    if (wsAlias) {
+      mine.add(normalize(wsAlias));
+      for (const part of wsAlias.split(/\s+/)) if (part.trim()) mine.add(normalize(part));
+    }
+    if (this.state.myAlias) {
+      mine.add(normalize(this.state.myAlias));
+      for (const part of this.state.myAlias.split(/\s+/)) if (part.trim()) mine.add(normalize(part));
+    }
+
+    mine.add(normalize(this.state.myPeerId));
+    mine.add(normalize(this.state.myPeerId.slice(0, 8)));
+
+    const mentionTokens = content.match(/(^|\s)@[A-Za-z0-9_.\-]+/g) || [];
+    for (const token of mentionTokens) {
+      const value = normalize(token.replace(/^\s*@/, ''));
+      if (mine.has(value)) return true;
+    }
+    return false;
+  }
+
+  private maybeRecordMentionActivity(msg: PlaintextMessage, channelId: string, wsId: string): void {
+    if (msg.senderId === this.state.myPeerId) return;
+    if (!this.isMentioningMe(msg.content || '', wsId)) return;
+
+    const isCurrentlyOpen = this.state.activeChannelId === channelId && (!msg.threadId || (this.state.threadOpen && this.state.activeThreadId === msg.threadId));
+    const id = `mention:${wsId}:${channelId}:${msg.id}`;
+    if (this.activityItems.some(i => i.id === id)) return;
+
+    this.activityItems.unshift({
+      id,
+      type: 'mention',
+      workspaceId: wsId,
+      channelId,
+      threadId: msg.threadId || undefined,
+      messageId: msg.id,
+      actorId: msg.senderId,
+      snippet: msg.content.slice(0, 140),
+      timestamp: msg.timestamp,
+      read: isCurrentlyOpen,
+    });
+
+    if (this.activityItems.length > 500) this.activityItems.length = 500;
+  }
+
+  private maybeRecordThreadActivity(msg: PlaintextMessage, channelId: string): void {
+    const threadId = msg.threadId;
+    if (!threadId) return;
+    if (msg.senderId === this.state.myPeerId) return;
+
+    const wsId = this.resolveWorkspaceIdByChannelId(channelId);
+    if (!wsId) return;
+
+    // If user is currently reading this thread, don't create unread activity.
+    const isCurrentlyOpen = this.state.activeChannelId === channelId && this.state.threadOpen && this.state.activeThreadId === threadId;
+
+    // Record all incoming thread replies (Slack-like Activity behavior),
+    // except when the thread is currently open and being read.
+    const id = `thread:${wsId}:${channelId}:${msg.id}`;
+    if (this.activityItems.some(i => i.id === id)) return;
+
+    this.activityItems.unshift({
+      id,
+      type: 'thread-reply',
+      workspaceId: wsId,
+      channelId,
+      threadId,
+      messageId: msg.id,
+      actorId: msg.senderId,
+      snippet: msg.content.slice(0, 140),
+      timestamp: msg.timestamp,
+      read: isCurrentlyOpen,
+    });
+
+    // Keep list bounded
+    if (this.activityItems.length > 500) this.activityItems.length = 500;
+  }
+
+  async removeChannel(channelId: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
+
+    const wsId = this.state.activeWorkspaceId;
+    const result = this.workspaceManager.removeChannel(wsId, channelId, this.state.myPeerId);
+    if (!result.success) return result;
+
+    this.messageStore.clearChannel(channelId);
+    this.messageCRDTs.delete(channelId);
+
+    try {
+      const messages = await this.persistentStore.getChannelMessages(channelId);
+      if (messages.length > 0) {
+        await this.persistentStore.deleteMessages(messages.map((m: any) => m.id));
+      }
+      const ws = this.workspaceManager.getWorkspace(wsId);
+      if (ws) await this.persistentStore.saveWorkspace(ws);
+    } catch (err) {
+      console.error('[Workspace] Failed to persist cleanup after removeChannel:', err);
+    }
+
+    if (this.state.activeChannelId === channelId) {
+      const ws = this.workspaceManager.getWorkspace(wsId);
+      const fallback = ws?.channels.find((c: Channel) => c.type === 'channel') || ws?.channels[0] || null;
+      this.state.activeChannelId = fallback?.id || null;
+    }
+
+    for (const peerId of this.getWorkspaceRecipientPeerIds()) {
+      this.transport.send(peerId, {
+        type: 'workspace-sync',
+        workspaceId: wsId,
+        sync: { type: 'channel-removed', channelId, removedBy: this.state.myPeerId },
+      });
+    }
+
+    this.ui?.updateSidebar();
+    this.ui?.updateChannelHeader();
+    this.ui?.renderMessages();
+    this.ui?.updateComposePlaceholder?.();
+
+    return { success: true };
+  }
+
   createDM(peerId: string): { success: boolean; channel?: Channel } {
     if (!this.state.activeWorkspaceId) return { success: false };
     return this.workspaceManager.createDM(
@@ -1796,6 +2313,75 @@ export class ChatController {
       this.state.myPeerId,
       peerId,
     );
+  }
+
+  private async cleanupWorkspaceLocalState(wsId: string, workspaceSnapshot?: Workspace | null): Promise<boolean> {
+    const ws = workspaceSnapshot || this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return false;
+
+    const channelIds = ws.channels.map((ch) => ch.id);
+
+    for (const channelId of channelIds) {
+      this.messageStore.clearChannel(channelId);
+      this.messageCRDTs.delete(channelId);
+    }
+
+    try {
+      for (const channelId of channelIds) {
+        const messages = await this.persistentStore.getChannelMessages(channelId);
+        if (messages.length > 0) {
+          await this.persistentStore.deleteMessages(messages.map((m: any) => m.id));
+        }
+      }
+      await this.persistentStore.deleteWorkspace(wsId);
+    } catch (err) {
+      console.error('[Workspace] Failed to delete persisted workspace data:', err);
+      return false;
+    }
+
+    if (this.state.workspaceAliases?.[wsId]) {
+      delete this.state.workspaceAliases[wsId];
+      await this.persistentStore.saveSetting('workspaceAliases', JSON.stringify(this.state.workspaceAliases));
+    }
+
+    if (this.state.activeWorkspaceId === wsId) {
+      this.state.activeWorkspaceId = null;
+      this.state.activeChannelId = null;
+      this.state.activeThreadId = null;
+      this.state.threadOpen = false;
+    }
+
+    return true;
+  }
+
+  async deleteWorkspace(wsId: string): Promise<boolean> {
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return false;
+
+    const deleted = this.workspaceManager.deleteWorkspace(wsId, this.state.myPeerId);
+    if (!deleted) return false;
+
+    const recipients = ws.members
+      .map((m: any) => m.peerId)
+      .filter((peerId: string) => peerId !== this.state.myPeerId && this.state.connectedPeers.has(peerId));
+
+    for (const peerId of recipients) {
+      this.transport.send(peerId, {
+        type: 'workspace-sync',
+        workspaceId: wsId,
+        sync: { type: 'workspace-deleted', workspaceId: wsId, deletedBy: this.state.myPeerId },
+      });
+    }
+
+    const ok = await this.cleanupWorkspaceLocalState(wsId, ws);
+    if (ok) {
+      this.ui?.updateWorkspaceRail?.();
+      this.ui?.updateSidebar();
+      this.ui?.updateChannelHeader();
+      this.ui?.renderMessages();
+      this.ui?.updateComposePlaceholder?.();
+    }
+    return ok;
   }
 
   async removeWorkspaceMember(peerId: string): Promise<{ success: boolean; error?: string }> {
@@ -1807,8 +2393,23 @@ export class ChatController {
 
     await this.persistWorkspace(wsId);
 
-    // Broadcast the updated workspace state to connected peers (including removed peer if still connected)
+    // Sign and broadcast member-removed event
+    const timestamp = Date.now();
+    let signature: string | undefined;
+    try {
+      signature = await this.signRemoveEvent(wsId, { peerId, timestamp });
+      if (this.signingKeyPair) {
+      }
+    } catch (e) {
+      console.warn('[Security] Could not sign remove event:', e);
+    }
+
     for (const connectedPeerId of this.state.connectedPeers) {
+      this.transport.send(connectedPeerId, {
+        type: 'workspace-sync',
+        workspaceId: wsId,
+        sync: { type: 'member-removed', peerId, removedBy: this.state.myPeerId, timestamp, signature },
+      });
       this.sendWorkspaceState(connectedPeerId);
     }
 
@@ -1817,6 +2418,193 @@ export class ChatController {
     this.ui?.renderMessages();
 
     return { success: true };
+  }
+
+  async promoteMember(targetPeerId: string, newRole: 'admin'): Promise<{ success: boolean; error?: string }> {
+    if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
+
+    const wsId = this.state.activeWorkspaceId;
+    const result = this.workspaceManager.promoteMember(wsId, this.state.myPeerId, targetPeerId, newRole);
+    if (!result.success) return result;
+
+    await this.persistWorkspace(wsId);
+
+    // Sign and broadcast role-changed event
+    const timestamp = Date.now();
+    let signature: string | undefined;
+    try {
+      signature = await this.signRoleEvent(wsId, { targetPeerId, newRole, timestamp });
+    } catch (e) {
+      console.warn('[Security] Could not sign role event:', e);
+    }
+
+    for (const connectedPeerId of this.state.connectedPeers) {
+      this.transport.send(connectedPeerId, {
+        type: 'workspace-sync',
+        workspaceId: wsId,
+        sync: { type: 'role-changed', peerId: targetPeerId, newRole, changedBy: this.state.myPeerId, timestamp, signature },
+      });
+    }
+
+    this.ui?.updateSidebar();
+    this.ui?.updateChannelHeader();
+    return { success: true };
+  }
+
+  async demoteMember(targetPeerId: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
+
+    const wsId = this.state.activeWorkspaceId;
+    const result = this.workspaceManager.demoteMember(wsId, this.state.myPeerId, targetPeerId);
+    if (!result.success) return result;
+
+    await this.persistWorkspace(wsId);
+
+    // Sign and broadcast role-changed event
+    const timestamp = Date.now();
+    const newRole = 'member';
+    let signature: string | undefined;
+    try {
+      signature = await this.signRoleEvent(wsId, { targetPeerId, newRole, timestamp });
+      if (this.signingKeyPair) {
+      }
+    } catch (e) {
+      console.warn('[Security] Could not sign role event:', e);
+    }
+
+    for (const connectedPeerId of this.state.connectedPeers) {
+      this.transport.send(connectedPeerId, {
+        type: 'workspace-sync',
+        workspaceId: wsId,
+        sync: { type: 'role-changed', peerId: targetPeerId, newRole, changedBy: this.state.myPeerId, timestamp, signature },
+      });
+    }
+
+    this.ui?.updateSidebar();
+    this.ui?.updateChannelHeader();
+    return { success: true };
+  }
+
+  async updateWorkspacePermissions(permissions: Partial<import('decent-protocol').WorkspacePermissions>): Promise<{ success: boolean; error?: string }> {
+    if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
+
+    const wsId = this.state.activeWorkspaceId;
+    const result = this.workspaceManager.updatePermissions(wsId, this.state.myPeerId, permissions);
+    if (!result.success) return result;
+
+    await this.persistWorkspace(wsId);
+
+    // Sign and broadcast settings-updated event
+    const fullPerms = this.workspaceManager.getPermissions(wsId);
+    const timestamp = Date.now();
+    let signature: string | undefined;
+    try {
+      signature = await this.signSettingsEvent(wsId, { settings: fullPerms, timestamp });
+      if (this.signingKeyPair) {
+      }
+    } catch (e) {
+      console.warn('[Security] Could not sign settings event:', e);
+    }
+
+    for (const connectedPeerId of this.state.connectedPeers) {
+      this.transport.send(connectedPeerId, {
+        type: 'workspace-sync',
+        workspaceId: wsId,
+        sync: { type: 'workspace-settings-updated', settings: fullPerms, changedBy: this.state.myPeerId, timestamp, signature },
+      });
+    }
+
+    return { success: true };
+  }
+
+  async updateWorkspaceInfo(updates: { name?: string; description?: string }): Promise<{ success: boolean; error?: string }> {
+    if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
+
+    const wsId = this.state.activeWorkspaceId;
+    const result = this.workspaceManager.updateWorkspaceInfo(wsId, this.state.myPeerId, updates);
+    if (!result.success) return result;
+
+    await this.persistWorkspace(wsId);
+
+    // Broadcast full workspace state so all peers get the updated name/description
+    for (const connectedPeerId of this.state.connectedPeers) {
+      this.sendWorkspaceState(connectedPeerId);
+    }
+
+    this.ui?.updateSidebar();
+    this.ui?.updateChannelHeader();
+    return { success: true };
+  }
+
+  /** Set the ECDSA signing key pair for signing admin events */
+  async setSigningKeyPair(keyPair: { publicKey: CryptoKey; privateKey: CryptoKey }): Promise<void> {
+    this.signingKeyPair = keyPair;
+    // Export and store our signing public key on our workspace members
+    const exportedKey = await this.cryptoManager.exportPublicKey(keyPair.publicKey);
+    for (const ws of this.workspaceManager.getAllWorkspaces()) {
+      const myMember = ws.members.find(m => m.peerId === this.state.myPeerId);
+      if (myMember && myMember.signingPublicKey !== exportedKey) {
+        myMember.signingPublicKey = exportedKey;
+        this.persistWorkspace(ws.id).catch(() => {});
+      }
+    }
+  }
+
+  /** Sign an admin event. Payload includes workspaceId + actorPeerId for cross-context replay protection. */
+  private async signAdminEvent(type: string, workspaceId: string, fields: string, timestamp: number): Promise<string> {
+    if (!this.signingKeyPair) throw new Error('Signing key pair not available');
+    const data = `${type}:${workspaceId}:${this.state.myPeerId}:${fields}:${timestamp}`;
+    const cipher = new MessageCipher();
+    return cipher.sign(data, this.signingKeyPair.privateKey);
+  }
+
+  /** Verify an admin event signature against a stored public key. */
+  private async verifyAdminEvent(
+    type: string, workspaceId: string, actorPeerId: string, fields: string,
+    timestamp: number, signature: string, signerPublicKeyBase64: string,
+  ): Promise<boolean> {
+    try {
+      const publicKey = await this.cryptoManager.importSigningPublicKey(signerPublicKeyBase64);
+      const data = `${type}:${workspaceId}:${actorPeerId}:${fields}:${timestamp}`;
+      const cipher = new MessageCipher();
+      return cipher.verify(data, signature, publicKey);
+    } catch (e) {
+      console.warn('[Security] Failed to verify admin event signature:', e);
+      return false;
+    }
+  }
+
+  private async signRoleEvent(wsId: string, payload: { targetPeerId: string; newRole: string; timestamp: number }): Promise<string> {
+    return this.signAdminEvent('role', wsId, `${payload.targetPeerId}:${payload.newRole}`, payload.timestamp);
+  }
+
+  private async verifyRoleEvent(wsId: string, actorPeerId: string,
+    payload: { targetPeerId: string; newRole: string; timestamp: number; signature: string },
+    signerPublicKeyBase64: string): Promise<boolean> {
+    return this.verifyAdminEvent('role', wsId, actorPeerId, `${payload.targetPeerId}:${payload.newRole}`,
+      payload.timestamp, payload.signature, signerPublicKeyBase64);
+  }
+
+  private async signSettingsEvent(wsId: string, payload: { settings: any; timestamp: number }): Promise<string> {
+    return this.signAdminEvent('settings', wsId, JSON.stringify(payload.settings), payload.timestamp);
+  }
+
+  private async verifySettingsEvent(wsId: string, actorPeerId: string,
+    payload: { settings: any; timestamp: number; signature: string },
+    signerPublicKeyBase64: string): Promise<boolean> {
+    return this.verifyAdminEvent('settings', wsId, actorPeerId, JSON.stringify(payload.settings),
+      payload.timestamp, payload.signature, signerPublicKeyBase64);
+  }
+
+  private async signRemoveEvent(wsId: string, payload: { peerId: string; timestamp: number }): Promise<string> {
+    return this.signAdminEvent('remove', wsId, payload.peerId, payload.timestamp);
+  }
+
+  private async verifyRemoveEvent(wsId: string, actorPeerId: string,
+    payload: { peerId: string; timestamp: number; signature: string },
+    signerPublicKeyBase64: string): Promise<boolean> {
+    return this.verifyAdminEvent('remove', wsId, actorPeerId, payload.peerId,
+      payload.timestamp, payload.signature, signerPublicKeyBase64);
   }
 
   // =========================================================================
@@ -1878,6 +2666,11 @@ export class ChatController {
       'text',
       threadId,
     );
+    (msg as any).recipientPeerIds = [conv.contactPeerId];
+    (msg as any).ackedBy = [] as string[];
+    (msg as any).ackedAt = {} as Record<string, number>;
+    (msg as any).readBy = [] as string[];
+    (msg as any).readAt = {} as Record<string, number>;
 
     const result = await this.messageStore.addMessage(msg);
     if (!result.success) {
@@ -1913,6 +2706,7 @@ export class ChatController {
 
     // Encrypt and send to the contact
     const peerId = conv.contactPeerId;
+    let attemptedDispatch = false;
     try {
       const envelope = await this.messageProtocol!.encryptMessage(peerId, content.trim(), 'text');
       (envelope as any).channelId = conversationId;
@@ -1925,8 +2719,23 @@ export class ChatController {
       } else {
         await this.offlineQueue.enqueue(peerId, envelope);
       }
+      attemptedDispatch = true;
     } catch (err) {
       console.error('Direct message send failed:', err);
+    }
+
+    if (attemptedDispatch && msg.status !== 'sent' && msg.status !== 'delivered') {
+      msg.status = 'sent';
+      await this.persistentStore.saveMessage({
+        ...msg,
+        status: 'sent',
+        recipientPeerIds: [peerId],
+        ackedBy: [],
+        ackedAt: {},
+        readBy: [],
+        readAt: {},
+      });
+      this.ui?.updateMessageStatus?.(msg.id, 'sent', { acked: 0, total: 1, read: 0 });
     }
 
   }
@@ -2182,6 +2991,12 @@ export class ChatController {
       threadId,
     );
     (msg as any).attachments = [meta];
+    const recipientPeerIds = this.getWorkspaceRecipientPeerIds();
+    (msg as any).recipientPeerIds = recipientPeerIds;
+    (msg as any).ackedBy = [] as string[];
+    (msg as any).ackedAt = {} as Record<string, number>;
+    (msg as any).readBy = [] as string[];
+    (msg as any).readAt = {} as Record<string, number>;
 
     const result = await this.messageStore.addMessage(msg);
     if (!result.success) return;
@@ -2199,7 +3014,8 @@ export class ChatController {
     }
 
     // Send to workspace peers
-    for (const peerId of this.getWorkspaceRecipientPeerIds()) {
+    let attemptedDispatch = false;
+    for (const peerId of recipientPeerIds) {
       try {
         const envelope = await this.messageProtocol!.encryptMessage(peerId, content, 'text');
         (envelope as any).channelId = this.state.activeChannelId;
@@ -2215,9 +3031,24 @@ export class ChatController {
         } else {
           await this.offlineQueue.enqueue(peerId, envelope);
         }
+        attemptedDispatch = true;
       } catch (err) {
         console.error('Send attachment to', peerId, 'failed:', err);
       }
+    }
+
+    if (attemptedDispatch && msg.status !== 'sent' && msg.status !== 'delivered') {
+      msg.status = 'sent';
+      await this.persistentStore.saveMessage({
+        ...msg,
+        status: 'sent',
+        recipientPeerIds,
+        ackedBy: [],
+        ackedAt: {},
+        readBy: [],
+        readAt: {},
+      });
+      this.ui?.updateMessageStatus?.(msg.id, 'sent', { acked: 0, total: recipientPeerIds.length, read: 0 });
     }
   }
 
@@ -2296,7 +3127,7 @@ export class ChatController {
   /** Handle media availability response */
   private async handleMediaResponse(peerId: string, response: MediaResponse): Promise<void> {
     if (!response.available) {
-      this.ui?.showToast(`Media not available from ${peerId.slice(0, 8)}`, 'error');
+      // Silent no-op: peer doesn't have requested media.
       return;
     }
 
@@ -2607,18 +3438,41 @@ export class ChatController {
   }
 
   private async flushOfflineQueue(peerId: string): Promise<void> {
-    const queued = await this.offlineQueue.flush(peerId);
-    for (const envelope of queued) {
+    // Non-destructive replay: never dequeue before successful transport.send().
+    // This prevents message loss during reconnect/refresh races.
+    const queued = await this.offlineQueue.getQueued(peerId);
+
+    let delivered = 0;
+    let failed = 0;
+
+    for (const item of queued as any[]) {
+      const envelope = item?.data ?? item;
       try {
         this.transport.send(peerId, envelope);
+        // Remove only after successful send attempt to transport.
+        if (typeof item?.id === 'number') {
+          await this.offlineQueue.remove(peerId, item.id);
+        }
+        delivered += 1;
       } catch (err) {
+        failed += 1;
+        if (typeof item?.id === 'number') {
+          await this.offlineQueue.markAttempt(peerId, item.id);
+        }
         console.error('Failed to deliver queued message to', peerId, err);
       }
     }
-    if (queued.length > 0) {
+
+    if (delivered > 0) {
       this.ui?.showToast(
-        `📬 Delivered ${queued.length} queued message${queued.length > 1 ? 's' : ''} to ${peerId.slice(0, 8)}`,
+        `📬 Delivered ${delivered} queued message${delivered > 1 ? 's' : ''} to ${peerId.slice(0, 8)}`,
         'success',
+      );
+    }
+    if (failed > 0) {
+      this.ui?.showToast(
+        `⚠️ ${failed} queued message${failed > 1 ? 's' : ''} still pending for ${peerId.slice(0, 8)}`,
+        'error',
       );
     }
   }
@@ -2628,11 +3482,12 @@ export class ChatController {
       ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
       : null;
     if (!ws) return [];
-    // ONLY send to peers who are members of the active workspace AND have a ready connection.
-    // Do NOT union with readyPeers globally — that would leak messages across workspaces.
+    // Send to all members of the active workspace except self.
+    // Ready peers are sent directly; offline peers are queued for replay on reconnect.
+    // Do NOT union with global peers to avoid cross-workspace leakage.
     return ws.members
       .map((m: any) => m.peerId)
-      .filter((p: string) => p !== this.state.myPeerId && this.state.readyPeers.has(p));
+      .filter((p: string) => p !== this.state.myPeerId);
   }
 
   private ensurePeerInActiveWorkspace(peerId: string, publicKey = ''): void {
@@ -2689,6 +3544,139 @@ export class ChatController {
   getMyAliasForWorkspace(wsId: string | null): string {
     if (wsId && this.state.workspaceAliases?.[wsId]) return this.state.workspaceAliases[wsId];
     return this.state.myAlias || this.state.myPeerId.slice(0, 8);
+  }
+
+  private findWorkspaceByChannelId(channelId: string): Workspace | null {
+    const workspaces = this.workspaceManager.getAllWorkspaces();
+    return workspaces.find((ws) => ws.channels.some((ch: Channel) => ch.id === channelId)) || null;
+  }
+
+  private getMessageRecipients(msg: PlaintextMessage, receiptPeerId?: string): string[] {
+    const explicit = Array.isArray((msg as any).recipientPeerIds)
+      ? (msg as any).recipientPeerIds.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
+      : [];
+    if (explicit.length > 0) return Array.from(new Set(explicit));
+
+    const ws = this.findWorkspaceByChannelId(msg.channelId);
+    if (ws) {
+      return ws.members.map((m: any) => m.peerId).filter((id: string) => id !== this.state.myPeerId);
+    }
+
+    const convMap = (this.directConversationStore as any).conversations as Map<string, { contactPeerId: string }> | undefined;
+    const dmPeer = convMap?.get(msg.channelId)?.contactPeerId;
+    if (dmPeer) return [dmPeer];
+
+    if (receiptPeerId) return [receiptPeerId];
+    return [];
+  }
+
+  private isValidInboundReceipt(peerId: string, channelId: string, messageId: string, type: 'ack' | 'read'): { valid: true; msg: PlaintextMessage; recipients: string[] } | { valid: false } {
+    const msgs = this.messageStore.getMessages(channelId) as PlaintextMessage[];
+    const msg = msgs.find((m) => m.id === messageId);
+    if (!msg) {
+      console.warn(`[Security] Rejecting ${type}: message ${messageId} not found in ${channelId}`);
+      return { valid: false };
+    }
+    if (msg.channelId !== channelId) {
+      console.warn(`[Security] Rejecting ${type}: channel mismatch for message ${messageId}`);
+      return { valid: false };
+    }
+    if (msg.senderId !== this.state.myPeerId) {
+      console.warn(`[Security] Rejecting ${type}: message ${messageId} is not outgoing`);
+      return { valid: false };
+    }
+
+    const recipients = this.getMessageRecipients(msg, peerId);
+    if (!recipients.includes(peerId)) {
+      console.warn(`[Security] Rejecting ${type}: peer ${peerId.slice(0, 8)} is not an intended recipient for ${messageId}`);
+      return { valid: false };
+    }
+
+    const ws = this.findWorkspaceByChannelId(channelId);
+    if (ws && !ws.members.some((m: any) => m.peerId === peerId)) {
+      console.warn(`[Security] Rejecting ${type}: peer ${peerId.slice(0, 8)} is not member of workspace ${ws.id}`);
+      return { valid: false };
+    }
+
+    return { valid: true, msg, recipients };
+  }
+
+  async onChannelViewed(channelId: string): Promise<void> {
+    if (!this.channelViewInFlight) this.channelViewInFlight = new Map<string, Promise<void>>();
+    if (!this.pendingReadReceiptKeys) this.pendingReadReceiptKeys = new Set<string>();
+
+    const current = this.channelViewInFlight.get(channelId);
+    if (current) {
+      await current;
+      return;
+    }
+
+    const run = (async () => {
+      const messages = this.messageStore.getMessages(channelId);
+      for (const msg of messages as any[]) {
+        if (msg.channelId !== channelId) continue;
+        // Only receipt incoming messages from other peers.
+        if (msg.senderId === this.state.myPeerId) continue;
+        if ((msg as any).localReadAt) continue;
+
+        // Mark in-memory first to avoid race duplicates.
+        (msg as any).localReadAt = Date.now();
+
+        const payload = { type: 'read', messageId: msg.id, channelId };
+        const dedupeKey = `${msg.senderId}:${msg.id}:${channelId}`;
+
+        try {
+          if (this.state.readyPeers.has(msg.senderId)) {
+            this.transport.send(msg.senderId, payload);
+          } else if (!this.pendingReadReceiptKeys.has(dedupeKey)) {
+            this.pendingReadReceiptKeys.add(dedupeKey);
+            await this.offlineQueue.enqueue(msg.senderId, payload);
+          }
+          await this.persistentStore.saveMessage({ ...(msg as any), localReadAt: (msg as any).localReadAt });
+        } catch (err) {
+          console.warn('[ReadReceipt] Failed to emit late read receipt', err);
+        }
+      }
+    })();
+
+    this.channelViewInFlight.set(channelId, run);
+    try {
+      await run;
+    } finally {
+      this.channelViewInFlight.delete(channelId);
+    }
+  }
+
+  getMessageReceiptInfo(messageId: string): {
+    messageId: string;
+    channelId: string;
+    recipients: Array<{ peerId: string; name: string; at?: number }>;
+    delivered: Array<{ peerId: string; name: string; at?: number }>;
+    read: Array<{ peerId: string; name: string; at?: number }>;
+    pending: Array<{ peerId: string; name: string; at?: number }>;
+  } | null {
+    const channelId = this.state.activeChannelId;
+    if (!channelId) return null;
+
+    const msg = this.messageStore.getMessages(channelId).find((m: any) => m.id === messageId);
+    if (!msg) return null;
+
+    const recipients: string[] = this.getMessageRecipients(msg as PlaintextMessage);
+    const deliveredSet = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
+    const readSet = new Set<string>(Array.isArray((msg as any).readBy) ? (msg as any).readBy : []);
+    const ackedAt: Record<string, number> = (msg as any).ackedAt || {};
+    const readAt: Record<string, number> = (msg as any).readAt || {};
+
+    const toUser = (peerId: string, at?: number) => ({ peerId, name: this.getDisplayNameForPeer(peerId), at });
+
+    return {
+      messageId,
+      channelId,
+      recipients: recipients.map((p) => toUser(p)),
+      delivered: recipients.filter((p) => deliveredSet.has(p)).map((p) => toUser(p, ackedAt[p])),
+      read: recipients.filter((p) => readSet.has(p)).map((p) => toUser(p, readAt[p])),
+      pending: recipients.filter((p) => !deliveredSet.has(p)).map((p) => toUser(p)),
+    };
   }
 
   /** Set a workspace-specific display name and persist it */

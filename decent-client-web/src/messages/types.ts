@@ -16,7 +16,12 @@ export interface ChatMessage {
     iv: string;
     tag: string;
   };
-  status: 'pending' | 'sent' | 'delivered';
+  status: 'pending' | 'sent' | 'delivered' | 'read';
+  recipientPeerIds?: string[];
+  ackedBy?: string[];
+  ackedAt?: Record<string, number>;
+  readBy?: string[];
+  readAt?: Record<string, number>;
   metadata?: {
     fileName?: string;
     fileSize?: number;
@@ -36,7 +41,12 @@ export interface PlaintextMessage {
   type: 'text' | 'file' | 'system';
   threadId?: string;
   prevHash: string;
-  status: 'pending' | 'sent' | 'delivered';
+  status: 'pending' | 'sent' | 'delivered' | 'read';
+  recipientPeerIds?: string[];
+  ackedBy?: string[];
+  ackedAt?: Record<string, number>;
+  readBy?: string[];
+  readAt?: Record<string, number>;
   metadata?: {
     fileName?: string;
     fileSize?: number;
