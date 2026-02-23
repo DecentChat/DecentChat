@@ -234,6 +234,25 @@ describe('MessageGuard - Validation', () => {
     expect(result.allowed).toBe(false);
   });
 
+  test('stream-start/stream-delta/stream-done pass through MessageGuard media bucket', () => {
+    const guard = new MessageGuard({ message: { max: 1, refillRate: 0 }, media: { max: 3, refillRate: 0 } });
+
+    // stream frames should ignore tight message bucket and use media bucket
+    expect(guard.check('peer1', { type: 'stream-start', messageId: 'm1' }).allowed).toBe(true);
+    expect(guard.check('peer1', { type: 'stream-delta', messageId: 'm1', content: 'A' }).allowed).toBe(true);
+    expect(guard.check('peer1', { type: 'stream-done', messageId: 'm1' }).allowed).toBe(true);
+    // 4th media-frame should now be blocked by media bucket exhaustion
+    expect(guard.check('peer1', { type: 'stream-delta', messageId: 'm1', content: 'B' }).allowed).toBe(false);
+  });
+
+  test('oversized stream-delta is rejected', () => {
+    const guard = new MessageGuard();
+    const huge = 'x'.repeat(1024 * 1024 + 1);
+    const result = guard.check('peer1', { type: 'stream-delta', messageId: 'm1', content: huge });
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('stream delta too large');
+  });
+
   test('banned peer rejected on all checks', () => {
     const guard = new MessageGuard();
     guard.ban('bad-peer');

@@ -30,6 +30,48 @@ type PeerContext = {
   abortSignal?: AbortSignal;
 };
 
+type IncomingPeerMessage = {
+  channelId: string;
+  workspaceId: string;
+  content: string;
+  senderId: string;
+  senderName: string;
+  messageId: string;
+  chatType: "channel" | "direct";
+  timestamp: number;
+  replyToId?: string;
+  threadId?: string;
+  attachments?: InboundAttachment[];
+};
+
+type StreamingPeerAdapter = {
+  startStream: (args: {
+    channelId: string;
+    workspaceId: string;
+    messageId: string;
+    threadId?: string;
+    replyToId?: string;
+  }) => Promise<void>;
+  startDirectStream: (args: { peerId: string; messageId: string }) => Promise<void>;
+  sendStreamDelta: (args: {
+    channelId: string;
+    workspaceId: string;
+    messageId: string;
+    content: string;
+  }) => Promise<void>;
+  sendDirectStreamDelta: (args: {
+    peerId: string;
+    messageId: string;
+    content: string;
+  }) => Promise<void>;
+  sendDirectStreamDone: (args: { peerId: string; messageId: string }) => Promise<void>;
+  sendStreamDone: (args: { channelId: string; workspaceId: string; messageId: string }) => Promise<void>;
+  sendDirectToPeer: (peerId: string, content: string, threadId?: string, replyToId?: string) => Promise<void>;
+  sendToChannel: (channelId: string, content: string, threadId?: string, replyToId?: string) => Promise<void>;
+};
+
+const TOOL_CALL_MISMATCH_RE = /^No tool call found for function call output with call_id\b/i;
+
 export async function finalizePeerStream(params: {
   xenaPeer: {
     sendDirectStreamDone: (args: { peerId: string; messageId: string }) => Promise<void>;
@@ -58,6 +100,162 @@ export async function finalizePeerStream(params: {
   });
 }
 
+export async function relayInboundMessageToPeer(params: {
+  incoming: IncomingPeerMessage;
+  ctx: Pick<PeerContext, "account" | "accountId" | "log">;
+  core: ReturnType<typeof getDecentChatRuntime>;
+  xenaPeer: StreamingPeerAdapter;
+  onFinalizeReady?: (finalize: () => Promise<void>) => void;
+}): Promise<void> {
+  const { incoming, ctx, core, xenaPeer } = params;
+  let streamMessageId: string | null = null;
+  let streamTimer: ReturnType<typeof setTimeout> | null = null;
+  let streamedReply = "";
+  let streamChunkCount = 0;
+  const streamEnabled = ctx.account.streamEnabled !== false;
+  let finalizeInFlight: Promise<void> | null = null;
+
+  const finalizeStream = async () => {
+    if (finalizeInFlight) {
+      await finalizeInFlight;
+      return;
+    }
+
+    finalizeInFlight = (async () => {
+      if (streamTimer) {
+        clearTimeout(streamTimer);
+        streamTimer = null;
+      }
+
+      const mid = streamMessageId;
+      streamMessageId = null;
+      await finalizePeerStream({
+        xenaPeer,
+        chatType: incoming.chatType === "direct" ? "direct" : "group",
+        senderId: incoming.senderId,
+        channelId: incoming.channelId,
+        workspaceId: incoming.workspaceId,
+        streamMessageId: mid,
+      });
+
+      const finalReply = streamedReply.trim();
+      ctx.log?.info?.(`[decentchat] stream telemetry: enabled=${streamEnabled} chunks=${streamChunkCount} finalChars=${finalReply.length}`);
+      streamedReply = "";
+      streamChunkCount = 0;
+      if (!finalReply) {
+        ctx.log?.warn?.("[decentchat] finalizeStream: empty final reply, skipping persistence");
+        return;
+      }
+
+      // When live streaming is enabled, the streamed message is already persisted by the web client
+      // as it receives deltas. Sending a second "normal" message here causes duplicates.
+      if (streamEnabled) {
+        return;
+      }
+
+      // Fallback persistence for non-stream mode.
+      try {
+        const persistThreadId = incoming.chatType === "direct"
+          ? incoming.threadId
+          : (incoming.threadId ?? incoming.messageId);
+
+        if (incoming.chatType === "direct") {
+          await xenaPeer.sendDirectToPeer(incoming.senderId, finalReply, persistThreadId, incoming.messageId);
+        } else {
+          await xenaPeer.sendToChannel(incoming.channelId, finalReply, persistThreadId, incoming.messageId);
+        }
+        ctx.log?.info?.(`[decentchat] persisted assistant reply (${finalReply.length} chars) in ${incoming.chatType}`);
+      } catch (err) {
+        ctx.log?.error?.(`[decentchat] failed to persist assistant reply: ${String(err)}`);
+      }
+    })();
+
+    try {
+      await finalizeInFlight;
+    } finally {
+      finalizeInFlight = null;
+    }
+  };
+
+  params.onFinalizeReady?.(finalizeStream);
+
+  await processInboundMessage(
+    {
+      messageId: incoming.messageId,
+      channelId: incoming.channelId,
+      workspaceId: incoming.workspaceId,
+      senderId: incoming.senderId,
+      senderName: incoming.senderName,
+      content: incoming.content,
+      chatType: incoming.chatType,
+      timestamp: incoming.timestamp,
+      replyToId: incoming.replyToId,
+      threadId: incoming.threadId,
+    },
+    { accountId: ctx.accountId, log: ctx.log },
+    core,
+    async (replyText) => {
+      if (TOOL_CALL_MISMATCH_RE.test(replyText.trim())) {
+        ctx.log?.warn?.("[decentchat] suppressed tool-call mismatch error text");
+        return;
+      }
+
+      // Real streaming path: forward provider chunks immediately (if enabled).
+      streamedReply += replyText;
+      streamChunkCount += 1;
+      ctx.log?.info?.(`[decentchat] deliver #${streamChunkCount}: +${replyText.length} chars, total=${streamedReply.length}`);
+
+      if (streamEnabled) {
+        if (!streamMessageId) {
+          streamMessageId = randomUUID();
+          // Always reply in a thread (Slack-bot style): use the existing thread root,
+          // or create a new thread under the inbound message.
+          const outThreadId = incoming.chatType === "direct"
+            ? undefined
+            : (incoming.threadId ?? incoming.messageId);
+          if (incoming.chatType === "direct") {
+            await xenaPeer.startDirectStream({ peerId: incoming.senderId, messageId: streamMessageId });
+          } else {
+            await xenaPeer.startStream({
+              channelId: incoming.channelId,
+              workspaceId: incoming.workspaceId,
+              messageId: streamMessageId,
+              threadId: outThreadId,
+              replyToId: incoming.messageId,
+            });
+          }
+        }
+
+        // Send cumulative content so receiver's replace-rendering shows progressive growth.
+        // Fallback smoothing: if provider gives a single big block, emit small progressive
+        // deltas so UX still looks like streaming (similar to TUI typing feel).
+        const sendDelta = async (content: string) => {
+          if (incoming.chatType === "direct") {
+            await xenaPeer.sendDirectStreamDelta({ peerId: incoming.senderId, messageId: streamMessageId, content });
+          } else {
+            await xenaPeer.sendStreamDelta({
+              channelId: incoming.channelId,
+              workspaceId: incoming.workspaceId,
+              messageId: streamMessageId,
+              content,
+            });
+          }
+        };
+
+        await sendDelta(streamedReply);
+      }
+
+      if (streamTimer) clearTimeout(streamTimer);
+      streamTimer = setTimeout(() => { void finalizeStream(); }, 200);
+    },
+    undefined,
+    incoming.attachments,
+    { streamEnabled },
+  );
+
+  await finalizeStream();
+}
+
 export async function startDecentChatPeer(ctx: PeerContext): Promise<void> {
   const seedPhrase = ctx.account.seedPhrase?.trim();
   if (!seedPhrase) {
@@ -70,7 +268,6 @@ export async function startDecentChatPeer(ctx: PeerContext): Promise<void> {
 async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
   const { NodeXenaPeer } = await import("./peer/NodeXenaPeer.js");
   const core = getDecentChatRuntime();
-  const TOOL_CALL_MISMATCH_RE = /^No tool call found for function call output with call_id\b/i;
 
   let xenaPeer: InstanceType<typeof NodeXenaPeer>;
   let finalizeStream: () => Promise<void> = async () => {};
@@ -78,80 +275,15 @@ async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
   xenaPeer = new NodeXenaPeer({
     account: ctx.account,
     onIncomingMessage: async (params) => {
-      let streamMessageId: string | null = null;
-      let streamTimer: ReturnType<typeof setTimeout> | null = null;
-      let streamedReply = '';
-
-      finalizeStream = async () => {
-        if (streamTimer) { clearTimeout(streamTimer); streamTimer = null; }
-        const mid = streamMessageId;
-        streamMessageId = null;
-        await finalizePeerStream({
-          xenaPeer,
-          chatType: params.chatType,
-          senderId: params.senderId,
-          channelId: params.channelId,
-          workspaceId: params.workspaceId,
-          streamMessageId: mid,
-        });
-
-        const finalReply = streamedReply.trim();
-        streamedReply = '';
-        if (!finalReply) {
-          ctx.log?.warn?.('[decentchat] finalizeStream: empty final reply, skipping persistence');
-          return;
-        }
-
-        // Persist assistant replies as normal messages too (stream UI can be ephemeral on refresh).
-        try {
-          const persistThreadId = params.chatType === 'direct'
-            ? params.threadId
-            : (params.threadId ?? params.messageId);
-
-          if (params.chatType === 'direct') {
-            await xenaPeer.sendDirectToPeer(params.senderId, finalReply, persistThreadId, params.messageId);
-          } else {
-            await xenaPeer.sendToChannel(params.channelId, finalReply, persistThreadId, params.messageId);
-          }
-          ctx.log?.info?.(`[decentchat] persisted assistant reply (${finalReply.length} chars) in ${params.chatType}`);
-        } catch (err) {
-          ctx.log?.error?.(`[decentchat] failed to persist assistant reply: ${String(err)}`);
-        }
-      };
-
-      await processInboundMessage(
-        {
-          messageId: params.messageId,
-          channelId: params.channelId,
-          workspaceId: params.workspaceId,
-          senderId: params.senderId,
-          senderName: params.senderName,
-          content: params.content,
-          chatType: params.chatType,
-          timestamp: params.timestamp,
-          replyToId: params.replyToId,
-          threadId: params.threadId,
-        },
+      await relayInboundMessageToPeer({
+        incoming: params,
         ctx,
         core,
-        async (replyText) => {
-          if (TOOL_CALL_MISMATCH_RE.test(replyText.trim())) {
-            ctx.log?.warn?.("[decentchat] suppressed tool-call mismatch error text");
-            return;
-          }
-
-          // Avoid duplicate live renders (stream + final persisted message).
-          // Buffer chunks and emit exactly one persisted reply at finalize.
-          streamedReply += replyText;
-
-          if (streamTimer) clearTimeout(streamTimer);
-          streamTimer = setTimeout(() => { void finalizeStream(); }, 200);
+        xenaPeer,
+        onFinalizeReady: (nextFinalize) => {
+          finalizeStream = nextFinalize;
         },
-        undefined,
-        params.attachments,
-      );
-
-      await finalizeStream();
+      });
     },
     onReply: () => { void finalizeStream(); },
     log: ctx.log,
@@ -215,6 +347,7 @@ async function processInboundMessage(
   deliver: (text: string) => Promise<void>,
   onDeliverError?: (reason: string) => void,
   attachments?: InboundAttachment[],
+  options?: { streamEnabled?: boolean },
 ): Promise<void> {
   let rawBody = msg.content?.trim() ?? "";
   const thumbnailAttachments = (attachments ?? []).filter(
@@ -330,6 +463,8 @@ async function processInboundMessage(
     onRecordError: (err) => ctx.log?.error?.(`[decentchat] session record error: ${String(err)}`),
   });
 
+  let streamingActive = false;
+
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
     agentId: route.agentId,
@@ -352,6 +487,13 @@ async function processInboundMessage(
           ctx.log?.warn?.("[decentchat] suppressed tool-call mismatch error text");
           return;
         }
+        // When real streaming is active (onPartialReply), tokens are already delivered.
+        // The deliver callback only fires for the final aggregated text — skip it to avoid duplicates.
+        // (Same pattern as Slack native streaming: stream IS the delivery.)
+        if (options?.streamEnabled && streamingActive) {
+          ctx.log?.info?.(`[decentchat] deliver: skipping (stream active, ${text.length} chars)`);
+          return;
+        }
         await deliver(text);
       },
       onError: (err, info) => {
@@ -360,6 +502,23 @@ async function processInboundMessage(
         onDeliverError?.(reason);
       },
     },
-    replyOptions: { onModelSelected, suppressToolErrorWarnings: true },
+    replyOptions: {
+      onModelSelected,
+      suppressToolErrorWarnings: true,
+      // Real token-level streaming: onPartialReply fires with each LLM token delta.
+      // We forward these directly to the P2P stream protocol for live rendering.
+      // NOTE: When onPartialReply is active, the dispatcherOptions.deliver callback
+      // must NOT also accumulate text — it should only finalize the stream.
+      onPartialReply: options?.streamEnabled
+        ? async (payload) => {
+            const text = (payload as any).text;
+            if (!text) return;
+            streamingActive = true;
+            await deliver(text);
+          }
+        : undefined,
+      // Disable block streaming chunker — we handle streaming ourselves via onPartialReply.
+      disableBlockStreaming: options?.streamEnabled,
+    },
   });
 }
