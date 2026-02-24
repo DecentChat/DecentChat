@@ -9,7 +9,7 @@ DecentChat uses three complementary mechanisms for message ordering and synchron
 
 1. **Vector Clocks** — Causal ordering without trusting wall clocks
 2. **CRDTs** — Conflict-free merging when peers reconnect
-3. **Merkle Trees** — Efficient identification of missing messages
+3. **Negentropy Set Reconciliation** — Efficient identification of missing messages
 
 Together, these ensure that all peers converge to the same message state regardless of network partitions, offline periods, or merge order.
 
@@ -137,11 +137,11 @@ After merging, messages are sorted by:
 
 This produces a **total order** from the partial order, ensuring all peers display messages identically.
 
-## 3. Merkle Trees
+## 3. Negentropy Set Reconciliation
 
 ### 3.1 Purpose
 
-When peers reconnect after being offline, they need to sync. Naive sync sends all messages — O(n). Merkle trees reduce this to O(log n) by identifying exactly which messages differ.
+When peers reconnect after being offline, they need to sync. Naive sync sends all messages — O(n). Negentropy reduces this by comparing compact range fingerprints and exchanging only missing message IDs.
 
 ### 3.2 Construction
 
@@ -204,7 +204,7 @@ diff(localNode, remoteNode):
 
 ### 3.5 Bandwidth Analysis
 
-| Scenario | Naive Sync | Merkle Sync |
+| Scenario | Naive Sync | Negentropy Sync |
 |---|---|---|
 | 1000 messages, 0 missing | Send all 1000 | Compare 1 hash |
 | 1000 messages, 1 missing | Send all 1000 | Compare ~10 hashes + send 1 message |
@@ -223,7 +223,7 @@ When two peers connect:
    
 3. PER-CHANNEL MERKLE SYNC
    For each shared channel:
-     a. Exchange Merkle root hashes
+     a. Exchange negentropy range fingerprints
      b. If roots differ: run diff algorithm
      c. Exchange missing messages
      d. Both sides run CRDT merge
@@ -248,7 +248,7 @@ Workspace metadata (members, channels) uses last-writer-wins with vector clock o
 During a partition, each partition operates independently:
 - Messages are added to local CRDT
 - Hash chains continue independently per partition
-- On reconnection: Merkle diff → CRDT merge → chains reconciled
+- On reconnection: Negentropy reconciliation → CRDT merge → chains reconciled
 
 ### 5.3 Malicious Peer
 
@@ -267,8 +267,8 @@ If a peer sends tampered messages:
 - Verify hash chains on imported message sets
 
 ### SHOULD
-- Implement Merkle tree sync for channels with >100 messages
-- Cache Merkle trees and update incrementally
+- Optimize negentropy range sizing for channels with >100 messages
+- Cache reconciliation state and update incrementally
 - Rate-limit sync requests to prevent DoS
 
 ### MAY

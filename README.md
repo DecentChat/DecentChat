@@ -4,7 +4,7 @@
 
 Inspired by **Bitcoin** (seed phrase identity, no central authority), **BitTorrent** (decentralized mesh, no servers), and **Signal Protocol** (E2E encryption, safety numbers, forward secrecy).
 
-Instead of Bitcoin's Proof of Work, DecentChat achieves consensus through **CRDTs** (Conflict-free Replicated Data Types) — a mathematical guarantee that all peers converge to the same state without mining, voting, or coordination. Combined with **vector clocks** for causal ordering and **Merkle trees** for efficient sync, peers can go offline, diverge, and merge back seamlessly. No energy wasted, no blocks to wait for — just eventual consistency by design.
+Instead of Bitcoin's Proof of Work, DecentChat achieves consensus through **CRDTs** (Conflict-free Replicated Data Types) — a mathematical guarantee that all peers converge to the same state without mining, voting, or coordination. Combined with **vector clocks** for causal ordering and **Negentropy set reconciliation** for efficient sync, peers can go offline, diverge, and merge back seamlessly. No energy wasted, no blocks to wait for — just eventual consistency by design.
 
 ## What is this?
 
@@ -17,7 +17,7 @@ decent-protocol/          ← SDK (npm package, zero deps)
   ├── crypto/           ← ECDH P-256, AES-GCM-256, ECDSA signing
   ├── messages/         ← MessageStore (hash chains), OfflineQueue
   ├── workspace/        ← Workspaces, channels, DMs, sync protocol
-  ├── crdt/             ← VectorClock, MessageCRDT (G-Set), MerkleTree
+  ├── crdt/             ← VectorClock, MessageCRDT (G-Set), Negentropy
   ├── identity/         ← Seed phrase (BIP39), safety numbers, multi-device
   ├── storage/          ← PersistentStore (IndexedDB)
   └── transport/        ← Abstract Transport interface
@@ -35,10 +35,19 @@ decent-client-web/        ← Reference Slack-like PWA (142KB JS)
 - **Offline-resilient** — CRDT merge + offline message queue
 - **Seed phrase identity** — 12-word BIP39 mnemonic, deterministic key derivation
 - **Causal ordering** — Vector clocks, not wall time
-- **Efficient sync** — Merkle trees for O(log n) diff
+- **Efficient sync** — Negentropy set reconciliation (minimal delta exchange)
 - **Persistent** — IndexedDB survives refresh/restart
 - **NAT traversal** — STUN + TURN servers with retry
 - **PWA** — Installable on phone, works offline
+
+## Documentation
+
+- Docs site entry: [`docs/`](docs/)
+- Run locally: `bun run docs:dev`
+- Build static docs: `bun run docs:build`
+- Deploy docs: `bun run deploy:docs`
+- Protocol specifications: [`decent-protocol/spec/`](decent-protocol/spec/)
+- DEP process and proposals: [`specs/deps/`](specs/deps/)
 
 ## Quick Start
 
@@ -131,7 +140,7 @@ Detailed protocol specifications in `decent-protocol/spec/`:
 - `PROTOCOL.md` — Architecture overview
 - `MESSAGE-FORMAT.md` — JSON schemas for all message types
 - `CRYPTO.md` — Cryptographic primitives and flows
-- `SYNC.md` — Vector clocks, CRDT properties, Merkle sync
+- `SYNC.md` — Vector clocks, CRDT properties, Negentropy sync
 
 ### DEPs (Decent Enhancement Proposals)
 
@@ -153,7 +162,7 @@ See [specs/deps/](specs/deps/) for all proposals and submission process.
 ├── sync (11)          — Join flow, broadcasting, full sync, tamper rejection
 ├── vector-clock (17)  — Ordering, merge, concurrent detection
 ├── crdt (13)          — G-Set properties, offline merge, 3-peer scenarios
-├── merkle (15)        — Tree building, diff, bidirectional sync
+├── negentropy (15+)   — Set reconciliation, diff, bidirectional sync
 ├── identity (24)      — Export/import, safety numbers, device linking, QR
 ├── seed-phrase (19)   — BIP39 mnemonic, deterministic derivation, full flow
 └── persistence (27)   — IndexedDB, offline queue, restart survival

@@ -7,7 +7,7 @@ When making changes to DecentChat's protocol, follow this workflow to maintain D
 **Always create a DEP for:**
 - New message types or protocol extensions
 - Cryptographic primitives changes
-- Sync algorithm changes (CRDT, Merkle, etc.)
+- Sync algorithm changes (CRDT, Negentropy, etc.)
 - Transport layer changes (WebRTC, discovery, NAT traversal)
 - Breaking changes to wire format
 - Security-critical changes

@@ -40,7 +40,7 @@
 | **Hash Chain** | A sequence of messages where each message embeds the SHA-256 hash of the previous one, starting from the genesis hash. |
 | **CRDT** | Conflict-free Replicated Data Type. A data structure that can be merged from multiple sources in any order and always converges to the same result. |
 | **Vector Clock** | A logical timestamp assigning a counter per peer. Used for causal ordering without trusting wall-clock time. |
-| **Merkle Tree** | A binary hash tree built over message IDs. Two peers compare roots to determine if they are in sync; differences are located in O(log n) round-trips. |
+| **Negentropy** | Set-reconciliation protocol where peers exchange compact range fingerprints and request only missing message IDs, minimizing sync payload. |
 | **Invite Code** | An 8-character alphanumeric token that authorises a peer to join a workspace. Transmitted out-of-band (e.g., copied and pasted). |
 
 ---
@@ -66,7 +66,7 @@
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                    CRDT Layer                            │   │
-│  │       (VectorClock + MessageCRDT + MerkleTree)           │   │
+│  │      (VectorClock + MessageCRDT + Negentropy)            │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐   │
@@ -110,7 +110,7 @@ Provides convergent, conflict-free merge of message sets across peers.
 
 - **VectorClock:** Tracks logical time per peer. Used to determine causal ordering.
 - **MessageCRDT:** A grow-only G-Set of messages. Merge is idempotent, commutative, and associative.
-- **MerkleTree:** Efficient tree over message IDs. Peers compare roots; a diff walk identifies exactly which messages are missing.
+- **Negentropy:** Efficient set reconciliation over message IDs using range fingerprints and targeted missing-item exchange.
 
 See [SYNC.md](./SYNC.md) for full details.
 
