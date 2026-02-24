@@ -18,6 +18,7 @@ import {
   ChunkedReceiver,
   ClockSync,
   MessageGuard,
+  Negentropy,
   verifyHandshakeKey,
   hashBlob,
   createAttachmentMeta,
@@ -34,6 +35,7 @@ import type {
   PlaintextMessage, Workspace, Channel,
   AttachmentMeta, Attachment, MediaChunk, MediaRequest, MediaResponse,
   TimeSyncRequest, TimeSyncResponse,
+  NegentropyQuery, NegentropyResponse,
   Contact, DirectConversation,
 } from 'decent-protocol';
 
@@ -54,6 +56,8 @@ import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
 import type { AppState } from '../main';
 
 const PROTOCOL_VERSION = 2;
+const NEGENTROPY_SYNC_CAPABILITY = 'negentropy-sync-v1';
+const NEGENTROPY_QUERY_TIMEOUT_MS = 8000;
 
 const DEV_SIGNAL_PORT = Number((import.meta as any).env?.VITE_SIGNAL_PORT || 9000);
 const DEV_SIGNAL_WS = `ws://localhost:${DEV_SIGNAL_PORT}`;
@@ -124,6 +128,16 @@ export class ChatController {
   private networkOnlineListenerBound = false;
   private transportReinitInFlight: Promise<boolean> | null = null;
   private lastTransportReinitAt = 0;
+  private peerCapabilities = new Map<string, Set<string>>();
+  private pendingNegentropyQueries = new Map<
+    string,
+    {
+      peerId: string;
+      resolve: (response: NegentropyResponse) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   /** DEP-002: Peer Exchange for signaling server discovery */
   readonly storageQuota: StorageQuotaManager = new StorageQuotaManager();
@@ -252,6 +266,36 @@ export class ChatController {
   // Transport event wiring
   // =========================================================================
 
+  private isWorkspaceMember(peerId: string, workspaceId?: string): boolean {
+    if (!workspaceId) return false;
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (!ws) return false;
+    return ws.members.some((m: any) => m.peerId === peerId);
+  }
+
+  private isTrustedSyncControlMessage(peerId: string, data: any): boolean {
+    const type = data?.type;
+    if (typeof type !== 'string') return false;
+
+    const syncTypes = new Set([
+      'message-sync-request',
+      'message-sync-response',
+      'message-sync-fetch-request',
+      'message-sync-fetch-response',
+      'message-sync-negentropy-query',
+      'message-sync-negentropy-response',
+    ]);
+    if (!syncTypes.has(type)) return false;
+
+    return this.isWorkspaceMember(peerId, data?.workspaceId as string | undefined);
+  }
+
+  private isTrustedOfflineReplayMessage(_peerId: string, data: any): boolean {
+    // Offline queue replay lane: allow higher throughput for messages explicitly
+    // marked as local outbox replay after reconnect.
+    return data?._offlineReplay === 1 && !!data?.encrypted;
+  }
+
   setupTransportHandlers(): void {
     this.transport.onConnect = async (peerId: string) => {
       this.state.connectedPeers.add(peerId);
@@ -260,7 +304,11 @@ export class ChatController {
 
       try {
         const handshake = await this.messageProtocol!.createHandshake();
-        this.transport.send(peerId, { type: 'handshake', ...handshake });
+        this.transport.send(peerId, {
+          type: 'handshake',
+          ...handshake,
+          capabilities: [NEGENTROPY_SYNC_CAPABILITY],
+        });
       } catch (err) {
         console.error('Handshake failed:', err);
       }
@@ -271,17 +319,31 @@ export class ChatController {
       this.state.connectingPeers.delete(peerId);
       this.state.readyPeers.delete(peerId);
       this.messageProtocol?.clearSharedSecret(peerId);
+      this.peerCapabilities.delete(peerId);
+      for (const [requestId, pending] of this.pendingNegentropyQueries) {
+        if (pending.peerId !== peerId) continue;
+        clearTimeout(pending.timer);
+        pending.reject(new Error(`Peer ${peerId} disconnected during negentropy sync`));
+        this.pendingNegentropyQueries.delete(requestId);
+      }
       this.ui?.updateSidebar();
     };
 
     this.transport.onMessage = async (peerId: string, rawData: unknown) => {
       const data = rawData as any;
 
-      // Rate limit + validate before any processing
-      const guardResult = this.messageGuard.check(peerId, data);
-      if (!guardResult.allowed) {
-        console.warn(`[Guard] Blocked message from ${peerId.slice(0, 8)}: ${guardResult.reason}`);
-        return;
+      // Rate limit + validate before any processing.
+      // Trusted sync-control traffic gets its own lane (still authenticated by
+      // workspace membership checks in handlers) so reconnect catch-up is not
+      // throttled by normal chat message limits.
+      const bypassGuard = this.isTrustedSyncControlMessage(peerId, data)
+        || this.isTrustedOfflineReplayMessage(peerId, data);
+      if (!bypassGuard) {
+        const guardResult = this.messageGuard.check(peerId, data);
+        if (!guardResult.allowed) {
+          console.warn(`[Guard] Blocked message from ${peerId.slice(0, 8)}: ${guardResult.reason}`);
+          return;
+        }
       }
 
       try {
@@ -373,8 +435,9 @@ export class ChatController {
             targetChannelId = conv.id;
           }
 
-          // Slack-bot style: always thread. threadId is the thread root (explicit or inbound messageId).
-          const streamThreadId = isDirect ? undefined : (threadId ?? replyToId);
+          // IMPORTANT: replyToId is quote/reply metadata, not thread metadata.
+          // Only explicit threadId may open/render a thread.
+          const streamThreadId = isDirect ? undefined : threadId;
           this.pendingStreams.set(messageId, {
             channelId: targetChannelId,
             senderId: streamSenderId,
@@ -486,6 +549,10 @@ export class ChatController {
               `(we support v${PROTOCOL_VERSION}). Some features may not work.`,
             );
           }
+          const capabilities = Array.isArray(data.capabilities)
+            ? data.capabilities.filter((value: unknown): value is string => typeof value === 'string')
+            : [];
+          this.peerCapabilities.set(peerId, new Set(capabilities));
 
           this.state.readyPeers.add(peerId);
           this.ensurePeerInActiveWorkspace(peerId, data.publicKey);
@@ -628,6 +695,18 @@ export class ChatController {
         }
 
         // --- Message sync (reconnect catch-up) ---
+        if (data?.type === 'message-sync-negentropy-query') {
+          await this.handleNegentropySyncQuery(peerId, data);
+          return;
+        }
+        if (data?.type === 'message-sync-negentropy-response') {
+          this.handleNegentropySyncResponse(peerId, data);
+          return;
+        }
+        if (data?.type === 'message-sync-fetch-request') {
+          await this.handleMessageSyncFetchRequest(peerId, data);
+          return;
+        }
         if (data?.type === 'message-sync-request') {
           await this.handleMessageSyncRequest(peerId, data);
           return;
@@ -646,11 +725,26 @@ export class ChatController {
         if (_gossipOrigId && this._gossipSeen.has(_gossipOrigId)) return;
 
         // --- Encrypted chat message ---
-        // Use persistentStore as the single source of truth for peer public keys.
+        // Prefer persisted peer key, but tolerate brief handshake/persistence races by
+        // falling back to workspace member key when available.
         const peerData = await this.persistentStore.getPeer(peerId);
-        if (!peerData) return;
+        let peerPublicKeyBase64: string | undefined = peerData?.publicKey;
 
-        const peerPublicKey = await this.cryptoManager.importPublicKey(peerData.publicKey);
+        if (!peerPublicKeyBase64) {
+          const wsId = this.state.activeWorkspaceId;
+          const ws = wsId ? this.workspaceManager.getWorkspace(wsId) : null;
+          const member = ws?.members.find((m: any) => m.peerId === peerId);
+          if (member?.publicKey) {
+            peerPublicKeyBase64 = member.publicKey;
+          }
+        }
+
+        if (!peerPublicKeyBase64) {
+          console.warn(`[Crypto] Missing public key for ${peerId.slice(0, 8)}; dropping message envelope.`);
+          return;
+        }
+
+        const peerPublicKey = await this.cryptoManager.importPublicKey(peerPublicKeyBase64);
         let content: string | null;
         try {
           content = await this.messageProtocol!.decryptMessage(peerId, data, peerPublicKey);
@@ -739,6 +833,21 @@ export class ChatController {
           let targetWs;
           if (data.workspaceId) {
             targetWs = allWorkspaces.find(ws => ws.id === data.workspaceId);
+            if (!targetWs && data.channelId) {
+              // Compatibility fallback: if workspaceId is stale/mismatched but channelId maps
+              // to one of our known workspaces, use that workspace and continue with strict
+              // membership checks below.
+              targetWs = allWorkspaces.find(ws =>
+                ws.channels.some((ch: any) => ch.id === data.channelId)
+              );
+              if (targetWs) {
+                console.warn(`[Security] workspaceId mismatch from ${peerId.slice(0, 8)}: ${data.workspaceId} -> using channel-mapped workspace ${targetWs.id}`);
+              }
+            }
+            if (!targetWs && allWorkspaces.length === 1 && this.state.readyPeers.has(peerId)) {
+              targetWs = allWorkspaces[0];
+              console.warn(`[Security] workspaceId unknown from ${peerId.slice(0, 8)}; using sole local workspace ${targetWs.id} (ready peer fallback)`);
+            }
             if (!targetWs) {
               console.warn(`[Security] Dropping message from ${peerId.slice(0, 8)}: unknown workspaceId ${data.workspaceId}`);
               return;
@@ -798,8 +907,19 @@ export class ChatController {
           // Sender must be a member of that workspace
           const isMember = targetWs.members.some((m: any) => m.peerId === peerId);
           if (!isMember) {
-            console.warn(`[Security] Dropping message from ${peerId.slice(0, 8)}: not a member of workspace ${targetWs.id}`);
-            return;
+            if (this.state.readyPeers.has(peerId)) {
+              this.workspaceManager.addMember(targetWs.id, {
+                peerId,
+                alias: peerId.slice(0, 8),
+                publicKey: '',
+                joinedAt: Date.now(),
+                role: 'member',
+              });
+              this.persistWorkspace(targetWs.id).catch(() => {});
+            } else {
+              console.warn(`[Security] Dropping message from ${peerId.slice(0, 8)}: not a member of workspace ${targetWs.id}`);
+              return;
+            }
           }
 
           // Resolve channelId: use the declared one if it exists in the workspace,
@@ -811,9 +931,8 @@ export class ChatController {
           }
         }
 
-        // Pass threadId so replies land in the correct thread (not the main channel).
-        // Some envelopes carry only replyToId for thread replies, so normalize here.
-        const normalizedThreadId: string | undefined = (data.threadId as string | undefined) ?? (data.replyToId as string | undefined);
+        // Threading must be explicit. replyToId is only quote/reply metadata.
+        const normalizedThreadId: string | undefined = data.threadId as string | undefined;
         // T3.2: For gossip-relayed messages, use the original sender's peerId (not the relay node)
         const actualSenderId: string = (data._gossipOriginalSender as string | undefined) ?? peerId;
         const msg = await this.messageStore.createMessage(channelId, actualSenderId, content, 'text', normalizedThreadId);
@@ -1270,15 +1389,63 @@ export class ChatController {
     // If our active workspace's invite code matches the remote one, or we have only 1 workspace
     if (!localWs) return;
 
-    // SECURITY: Never remap workspace ID. Each workspace has a unique identity.
-    // Sync is only allowed within the same workspace (verified by workspace ID).
-    // If remote workspace ID differs, it means we're talking to a peer from a
-    // different workspace - ignore the sync to prevent workspace "merging".
+    // SECURITY: workspace IDs should match for normal sync.
+    // But on fresh invite-join flows, the joiner may have created a provisional
+    // local workspace ID before receiving the owner's canonical workspace-state.
+    // In that case, if inviteCode matches, adopt the remote workspace ID once.
     if (remoteWorkspaceId !== localWs.id) {
-      console.warn(`[Sync] Rejected workspace state from ${peerId.slice(0, 8)}: workspace ID mismatch. ` +
-        `Local: ${localWs.id.slice(0, 8)}, Remote: ${remoteWorkspaceId.slice(0, 8)}. ` +
-        `This peer may be from a different workspace.`);
-      return;
+      const sameInvite = !!sync?.inviteCode && sync.inviteCode === localWs.inviteCode;
+      const onlyOneWorkspace = this.workspaceManager.getAllWorkspaces().length === 1;
+      const inviterIsKnownMember = localWs.members.some((m: any) => m.peerId === peerId);
+      const inviterIsOwner = localWs.members.some((m: any) => m.peerId === peerId && m.role === 'owner');
+      const canAdoptByJoinHeuristic = onlyOneWorkspace && inviterIsKnownMember && inviterIsOwner;
+
+      if (!sameInvite && !canAdoptByJoinHeuristic) {
+        console.warn(`[Sync] Rejected workspace state from ${peerId.slice(0, 8)}: workspace ID mismatch. ` +
+          `Local: ${localWs.id.slice(0, 8)}, Remote: ${remoteWorkspaceId.slice(0, 8)}. ` +
+          `This peer may be from a different workspace.`);
+        return;
+      }
+
+      const oldWorkspaceId = localWs.id;
+      console.log(`[Sync] Adopting remote workspace ID ${remoteWorkspaceId.slice(0, 8)} (was ${oldWorkspaceId.slice(0, 8)}) for invite ${localWs.inviteCode}`);
+
+      // Remap local channel IDs to the owner's canonical channel IDs by name/type.
+      if (Array.isArray(sync.channels)) {
+        for (const remoteCh of sync.channels) {
+          const localCh = localWs.channels.find((ch: any) => ch.name === remoteCh.name && ch.type === remoteCh.type);
+          if (localCh && localCh.id !== remoteCh.id) {
+            const oldId = localCh.id;
+            localCh.id = remoteCh.id;
+            localCh.workspaceId = remoteWorkspaceId;
+            this.messageStore.remapChannel(oldId, remoteCh.id);
+            await this.persistentStore.remapChannelMessages(oldId, remoteCh.id);
+            if (this.messageCRDTs.has(oldId)) {
+              const crdt = this.messageCRDTs.get(oldId)!;
+              this.messageCRDTs.set(remoteCh.id, crdt);
+              this.messageCRDTs.delete(oldId);
+            }
+            if (this.state.activeChannelId === oldId) {
+              this.state.activeChannelId = remoteCh.id;
+            }
+          }
+        }
+      }
+
+      // Replace provisional workspace ID with canonical one.
+      this.workspaceManager.removeWorkspace(oldWorkspaceId);
+      localWs.id = remoteWorkspaceId;
+      for (const ch of localWs.channels) {
+        ch.workspaceId = remoteWorkspaceId;
+      }
+      this.workspaceManager.importWorkspace(localWs as any);
+
+      await this.persistentStore.deleteWorkspace(oldWorkspaceId);
+      await this.persistentStore.saveWorkspace(localWs as any);
+
+      if (this.state.activeWorkspaceId === oldWorkspaceId) {
+        this.state.activeWorkspaceId = remoteWorkspaceId;
+      }
     }
 
     // Update workspace name if it was using the invite code as name
@@ -2007,7 +2174,12 @@ export class ChatController {
         (envelope as any).messageId = msg.id; // For reaction targeting — receiver must use same ID
 
         if (this.state.readyPeers.has(peerId)) {
-          this.transport.send(peerId, envelope);
+          const sent = this.transport.send(peerId, envelope);
+          // Reconnect race: readyPeers can be briefly stale after disconnect.
+          // If transport rejects the send, persist to outbox instead of dropping.
+          if (!sent) {
+            await this.offlineQueue.enqueue(peerId, envelope);
+          }
         } else {
           await this.offlineQueue.enqueue(peerId, envelope);
         }
@@ -2057,6 +2229,29 @@ export class ChatController {
     return ws;
   }
 
+  private async connectPeerWithRetry(peerId: string, reason: string, attempts = 6): Promise<void> {
+    if (!peerId || peerId === this.state.myPeerId) return;
+
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      if (this.state.connectedPeers.has(peerId)) return;
+      try {
+        await this.transport.connect(peerId);
+        return;
+      } catch (err) {
+        const isLast = attempt === attempts;
+        const delayMs = Math.min(300 * (2 ** (attempt - 1)), 2_500);
+        if (isLast) {
+          console.warn(
+            `[Connect] Failed to connect to ${peerId.slice(0, 8)} after ${attempts} attempts (${reason}):`,
+            (err as Error)?.message ?? err,
+          );
+          return;
+        }
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
   async joinWorkspace(code: string, alias: string, peerId: string, inviteData?: InviteData): Promise<void> {
     console.log('[DecentChat] joinWorkspace called:', { code, alias, peerId, hasUI: !!this.ui });
     // Create the workspace locally for the joining user
@@ -2065,6 +2260,10 @@ export class ChatController {
       this.state.myPeerId,
       alias,
       this.myPublicKey,
+      {
+        inviteCode: code,
+        workspaceId: inviteData?.workspaceId,
+      },
     );
 
     // DEP-002: Initialize server discovery for joined workspace
@@ -2094,13 +2293,19 @@ export class ChatController {
     this.startQuotaChecks();      // T2.4
     this.startGossipCleanup();    // T3.2
 
-    // Bootstrap local member list so outbound messages can target inviter
+    // This is a JOINED workspace, not one we own.
+    // Reassign ownership semantics so sync/permissions match canonical host workspace.
+    ws.createdBy = peerId;
+    const me = ws.members.find((m: any) => m.peerId === this.state.myPeerId);
+    if (me) me.role = 'member';
+
+    // Bootstrap inviter as owner so incoming workspace-state from inviter is trusted.
     this.workspaceManager.addMember(ws.id, {
       peerId,
       alias: peerId.slice(0, 8),
       publicKey: inviteData?.publicKey || '',
       joinedAt: Date.now(),
-      role: 'member',
+      role: 'owner',
     });
 
     // Set as active workspace
@@ -2113,12 +2318,14 @@ export class ChatController {
     // Render the app UI
     this.ui?.renderApp();
 
-    // Connect to the peer who invited us
-    this.transport.connect(peerId);
+    // Connect to the peer who invited us.
+    // Use retry wrapper to absorb startup/join races where transport isn't
+    // fully ready at the exact moment the user submits the join modal.
+    void this.connectPeerWithRetry(peerId, 'join-workspace');
   }
 
   connectPeer(peerId: string): void {
-    this.transport.connect(peerId);
+    void this.connectPeerWithRetry(peerId, 'manual-connect');
   }
 
   createChannel(name: string): { success: boolean; channel?: Channel; error?: string } {
@@ -2388,8 +2595,27 @@ export class ChatController {
     if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
 
     const wsId = this.state.activeWorkspaceId;
-    const result = this.workspaceManager.removeMember(wsId, peerId, this.state.myPeerId);
-    if (!result.success) return result;
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return { success: false, error: 'Workspace not found' };
+
+    const me = ws.members.find((m: any) => m.peerId === this.state.myPeerId);
+    const target = ws.members.find((m: any) => m.peerId === peerId);
+    if (!target) return { success: false, error: 'Member not found' };
+    if (target.role === 'owner') return { success: false, error: 'Cannot remove owner' };
+
+    // Robust permission check: tolerate stale local role snapshots.
+    const managerOwner = this.workspaceManager.isOwner(wsId, this.state.myPeerId);
+    const managerAdmin = this.workspaceManager.isAdmin(wsId, this.state.myPeerId);
+    const hasRemovePermission = managerOwner || managerAdmin || ws.createdBy === this.state.myPeerId || me?.role === 'owner' || me?.role === 'admin';
+    if (!hasRemovePermission) {
+      return { success: false, error: 'Only owner or admin can remove members' };
+    }
+
+    // Deterministic local remove (avoid stale-role false negatives in manager guards).
+    ws.members = ws.members.filter((m: any) => m.peerId !== peerId);
+    for (const ch of ws.channels) {
+      ch.members = ch.members.filter((id: string) => id !== peerId);
+    }
 
     await this.persistWorkspace(wsId);
 
@@ -2807,6 +3033,7 @@ export class ChatController {
       peerId: this.state.myPeerId,
       publicKey: this.myPublicKey || undefined,
       workspaceName: ws.name || undefined,
+      workspaceId: ws.id,
     };
 
     // Use InviteURI.encode to generate proper URL (InviteURI hardcodes https, fix for localhost)
@@ -3315,6 +3542,22 @@ export class ChatController {
   // =========================================================================
 
   private async requestMessageSync(peerId: string): Promise<void> {
+    if (this.peerSupportsCapability(peerId, NEGENTROPY_SYNC_CAPABILITY)) {
+      try {
+        await this.requestNegentropyMessageSync(peerId);
+        return;
+      } catch (err) {
+        console.warn('[Sync] Negentropy sync failed, falling back to timestamp sync:', err);
+      }
+    }
+    await this.requestTimestampMessageSync(peerId);
+  }
+
+  private peerSupportsCapability(peerId: string, capability: string): boolean {
+    return this.peerCapabilities.get(peerId)?.has(capability) === true;
+  }
+
+  private async requestTimestampMessageSync(peerId: string): Promise<void> {
     const wsId = this.state.activeWorkspaceId;
     if (!wsId) return;
     const ws = this.workspaceManager.getWorkspace(wsId);
@@ -3331,6 +3574,137 @@ export class ChatController {
       type: 'message-sync-request',
       workspaceId: wsId,
       channelTimestamps,
+    });
+  }
+
+  private async requestNegentropyMessageSync(peerId: string): Promise<void> {
+    const wsId = this.state.activeWorkspaceId;
+    if (!wsId) return;
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return;
+
+    const messageIdsByChannel: Record<string, string[]> = {};
+    for (const ch of ws.channels) {
+      const localItems = this.messageStore.getMessages(ch.id).map((m) => ({ id: m.id, timestamp: m.timestamp }));
+      const negentropy = new Negentropy();
+      await negentropy.build(localItems);
+
+      const result = await negentropy.reconcile(
+        async (query: NegentropyQuery) => this.sendNegentropyQuery(peerId, wsId, ch.id, query),
+      );
+      if (result.need.length > 0) {
+        messageIdsByChannel[ch.id] = result.need;
+      }
+    }
+
+    if (Object.keys(messageIdsByChannel).length === 0) return;
+    this.transport.send(peerId, {
+      type: 'message-sync-fetch-request',
+      workspaceId: wsId,
+      messageIdsByChannel,
+    });
+  }
+
+  private async sendNegentropyQuery(
+    peerId: string,
+    workspaceId: string,
+    channelId: string,
+    query: NegentropyQuery,
+  ): Promise<NegentropyResponse> {
+    const requestId = crypto.randomUUID();
+    return await new Promise<NegentropyResponse>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingNegentropyQueries.delete(requestId);
+        reject(new Error(`Negentropy query timeout for ${peerId.slice(0, 8)}`));
+      }, NEGENTROPY_QUERY_TIMEOUT_MS);
+      this.pendingNegentropyQueries.set(requestId, { peerId, resolve, reject, timer });
+      this.transport.send(peerId, {
+        type: 'message-sync-negentropy-query',
+        requestId,
+        workspaceId,
+        channelId,
+        query,
+      });
+    });
+  }
+
+  private async handleNegentropySyncQuery(peerId: string, data: any): Promise<void> {
+    const wsId = data.workspaceId as string | undefined;
+    const channelId = data.channelId as string | undefined;
+    const requestId = data.requestId as string | undefined;
+    const query = data.query as NegentropyQuery | undefined;
+    if (!wsId || !channelId || !requestId || !query) return;
+
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return;
+    if (!ws.members.some((m: any) => m.peerId === peerId)) return;
+    if (!ws.channels.some((ch: any) => ch.id === channelId)) return;
+
+    const localItems = this.messageStore.getMessages(channelId).map((m) => ({ id: m.id, timestamp: m.timestamp }));
+    const negentropy = new Negentropy();
+    await negentropy.build(localItems);
+    const response = await negentropy.processQuery(query);
+
+    this.transport.send(peerId, {
+      type: 'message-sync-negentropy-response',
+      requestId,
+      workspaceId: wsId,
+      channelId,
+      response,
+    });
+  }
+
+  private handleNegentropySyncResponse(peerId: string, data: any): void {
+    const requestId = data.requestId as string | undefined;
+    if (!requestId) return;
+
+    const pending = this.pendingNegentropyQueries.get(requestId);
+    if (!pending) return;
+    if (pending.peerId !== peerId) return;
+
+    clearTimeout(pending.timer);
+    this.pendingNegentropyQueries.delete(requestId);
+    pending.resolve(data.response as NegentropyResponse);
+  }
+
+  private async handleMessageSyncFetchRequest(peerId: string, data: any): Promise<void> {
+    const wsId = data.workspaceId as string | undefined;
+    if (!wsId) return;
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return;
+    if (!ws.members.some((m: any) => m.peerId === peerId)) return;
+
+    const requested: Record<string, string[]> = data.messageIdsByChannel || {};
+    const allMessages: any[] = [];
+
+    for (const ch of ws.channels) {
+      const requestedIds = Array.isArray(requested[ch.id]) ? requested[ch.id] : [];
+      if (requestedIds.length === 0) continue;
+      const idSet = new Set(requestedIds.filter((id) => typeof id === 'string'));
+      if (idSet.size === 0) continue;
+
+      const channelMessages = this.messageStore.getMessages(ch.id)
+        .filter((m) => idSet.has(m.id))
+        .sort((a, b) => a.timestamp - b.timestamp);
+      for (const m of channelMessages) {
+        allMessages.push({
+          id: m.id,
+          channelId: m.channelId,
+          senderId: m.senderId,
+          content: m.content,
+          timestamp: m.timestamp,
+          type: m.type,
+          threadId: m.threadId,
+          prevHash: m.prevHash,
+          vectorClock: (m as any).vectorClock,
+        });
+      }
+    }
+
+    this.transport.send(peerId, {
+      type: 'message-sync-response',
+      workspaceId: wsId,
+      messages: allMessages,
     });
   }
 
@@ -3447,9 +3821,15 @@ export class ChatController {
 
     for (const item of queued as any[]) {
       const envelope = item?.data ?? item;
+      // Mark replayed outbox traffic so receiver can route it through trusted
+      // replay lane instead of normal chat throttling.
+      (envelope as any)._offlineReplay = 1;
       try {
-        this.transport.send(peerId, envelope);
-        // Remove only after successful send attempt to transport.
+        const sent = this.transport.send(peerId, envelope);
+        if (!sent) {
+          throw new Error('transport.send returned false');
+        }
+        // Remove only after successful transport acceptance.
         if (typeof item?.id === 'number') {
           await this.offlineQueue.remove(peerId, item.id);
         }
@@ -3474,6 +3854,15 @@ export class ChatController {
         `⚠️ ${failed} queued message${failed > 1 ? 's' : ''} still pending for ${peerId.slice(0, 8)}`,
         'error',
       );
+
+      // Retry pending queue shortly while peer remains ready.
+      setTimeout(() => {
+        if (this.state.readyPeers.has(peerId)) {
+          this.flushOfflineQueue(peerId).catch((err) => {
+            console.warn('[OfflineQueue] retry flush failed:', (err as Error)?.message || err);
+          });
+        }
+      }, 1_500);
     }
   }
 
@@ -3481,13 +3870,20 @@ export class ChatController {
     const ws = this.state.activeWorkspaceId
       ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
       : null;
-    if (!ws) return [];
-    // Send to all members of the active workspace except self.
-    // Ready peers are sent directly; offline peers are queued for replay on reconnect.
-    // Do NOT union with global peers to avoid cross-workspace leakage.
-    return ws.members
-      .map((m: any) => m.peerId)
-      .filter((p: string) => p !== this.state.myPeerId);
+
+    const workspaceRecipients = ws
+      ? ws.members
+          .map((m: any) => m.peerId)
+          .filter((p: string) => p !== this.state.myPeerId)
+      : [];
+
+    if (workspaceRecipients.length > 0) {
+      return workspaceRecipients;
+    }
+
+    // Compatibility fallback for invite/join race windows: before membership sync lands,
+    // allow sending to transport-ready peers so initial messages aren't dropped.
+    return Array.from(this.state.readyPeers);
   }
 
   private ensurePeerInActiveWorkspace(peerId: string, publicKey = ''): void {

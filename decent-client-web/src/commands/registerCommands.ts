@@ -486,7 +486,7 @@ export function registerCommands(parser: CommandParser, ctrl: ChatController, st
         '  Transport: decent-transport-webrtc v0.1.0',
         '  Client:    decent-client-web v0.1.0',
         '  Crypto:    P-256 ECDH + AES-GCM-256 + ECDSA + Double Ratchet',
-        '  Sync:      CRDT + Vector Clocks + Merkle Trees',
+        '  Sync:      CRDT + Vector Clocks + Negentropy',
         '  Identity:  BIP39 + HD Key Derivation',
       ].join('\n'),
     }),

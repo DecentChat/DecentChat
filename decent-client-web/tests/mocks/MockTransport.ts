@@ -29,6 +29,9 @@ export function getMockTransportScript(relayUrl: string): string {
       this._relayUrl = '${relayUrl}';
       this._pendingInit = null;
       this._pendingConnects = new Map();
+      this._manualDestroy = false;
+      this._reconnectTimer = null;
+      this._reconnectDelayMs = 300;
     }
 
     _tracePrefix() {
@@ -41,40 +44,68 @@ export function getMockTransportScript(relayUrl: string): string {
     async init(peerId) {
       const id = peerId || crypto.randomUUID();
       this._myPeerId = id;
+      this._manualDestroy = false;
       console.log('[MockTransport] init called, peerId=' + id);
 
       return new Promise((resolve, reject) => {
         this._pendingInit = { resolve, reject };
-
-        this._ws = new WebSocket(this._relayUrl);
-
-        this._ws.onopen = () => {
-          console.log('[MockTransport] WS open, registering as ' + id);
-          this._ws.send(JSON.stringify({ type: '__register', peerId: id }));
-        };
-
-        this._ws.onmessage = (event) => {
-          const msg = JSON.parse(event.data);
-          console.log(this._tracePrefix(), 'WS relay onmessage', {
-            relayType: msg && msg.type,
-            from: msg && msg.from,
-            targetPeerId: msg && msg.targetPeerId,
-            innerType: msg && msg.data && msg.data.type,
-          });
-          this._handleRelayMessage(msg);
-        };
-
-        this._ws.onerror = () => {
-          reject(new Error('MockTransport: WebSocket connection failed'));
-        };
-
-        this._ws.onclose = () => {
-          for (const peer of this._connectedPeers) {
-            this._connectedPeers.delete(peer);
-            if (this.onDisconnect) this.onDisconnect(peer);
-          }
-        };
+        this._openSocket();
       });
+    }
+
+    _openSocket() {
+      if (this._ws && (this._ws.readyState === WebSocket.OPEN || this._ws.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+
+      this._ws = new WebSocket(this._relayUrl);
+
+      this._ws.onopen = () => {
+        this._reconnectDelayMs = 300;
+        console.log('[MockTransport] WS open, registering as ' + this._myPeerId);
+        this._ws.send(JSON.stringify({ type: '__register', peerId: this._myPeerId }));
+      };
+
+      this._ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        console.log(this._tracePrefix(), 'WS relay onmessage', {
+          relayType: msg && msg.type,
+          from: msg && msg.from,
+          targetPeerId: msg && msg.targetPeerId,
+          innerType: msg && msg.data && msg.data.type,
+        });
+        this._handleRelayMessage(msg);
+      };
+
+      this._ws.onerror = () => {
+        if (this._pendingInit) {
+          this._pendingInit.reject(new Error('MockTransport: WebSocket connection failed'));
+          this._pendingInit = null;
+        }
+      };
+
+      this._ws.onclose = () => {
+        for (const peer of this._connectedPeers) {
+          this._connectedPeers.delete(peer);
+          if (this.onDisconnect) this.onDisconnect(peer);
+        }
+
+        // Auto-reconnect for offline/online test scenarios.
+        if (!this._manualDestroy) {
+          this._scheduleReconnect();
+        }
+      };
+    }
+
+    _scheduleReconnect() {
+      if (this._reconnectTimer) return;
+      const delay = this._reconnectDelayMs;
+      this._reconnectTimer = setTimeout(() => {
+        this._reconnectTimer = null;
+        if (this._manualDestroy) return;
+        this._openSocket();
+      }, delay);
+      this._reconnectDelayMs = Math.min(Math.floor(this._reconnectDelayMs * 1.8), 2500);
     }
 
     _handleRelayMessage(msg) {
@@ -204,7 +235,12 @@ export function getMockTransportScript(relayUrl: string): string {
     }
 
     destroy() {
+      this._manualDestroy = true;
       this._connectedPeers.clear();
+      if (this._reconnectTimer) {
+        clearTimeout(this._reconnectTimer);
+        this._reconnectTimer = null;
+      }
       if (this._ws) {
         this._ws.close();
         this._ws = null;

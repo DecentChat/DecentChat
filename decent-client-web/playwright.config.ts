@@ -10,6 +10,8 @@ export default defineConfig({
   testIgnore: ['**/*.live-smoke.spec.ts'],
   timeout: 30000,
   retries: 0,
+  workers: 1,
+  fullyParallel: false,
   use: {
     baseURL: 'http://localhost:5173',
     headless: true,

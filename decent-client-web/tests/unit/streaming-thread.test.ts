@@ -20,6 +20,7 @@ function createControllerStub(): any {
 
   ctrl.pendingStreams = new Map();
   ctrl._gossipSeen = new Map();
+  ctrl.activityItems = [];
   ctrl.messageGuard = { check: () => ({ allowed: true }) };
   ctrl.findMessageById = () => undefined;
   ctrl.getDisplayNameForPeer = () => 'Alice';
@@ -92,6 +93,7 @@ function createControllerStub(): any {
   ctrl.ui = {
     appendMessageToDOM: mock(() => {}),
     updateSidebar: mock(() => {}),
+    updateChannelHeader: mock(() => {}),
     updateStreamingMessage: mock(() => {}),
     finalizeStreamingMessage: mock(() => {}),
     updateThreadIndicator: mock(() => {}),
@@ -106,7 +108,7 @@ function createControllerStub(): any {
 }
 
 describe('streaming thread routing', () => {
-  test('normalizedThreadId resolves threadId first, then replyToId fallback', async () => {
+  test('normalizedThreadId uses only explicit threadId (replyToId is ignored)', async () => {
     const ctrl = createControllerStub();
     ctrl.setupTransportHandlers = ChatController.prototype.setupTransportHandlers;
     ctrl.setupTransportHandlers();
@@ -134,7 +136,7 @@ describe('streaming thread routing', () => {
 
     const calls = ctrl.messageStore.createMessage.mock.calls;
     expect(calls[0][4]).toBe('thread-root-1');
-    expect(calls[1][4]).toBe('root-msg-2');
+    expect(calls[1][4]).toBeUndefined();
   });
 
   test('stream-start with threadId auto-opens thread panel on stream-delta', async () => {
