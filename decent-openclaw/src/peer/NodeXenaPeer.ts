@@ -11,14 +11,14 @@ import {
   MessageStore,
   OfflineQueue,
   SeedPhraseManager,
-  SyncProtocol,
   WorkspaceManager,
 } from 'decent-protocol';
-import type { SyncEvent, Workspace, WorkspaceMember } from 'decent-protocol';
+import type { Workspace, WorkspaceMember } from 'decent-protocol';
 import { PeerTransport } from 'decent-transport-webrtc';
 import { randomUUID } from 'node:crypto';
 import { FileStore } from './FileStore.js';
 import { NodeMessageProtocol } from './NodeMessageProtocol.js';
+import { SyncProtocol, type SyncEvent } from './SyncProtocol.js';
 import type { ResolvedDecentChatAccount } from '../types.js';
 
 export interface NodeXenaPeerOptions {
@@ -462,6 +462,7 @@ export class NodeXenaPeer {
       await this.flushOfflineQueue(fromPeerId);
       await this.resendPendingAcks(fromPeerId);
       await this.flushPendingReadReceipts(fromPeerId);
+      this.requestSyncForPeer(fromPeerId);
       return;
     }
 
@@ -1024,6 +1025,14 @@ export class NodeXenaPeer {
 
   private pendingReadReceiptKey(peerId: string): string {
     return `pending-read-${peerId}`;
+  }
+
+  private requestSyncForPeer(peerId: string): void {
+    if (!this.syncProtocol) return;
+    for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+      if (!workspace.members.some((member) => member.peerId === peerId)) continue;
+      this.syncProtocol.requestSync(peerId, workspace.id);
+    }
   }
 
   private async queuePendingReadReceipt(peerId: string, channelId: string, messageId: string): Promise<void> {
