@@ -18,6 +18,12 @@ const DecentChatConfigSchema = z.object({
   dataDir: z.string().optional(),
   streamEnabled: z.boolean().optional().default(true),
   dmPolicy: z.enum(["open", "pairing", "allowlist", "disabled"]).optional().default("open"),
+  replyToMode: z.enum(["off", "first", "all"]).optional().default("all"),
+  thread: z.object({
+    historyScope: z.enum(["thread", "channel"]).optional().default("thread"),
+    inheritParent: z.boolean().optional().default(false),
+    initialHistoryLimit: z.number().int().min(0).optional().default(20),
+  }).optional(),
   channels: z.record(z.string(), z.object({
     requireMention: z.boolean().optional(),
   }).optional()).optional(),
@@ -37,6 +43,12 @@ function resolveDecentChatAccount(cfg: any, accountId?: string | null): Resolved
     alias: ch.alias ?? "Xena AI",
     dataDir: ch.dataDir,
     streamEnabled: ch.streamEnabled !== false,
+    replyToMode: ch.replyToMode ?? "all",
+    thread: {
+      historyScope: ch.thread?.historyScope ?? "thread",
+      inheritParent: ch.thread?.inheritParent ?? false,
+      initialHistoryLimit: ch.thread?.initialHistoryLimit ?? 20,
+    },
   };
 }
 
@@ -62,6 +74,8 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       dataDir: { label: "Data Directory", advanced: true, help: "Path for persistent peer storage" },
       streamEnabled: { label: "Enable streaming", help: "Stream token deltas to peers in real time" },
       dmPolicy: { label: "DM Policy" },
+      replyToMode: { label: "Reply-to mode", help: "off|first|all (Slack-compatible semantics)" },
+      thread: { label: "Thread settings", advanced: true },
       invites: { label: "Invite URLs", advanced: true, help: "DecentChat invite URIs for workspaces to join on startup" },
     },
   },
@@ -91,7 +105,10 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
   },
 
   threading: {
-    resolveReplyToMode: () => "all",
+    resolveReplyToMode: ({ cfg, accountId }) => {
+      const account = resolveDecentChatAccount(cfg, accountId);
+      return account.replyToMode;
+    },
     allowExplicitReplyTagsWhenOff: true,
   },
 
