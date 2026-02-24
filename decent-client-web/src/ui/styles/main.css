@@ -113,7 +113,8 @@ body {
   padding: 8px 0;
   gap: 4px;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: visible;
+  position: relative;
 }
 
 .ws-rail-icon {
@@ -184,6 +185,7 @@ body {
 }
 
 .sidebar-header h1 {
+  margin: 0;
   font-size: 17px;
   font-weight: 800;
   color: var(--sidebar-text-active);
@@ -191,6 +193,64 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   letter-spacing: -0.3px;
+}
+
+.workspace-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  max-width: calc(100% - 32px);
+  padding: 2px 6px;
+  border-radius: 8px;
+}
+
+.workspace-menu-trigger:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.workspace-menu-caret {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.workspace-menu {
+  margin: 6px 10px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--bg-secondary);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.workspace-menu-item {
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.workspace-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.ws-rail-menu {
+  position: absolute;
+  left: 52px;
+  top: 160px;
+  width: 190px;
+  z-index: 40;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.ws-rail-badge {
+  border-color: rgba(20, 20, 26, 0.85);
 }
 
 .sidebar-header .status-dot {
@@ -520,6 +580,35 @@ body.show-reconnect-activity .sidebar-item .dm-status.connecting {
   margin-left: auto; background: var(--primary); color: white;
   font-size: 10px; font-weight: 700; padding: 1px 6px;
   border-radius: 10px; min-width: 18px; text-align: center;
+}
+
+.activity-nav-item {
+  width: 100%;
+  border: 0;
+  text-align: left;
+  justify-content: flex-start;
+}
+
+.sidebar-utility-row {
+  padding: 4px 12px 0;
+}
+
+.sidebar-utility-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--sidebar-text-active);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.sidebar-utility-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .sidebar-footer {
@@ -1247,6 +1336,48 @@ body.debug-mode .msg-delivery-detail {
 
 .modal .form-group { margin-bottom: 16px; }
 
+.invite-autofill-hint {
+  margin-top: 8px;
+  color: var(--success);
+  font-size: 12px;
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.invite-autofill-hint-visible {
+  animation: inviteAutofillIn 0.35s ease-out forwards;
+}
+
+@keyframes inviteAutofillIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.workspace-preview-visible input {
+  border-color: rgba(46, 204, 113, 0.45) !important;
+  background: rgba(46, 204, 113, 0.09) !important;
+}
+
+.workspace-preview-pop {
+  animation: workspacePreviewPop 0.45s ease-out;
+}
+
+.invite-input.invite-autofilled {
+  border-color: rgba(46, 204, 113, 0.55) !important;
+  background: rgba(46, 204, 113, 0.09) !important;
+  animation: workspacePreviewPop 0.45s ease-out;
+}
+
+.join-alias-input {
+  background: var(--bg) !important;
+}
+
+@keyframes workspacePreviewPop {
+  0% { transform: scale(0.98); box-shadow: 0 0 0 0 rgba(46, 204, 113, 0.35); }
+  60% { transform: scale(1.01); box-shadow: 0 0 0 8px rgba(46, 204, 113, 0.16); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(46, 204, 113, 0); }
+}
+
 .modal label {
   display: block;
   font-size: 13px;
@@ -1843,11 +1974,13 @@ body.debug-mode .msg-delivery-detail {
 }
 
 /* === Message Actions Bar (reactions + thread) === */
+/* Slack-like: floating overlay in top-right so messages don't reflow/jump on hover. */
 .message-actions-bar {
   display: none;
   position: absolute;
   top: -14px;
   right: 8px;
+  width: fit-content;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1858,7 +1991,22 @@ body.debug-mode .msg-delivery-detail {
 }
 
 .message { position: relative; }
-.message:hover .message-actions-bar { display: flex; }
+.message:hover .message-actions-bar,
+.message:focus-within .message-actions-bar { display: flex; }
+
+/* Thread follows the same floating behavior for consistency and no layout jump. */
+#thread-messages .message .message-actions-bar.in-thread {
+  position: absolute;
+  top: -14px;
+  right: 8px;
+}
+
+@media (hover: none) {
+  #thread-messages .message:active .message-actions-bar.in-thread,
+  .message:active .message-actions-bar {
+    display: flex !important;
+  }
+}
 
 .quick-react {
   background: none;
@@ -1872,6 +2020,21 @@ body.debug-mode .msg-delivery-detail {
 }
 
 .quick-react:hover { background: var(--bg-hover); transform: scale(1.2); }
+
+.quick-react-add {
+  background: none;
+  border: none;
+  font-size: 14px;
+  padding: 4px 6px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  line-height: 1;
+  color: var(--text-light);
+}
+.quick-react-add:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
 
 .message-actions-bar .message-thread-btn {
   display: inline-block;
@@ -2449,7 +2612,8 @@ body.compact .messages-list { gap: 0; }
   }
 
   /* Quick reactions: bigger touch targets on mobile */
-  .quick-react {
+  .quick-react,
+  .quick-react-add {
     font-size: 20px;
     padding: 8px 10px;
     min-width: 44px;
@@ -2869,14 +3033,12 @@ body.compact .messages-list { gap: 0; }
   padding: 80px 24px;
 }
 .lp-steps {
-  display: flex;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
   gap: 16px;
-  flex-wrap: wrap;
 }
 .lp-step {
-  flex: 1;
-  min-width: 220px;
   display: flex;
   gap: 16px;
   align-items: flex-start;
@@ -2885,6 +3047,7 @@ body.compact .messages-list { gap: 0; }
   border-radius: var(--radius-lg);
   padding: 24px 20px;
   transition: border-color 0.2s, transform 0.2s;
+  height: 100%;
 }
 .lp-step:hover {
   border-color: var(--primary);
@@ -3131,7 +3294,7 @@ body.compact .messages-list { gap: 0; }
   .lp-hero-mascot { width: 100%; }
   .hero-deci { width: 180px; }
   .lp-hero-title { letter-spacing: -1px; }
-  .lp-steps { flex-direction: column; }
+  .lp-steps { grid-template-columns: 1fr; }
   .lp-step-arrow { display: none; }
   .lp-features-grid { grid-template-columns: 1fr; }
   .lp-compare-header, .lp-compare-row { grid-template-columns: 1fr 1fr; }

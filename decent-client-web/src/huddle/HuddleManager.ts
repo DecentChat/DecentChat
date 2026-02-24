@@ -18,6 +18,8 @@ export interface HuddleParticipant {
   peerId: string;
   displayName: string;
   muted: boolean;
+  speaking?: boolean;
+  audioLevel?: number; // 0..1
 }
 
 export type HuddleState = 'inactive' | 'available' | 'in-call';
@@ -43,6 +45,15 @@ export class HuddleManager {
   private connections = new Map<string, RTCPeerConnection>();
   private audioElements = new Map<string, HTMLAudioElement>();
   private participants = new Map<string, HuddleParticipant>();
+  private reconnectCleanupTimers = new Map<string, number>();
+  private audioContexts = new Map<string, AudioContext>();
+  private analysers = new Map<string, AnalyserNode>();
+  private analyserData = new Map<string, Uint8Array>();
+  private speechLastActiveAt = new Map<string, number>();
+  private localAudioContext: AudioContext | null = null;
+  private localAnalyser: AnalyserNode | null = null;
+  private localAnalyserData: Uint8Array | null = null;
+  private speechAnimationFrame: number | null = null;
   private myMuted = false;
   private callbacks: HuddleCallbacks;
 
@@ -81,10 +92,13 @@ export class HuddleManager {
       peerId: this.myPeerId,
       displayName: 'You',
       muted: false,
+      speaking: false,
+      audioLevel: 0,
     });
 
     this.callbacks.onStateChange('in-call', channelId);
     this.callbacks.onParticipantsChange(this.getParticipants());
+    this.startSpeechMonitoring();
 
     this.callbacks.broadcastSignal({
       type: 'huddle-announce',
@@ -118,6 +132,7 @@ export class HuddleManager {
 
     this.callbacks.onStateChange('in-call', channelId);
     this.callbacks.onParticipantsChange(this.getParticipants());
+    this.startSpeechMonitoring();
 
     this.callbacks.broadcastSignal({
       type: 'huddle-join',
@@ -133,6 +148,7 @@ export class HuddleManager {
 
     this.localStream?.getTracks().forEach(t => t.stop());
     this.localStream = null;
+    this.stopSpeechMonitoring();
 
     for (const [peerId, pc] of this.connections) {
       pc.close();
@@ -357,6 +373,7 @@ export class HuddleManager {
         this.audioElements.set(peerId, audioEl);
       }
       audioEl.srcObject = remoteStream;
+      this.attachRemoteAnalyser(peerId, remoteStream);
       // Explicit play() required — autoplay alone is blocked by Chrome's autoplay policy
       audioEl.play()
         .then(() => console.log('[Huddle] audio play() succeeded for peer', peerId))
@@ -393,24 +410,209 @@ export class HuddleManager {
     pc.onconnectionstatechange = () => {
       console.log('[Huddle] connection state for', peerId, ':', pc.connectionState);
       if (pc.connectionState === 'connected') {
+        this.clearReconnectCleanup(peerId);
         const p = this.participants.get(peerId);
         if (!p) {
           this.participants.set(peerId, {
             peerId,
             displayName: this.callbacks.getDisplayName(peerId),
             muted: false,
+            speaking: false,
+            audioLevel: 0,
           });
           this.callbacks.onParticipantsChange(this.getParticipants());
         }
+      } else if (pc.connectionState === 'disconnected') {
+        // transient; defer participant cleanup and allow reconnect.
+        this.scheduleReconnectCleanup(peerId, 7000);
       } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-        // 'disconnected' is transient — WebRTC may recover from it automatically.
-        // Only clean up on 'failed' (unrecoverable) or 'closed' (explicit close).
-        this.connections.delete(peerId);
-        this.participants.delete(peerId);
-        this.callbacks.onParticipantsChange(this.getParticipants());
+        this.cleanupPeer(peerId);
       }
     };
 
     return pc;
+  }
+
+  private scheduleReconnectCleanup(peerId: string, delayMs: number): void {
+    this.clearReconnectCleanup(peerId);
+    const timer = window.setTimeout(() => {
+      const pc = this.connections.get(peerId);
+      if (!pc || pc.connectionState !== 'connected') {
+        this.cleanupPeer(peerId);
+      }
+    }, delayMs);
+    this.reconnectCleanupTimers.set(peerId, timer);
+  }
+
+  private clearReconnectCleanup(peerId: string): void {
+    const timer = this.reconnectCleanupTimers.get(peerId);
+    if (timer != null) {
+      window.clearTimeout(timer);
+      this.reconnectCleanupTimers.delete(peerId);
+    }
+  }
+
+  private cleanupPeer(peerId: string): void {
+    this.clearReconnectCleanup(peerId);
+    const pc = this.connections.get(peerId);
+    if (pc) {
+      pc.close();
+      this.connections.delete(peerId);
+    }
+
+    const audioEl = this.audioElements.get(peerId);
+    if (audioEl) {
+      audioEl.srcObject = null;
+      audioEl.remove();
+      this.audioElements.delete(peerId);
+    }
+
+    const ctx = this.audioContexts.get(peerId);
+    if (ctx) {
+      void ctx.close();
+      this.audioContexts.delete(peerId);
+    }
+    this.analysers.delete(peerId);
+    this.analyserData.delete(peerId);
+    this.speechLastActiveAt.delete(peerId);
+
+    this.participants.delete(peerId);
+    this.callbacks.onParticipantsChange(this.getParticipants());
+  }
+
+  private attachRemoteAnalyser(peerId: string, stream: MediaStream): void {
+    try {
+      const existing = this.audioContexts.get(peerId);
+      if (existing) {
+        void existing.close();
+      }
+      const ctx = new AudioContext();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.65;
+      source.connect(analyser);
+      this.audioContexts.set(peerId, ctx);
+      this.analysers.set(peerId, analyser);
+      this.analyserData.set(peerId, new Uint8Array(analyser.frequencyBinCount));
+    } catch (err) {
+      console.warn('[Huddle] failed to attach remote analyser', err);
+    }
+  }
+
+  private startSpeechMonitoring(): void {
+    if (!this.localStream) return;
+
+    if (!this.localAudioContext) {
+      try {
+        this.localAudioContext = new AudioContext();
+        const source = this.localAudioContext.createMediaStreamSource(this.localStream);
+        this.localAnalyser = this.localAudioContext.createAnalyser();
+        this.localAnalyser.fftSize = 256;
+        this.localAnalyser.smoothingTimeConstant = 0.65;
+        source.connect(this.localAnalyser);
+        this.localAnalyserData = new Uint8Array(this.localAnalyser.frequencyBinCount);
+      } catch (err) {
+        console.warn('[Huddle] local analyser init failed', err);
+      }
+    }
+
+    if (this.speechAnimationFrame != null) return;
+
+    const tick = () => {
+      this.updateParticipantSpeechLevels();
+      this.speechAnimationFrame = window.requestAnimationFrame(tick);
+    };
+    this.speechAnimationFrame = window.requestAnimationFrame(tick);
+  }
+
+  private stopSpeechMonitoring(): void {
+    if (this.speechAnimationFrame != null) {
+      window.cancelAnimationFrame(this.speechAnimationFrame);
+      this.speechAnimationFrame = null;
+    }
+
+    for (const [peerId, timer] of this.reconnectCleanupTimers) {
+      window.clearTimeout(timer);
+      this.reconnectCleanupTimers.delete(peerId);
+    }
+
+    for (const [_peerId, ctx] of this.audioContexts) {
+      void ctx.close();
+    }
+    this.audioContexts.clear();
+    this.analysers.clear();
+    this.analyserData.clear();
+    this.speechLastActiveAt.clear();
+
+    if (this.localAudioContext) {
+      void this.localAudioContext.close();
+      this.localAudioContext = null;
+    }
+    this.localAnalyser = null;
+    this.localAnalyserData = null;
+  }
+
+  private computeLevel(analyser: AnalyserNode, data: Uint8Array): number {
+    analyser.getByteTimeDomainData(data as unknown as Uint8Array<ArrayBuffer>);
+    let sumSquares = 0;
+    for (let i = 0; i < data.length; i += 1) {
+      const centered = (data[i] - 128) / 128;
+      sumSquares += centered * centered;
+    }
+    const rms = Math.sqrt(sumSquares / data.length);
+    return Math.min(1, rms * 3.2);
+  }
+
+  private updateParticipantSpeechLevels(): void {
+    let changed = false;
+    const now = Date.now();
+    const threshold = 0.06;
+    const holdMs = 220;
+
+    // Local participant (You)
+    const me = this.participants.get(this.myPeerId);
+    if (me) {
+      let level = 0;
+      if (!this.myMuted && this.localAnalyser && this.localAnalyserData) {
+        level = this.computeLevel(this.localAnalyser, this.localAnalyserData);
+      }
+      const active = level > threshold;
+      if (active) {
+        this.speechLastActiveAt.set(this.myPeerId, now);
+      }
+      const speaking = active || ((this.speechLastActiveAt.get(this.myPeerId) ?? 0) + holdMs > now);
+      if (me.speaking !== speaking || Math.abs((me.audioLevel ?? 0) - level) > 0.05) {
+        me.speaking = speaking;
+        me.audioLevel = level;
+        this.participants.set(this.myPeerId, me);
+        changed = true;
+      }
+    }
+
+    for (const [peerId, participant] of this.participants) {
+      if (peerId === this.myPeerId) continue;
+      const analyser = this.analysers.get(peerId);
+      const data = this.analyserData.get(peerId);
+      if (!analyser || !data) continue;
+
+      const level = this.computeLevel(analyser, data);
+      const active = level > threshold;
+      if (active) {
+        this.speechLastActiveAt.set(peerId, now);
+      }
+      const speaking = active || ((this.speechLastActiveAt.get(peerId) ?? 0) + holdMs > now);
+
+      if (participant.speaking !== speaking || Math.abs((participant.audioLevel ?? 0) - level) > 0.05) {
+        participant.speaking = speaking;
+        participant.audioLevel = level;
+        this.participants.set(peerId, participant);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.callbacks.onParticipantsChange(this.getParticipants());
+    }
   }
 }

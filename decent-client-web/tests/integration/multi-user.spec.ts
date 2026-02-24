@@ -505,7 +505,56 @@ test.describe('Multi-User P2P Integration', () => {
     }
   });
 
-  // ─── Test 9: Activity catches thread replies and deep-links to thread ─────
+  // ─── Test 9: Owner can remove member via Members modal (no auto-close) ────
+
+  test('owner removes member from workspace and members modal stays open', async ({ browser }) => {
+    const alice = await createUser(browser, 'Alice');
+    const bob = await createUser(browser, 'Bob');
+
+    try {
+      await createWorkspace(alice.page, 'P2P Remove Member', 'Alice');
+      const inviteUrl = await getInviteUrl(alice.page);
+      await joinViaInviteUrl(bob.page, inviteUrl, 'Bob');
+      await waitForPeerConnection(alice.page, 30000);
+      await waitForPeerConnection(bob.page, 30000);
+
+      // Open workspace menu -> members modal
+      await alice.page.click('#workspace-menu-trigger');
+      await alice.page.click('#workspace-menu-members');
+      await alice.page.waitForSelector('.modal .members-list', { timeout: 10000 });
+
+      // Bob should be listed with a remove button.
+      const bobRow = alice.page.locator('.modal .member-row').filter({ hasText: 'Bob' }).first();
+      await expect(bobRow).toBeVisible();
+      const removeBtn = bobRow.locator('.remove-member-btn');
+      await expect(removeBtn).toHaveCount(1);
+
+      // Ensure confirm does not block in headless.
+      await alice.page.evaluate(() => { (window as any).confirm = () => true; });
+      await removeBtn.click({ force: true });
+
+      // Modal stays open and workspace state reflects removal.
+      await alice.page.waitForTimeout(600);
+      await expect(alice.page.locator('.modal .members-list')).toBeVisible();
+      await expect(alice.page.locator('#members-count-label')).toContainText('1 member');
+      await expect.poll(async () => {
+        return await alice.page.evaluate(() => {
+          const s = (window as any).__state;
+          const c = (window as any).__ctrl;
+          const ws = c.workspaceManager.getWorkspace(s.activeWorkspaceId);
+          return ws?.members?.length || 0;
+        });
+      }).toBe(1);
+
+      // No permission error toast should be shown.
+      await expect(alice.page.locator('.toast').filter({ hasText: 'Only owner or admin can remove members' })).toHaveCount(0);
+    } finally {
+      await closeUser(alice);
+      await closeUser(bob);
+    }
+  });
+
+  // ─── Test 10: Activity catches thread replies and deep-links to thread ─────
 
   test('activity shows thread reply and opens the correct thread on click', async ({ browser }) => {
     const alice = await createUser(browser, 'Alice');

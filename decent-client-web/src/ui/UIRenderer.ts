@@ -169,6 +169,8 @@ export class UIRenderer {
   private pendingMainAttachments: Array<{ id: string; file: File; previewUrl?: string }> = [];
   private pendingThreadAttachments: Array<{ id: string; file: File; previewUrl?: string }> = [];
   private lightboxBlobUrl: string | null = null;
+  private frequentReactions: string[] = [];
+  private reactionUsage: Record<string, number> = {};
 
   constructor(
     private state: AppState,
@@ -184,6 +186,8 @@ export class UIRenderer {
       showToast: (msg, type) => this.showToast(msg, type),
     });
     this.refreshContactsCache();
+    this.reactionUsage = this.loadReactionUsage();
+    this.frequentReactions = this.loadFrequentReactions();
   }
 
   private tracePrefix(): string {
@@ -191,6 +195,126 @@ export class UIRenderer {
     if (/^alice$/i.test(alias)) return '[TRACE Alice]';
     if (/^bob$/i.test(alias)) return '[TRACE Bob]';
     return `[TRACE ${alias || this.state.myPeerId.slice(0, 8)}]`;
+  }
+
+  private frequentReactionsKey(): string {
+    return `decentchat:frequentReactions:${this.state.myPeerId || 'anon'}`;
+  }
+
+  private reactionUsageKey(): string {
+    return `decentchat:reactionUsage:${this.state.myPeerId || 'anon'}`;
+  }
+
+  private loadReactionUsage(): Record<string, number> {
+    try {
+      const raw = localStorage.getItem(this.reactionUsageKey());
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const normalized: Record<string, number> = {};
+        for (const [emoji, count] of Object.entries(parsed || {})) {
+          if (typeof emoji === 'string' && emoji.length > 0 && typeof count === 'number' && count > 0) {
+            normalized[emoji] = Math.floor(count);
+          }
+        }
+        return normalized;
+      }
+    } catch {}
+    return {};
+  }
+
+  private saveReactionUsage(): void {
+    try {
+      localStorage.setItem(this.reactionUsageKey(), JSON.stringify(this.reactionUsage));
+    } catch {}
+  }
+
+  private loadFrequentReactions(): string[] {
+    // Primary: derive from usage counts (true "frequently used").
+    const fromUsage = Object.entries(this.reactionUsage)
+      .sort((a, b) => b[1] - a[1])
+      .map(([emoji]) => emoji);
+    if (fromUsage.length > 0) {
+      for (const fallback of QUICK_REACTIONS) {
+        if (!fromUsage.includes(fallback)) fromUsage.push(fallback);
+        if (fromUsage.length >= 3) break;
+      }
+      return fromUsage.slice(0, 3);
+    }
+
+    // Backward compatibility: old list-only storage.
+    try {
+      const raw = localStorage.getItem(this.frequentReactionsKey());
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const normalized = parsed.filter((e) => typeof e === 'string' && e.length > 0);
+          if (normalized.length > 0) {
+            return normalized.slice(0, 3);
+          }
+        }
+      }
+    } catch {}
+
+    return QUICK_REACTIONS.slice(0, 3);
+  }
+
+  private saveFrequentReactions(): void {
+    try {
+      localStorage.setItem(this.frequentReactionsKey(), JSON.stringify(this.frequentReactions.slice(0, 3)));
+    } catch {}
+  }
+
+  private rememberReaction(emoji: string): void {
+    if (!emoji) return;
+
+    this.reactionUsage[emoji] = (this.reactionUsage[emoji] || 0) + 1;
+    this.saveReactionUsage();
+
+    const ranked = Object.entries(this.reactionUsage)
+      .sort((a, b) => b[1] - a[1])
+      .map(([e]) => e);
+
+    for (const fallback of [...this.frequentReactions, ...QUICK_REACTIONS]) {
+      if (!ranked.includes(fallback)) ranked.push(fallback);
+      if (ranked.length >= 3) break;
+    }
+
+    this.frequentReactions = ranked.slice(0, 3);
+
+    this.saveFrequentReactions();
+    this.refreshQuickReactionButtons();
+  }
+
+  private refreshQuickReactionButtons(): void {
+    const frequent = this.getFrequentReactions();
+    document.querySelectorAll('.message-actions-bar').forEach((barEl) => {
+      const bar = barEl as HTMLElement;
+      const addBtn = bar.querySelector('.quick-react-add') as HTMLElement | null;
+      const msgId = addBtn?.dataset.msgId;
+      if (!addBtn || !msgId) return;
+
+      bar.querySelectorAll('.quick-react').forEach((btn) => btn.remove());
+
+      for (const emoji of frequent) {
+        const btn = document.createElement('button');
+        btn.className = 'quick-react';
+        btn.dataset.msgId = msgId;
+        btn.dataset.emoji = emoji;
+        btn.textContent = emoji;
+        btn.addEventListener('click', () => {
+          this.rememberReaction(emoji);
+          this.callbacks.toggleReaction?.(msgId, emoji);
+        });
+        bar.insertBefore(btn, addBtn);
+      }
+    });
+  }
+
+  private getFrequentReactions(): string[] {
+    if (!this.frequentReactions.length) {
+      this.frequentReactions = this.loadFrequentReactions();
+    }
+    return this.frequentReactions.slice(0, 3);
   }
 
   /** Refresh the cached contacts/conversations from the async stores */
@@ -220,6 +344,7 @@ export class UIRenderer {
   renderWelcome(): void {
     this.hideLoading();
     const app = document.getElementById('app')!;
+    const hasWorkspace = (this.callbacks.getAllWorkspaces?.().length || 0) > 0;
     app.innerHTML = `
       <div class="landing-page">
 
@@ -232,7 +357,8 @@ export class UIRenderer {
             </div>
             <div class="landing-nav-actions">
               <button class="btn-secondary btn-sm" id="join-ws-btn-nav">Join workspace</button>
-              <button class="btn-primary btn-sm" id="create-ws-btn-nav">Launch App →</button>
+              <button class="btn-primary btn-sm" id="open-app-btn-nav">Open App</button>
+              ${!hasWorkspace ? '<button class="btn-secondary btn-sm" id="create-ws-btn-nav">Create workspace</button>' : ''}
             </div>
           </div>
         </nav>
@@ -247,7 +373,9 @@ export class UIRenderer {
               <strong>DecentChat stores nothing.</strong> Messages go directly between people — encrypted, peer-to-peer, serverless.
             </p>
             <div class="lp-hero-actions">
-              <button class="btn-primary btn-lg" id="create-ws-btn">Start Chatting Free →</button>
+              ${hasWorkspace
+                ? '<button class="btn-primary btn-lg" id="open-app-btn">Open App →</button>'
+                : '<button class="btn-primary btn-lg" id="create-ws-btn">Start Chatting Free →</button>'}
               <button class="btn-secondary btn-lg" id="join-ws-btn">Join with Invite Code</button>
             </div>
             <p class="lp-hero-note">No signup · No phone number · Works in your browser</p>
@@ -281,26 +409,18 @@ export class UIRenderer {
         <section class="lp-how">
           <div class="lp-container">
             <h2 class="lp-section-title">How it works</h2>
-            <p class="lp-section-sub">Three steps. No servers involved.</p>
+            <p class="lp-section-sub">Two steps. No servers involved.</p>
             <div class="lp-steps">
               <div class="lp-step">
                 <div class="lp-step-num">1</div>
                 <div class="lp-step-content">
-                  <h3>Generate your identity</h3>
-                  <p>A 12-word seed phrase is created right in your browser. Like a crypto wallet — no email, no phone, no verification. You own it forever.</p>
+                  <h3>Create your workspace or join one</h3>
+                  <p>Start your own workspace in one click, or paste an invite to join an existing one. Your secure seed identity is generated automatically in your browser.</p>
                 </div>
               </div>
               <div class="lp-step-arrow">→</div>
               <div class="lp-step">
                 <div class="lp-step-num">2</div>
-                <div class="lp-step-content">
-                  <h3>Create or join a workspace</h3>
-                  <p>Create a workspace and share an invite link. Your contacts connect directly to your device via WebRTC. No server reads your messages.</p>
-                </div>
-              </div>
-              <div class="lp-step-arrow">→</div>
-              <div class="lp-step">
-                <div class="lp-step-num">3</div>
                 <div class="lp-step-content">
                   <h3>Chat with total privacy</h3>
                   <p>Messages are encrypted before leaving your device using Signal's Double Ratchet. Even the signaling server — the only server that exists — never sees your content.</p>
@@ -428,7 +548,9 @@ export class UIRenderer {
             <h2>Your conversations.<br>Your keys. Your rules.</h2>
             <p>Start in 10 seconds. No signup. No credit card. No catch.</p>
             <div class="lp-hero-actions" style="justify-content:center; margin-top: 24px;">
-              <button class="btn-primary btn-lg" id="create-ws-btn-2">Start Chatting Free →</button>
+              ${hasWorkspace
+                ? '<button class="btn-primary btn-lg" id="open-app-btn-2">Open App →</button>'
+                : '<button class="btn-primary btn-lg" id="create-ws-btn-2">Start Chatting Free →</button>'}
               <button class="btn-secondary btn-lg" id="join-ws-btn-2">Join with Invite Code</button>
             </div>
             <p class="lp-restore-hint">
@@ -455,12 +577,37 @@ export class UIRenderer {
       </div>
     `;
 
-    document.getElementById('create-ws-btn')!.addEventListener('click', () => this.showCreateWorkspaceModal());
-    document.getElementById('create-ws-btn-2')!.addEventListener('click', () => this.showCreateWorkspaceModal());
-    document.getElementById('create-ws-btn-nav')!.addEventListener('click', () => this.showCreateWorkspaceModal());
-    document.getElementById('join-ws-btn')!.addEventListener('click', () => this.showJoinWorkspaceModal());
-    document.getElementById('join-ws-btn-2')!.addEventListener('click', () => this.showJoinWorkspaceModal());
-    document.getElementById('join-ws-btn-nav')!.addEventListener('click', () => this.showJoinWorkspaceModal());
+    const isAppLikeRoute = window.location.pathname === '/app' || window.location.pathname.startsWith('/app/');
+    const bootstrapAction = (action: 'create' | 'join') => {
+      sessionStorage.setItem('decent:welcomeAction', action);
+      window.location.assign('/app');
+    };
+
+    const onCreateClick = () => {
+      if (!isAppLikeRoute) {
+        bootstrapAction('create');
+        return;
+      }
+      this.showCreateWorkspaceModal();
+    };
+
+    const onJoinClick = () => {
+      if (!isAppLikeRoute) {
+        bootstrapAction('join');
+        return;
+      }
+      this.showJoinWorkspaceModal();
+    };
+
+    document.getElementById('create-ws-btn')?.addEventListener('click', onCreateClick);
+    document.getElementById('create-ws-btn-2')?.addEventListener('click', onCreateClick);
+    document.getElementById('create-ws-btn-nav')?.addEventListener('click', onCreateClick);
+    document.getElementById('open-app-btn')?.addEventListener('click', () => window.location.assign('/app'));
+    document.getElementById('open-app-btn-2')?.addEventListener('click', () => window.location.assign('/app'));
+    document.getElementById('open-app-btn-nav')?.addEventListener('click', () => window.location.assign('/app'));
+    document.getElementById('join-ws-btn')?.addEventListener('click', onJoinClick);
+    document.getElementById('join-ws-btn-2')?.addEventListener('click', onJoinClick);
+    document.getElementById('join-ws-btn-nav')?.addEventListener('click', onJoinClick);
     document.getElementById('welcome-peer-id')!.addEventListener('click', () => {
       navigator.clipboard.writeText(this.state.myPeerId);
       this.showToast('Peer ID copied!');
@@ -561,6 +708,8 @@ export class UIRenderer {
     const allWorkspaces = this.callbacks.getAllWorkspaces?.() || [];
     const isInDMs = this.state.activeWorkspaceId === null;
 
+    const activityUnread = this.callbacks.getActivityUnreadCount?.() || 0;
+
     const dmIcon = `
       <div class="ws-rail-icon ${isInDMs ? 'active' : ''}" id="ws-rail-dms" title="Direct Messages">
         DM
@@ -580,6 +729,10 @@ export class UIRenderer {
     return `
       ${dmIcon}
       ${wsIcons}
+      <div class="ws-rail-icon activity-btn" id="activity-btn" title="Activity">
+        🔔
+        ${activityUnread > 0 ? `<span class="activity-badge ws-rail-badge">${activityUnread > 99 ? '99+' : activityUnread}</span>` : ''}
+      </div>
       <div class="ws-rail-icon ws-rail-add" id="ws-rail-add" title="Create or join workspace">
         +
       </div>
@@ -592,6 +745,7 @@ export class UIRenderer {
       if (!this.state.activeDirectConversationId) {
         this.state.activeChannelId = null;
       }
+      this.persistViewState();
       this.refreshContactsCache().catch(() => {});
       this.updateSidebar();
       this.updateWorkspaceRail();
@@ -619,6 +773,7 @@ export class UIRenderer {
     this.state.activeDirectConversationId = null;
     this.state.activeChannelId = ws.channels[0]?.id || null;
     this.closeThread();
+    this.persistViewState();
     this.refreshContactsCache();
     this.updateSidebar();
     this.updateWorkspaceRail();
@@ -670,9 +825,22 @@ export class UIRenderer {
     return `
       <div class="sidebar-header">
         <img src="/icons/icon-32.png" alt="" class="sidebar-logo" />
-        <h1>${ws ? this.escapeHtml(ws.name) : 'Workspaces'}</h1>
+        ${ws ? `
+          <button class="workspace-menu-trigger" id="workspace-menu-trigger" title="Workspace menu">
+            <h1>${this.escapeHtml(ws.name)}</h1>
+            <span class="workspace-menu-caret">▾</span>
+          </button>
+        ` : `<h1>Workspaces</h1>`}
         <span class="status-dot"></span>
       </div>
+      ${ws ? `
+      <div class="workspace-menu" id="workspace-menu" style="display:none;">
+        <button class="workspace-menu-item" id="workspace-menu-settings">Workspace settings</button>
+        <button class="workspace-menu-item" id="workspace-menu-members">Members</button>
+        <button class="workspace-menu-item" id="workspace-menu-invite">Invite people</button>
+        <button class="workspace-menu-item" id="workspace-menu-notifications">Notification prefs</button>
+      </div>
+      ` : ''}
       <div class="sidebar-nav" id="sidebar-nav">
         ${ws ? `
         <div class="sidebar-section">
@@ -756,14 +924,6 @@ export class UIRenderer {
       : 'Select a channel';
     const memberCount = channel ? channel.members.length : 0;
 
-    // Show workspace settings gear only to admins/owners
-    const isAdminOrOwner = ws ? this.workspaceManager.isAdmin(ws.id, this.state.myPeerId) : false;
-    const wsSettingsBtn = isAdminOrOwner
-      ? `<button class="icon-btn" id="ws-settings-btn" title="Workspace Settings">🔧</button>`
-      : '';
-
-    const activityUnread = this.callbacks.getActivityUnreadCount?.() || 0;
-
     return `
       <div class="channel-header">
         <div class="channel-header-left">
@@ -773,9 +933,7 @@ export class UIRenderer {
         </div>
         <div class="channel-header-right">
           <button class="icon-btn${this.huddleState === 'in-call' && this.huddleChannelId === this.state.activeChannelId ? ' huddle-start-btn active' : ''}" id="huddle-start-btn" title="Start Huddle">🎧</button>
-          ${wsSettingsBtn}
           <button class="icon-btn" id="connect-peer-header-btn" title="Connect to peer">🔌</button>
-          <button class="icon-btn activity-btn" id="activity-btn" title="Activity">🔔${activityUnread > 0 ? `<span class="activity-badge">${activityUnread > 99 ? '99+' : activityUnread}</span>` : ''}</button>
           <button class="icon-btn" id="qr-btn" title="QR Code">📱</button>
           <button class="icon-btn" id="search-btn" title="Search messages (Ctrl+F)">🔍</button>
           <button class="icon-btn" id="invite-btn" title="Invite code">🔗</button>
@@ -853,6 +1011,7 @@ export class UIRenderer {
     if (emptyState) emptyState.remove();
 
     const isMine = msg.senderId === this.state.myPeerId;
+    const inThreadView = list.id === 'thread-messages';
     const myDisplayName = (this.state.activeWorkspaceId && this.state.workspaceAliases?.[this.state.activeWorkspaceId])
       || this.state.myAlias
       || 'You';
@@ -916,14 +1075,15 @@ export class UIRenderer {
           </div>
           <div class="message-content markdown-body">${renderMarkdown(msg.content)}</div>
           ${this.renderAttachments((msg as any).attachments)}
-          <div class="message-thread-indicator${threadReplies.length > 0 ? ' has-replies' : ''}" data-thread-id="${msg.id}">
+          ${inThreadView ? '' : `<div class="message-thread-indicator${threadReplies.length > 0 ? ' has-replies' : ''}" data-thread-id="${msg.id}">
             ${threadReplies.length > 0 ? this.renderThreadIndicatorContent(threadReplies) : ''}
-          </div>
+          </div>`}
           <div class="message-reactions" id="reactions-${msg.id}"></div>
-          <div class="message-actions-bar">
-            ${QUICK_REACTIONS.map(e => `<button class="quick-react" data-msg-id="${msg.id}" data-emoji="${e}">${e}</button>`).join('')}
+          <div class="message-actions-bar${inThreadView ? ' in-thread' : ''}">
+            ${this.getFrequentReactions().map(e => `<button class="quick-react" data-msg-id="${msg.id}" data-emoji="${e}">${e}</button>`).join('')}
+            <button class="quick-react-add" data-msg-id="${msg.id}" title="Add reaction">➕</button>
             <button class="message-thread-btn" data-thread-id="${msg.id}" title="Reply in thread">💬 Reply</button>
-            ${isMine ? `<button class="message-info-btn" data-message-id="${msg.id}" title="Message info">ℹ️ Info</button>` : ''}
+            ${(isMine || inThreadView) ? `<button class="message-info-btn" data-message-id="${msg.id}" title="Message info">ℹ️ Info</button>` : ''}
           </div>
         </div>
       `;
@@ -938,6 +1098,16 @@ export class UIRenderer {
         btn.addEventListener('click', () => {
           const msgId = (btn as HTMLElement).dataset.msgId!;
           const emoji = (btn as HTMLElement).dataset.emoji!;
+          this.rememberReaction(emoji);
+          this.callbacks.toggleReaction?.(msgId, emoji);
+        });
+      });
+      div.querySelector('.quick-react-add')?.addEventListener('click', () => {
+        const btn = div.querySelector('.quick-react-add') as HTMLElement | null;
+        const msgId = btn?.dataset.msgId;
+        if (!btn || !msgId) return;
+        void this.emojiPicker.show(btn, (emoji) => {
+          this.rememberReaction(emoji);
           this.callbacks.toggleReaction?.(msgId, emoji);
         });
       });
@@ -1104,6 +1274,19 @@ export class UIRenderer {
   // Thread open/close
   // =========================================================================
 
+  private persistViewState(): void {
+    const payload = {
+      workspaceId: this.state.activeWorkspaceId,
+      channelId: this.state.activeChannelId,
+      threadId: this.state.threadOpen ? this.state.activeThreadId : null,
+      threadOpen: this.state.threadOpen,
+      directConversationId: this.state.activeDirectConversationId,
+      at: Date.now(),
+    };
+
+    void this.callbacks.persistSetting('ui:lastView', payload).catch(() => {});
+  }
+
   openThread(messageId: string): void {
     this.state.activeThreadId = messageId;
     this.state.threadOpen = true;
@@ -1129,6 +1312,7 @@ export class UIRenderer {
     }
 
     this.renderThreadMessages();
+    this.persistViewState();
     if (this.state.activeChannelId) {
       this.callbacks.markThreadActivityRead?.(this.state.activeChannelId, messageId);
       this.updateChannelHeader();
@@ -1144,6 +1328,7 @@ export class UIRenderer {
     this.clearPendingAttachments('thread');
     this.state.activeThreadId = null;
     this.state.threadOpen = false;
+    this.persistViewState();
     const panel = document.getElementById('thread-panel');
     panel?.classList.add('hidden');
     panel?.classList.remove('open'); // remove mobile slide-in class
@@ -1299,6 +1484,7 @@ export class UIRenderer {
     this.callbacks.markChannelRead?.(channelId);
     void this.callbacks.onChannelViewed?.(channelId);
     this.closeThread();
+    this.persistViewState();
     this.updateSidebar();
     this.updateChannelHeader();
     this.renderMessages();
@@ -1315,6 +1501,7 @@ export class UIRenderer {
     this.callbacks.markChannelRead?.(conversationId);
     void this.callbacks.onChannelViewed?.(conversationId);
     this.closeThread();
+    this.persistViewState();
     this.updateSidebar();
     this.updateChannelHeader();
     this.renderMessages();
@@ -1724,6 +1911,37 @@ export class UIRenderer {
       }
     });
     document.getElementById('sidebar-qr-btn')?.addEventListener('click', () => this.showMyQR());
+
+    document.getElementById('workspace-menu-trigger')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const menu = document.getElementById('workspace-menu');
+      if (!menu) return;
+      const next = menu.style.display === 'none' || !menu.style.display;
+      menu.style.display = next ? 'block' : 'none';
+    });
+
+    document.getElementById('workspace-menu-settings')?.addEventListener('click', () => {
+      document.getElementById('workspace-menu')?.setAttribute('style', 'display:none;');
+      this.showWorkspaceSettingsModal();
+    });
+    document.getElementById('workspace-menu-members')?.addEventListener('click', () => {
+      document.getElementById('workspace-menu')?.setAttribute('style', 'display:none;');
+      this.showWorkspaceMembersModal();
+    });
+    document.getElementById('workspace-menu-invite')?.addEventListener('click', () => {
+      document.getElementById('workspace-menu')?.setAttribute('style', 'display:none;');
+      if (!this.state.activeWorkspaceId) return;
+      const inviteURL = this.callbacks.generateInviteURL?.(this.state.activeWorkspaceId);
+      if (inviteURL) {
+        navigator.clipboard.writeText(inviteURL);
+        this.showToast('Invite link copied!', 'success');
+      }
+    });
+    document.getElementById('workspace-menu-notifications')?.addEventListener('click', () => {
+      document.getElementById('workspace-menu')?.setAttribute('style', 'display:none;');
+      this.showSettings();
+    });
+
   }
 
   private bindChannelHeaderEvents(): void {
@@ -1747,7 +1965,6 @@ export class UIRenderer {
     document.getElementById('qr-btn')?.addEventListener('click', () => this.showMyQR());
     document.getElementById('activity-btn')?.addEventListener('click', () => this.showActivityModal());
     document.getElementById('channel-members-btn')?.addEventListener('click', () => this.showChannelMembersModal());
-    document.getElementById('ws-settings-btn')?.addEventListener('click', () => this.showWorkspaceSettingsModal());
     document.getElementById('search-btn')?.addEventListener('click', () => this.showSearchPanel());
     document.getElementById('settings-btn')?.addEventListener('click', () => this.showSettings());
     document.getElementById('connect-peer-header-btn')?.addEventListener('click', () => this.showConnectPeerModal());
@@ -1946,8 +2163,8 @@ export class UIRenderer {
 
     const myMember = ws.members.find(m => m.peerId === this.state.myPeerId);
     const myRole = myMember?.role || 'member';
-    const isOwner = myRole === 'owner';
-    const isAdminOrOwner = myRole === 'owner' || myRole === 'admin';
+    const isOwner = myRole === 'owner' || ws.createdBy === this.state.myPeerId || this.workspaceManager.isOwner(ws.id, this.state.myPeerId);
+    const isAdminOrOwner = isOwner || myRole === 'admin' || this.workspaceManager.isAdmin(ws.id, this.state.myPeerId);
 
     const roleBadge = (role: string) => {
       if (role === 'owner') return '<span class="role-badge role-owner" title="Owner">Owner</span>';
@@ -1993,7 +2210,7 @@ export class UIRenderer {
       `Workspace Members`,
       `
       <div class="form-group" style="margin-bottom: 8px;">
-        <div style="font-size: 13px; color: var(--text-muted);">${ws.members.length} member${ws.members.length === 1 ? '' : 's'}</div>
+        <div id="members-count-label" style="font-size: 13px; color: var(--text-muted);">${ws.members.length} member${ws.members.length === 1 ? '' : 's'}</div>
       </div>
       <div class="members-list">${membersHTML}</div>
     `,
@@ -2011,7 +2228,10 @@ export class UIRenderer {
         const res = await this.callbacks.removeWorkspaceMember(peerId);
         if (!res.success) return this.showToast(res.error || 'Failed to remove member', 'error');
 
+        // Keep dialog experience open by immediately re-rendering members modal.
         overlay.remove();
+        this.showWorkspaceMembersModal();
+
         this.showToast('Member removed', 'success');
         this.updateSidebar();
         this.updateChannelHeader();
@@ -2159,7 +2379,7 @@ export class UIRenderer {
     title: string,
     bodyHTML: string,
     onSubmit: (form: HTMLFormElement) => boolean | void | Promise<boolean | void>,
-  ): void {
+  ): HTMLDivElement {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML = `
@@ -2192,6 +2412,7 @@ export class UIRenderer {
       }
     });
     setTimeout(() => (overlay.querySelector('input') as HTMLInputElement)?.focus(), 50);
+    return overlay;
   }
 
   showCreateWorkspaceModal(): void {
@@ -2251,20 +2472,78 @@ export class UIRenderer {
     );
   }
 
+  private parseJoinInviteInput(invite: string): { code: string; peerId?: string; inviteData?: import('decent-protocol').InviteData; error?: string } {
+    if (invite.includes('://') || invite.includes('/')) {
+      try {
+        const data = InviteURI.decode(invite);
+
+        // Auto-connect to signaling server from invite
+        if (data.host && data.port) {
+          console.log(`[DecentChat] Invite points to signaling: ${data.host}:${data.port}`);
+        }
+
+        return {
+          code: data.inviteCode,
+          peerId: data.peerId,
+          inviteData: data,
+        };
+      } catch {
+        return { code: '', error: 'Invalid invite link' };
+      }
+    }
+
+    // Plain invite code — need a peer ID
+    return { code: invite.toUpperCase() };
+  }
+
+  private updateWorkspacePreview(overlay: HTMLDivElement): void {
+    const inviteInput = overlay.querySelector('input[name="invite"]') as HTMLInputElement | null;
+    const previewGroup = overlay.querySelector('[data-workspace-preview]') as HTMLElement | null;
+    const previewInput = overlay.querySelector('input[name="workspacePreview"]') as HTMLInputElement | null;
+
+    if (!inviteInput || !previewGroup || !previewInput) return;
+
+    const parsed = this.parseJoinInviteInput(inviteInput.value.trim());
+    const workspaceName = parsed.inviteData?.workspaceName?.trim();
+
+    if (workspaceName) {
+      const wasVisible = previewGroup.classList.contains('workspace-preview-visible');
+      previewInput.value = workspaceName;
+      previewGroup.style.display = 'block';
+      previewGroup.classList.add('workspace-preview-visible');
+      if (!wasVisible) {
+        previewInput.classList.remove('workspace-preview-pop');
+        requestAnimationFrame(() => previewInput.classList.add('workspace-preview-pop'));
+      }
+    } else {
+      previewInput.value = '';
+      previewGroup.style.display = 'none';
+      previewGroup.classList.remove('workspace-preview-visible');
+      previewInput.classList.remove('workspace-preview-pop');
+    }
+  }
+
   showJoinWorkspaceModal(): void {
-    this.showModal(
+    const overlay = this.showModal(
       'Join Workspace',
       `
       <div class="form-group">
         <label>Invite Link or Code</label>
-        <input type="text" name="invite" placeholder="https://decentchat.app/join/... or paste invite link" required />
+        <input type="text" name="invite" class="invite-input" placeholder="https://decentchat.app/join/... or paste invite link" required />
         <small style="color: var(--text-muted); margin-top: 4px; display: block;">
           Paste the full invite link you received
         </small>
+        <small class="invite-autofill-hint" data-invite-autofill-hint style="display: none;">
+          ✅ We found an invite in your clipboard and pasted it here for you.
+        </small>
+      </div>
+      <div class="form-group" data-workspace-preview style="display: none;">
+        <label>Workspace</label>
+        <input type="text" name="workspacePreview" readonly />
       </div>
       <div class="form-group">
         <label>Your Display Name</label>
-        <input type="text" name="alias" placeholder="Your name" required />
+        <input type="text" name="alias" class="join-alias-input" placeholder="Your name" required />
       </div>
     `,
       (form) => {
@@ -2272,29 +2551,14 @@ export class UIRenderer {
         const alias = (form.elements.namedItem('alias') as HTMLInputElement).value.trim();
         if (!invite || !alias) return;
 
-        let code: string;
-        let peerId: string | undefined;
-        let inviteData: import('decent-protocol').InviteData | undefined;
+        const parsed = this.parseJoinInviteInput(invite);
+        if (parsed.error) {
+          this.showToast(parsed.error, 'error');
+          return;
+        }
 
-        // Try parsing as invite URL first
-        if (invite.includes('://') || invite.includes('/')) {
-          try {
-            const data = InviteURI.decode(invite);
-            code = data.inviteCode;
-            peerId = data.peerId;
-            inviteData = data; // DEP-002: Pass full invite data for server discovery
-
-            // Auto-connect to signaling server from invite
-            if (data.host && data.port) {
-              console.log(`[DecentChat] Invite points to signaling: ${data.host}:${data.port}`);
-            }
-          } catch {
-            this.showToast('Invalid invite link', 'error');
-            return;
-          }
-        } else {
-          // Plain invite code — need a peer ID
-          code = invite.toUpperCase();
+        let peerId = parsed.peerId;
+        if (!peerId) {
           const peerInput = prompt('Enter the Peer ID of someone in the workspace:');
           if (!peerInput) return;
           peerId = peerInput.trim();
@@ -2307,12 +2571,59 @@ export class UIRenderer {
 
         this.state.myAlias = alias;
         this.callbacks.persistSetting('myAlias', alias);
-        // Use decoded workspace name if available, otherwise use invite code
-        const wsName = inviteData?.workspaceName || code;
-        this.callbacks.joinWorkspace(wsName, alias, peerId!, inviteData);
-        this.showToast(`Joining workspace... connecting to ${peerId!.slice(0, 8)}`);
+        const wsName = parsed.inviteData?.workspaceName || parsed.code;
+        this.callbacks.joinWorkspace(wsName, alias, peerId, parsed.inviteData);
+        this.showToast(`Joining workspace... connecting to ${peerId.slice(0, 8)}`);
       },
     );
+
+    const inviteInput = overlay.querySelector('input[name="invite"]') as HTMLInputElement | null;
+    const aliasInput = overlay.querySelector('input[name="alias"]') as HTMLInputElement | null;
+    const autofillHint = overlay.querySelector('[data-invite-autofill-hint]') as HTMLElement | null;
+
+    if (inviteInput) {
+      inviteInput.addEventListener('input', () => {
+        this.updateWorkspacePreview(overlay);
+        inviteInput.classList.remove('invite-autofilled');
+        if (autofillHint) {
+          autofillHint.style.display = 'none';
+          autofillHint.classList.remove('invite-autofill-hint-visible');
+        }
+      });
+    }
+
+    // Clipboard auto-detect (requires user gesture: opening modal)
+    if (navigator.clipboard?.readText) {
+      navigator.clipboard.readText()
+        .then((text) => {
+          const clipboardText = text.trim();
+          if (!clipboardText || !inviteInput || inviteInput.value.trim()) return;
+
+          const parsed = this.parseJoinInviteInput(clipboardText);
+          if (parsed.error || !parsed.inviteData) return;
+
+          inviteInput.value = clipboardText;
+          inviteInput.classList.remove('invite-autofilled');
+          requestAnimationFrame(() => inviteInput.classList.add('invite-autofilled'));
+          this.updateWorkspacePreview(overlay);
+
+          if (autofillHint) {
+            autofillHint.style.display = 'block';
+            autofillHint.classList.remove('invite-autofill-hint-visible');
+            requestAnimationFrame(() => autofillHint.classList.add('invite-autofill-hint-visible'));
+          }
+
+          // Move user directly to the next step.
+          // Delay slightly so it wins over modal's initial autofocus on first input.
+          setTimeout(() => {
+            aliasInput?.focus();
+            aliasInput?.select();
+          }, 90);
+        })
+        .catch(() => {
+          // Clipboard read can fail due to browser permissions; ignore silently.
+        });
+    }
   }
 
   showConnectPeerModal(): void {

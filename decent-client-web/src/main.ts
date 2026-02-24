@@ -306,14 +306,48 @@ async function init(): Promise<void> {
   // User can enable via Settings or we'll ask on first message
   // ctrl.notifications.requestPermission();
 
+  // Route intent (decided BEFORE heavy app bootstrap)
+  const path = window.location.pathname;
+  const isAppRoute = path === '/app' || path.startsWith('/app/');
+  const isJoinRoute = /^\/join\/[A-Za-z0-9]+/.test(path);
+
   try {
     // Initialize storage — PersistentStore is the primary store.
     // Database is kept but no longer initialized here (see task #8 consolidation).
-    
+
     // Update loading hint
     const loadingHint = document.querySelector('#loading .hint') as HTMLElement;
     if (loadingHint) loadingHint.textContent = 'Loading storage...';
-    
+
+    // Hard route split:
+    // - / and non-app routes render landing only (no transport/bootstrap/network)
+    // - /app and /join/* run full app bootstrap
+    if (!isAppRoute && !isJoinRoute) {
+      const landingDefaults: AppSettings = { theme: 'auto', notifications: true };
+      await ctrl.persistentStore.init();
+
+      const settings = await ctrl.persistentStore.getSettings<AppSettings>(landingDefaults);
+      const myAlias = await ctrl.persistentStore.getSetting('myAlias');
+      const savedWorkspaces = await ctrl.persistentStore.getAllWorkspaces();
+
+      for (const ws of savedWorkspaces) {
+        try {
+          ctrl.workspaceManager.importWorkspace(ws);
+        } catch {
+          // Ignore malformed workspace records on landing path.
+        }
+      }
+
+      state.myPeerId = (settings as any).myPeerId || '';
+      state.myAlias = typeof myAlias === 'string' && myAlias.trim()
+        ? myAlias
+        : (state.myPeerId ? state.myPeerId.slice(0, 8) : '');
+
+      ui.renderWelcome();
+      (window as any).__appInitialized = true;
+      return;
+    }
+
     await ctrl.keyStore.init();
     await ctrl.persistentStore.init();
 
@@ -474,7 +508,7 @@ async function init(): Promise<void> {
     }
 
     // Check for /join/CODE invite URL
-    const joinMatch = window.location.pathname.match(/^\/join\/([A-Za-z0-9]+)/);
+    const joinMatch = path.match(/^\/join\/([A-Za-z0-9]+)/);
     let pendingInvite: { code: string; peerId: string; name: string; inviteData?: import('decent-protocol').InviteData } | null = null;
 
     if (joinMatch) {
@@ -525,17 +559,63 @@ async function init(): Promise<void> {
       setTimeout(() => {
         ui.showJoinWithInvite(pendingInvite!.code, pendingInvite!.peerId, pendingInvite!.name, pendingInvite!.inviteData);
       }, 100);
+    } else if (!isAppRoute) {
+      // Landing page is always reachable at /
+      ui.renderWelcome();
     } else if (ctrl.workspaceManager.getAllWorkspaces().length === 0) {
       ui.renderWelcome();
     } else {
-      state.activeWorkspaceId = ctrl.workspaceManager.getAllWorkspaces()[0].id;
+      const allWorkspaces = ctrl.workspaceManager.getAllWorkspaces();
+      const lastView = (settings as any)?.['ui:lastView'] as {
+        workspaceId?: string | null;
+        channelId?: string | null;
+        threadId?: string | null;
+        threadOpen?: boolean;
+      } | undefined;
+
+      const restoredWorkspace = lastView?.workspaceId
+        ? ctrl.workspaceManager.getWorkspace(lastView.workspaceId)
+        : null;
+
+      state.activeWorkspaceId = restoredWorkspace?.id || allWorkspaces[0].id;
       const ws = ctrl.workspaceManager.getWorkspace(state.activeWorkspaceId!)!;
-      state.activeChannelId = ws.channels[0]?.id || null;
+
+      const restoredChannel = lastView?.channelId
+        ? ws.channels.find((ch: any) => ch.id === lastView.channelId)
+        : null;
+
+      state.activeChannelId = restoredChannel?.id || ws.channels[0]?.id || null;
+
       ui.renderApp();
+
+      // Restore open thread if it still exists in the restored channel.
+      if (lastView?.threadOpen && lastView.threadId && state.activeChannelId) {
+        const threadExists = ctrl.messageStore
+          .getMessages(state.activeChannelId)
+          .some((m: any) => m.id === lastView.threadId);
+        if (threadExists) {
+          ui.openThread(lastView.threadId);
+        }
+      }
+
       // Tell NotificationManager which channel is currently focused on startup
       if (state.activeChannelId) {
         ctrl.notifications.setFocusedChannel(state.activeChannelId);
         void ctrl.onChannelViewed(state.activeChannelId);
+      }
+    }
+
+    // If user clicked Create/Join on landing page, bootstrap full app first,
+    // then open the intended modal on /app. This avoids landing-mode networkless
+    // races (workspace created without active transport).
+    if (isAppRoute && ctrl.workspaceManager.getAllWorkspaces().length === 0) {
+      const pendingWelcomeAction = sessionStorage.getItem('decent:welcomeAction');
+      if (pendingWelcomeAction === 'create' || pendingWelcomeAction === 'join') {
+        sessionStorage.removeItem('decent:welcomeAction');
+        setTimeout(() => {
+          if (pendingWelcomeAction === 'create') ui.showCreateWorkspaceModal();
+          else ui.showJoinWorkspaceModal();
+        }, 100);
       }
     }
 
