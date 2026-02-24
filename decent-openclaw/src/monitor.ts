@@ -354,6 +354,22 @@ function resolveThreadSessionKeys(params: {
   };
 }
 
+function resolveDecentThreadingFlags(cfg: OpenClawConfig): {
+  replyToMode: "off" | "first" | "all";
+  historyScope: "thread" | "channel";
+  inheritParent: boolean;
+} {
+  const ch = (cfg as any)?.channels?.decentchat ?? {};
+  const replyToMode = (ch.replyToMode === "off" || ch.replyToMode === "first" || ch.replyToMode === "all")
+    ? ch.replyToMode
+    : "all";
+  const historyScope = (ch.thread?.historyScope === "channel" || ch.thread?.historyScope === "thread")
+    ? ch.thread.historyScope
+    : "thread";
+  const inheritParent = ch.thread?.inheritParent === true;
+  return { replyToMode, historyScope, inheritParent };
+}
+
 async function processInboundMessage(
   msg: {
     messageId: string;
@@ -426,6 +442,7 @@ async function processInboundMessage(
   }
 
   const cfg = core.config.loadConfig() as OpenClawConfig;
+  const threadingFlags = resolveDecentThreadingFlags(cfg);
   const channel = "decentchat";
   const peerId = msg.chatType === "direct"
     ? msg.senderId
@@ -439,11 +456,24 @@ async function processInboundMessage(
   });
 
   const baseSessionKey = route.sessionKey;
-  const isThreadReply = Boolean(msg.threadId && msg.threadId !== msg.messageId);
+  // Thread-aware session routing (parallelism):
+  // - prefer explicit threadId
+  // - fallback to replyToId for legacy envelopes that omit threadId
+  const explicitThreadId = (msg.threadId ?? "").trim();
+  const fallbackThreadId = (msg.replyToId ?? "").trim();
+  const candidateThreadId = explicitThreadId || fallbackThreadId;
+
+  // Slack-compatible knobs:
+  // - replyToMode=off => never route per-thread
+  // - thread.historyScope=channel => keep base channel session
+  const threadingDisabled = threadingFlags.replyToMode === "off" || threadingFlags.historyScope === "channel";
+  const derivedThreadId = threadingDisabled ? "" : candidateThreadId;
+  const isThreadReply = Boolean(derivedThreadId && derivedThreadId !== msg.messageId);
+
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
-    threadId: isThreadReply ? msg.threadId : undefined,
-    parentSessionKey: isThreadReply ? baseSessionKey : undefined,
+    threadId: isThreadReply ? derivedThreadId : undefined,
+    parentSessionKey: isThreadReply && threadingFlags.inheritParent ? baseSessionKey : undefined,
   });
   const sessionKey = threadKeys.sessionKey;
 
@@ -454,6 +484,10 @@ async function processInboundMessage(
     storePath,
     sessionKey,
   });
+  // Bootstrap context for first thread turn even when inheritParent=false,
+  // so root channel turn + first assistant reply are available in new thread session.
+  const bootstrapParentSessionKey = isThreadReply && !previousTimestamp ? baseSessionKey : undefined;
+  const effectiveParentSessionKey = threadKeys.parentSessionKey ?? bootstrapParentSessionKey;
 
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "DecentChat",
@@ -485,9 +519,9 @@ async function processInboundMessage(
     Timestamp: msg.timestamp,
     OriginatingChannel: channel,
     OriginatingTo: msg.chatType === "direct" ? `decentchat:${msg.senderId}` : `decentchat:channel:${msg.channelId}`,
-    ReplyToId: isThreadReply ? msg.threadId : undefined,
-    MessageThreadId: isThreadReply ? msg.threadId : undefined,
-    ParentSessionKey: threadKeys.parentSessionKey,
+    ReplyToId: isThreadReply ? derivedThreadId : undefined,
+    MessageThreadId: isThreadReply ? derivedThreadId : undefined,
+    ParentSessionKey: effectiveParentSessionKey,
     IsFirstThreadTurn: isThreadReply && !previousTimestamp ? true : undefined,
     MediaPath: mediaPaths[0],
     MediaType: mediaType,

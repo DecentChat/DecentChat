@@ -57,6 +57,247 @@ function makeIncoming(overrides: Partial<any> = {}): any {
 }
 
 describe("runtime streaming relay integration", () => {
+  test("thread reply without threadId uses replyToId and bootstraps parent session on first thread turn", async () => {
+    const recorded: Array<{ sessionKey: string; ctx: any }> = [];
+
+    const core = {
+      config: { loadConfig: () => ({ channels: { decentchat: { replyToMode: "all", thread: { historyScope: "thread", inheritParent: false } } } }) },
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({ sessionKey: "session:group:ws:chan", agentId: "agent-1", accountId: "acct-1" }),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/decent-openclaw-stream-test-store",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: async (args: any) => recorded.push(args),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope: (params: { body: string }) => params.body,
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher: async ({ dispatcherOptions }: any) => {
+            await dispatcherOptions.deliver({ text: "ok" });
+          },
+        },
+      },
+    } as any;
+
+    const xenaPeer = {
+      startStream: async () => {},
+      startDirectStream: async () => {},
+      sendStreamDelta: async () => {},
+      sendDirectStreamDelta: async () => {},
+      sendStreamDone: async () => {},
+      sendDirectStreamDone: async () => {},
+      sendDirectToPeer: async () => {},
+      sendToChannel: async () => {},
+      sendReadReceipt: async () => {},
+      requestFullImage: async () => null,
+    } as any;
+
+    await relayInboundMessageToPeer({
+      incoming: {
+        channelId: "chan-1",
+        workspaceId: "ws-1",
+        content: "hello",
+        senderId: "peer-1",
+        senderName: "Peer",
+        messageId: "msg-100",
+        chatType: "channel",
+        timestamp: Date.now(),
+        replyToId: "root-777",
+        // threadId intentionally missing (legacy)
+      },
+      ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
+      core,
+      xenaPeer,
+    });
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.sessionKey).toContain(":thread:root-777");
+    expect(recorded[0]?.ctx?.MessageThreadId).toBe("root-777");
+    expect(recorded[0]?.ctx?.ParentSessionKey).toBe("session:group:ws:chan");
+  });
+
+  test("replyToMode=off keeps base channel session (no per-thread split)", async () => {
+    const recorded: Array<{ sessionKey: string; ctx: any }> = [];
+
+    const core = {
+      config: { loadConfig: () => ({ channels: { decentchat: { replyToMode: "off" } } }) },
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({ sessionKey: "session:group:ws:chan", agentId: "agent-1", accountId: "acct-1" }),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/decent-openclaw-stream-test-store",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: async (args: any) => recorded.push(args),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope: (params: { body: string }) => params.body,
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher: async ({ dispatcherOptions }: any) => {
+            await dispatcherOptions.deliver({ text: "ok" });
+          },
+        },
+      },
+    } as any;
+
+    const xenaPeer = {
+      startStream: async () => {},
+      startDirectStream: async () => {},
+      sendStreamDelta: async () => {},
+      sendDirectStreamDelta: async () => {},
+      sendStreamDone: async () => {},
+      sendDirectStreamDone: async () => {},
+      sendDirectToPeer: async () => {},
+      sendToChannel: async () => {},
+      sendReadReceipt: async () => {},
+      requestFullImage: async () => null,
+    } as any;
+
+    await relayInboundMessageToPeer({
+      incoming: {
+        channelId: "chan-1",
+        workspaceId: "ws-1",
+        content: "hello",
+        senderId: "peer-1",
+        senderName: "Peer",
+        messageId: "msg-101",
+        chatType: "channel",
+        timestamp: Date.now(),
+        threadId: "root-777",
+      },
+      ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
+      core,
+      xenaPeer,
+    });
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.sessionKey).toBe("session:group:ws:chan");
+    expect(recorded[0]?.ctx?.MessageThreadId).toBeUndefined();
+  });
+
+  test("thread.historyScope=channel keeps base channel session", async () => {
+    const recorded: Array<{ sessionKey: string; ctx: any }> = [];
+
+    const core = {
+      config: { loadConfig: () => ({ channels: { decentchat: { replyToMode: "all", thread: { historyScope: "channel", inheritParent: true } } } }) },
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({ sessionKey: "session:group:ws:chan", agentId: "agent-1", accountId: "acct-1" }),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/decent-openclaw-stream-test-store",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: async (args: any) => recorded.push(args),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope: (params: { body: string }) => params.body,
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher: async ({ dispatcherOptions }: any) => {
+            await dispatcherOptions.deliver({ text: "ok" });
+          },
+        },
+      },
+    } as any;
+
+    const xenaPeer = {
+      startStream: async () => {},
+      startDirectStream: async () => {},
+      sendStreamDelta: async () => {},
+      sendDirectStreamDelta: async () => {},
+      sendStreamDone: async () => {},
+      sendDirectStreamDone: async () => {},
+      sendDirectToPeer: async () => {},
+      sendToChannel: async () => {},
+      sendReadReceipt: async () => {},
+      requestFullImage: async () => null,
+    } as any;
+
+    await relayInboundMessageToPeer({
+      incoming: {
+        channelId: "chan-1",
+        workspaceId: "ws-1",
+        content: "hello",
+        senderId: "peer-1",
+        senderName: "Peer",
+        messageId: "msg-102a",
+        chatType: "channel",
+        timestamp: Date.now(),
+        threadId: "root-777",
+      },
+      ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
+      core,
+      xenaPeer,
+    });
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.sessionKey).toBe("session:group:ws:chan");
+    expect(recorded[0]?.ctx?.MessageThreadId).toBeUndefined();
+  });
+
+  test("thread.inheritParent=true sets ParentSessionKey on thread sessions", async () => {
+    const recorded: Array<{ sessionKey: string; ctx: any }> = [];
+
+    const core = {
+      config: { loadConfig: () => ({ channels: { decentchat: { replyToMode: "all", thread: { historyScope: "thread", inheritParent: true } } } }) },
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({ sessionKey: "session:group:ws:chan", agentId: "agent-1", accountId: "acct-1" }),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/decent-openclaw-stream-test-store",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: async (args: any) => recorded.push(args),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope: (params: { body: string }) => params.body,
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher: async ({ dispatcherOptions }: any) => {
+            await dispatcherOptions.deliver({ text: "ok" });
+          },
+        },
+      },
+    } as any;
+
+    const xenaPeer = {
+      startStream: async () => {},
+      startDirectStream: async () => {},
+      sendStreamDelta: async () => {},
+      sendDirectStreamDelta: async () => {},
+      sendStreamDone: async () => {},
+      sendDirectStreamDone: async () => {},
+      sendDirectToPeer: async () => {},
+      sendToChannel: async () => {},
+      sendReadReceipt: async () => {},
+      requestFullImage: async () => null,
+    } as any;
+
+    await relayInboundMessageToPeer({
+      incoming: {
+        channelId: "chan-1",
+        workspaceId: "ws-1",
+        content: "hello",
+        senderId: "peer-1",
+        senderName: "Peer",
+        messageId: "msg-102",
+        chatType: "channel",
+        timestamp: Date.now(),
+        threadId: "root-777",
+      },
+      ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
+      core,
+      xenaPeer,
+    });
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.sessionKey).toContain(":thread:root-777");
+    expect(recorded[0]?.ctx?.ParentSessionKey).toBe("session:group:ws:chan");
+  });
   test("onPartialReply delivers tokens and final deliver is skipped when stream is active", async () => {
     const streamStarts: Array<{ peerId: string; messageId: string }> = [];
     const streamDeltas: Array<{ peerId: string; messageId: string; content: string }> = [];
