@@ -26,6 +26,7 @@ export function getMockTransportScript(relayUrl: string): string {
       this._ws = null;
       this._myPeerId = null;
       this._connectedPeers = new Set();
+      this._previousPeers = null;
       this._relayUrl = '${relayUrl}';
       this._pendingInit = null;
       this._pendingConnects = new Map();
@@ -85,6 +86,10 @@ export function getMockTransportScript(relayUrl: string): string {
       };
 
       this._ws.onclose = () => {
+        // Save peers for reconnection before clearing
+        if (this._connectedPeers.size > 0) {
+          this._previousPeers = new Set(this._connectedPeers);
+        }
         for (const peer of this._connectedPeers) {
           this._connectedPeers.delete(peer);
           if (this.onDisconnect) this.onDisconnect(peer);
@@ -114,6 +119,19 @@ export function getMockTransportScript(relayUrl: string): string {
           if (this._pendingInit) {
             this._pendingInit.resolve(this._myPeerId);
             this._pendingInit = null;
+          }
+          // Re-connect to previously known peers after reconnect
+          if (this._previousPeers && this._previousPeers.size > 0) {
+            const peers = this._previousPeers;
+            this._previousPeers = null;
+            for (const peer of peers) {
+              if (!this._connectedPeers.has(peer)) {
+                this._ws.send(JSON.stringify({
+                  type: '__connect',
+                  targetPeerId: peer,
+                }));
+              }
+            }
           }
           break;
 

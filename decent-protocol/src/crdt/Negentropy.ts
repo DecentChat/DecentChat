@@ -34,6 +34,8 @@ export interface NegentropyResponse {
   need: string[];
   /** Additional subranges the initiator should compare next. */
   continueWith?: NegentropyRange[];
+  /** Ranges that were fully enumerated (divergent + small enough). */
+  enumeratedRanges?: Array<{ start: string | null; end: string | null }>;
 }
 
 const EMPTY_FINGERPRINT = '0'.repeat(64);
@@ -83,12 +85,13 @@ export class Negentropy {
   async processQuery(query: NegentropyQuery): Promise<NegentropyResponse> {
     const have = new Set<string>();
     const continueWith: NegentropyRange[] = [];
+    const enumeratedRanges: Array<{ start: string | null; end: string | null }> = [];
 
     if (query.ranges.length === 0) {
       for (const entry of this.entries) {
         have.add(entry.item.id);
       }
-      return { have: [...have], need: [] };
+      return { have: [...have], need: [], enumeratedRanges: [{ start: null, end: null }] };
     }
 
     for (const remoteRange of query.ranges) {
@@ -104,6 +107,7 @@ export class Negentropy {
         for (const entry of localEntries) {
           have.add(entry.item.id);
         }
+        enumeratedRanges.push({ start: remoteRange.start, end: remoteRange.end });
         continue;
       }
 
@@ -123,15 +127,18 @@ export class Negentropy {
       have: [...have],
       need: [],
       continueWith: continueWith.length > 0 ? continueWith : undefined,
+      enumeratedRanges: enumeratedRanges.length > 0 ? enumeratedRanges : undefined,
     };
   }
 
   async reconcile(
     remoteProcessQuery: (query: NegentropyQuery) => Promise<NegentropyResponse>,
     maxRounds: number = DEFAULT_MAX_ROUNDS,
-  ): Promise<{ need: string[] }> {
+  ): Promise<{ need: string[]; excess: string[] }> {
     const localIds = new Set(this.items.map((item) => item.id));
     const need = new Set<string>();
+    const remoteHave = new Set<string>();
+    const excess = new Set<string>();
 
     let query = await this.createQuery();
 
@@ -139,8 +146,20 @@ export class Negentropy {
       const response = await remoteProcessQuery(query);
 
       for (const id of response.have) {
+        remoteHave.add(id);
         if (!localIds.has(id)) {
           need.add(id);
+        }
+      }
+
+      // Compute excess: local IDs in enumerated ranges that remote doesn't have
+      if (response.enumeratedRanges) {
+        for (const range of response.enumeratedRanges) {
+          for (const entry of this.getEntriesInRange(range.start, range.end)) {
+            if (!remoteHave.has(entry.item.id)) {
+              excess.add(entry.item.id);
+            }
+          }
         }
       }
 
@@ -162,7 +181,7 @@ export class Negentropy {
       query = { ranges: nextRanges };
     }
 
-    return { need: [...need] };
+    return { need: [...need], excess: [...excess] };
   }
 
   getItem(id: string): NegentropyItem | undefined {

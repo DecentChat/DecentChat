@@ -3603,8 +3603,10 @@ export class ChatController {
     if (!ws) return;
 
     const messageIdsByChannel: Record<string, string[]> = {};
+    const pushMessages: any[] = [];
     for (const ch of ws.channels) {
-      const localItems = this.messageStore.getMessages(ch.id).map((m) => ({ id: m.id, timestamp: m.timestamp }));
+      const localMessages = this.messageStore.getMessages(ch.id);
+      const localItems = localMessages.map((m) => ({ id: m.id, timestamp: m.timestamp }));
       const negentropy = new Negentropy();
       await negentropy.build(localItems);
 
@@ -3614,14 +3616,44 @@ export class ChatController {
       if (result.need.length > 0) {
         messageIdsByChannel[ch.id] = result.need;
       }
+
+      // Push messages that remote is missing
+      if (result.excess.length > 0) {
+        const excessSet = new Set(result.excess);
+        for (const m of localMessages) {
+          if (excessSet.has(m.id)) {
+            pushMessages.push({
+              id: m.id,
+              channelId: m.channelId,
+              senderId: m.senderId,
+              content: m.content,
+              timestamp: m.timestamp,
+              type: m.type,
+              threadId: m.threadId,
+              prevHash: m.prevHash,
+              vectorClock: (m as any).vectorClock,
+            });
+          }
+        }
+      }
     }
 
-    if (Object.keys(messageIdsByChannel).length === 0) return;
-    this.transport.send(peerId, {
-      type: 'message-sync-fetch-request',
-      workspaceId: wsId,
-      messageIdsByChannel,
-    });
+    if (Object.keys(messageIdsByChannel).length > 0) {
+      this.transport.send(peerId, {
+        type: 'message-sync-fetch-request',
+        workspaceId: wsId,
+        messageIdsByChannel,
+      });
+    }
+
+    // Proactively push messages the remote is missing
+    if (pushMessages.length > 0) {
+      this.transport.send(peerId, {
+        type: 'message-sync-response',
+        workspaceId: wsId,
+        messages: pushMessages,
+      });
+    }
   }
 
   private async sendNegentropyQuery(
