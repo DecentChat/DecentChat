@@ -10,6 +10,8 @@
  */
 
 import { test, expect, Page, BrowserContext } from '@playwright/test';
+import { startRelayServer, type RelayServer } from '../mocks/mock-relay-server';
+import { getMockTransportScript } from '../mocks/MockTransport';
 
 // ─── Known-valid BIP39 mnemonic for import tests ─────────────────────────────
 // Validated with SeedPhraseManager.validate() — all 12 words are in the BIP39
@@ -20,6 +22,16 @@ const VALID_MNEMONIC =
 // A phrase with a word not in the BIP39 wordlist
 const INVALID_MNEMONIC = 'this is not a valid bip39 seed phrase at all here end';
 
+// ─── Relay server (use mock transport to avoid localhost:9000 dependency) ───
+
+let relay: RelayServer;
+
+test.beforeAll(async () => {
+  relay = await startRelayServer(0);
+});
+
+test.afterAll(() => relay?.close());
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Fresh browser context + page with clean IndexedDB / localStorage */
@@ -29,6 +41,8 @@ async function freshPage(context: BrowserContext): Promise<Page> {
   page.on('console', msg => {
     if (msg.type() === 'error') console.error('[Browser]', msg.text());
   });
+
+  await page.addInitScript(getMockTransportScript(`ws://localhost:${relay.port}`));
 
   await page.goto('/');
 
@@ -56,6 +70,11 @@ async function waitForReady(page: Page): Promise<void> {
     },
     { timeout: 15000 },
   );
+  const openAppBtn = page.getByRole('button', { name: /open app/i });
+  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await openAppBtn.click();
+  }
+
   await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
 }
 

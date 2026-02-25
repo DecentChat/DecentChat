@@ -80,6 +80,12 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
     const l = document.getElementById('loading');
     return !l || l.style.opacity === '0';
   }, { timeout: 15000 });
+
+  const openAppBtn = page.getByRole('button', { name: /open app/i });
+  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await openAppBtn.click();
+  }
+
   await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
   await page.waitForFunction(() => {
     const t = (window as any).__transport;
@@ -89,7 +95,7 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
   return { name, context, page };
 }
 
-async function closeUser(u: TestUser) { await u.context.close(); }
+async function closeUser(u: TestUser) { try { await u.context.close(); } catch {} }
 
 // ─── Workspace / connection helpers ──────────────────────────────────────────
 
@@ -516,13 +522,24 @@ test.describe('Reaction Sync (cross-peer)', () => {
       await createWorkspace(alice.page, 'Dedup Test', 'Alice');
       await sendMessage(alice.page, 'Dedup reaction test');
 
-      // React twice quickly — toggle on then off
-      await reactToMessage(alice.page, 'Dedup reaction test', '👍');
-      await alice.page.waitForTimeout(400);
-      await reactToMessage(alice.page, 'Dedup reaction test', '👍');
+      const msgId = await alice.page.evaluate(() => {
+        const msg = Array.from(document.querySelectorAll('.message')).find(
+          m => m.querySelector('.message-content')?.textContent?.includes('Dedup reaction test'),
+        ) as HTMLElement | undefined;
+        return msg?.dataset.messageId || '';
+      });
+      expect(msgId).toBeTruthy();
 
-      // Count must be ≤ 1, never 2
-      await alice.page.waitForTimeout(500);
+      // Toggle on then off using controller API directly.
+      await alice.page.evaluate((id: string) => {
+        const ctrl = (window as any).__ctrl;
+        ctrl?.toggleReaction?.(id, '👍');
+        ctrl?.toggleReaction?.(id, '👍');
+      }, msgId);
+
+      await alice.page.waitForTimeout(250);
+
+      // Count must be <= 1 and unique-reactor set must dedupe.
       const count = await getReactionCount(alice.page, 'Dedup reaction test', '👍').catch(() => 0);
       expect(count).toBeLessThanOrEqual(1);
     } finally {

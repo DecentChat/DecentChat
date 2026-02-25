@@ -9,6 +9,12 @@ test('lifecycle reconnect events are debounced into one reconnect pass', async (
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 20_000 });
+
+  const openAppBtn = page.getByRole('button', { name: /open app/i });
+  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await openAppBtn.click();
+  }
+
   await page.waitForFunction(() => !!(window as any).__ctrl, { timeout: 10_000 });
 
   await page.evaluate(() => {
