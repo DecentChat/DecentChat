@@ -38,6 +38,12 @@ async function createPage(browser: Browser): Promise<Page> {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 15000 });
+
+  const openAppBtn = page.getByRole('button', { name: /open app/i });
+  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await openAppBtn.click();
+  }
+
   await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
   await page.waitForFunction(() => {
     const t = (window as any).__transport;

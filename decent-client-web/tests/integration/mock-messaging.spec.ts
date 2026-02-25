@@ -88,6 +88,12 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 15000 });
+
+  const openAppBtn = page.getByRole('button', { name: /open app/i });
+  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await openAppBtn.click();
+  }
+
   await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
 
   // Wait for mock transport to be initialized (app sets window.__transport)
@@ -161,7 +167,7 @@ async function waitForMessage(page: Page, text: string, timeoutMs = 15000): Prom
 }
 
 async function getMessages(page: Page): Promise<string[]> {
-  return page.locator('.message-content').allTextContents();
+  return (await page.locator('.message-content').allTextContents()).map(t => t.trim());
 }
 
 /**

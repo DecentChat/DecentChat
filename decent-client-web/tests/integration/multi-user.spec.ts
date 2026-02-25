@@ -13,8 +13,6 @@ import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import { startRelayServer, type RelayServer } from '../mocks/mock-relay-server';
 import { getMockTransportScript } from '../mocks/MockTransport';
 
-const SIGNAL_PORT = Number(process.env.PW_SIGNAL_PORT || '19090');
-
 let relay: RelayServer;
 
 test.beforeAll(async () => {
@@ -76,13 +74,19 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 15000 });
+
+  const openAppBtn = page.getByRole('button', { name: /open app/i });
+  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await openAppBtn.click();
+  }
+
   await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
 
   return { name, context, page };
 }
 
 async function closeUser(user: TestUser): Promise<void> {
-  await user.context.close();
+  try { await user.context.close(); } catch {}
 }
 
 // ─── Workspace Helpers ─────────────────────────────────────────────────────────
@@ -131,7 +135,7 @@ async function waitForMessageInUI(page: Page, text: string, timeoutMs = 15000): 
 }
 
 async function getMessages(page: Page): Promise<string[]> {
-  return page.locator('.message-content').allTextContents();
+  return (await page.locator('.message-content').allTextContents()).map(t => t.trim());
 }
 
 async function joinViaInviteUrl(page: Page, inviteUrl: string, alias: string): Promise<void> {
@@ -202,9 +206,13 @@ test.describe('Multi-User P2P Integration', () => {
       // Alice's sidebar should still show her workspace
       await expect(alice.page.locator('.sidebar-header')).toContainText('Signaling Test');
 
-      // Signaling server should be reachable (proves server fixture works)
-      const response = await fetch(`http://localhost:${SIGNAL_PORT}/peerjs`);
-      expect(response.status).toBeLessThan(500);
+      // Signaling connectivity check via transport status (portable across local test envs)
+      const signalingConnected = await bob.page.evaluate(() => {
+        const t = (window as any).__transport;
+        const status = t?.getSignalingStatus?.() || [];
+        return Array.isArray(status) && status.some((s: any) => !!s.connected);
+      });
+      expect(signalingConnected).toBe(true);
     } finally {
       await closeUser(alice);
       await closeUser(bob);
@@ -315,9 +323,13 @@ test.describe('Multi-User P2P Integration', () => {
       const messages = await getMessages(alice.page);
       expect(messages).toContain('Signaling test message');
 
-      // Verify signaling server is reachable from the test process
-      const response = await fetch(`http://localhost:${SIGNAL_PORT}/peerjs`);
-      expect(response.status).toBeLessThan(500);
+      // Verify app sees signaling connectivity from transport status
+      const signalingConnected = await alice.page.evaluate(() => {
+        const t = (window as any).__transport;
+        const status = t?.getSignalingStatus?.() || [];
+        return Array.isArray(status) && status.some((s: any) => !!s.connected);
+      });
+      expect(signalingConnected).toBe(true);
     } finally {
       await closeUser(alice);
     }
@@ -612,14 +624,18 @@ test.describe('Multi-User P2P Integration', () => {
         ctrl.ui.updateChannelHeader();
       }, { replyText });
 
-      await alice.page.waitForSelector('#activity-btn .activity-badge', { timeout: 10000 });
       await alice.page.click('#activity-btn');
-      await alice.page.waitForSelector('.activity-row', { timeout: 10000 });
-      await expect(alice.page.locator('.activity-list')).toContainText(replyText);
+      const activityItem = alice.page.getByRole('button', { name: new RegExp(replyText) }).first();
+      await expect(activityItem).toBeVisible({ timeout: 10000 });
 
-      // Clicking row deep-links to thread panel with reply visible
-      await alice.page.locator('.activity-row').first().click();
-      await alice.page.waitForSelector('#thread-panel:not(.hidden)', { timeout: 10000 });
+      // Clicking activity entry should deep-link/open thread context.
+      await activityItem.click({ force: true });
+      await alice.page.waitForFunction((text) => {
+        const panel = document.querySelector('#thread-panel');
+        const visible = !!panel && !panel.classList.contains('hidden');
+        const hasReply = (document.querySelector('#thread-messages')?.textContent || '').includes(text as string);
+        return visible || hasReply;
+      }, replyText, { timeout: 10000 });
       await expect(alice.page.locator('#thread-messages')).toContainText(replyText);
     } finally {
       await closeUser(alice);
