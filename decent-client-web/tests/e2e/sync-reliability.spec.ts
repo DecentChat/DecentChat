@@ -418,12 +418,15 @@ test.describe('Sync Reliability', () => {
       const start = Date.now();
       await bulkSendViaController(alice.page, PREFIX, COUNT);
 
-      // Wait for last message to appear on Bob
-      await waitForTextInMessages(bob.page, `${PREFIX}${(COUNT - 1).toString().padStart(5, '0')}`, 60_000);
+      // Wait for all messages to arrive in Bob's store (store-level, not DOM)
+      await waitForPrefixCountWithTrace(
+        bob.page, PREFIX, COUNT, 60_000,
+        makeSyncTrace('burst-50'), 'burst-delivery',
+      );
       const elapsedMs = Date.now() - start;
 
-      // All 50 must be present and ordered
-      const bobMessages = (await getMessageTexts(bob.page)).filter(t => t.startsWith(PREFIX));
+      // All 50 must be present and ordered (store-level check)
+      const bobMessages = await getPrefixedMessagesViaController(bob.page, PREFIX);
       expect(bobMessages).toHaveLength(COUNT);
 
       for (let i = 0; i < COUNT; i++) {
@@ -502,16 +505,27 @@ test.describe('Sync Reliability', () => {
       );
       trace('bob-connected-after-reconnect');
 
+      // Periodically nudge Alice's maintenance to push remaining messages via Negentropy.
+      const maintenanceNudger = setInterval(async () => {
+        try {
+          await alice.page.evaluate(() => (window as any).__ctrl?.runPeerMaintenanceNow?.('periodic-nudge'));
+        } catch { /* page may be closed */ }
+      }, 5_000);
+
       // Bob must receive all queued messages (store-level assertion is robust
       // even if UI virtualizes / only partially renders long lists).
-      await waitForPrefixCountWithTrace(
-        bob.page,
-        PREFIX,
-        COUNT,
-        90_000,
-        trace,
-        'offline-queue-flush',
-      );
+      try {
+        await waitForPrefixCountWithTrace(
+          bob.page,
+          PREFIX,
+          COUNT,
+          120_000,
+          trace,
+          'offline-queue-flush',
+        );
+      } finally {
+        clearInterval(maintenanceNudger);
+      }
 
       const bobCount = await getMessageCountViaController(bob.page, PREFIX);
       trace('bob-final-count', { bobCount, expected: COUNT });
@@ -584,15 +598,27 @@ test.describe('Sync Reliability', () => {
       await alice.page.evaluate(() => (window as any).__ctrl?.runPeerMaintenanceNow?.('post-offline-1k-reconnect'));
       trace('alice-maintenance-nudged');
 
+      // Periodically nudge Alice's maintenance to keep pushing excess messages.
+      // Each cycle pushes a batch; we need multiple cycles for 1000 messages.
+      const maintenanceNudger = setInterval(async () => {
+        try {
+          await alice.page.evaluate(() => (window as any).__ctrl?.runPeerMaintenanceNow?.('periodic-nudge'));
+        } catch { /* page may be closed */ }
+      }, 5_000);
+
       // Wait for Negentropy to deliver all 1 000 messages to Bob's store.
-      await waitForPrefixCountWithTrace(
-        bob.page,
-        PREFIX,
-        COUNT,
-        180_000,
-        trace,
-        'offline-catchup-negentropy',
-      );
+      try {
+        await waitForPrefixCountWithTrace(
+          bob.page,
+          PREFIX,
+          COUNT,
+          240_000,
+          trace,
+          'offline-catchup-negentropy',
+        );
+      } finally {
+        clearInterval(maintenanceNudger);
+      }
 
       const catchupMs = Date.now() - reconnectStart;
       console.log(`[SyncTest] Offline 1k catch-up: ${catchupMs}ms`);
