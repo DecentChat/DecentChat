@@ -159,7 +159,7 @@ describe('OfflineQueue - Persistence Integration', () => {
     },
     load: async (peerId: string) => savedMessages.get(peerId) || [],
     remove: async (id: number) => {
-      for (const [peerId, messages] of savedMessages.entries()) {
+      for (const [, messages] of savedMessages.entries()) {
         const idx = messages.findIndex(m => m.id === id)
         if (idx >= 0) {
           messages.splice(idx, 1)

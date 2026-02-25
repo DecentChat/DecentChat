@@ -12,7 +12,7 @@
 import { describe, test, expect } from 'bun:test';
 import { ChunkedSender, ChunkedReceiver } from '../../src/media/ChunkedTransfer';
 import { MediaStore, MemoryBlobStorage } from '../../src/media/MediaStore';
-import { hashBlob, CHUNK_SIZE } from '../../src/media/Attachment';
+import { hashBlob } from '../../src/media/Attachment';
 import type { MediaChunk } from '../../src/media/Attachment';
 
 // Helper: create test data of given size

@@ -4,7 +4,6 @@
 
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { MessageCRDT } from '../../src/crdt/MessageCRDT';
-import type { CRDTMessage } from '../../src/crdt/MessageCRDT';
 
 describe('MessageCRDT', () => {
   let alice: MessageCRDT;
@@ -249,9 +248,9 @@ describe('MessageCRDT - Threads', () => {
     const alice = new MessageCRDT('alice');
 
     const parent = alice.createMessage('ch-1', 'Discussion topic');
-    const reply1 = alice.createMessage('ch-1', 'Reply 1', 'text', parent.id);
-    const mainMsg = alice.createMessage('ch-1', 'Back to main');
-    const reply2 = alice.createMessage('ch-1', 'Reply 2', 'text', parent.id);
+    alice.createMessage('ch-1', 'Reply 1', 'text', parent.id);
+    alice.createMessage('ch-1', 'Back to main');
+    alice.createMessage('ch-1', 'Reply 2', 'text', parent.id);
 
     const thread = alice.getThread('ch-1', parent.id);
     expect(thread).toHaveLength(2);

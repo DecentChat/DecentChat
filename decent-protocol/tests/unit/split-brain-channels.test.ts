@@ -9,7 +9,6 @@
 
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { WorkspaceManager } from '../../src/workspace/WorkspaceManager';
-import type { Channel, Workspace } from '../../src/workspace/types';
 import { MessageCRDT } from '../../src/crdt/MessageCRDT';
 
 describe('Split-Brain Channels — duplicate #dev created offline', () => {
@@ -107,7 +106,6 @@ describe('Split-Brain Channels — duplicate #dev created offline', () => {
 
     const aliceDevId = aliceResult.channel!.id;
     const bobDevId = bobResult.channel!.id;
-    const winnerId = aliceDevId < bobDevId ? aliceDevId : bobDevId;
 
     // Create messages on both channels
     const aliceCRDT = new MessageCRDT('alice');

@@ -24,7 +24,6 @@ import { describe, test, expect, beforeEach } from 'bun:test';
 import { WorkspaceManager } from '../../src/workspace/WorkspaceManager';
 import { MessageStore } from '../../src/messages/MessageStore';
 import { MessageCRDT } from '../../src/crdt/MessageCRDT';
-import type { Channel } from '../../src/workspace/types';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -234,7 +233,7 @@ beforeEach(async () => {
   await bob.ms.addMessage(msg3);
 
   // Alice receives Bob's message
-  const aliceMsgs = alice.ms.getMessages(GENERAL_CHANNEL_ID);
+  alice.ms.getMessages(GENERAL_CHANNEL_ID);
   const bobMsgCopy = await alice.ms.createMessage(GENERAL_CHANNEL_ID, BOB, 'Hello from Bob');
   await alice.ms.addMessage(bobMsgCopy);
 });
@@ -542,9 +541,6 @@ describe('Three-peer join — full scenario', () => {
     const maryGeneralCh = ws.channels.find(ch => ch.name === 'general');
     expect(maryGeneralCh).toBeDefined();
     // The smaller of Mary's original and Bob's synced ID should win
-    const expectedId = maryWs.channels[0].id < GENERAL_CHANNEL_ID
-      ? maryWs.channels[0].id
-      : GENERAL_CHANNEL_ID;
     // The channel should use the min ID (whichever is smaller)
     expect(maryGeneralCh!.id <= GENERAL_CHANNEL_ID || maryGeneralCh!.id <= maryWs.channels[0].id).toBe(true);
   });

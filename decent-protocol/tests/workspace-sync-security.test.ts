@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect } from 'bun:test';
 
 /**
  * Tests for workspace sync security
@@ -156,7 +156,6 @@ describe('Workspace Sync Attack Prevention', () => {
     
     // Without the fix, lexicographically smaller ID would "win"
     // With the fix, both workspaces remain separate
-    const aIsSmaller = workspaceA.id < workspaceB.id;
     
     // Regardless of which is smaller, workspaces should NOT merge
     expect(workspaceA.id).not.toBe(workspaceB.id);

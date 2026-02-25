@@ -51,7 +51,6 @@ interface RegisteredPeer {
 export class EmbeddedSignaling {
   private config: Required<EmbeddedSignalingConfig>;
   private server: any = null; // HTTP server
-  private wss: any = null; // WebSocket server
   private peers = new Map<string, RegisteredPeer>();
   private running = false;
 
@@ -110,7 +109,7 @@ export class EmbeddedSignaling {
         // Extract peer ID from URL: /peerjs?key=peerjs&id=PEER_ID&token=TOKEN
         const url = new URL(request.url, `http://${request.headers.host}`);
         const peerId = url.searchParams.get('id');
-        const key = url.searchParams.get('key') || 'peerjs';
+        url.searchParams.get('key'); // keep parse for compatibility
 
         if (!peerId) {
           socket.destroy();
@@ -141,9 +140,8 @@ export class EmbeddedSignaling {
     });
   }
 
-  private handleWebSocketUpgrade(request: any, socket: any, head: any, peerId: string): void {
+  private handleWebSocketUpgrade(request: any, socket: any, _head: any, peerId: string): void {
     // Minimal WebSocket handshake (RFC 6455)
-    const crypto = globalThis.crypto || require('crypto');
     const key = request.headers['sec-websocket-key'];
     const GUID = '258EAFA5-E914-47DA-95CA-5AB5DC11D65A';
 

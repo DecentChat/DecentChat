@@ -289,7 +289,6 @@ describe('Workspace Isolation — cross-workspace message injection', () => {
   let ws1Id: string;
   let ws2Id: string;
   let ws1ChannelId: string;
-  let ws2ChannelId: string;
 
   beforeEach(() => {
     wm = new WorkspaceManager();
@@ -302,7 +301,6 @@ describe('Workspace Isolation — cross-workspace message injection', () => {
     const ws2 = wm.createWorkspace('workspace2', 'alice', 'Alice', 'alice-key');
     wm.addMember(ws2.id, { peerId: 'kim', alias: 'Kim', publicKey: 'kim-key', joinedAt: Date.now(), role: 'member' });
     ws2Id = ws2.id;
-    ws2ChannelId = ws2.channels[0].id;
   });
 
   // 4a: valid channelId but wrong workspaceId → rejected

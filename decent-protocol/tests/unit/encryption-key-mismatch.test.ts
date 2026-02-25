@@ -7,7 +7,7 @@
  * still write new data with new key.
  */
 
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect } from 'bun:test';
 import { AtRestEncryption } from '../../src/storage/AtRestEncryption';
 
 function makeSeed(): ArrayBuffer {

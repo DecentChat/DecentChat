@@ -122,7 +122,7 @@ describe('DoubleRatchet - Out of Order Messages', () => {
 
 describe('DoubleRatchet - Forward Secrecy', () => {
   test('each message uses a unique key (different ciphertext)', async () => {
-    const { alice, bob } = await createPair();
+    const { alice } = await createPair();
 
     const m1 = await DoubleRatchet.encrypt(alice, 'same text');
     const m2 = await DoubleRatchet.encrypt(alice, 'same text');
@@ -150,7 +150,7 @@ describe('DoubleRatchet - Forward Secrecy', () => {
   });
 
   test('message number increments within chain', async () => {
-    const { alice, bob } = await createPair();
+    const { alice } = await createPair();
 
     const m0 = await DoubleRatchet.encrypt(alice, 'msg 0');
     const m1 = await DoubleRatchet.encrypt(alice, 'msg 1');
@@ -183,7 +183,7 @@ describe('DoubleRatchet - Forward Secrecy', () => {
 
 describe('DoubleRatchet - Security', () => {
   test('cannot decrypt with wrong ratchet state', async () => {
-    const { alice, bob } = await createPair();
+    const { alice } = await createPair();
     const { alice: eve } = await createPair(); // Different session
 
     const msg = await DoubleRatchet.encrypt(alice, 'secret message');

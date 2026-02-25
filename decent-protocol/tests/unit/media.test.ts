@@ -5,7 +5,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   inferAttachmentType, calculateChunkCount, createAttachmentMeta, hashBlob,
-  CHUNK_SIZE, MAX_THUMBNAIL_SIZE,
+  CHUNK_SIZE,
   MediaStore, MemoryBlobStorage,
   ChunkedSender, ChunkedReceiver,
   generateWaveform, encodeWaveform, decodeWaveform, waveformToSVG, getFileTypeIcon,

@@ -4,7 +4,7 @@
 
 import { test, expect } from 'bun:test';
 import { Negentropy } from '../../src/crdt/Negentropy';
-import type { NegentropyItem, NegentropyQuery } from '../../src/crdt/Negentropy';
+import type { NegentropyItem } from '../../src/crdt/Negentropy';
 
 // Helper to create mock items
 function createItems(count: number, startId = 1, startTime = 1000): NegentropyItem[] {
@@ -267,8 +267,6 @@ test('Negentropy - Round Trip > bidirectional reconciliation', async () => {
   expect(bobResult.need.length).toBe(50); // Bob needs 1-50
 
   // Verify symmetry: what Alice needs should be what Bob has (51-100)
-  const aliceNeedsSet = new Set(aliceResult.need);
-  const bobHasExtraSet = new Set(bobItems.filter(item => item.id.match(/^msg-(5[1-9]|[6-9]\d|100)$/)).map(i => i.id));
   expect(aliceResult.need.every(id => id.startsWith('msg-5') || id.startsWith('msg-6') || id.startsWith('msg-7') || id.startsWith('msg-8') || id.startsWith('msg-9') || id === 'msg-100')).toBe(true);
 });
 

@@ -23,7 +23,6 @@ import { describe, test, expect, beforeEach } from 'bun:test';
 import { WorkspaceManager } from '../../src/workspace/WorkspaceManager';
 import { MemoryContactStore } from '../../src/contacts/Contact';
 import type { Contact } from '../../src/contacts/Contact';
-import type { Channel } from '../../src/workspace/types';
 
 // ---------------------------------------------------------------------------
 // Helpers

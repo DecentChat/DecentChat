@@ -9,7 +9,6 @@ import { describe, test, expect, beforeEach } from 'bun:test';
 import { SyncProtocol, SyncEvent } from '../../src/workspace/SyncProtocol';
 import { WorkspaceManager } from '../../src/workspace/WorkspaceManager';
 import { MessageStore } from '../../src/messages/MessageStore';
-import type { SyncMessage } from '../../src/workspace/types';
 
 /**
  * Creates a simulated peer with its own managers and sync protocol.

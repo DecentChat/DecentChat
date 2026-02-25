@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { CryptoManager, MessageCipher, HashChain, GENESIS_HASH, MessageStore, MessageCRDT } from '../../src/index';
+import { CryptoManager, MessageCipher, HashChain, MessageStore, MessageCRDT } from '../../src/index';
 import { IdentityManager } from '../../src/identity/Identity';
 import { SeedPhraseManager } from '../../src/identity/SeedPhrase';
 import { verifyHandshakeKey } from '../../src/security/HandshakeVerifier';
@@ -221,7 +221,7 @@ describe('Security - Hash Chain Attacks', () => {
     // The forked chain has a broken hash: msg2's content changed but
     // if anyone has the original msg2's hash, the fork is detected
     const forkedChain = [validChain[0], forked];
-    const result = await chain.verifyFullChain(forkedChain.map(m => ({
+    await chain.verifyFullChain(forkedChain.map(m => ({ 
       id: m.id, channelId: m.channelId, senderId: m.senderId,
       timestamp: m.timestamp, content: m.content, type: m.type, prevHash: m.prevHash,
     })));
@@ -233,7 +233,7 @@ describe('Security - Hash Chain Attacks', () => {
     msg3.timestamp = msg2.timestamp + 1;
     await store.addMessage(msg3);
 
-    const realMsg3Hash = store.getMessages('ch-1')[2];
+    store.getMessages('ch-1')[2];
     // If attacker tries to add msg3 to forked chain, prevHash won't match
     const forkHash = await chain.hashMessage({
       id: forked.id, channelId: forked.channelId, senderId: forked.senderId,
@@ -284,7 +284,7 @@ describe('Security - Hash Chain Attacks', () => {
   test('future timestamp does not break CRDT ordering', () => {
     const crdt = new MessageCRDT('alice');
 
-    const msg1 = crdt.createMessage('ch-1', 'Normal');
+    crdt.createMessage('ch-1', 'Normal');
 
     // Simulate message from future (malicious peer with wrong clock)
     const futureMsg = {

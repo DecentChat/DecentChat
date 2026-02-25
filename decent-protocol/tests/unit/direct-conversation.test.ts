@@ -4,7 +4,6 @@
 
 import { describe, test, expect, beforeEach } from 'bun:test'
 import { MemoryDirectConversationStore } from '../../src/contacts/DirectConversation'
-import type { DirectConversation } from '../../src/contacts/DirectConversation'
 
 describe('MemoryDirectConversationStore - Basic Operations', () => {
   let store: MemoryDirectConversationStore
@@ -136,8 +135,8 @@ describe('DirectConversation - Sorting & Ordering', () => {
 
   test('conversations with no messages sort to bottom', async () => {
     const conv1 = await store.create('peer1')
-    const conv2 = await store.create('peer2')
-    const conv3 = await store.create('peer3')
+    await store.create('peer2')
+    await store.create('peer3')
 
     await store.updateLastMessage(conv1.id, Date.now())
     // conv2 and conv3 have no messages (lastMessageAt = 0)
@@ -267,7 +266,7 @@ describe('DirectConversation - Data Integrity', () => {
   })
 
   test('handles unicode in contactPeerId', async () => {
-    const conv = await store.create('peer-你好-🚀')
+    await store.create('peer-你好-🚀')
 
     const retrieved = await store.getByContact('peer-你好-🚀')
     expect(retrieved).toBeDefined()

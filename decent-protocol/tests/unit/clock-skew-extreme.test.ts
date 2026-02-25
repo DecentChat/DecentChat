@@ -11,7 +11,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { ClockSync } from '../../src/time/ClockSync';
 import { MessageCRDT } from '../../src/crdt/MessageCRDT';
-import type { PeerClockInfo, TimeSyncRequest, TimeSyncResponse } from '../../src/time/ClockSync';
+import type { PeerClockInfo, TimeSyncResponse } from '../../src/time/ClockSync';
 
 /**
  * Simulate a time-sync round-trip with a known clock offset.
@@ -24,7 +24,6 @@ function simulateSync(
   rttMs: number = 10
 ): PeerClockInfo {
   const request = sync.createRequest(peerId);
-  const now = Date.now();
 
   // Simulate: remote clock is offsetMs ahead
   const response: TimeSyncResponse = {

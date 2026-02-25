@@ -6,7 +6,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { HDKeyDerivation, HDPurpose } from '../../src/identity/HDKeyDerivation';
+import { HDKeyDerivation } from '../../src/identity/HDKeyDerivation';
 import { SeedPhraseManager } from '../../src/identity/SeedPhrase';
 import { CryptoManager } from '../../src/crypto/CryptoManager';
 import { MessageCipher } from '../../src/crypto/MessageCipher';

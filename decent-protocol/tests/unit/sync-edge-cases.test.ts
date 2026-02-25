@@ -5,7 +5,7 @@
  * large history syncs, and tamper detection.
  */
 
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect } from 'bun:test';
 import { SyncProtocol, SyncEvent } from '../../src/workspace/SyncProtocol';
 import { WorkspaceManager } from '../../src/workspace/WorkspaceManager';
 import { MessageStore } from '../../src/messages/MessageStore';
@@ -208,7 +208,7 @@ describe('Edge Case: Message broadcast to disconnected peer', () => {
     const events: SyncEvent[] = [];
 
     const sentTo: string[] = [];
-    const sendFn = (targetPeerId: string, data: any) => {
+    const sendFn = (targetPeerId: string) => {
       sentTo.push(targetPeerId);
       if (targetPeerId === 'dave') {
         return false; // dave is disconnected
@@ -345,7 +345,7 @@ describe('Edge Case: Large history sync', () => {
     alice.wm.addMember(ws.id, { peerId: 'bob', alias: 'Bob', publicKey: 'bob-key', joinedAt: Date.now(), role: 'member' });
 
     // Create 4 additional channels (1 general already exists)
-    const channels = alice.wm.getChannels(ws.id); // starts with [general]
+    alice.wm.getChannels(ws.id); // starts with [general]
     for (let i = 0; i < 4; i++) {
       alice.wm.createChannel(ws.id, `channel-${i}`, 'alice');
     }

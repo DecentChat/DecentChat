@@ -3,10 +3,10 @@
  */
 
 import '../setup';
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect } from 'bun:test';
 import {
   CryptoManager, MessageCipher, MessageStore, WorkspaceManager,
-  MessageCRDT, VectorClock, PersistentStore,
+  MessageCRDT, PersistentStore,
 } from '../../src/index';
 import { SeedPhraseManager } from '../../src/identity/SeedPhrase';
 import { IdentityManager } from '../../src/identity/Identity';
@@ -73,7 +73,7 @@ describe('E2E - Full Identity + Workspace + Messaging Flow', () => {
 
     // 8. Both add to CRDT → verify ordering
     const aliceCRDT = new MessageCRDT(alicePeerId);
-    const crdtMsg = aliceCRDT.createMessage(channelId, plaintext);
+    aliceCRDT.createMessage(channelId, plaintext);
     expect(aliceCRDT.getMessages(channelId)).toHaveLength(1);
 
     // 9. Save to PersistentStore
@@ -182,7 +182,6 @@ describe('E2E - Offline Divergence + Merge', () => {
 describe('E2E - Three-Peer Workspace with DMs', () => {
   test('channel isolation: DM not visible to third party', () => {
     const wm = new WorkspaceManager();
-    const crypto = new CryptoManager();
 
     // Alice creates workspace
     const ws = wm.createWorkspace('Team', 'alice', 'Alice', 'alice-key');
@@ -254,7 +253,7 @@ describe('E2E - SyncProtocol Full Join Flow', () => {
     const bobEvents: any[] = [];
     const bobSync = new SyncProtocol(
       bobWM, bobMS,
-      (peerId, data) => true,
+      () => true,
       (event) => bobEvents.push(event),
       'bob'
     );

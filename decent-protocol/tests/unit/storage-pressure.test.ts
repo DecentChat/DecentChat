@@ -133,7 +133,7 @@ describe('Storage Pressure — Quota management under active messaging', () => {
     expect(result.success).toBe(true);
 
     // Auto-prune and store new media
-    const pruned = await mediaStore.autoprune();
+    await mediaStore.autoprune();
 
     const newBlob = createBlob(1000);
     const newMeta = await createMeta('att-after-prune', 1000, newBlob);
