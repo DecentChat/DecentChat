@@ -144,6 +144,34 @@ async function getMessageTexts(page: Page): Promise<string[]> {
   return texts.map(t => t.replace(/\n+$/g, ''));
 }
 
+function generateSequentialMessages(prefix: string, count: number): string[] {
+  return Array.from({ length: count }, (_, i) => `${prefix}${i.toString().padStart(5, '0')}`);
+}
+
+function getDeterministicSampleIndices(count: number): number[] {
+  const candidates = [0, 1, 2, 3, 4, 10, 25, 50, 100, 250, 500, 750, 900, 995, 998, 999];
+  return [...new Set(candidates.filter(i => i >= 0 && i < count))];
+}
+
+async function getPrefixedMessagesViaController(page: Page, prefix: string): Promise<string[]> {
+  return page.evaluate((pfx: string) => {
+    const ctrl = (window as any).__ctrl;
+    const state = (window as any).__state;
+    if (!ctrl?.messageStore || !state?.activeChannelId) return [];
+
+    return ctrl.messageStore
+      .getMessages(state.activeChannelId)
+      .filter((m: any) => String(m.content ?? '').startsWith(pfx))
+      .slice()
+      .sort((a: any, b: any) => {
+        const tsDelta = Number(a.timestamp) - Number(b.timestamp);
+        if (tsDelta !== 0) return tsDelta;
+        return String(a.id).localeCompare(String(b.id));
+      })
+      .map((m: any) => String(m.content ?? ''));
+  }, prefix);
+}
+
 /**
  * Inject N messages directly through the app's ChatController.sendMessage()
  * running inside the browser context — fast, exercises real send + encrypt + queue path.
@@ -165,41 +193,45 @@ async function bulkSendViaController(page: Page, prefix: string, count: number) 
  * Seed N messages directly into Alice's MessageStore (bypasses encryption/transport
  * entirely — used to pre-populate history before Bob joins, to test Negentropy sync).
  */
-async function seedMessagesIntoStore(page: Page, channelId: string, prefix: string, count: number) {
+async function seedMessagesIntoStore(page: Page, channelId: string, messages: string[]) {
   // Use forceAdd (synchronous) instead of createMessage+addMessage (async SHA-256 per msg
   // + IndexedDB per msg) to avoid page.evaluate timing out at ~200 iterations.
   // forceAdd inserts directly into the in-memory store without hash-chain validation —
   // acceptable here because we're testing sync/delivery, not chain integrity.
-  await page.evaluate(({ channelId, prefix, count }: { channelId: string; prefix: string; count: number }) => {
+  await page.evaluate(({ channelId, messages }: { channelId: string; messages: string[] }) => {
     const ctrl = (window as any).__ctrl;
     const state = (window as any).__state;
     if (!ctrl?.messageStore) throw new Error('messageStore not available');
     const peerId = state.myPeerId;
     const GENESIS = '0'.repeat(64);
+    const runTag = Date.now().toString(36);
 
-    let lastTs = Date.now();
+    const seeded: any[] = [];
+    let lastTs = Date.now() - 1;
 
-    for (let i = 0; i < count; i++) {
-      ctrl.messageStore.forceAdd({
-        id: `seed-${i}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    for (let i = 0; i < messages.length; i++) {
+      const msg = {
+        id: `seed-${runTag}-${i.toString().padStart(5, '0')}`,
         channelId,
         senderId: peerId,
         timestamp: ++lastTs,
-        content: `${prefix}${i.toString().padStart(5, '0')}`,
+        content: messages[i],
         type: 'text' as const,
         threadId: undefined,
         prevHash: GENESIS,
         status: 'pending',
-      });
+      };
+      ctrl.messageStore.forceAdd(msg);
+      seeded.push(msg);
     }
 
     // Register all seeded messages in the CRDT index so Negentropy can compute
     // set-difference and advertise them to connecting peers.
     const crdt = ctrl.getOrCreateCRDT(channelId);
-    for (const msg of ctrl.messageStore.getMessages(channelId)) {
+    for (const msg of seeded) {
       try { crdt.addReceived(msg); } catch {}
     }
-  }, { channelId, prefix, count });
+  }, { channelId, messages });
 }
 
 async function waitForMessageCount(page: Page, count: number, timeoutMs = 60_000) {
@@ -518,6 +550,7 @@ test.describe('Sync Reliability', () => {
 
       const COUNT = 1_000;
       const PREFIX = `offline-1k-${Date.now()}-`;
+      const expectedMessages = generateSequentialMessages(PREFIX, COUNT);
 
       // Grab Alice's active channel ID.
       const channelId = await alice.page.evaluate(() => (window as any).__state?.activeChannelId);
@@ -525,7 +558,7 @@ test.describe('Sync Reliability', () => {
 
       // Seed 1 000 messages directly into Alice's MessageStore + CRDT index.
       // This is ~1–2s vs ~60–120s for the encrypted send path.
-      await seedMessagesIntoStore(alice.page, channelId, PREFIX, COUNT);
+      await seedMessagesIntoStore(alice.page, channelId, expectedMessages);
       const seededCount = await getMessageCountViaController(alice.page, PREFIX);
       trace('alice-seeded', { seededCount, expected: COUNT });
       expect(seededCount).toBe(COUNT);
@@ -568,14 +601,143 @@ test.describe('Sync Reliability', () => {
       trace('bob-final-count', { bobCount, expected: COUNT, catchupMs });
       expect(bobCount).toBe(COUNT);
 
-      // Spot-check first and last message ordering.
-      const bobTexts = (await bob.page.locator('.message-content').allTextContents())
-        .filter(t => t.startsWith(PREFIX));
-      expect(bobTexts[0]).toBe(`${PREFIX}${(0).toString().padStart(5, '0')}`);
-      expect(bobTexts[COUNT - 1]).toBe(`${PREFIX}${(COUNT - 1).toString().padStart(5, '0')}`);
+      // Strong validation using store-level data (CI-stable with virtualized UI).
+      const bobMessages = await getPrefixedMessagesViaController(bob.page, PREFIX);
+      expect(bobMessages).toHaveLength(COUNT);
+
+      // Sampled content checks across the full range.
+      for (const idx of getDeterministicSampleIndices(COUNT)) {
+        expect(bobMessages[idx]).toBe(expectedMessages[idx]);
+      }
+
+      // Full-order check: suffix numbers must be strictly increasing end-to-end.
+      const ordered = bobMessages.every((msg, idx) => {
+        if (idx === 0) return true;
+        const prev = Number(bobMessages[idx - 1].slice(PREFIX.length));
+        const curr = Number(msg.slice(PREFIX.length));
+        return Number.isFinite(prev) && Number.isFinite(curr) && curr > prev;
+      });
+      expect(ordered).toBe(true);
 
       // Performance guard: 1k Negentropy catch-up must complete in under 3 minutes.
       expect(catchupMs).toBeLessThan(180_000);
+    } finally {
+      await closeUser(alice);
+      await closeUser(bob);
+    }
+  });
+
+  // ─── 6b. Offline chaos reconnect: repeated flaps during 1 000-message catch-up ───────
+
+  test('offline chaos reconnect: Bob survives repeated disconnects and fully catches up 1 000 messages', async ({ browser }) => {
+    test.setTimeout(420_000);
+    const trace = makeSyncTrace('offline-chaos-1k');
+    const alice = await createUser(browser, 'Alice');
+    const bob   = await createUser(browser, 'Bob');
+
+    try {
+      trace('start');
+      await createWorkspace(alice.page, 'Offline Chaos 1k', 'Alice');
+      const inviteUrl = await getInviteUrl(alice.page);
+      await joinViaUrl(bob.page, inviteUrl, 'Bob');
+      await waitForPeerConnection(alice.page);
+      await waitForPeerConnection(bob.page);
+      trace('connected-initial');
+
+      await bob.context.setOffline(true);
+      trace('bob-offline-initial');
+      await alice.page.waitForTimeout(2_000);
+
+      const COUNT = 1_000;
+      const PREFIX = `offline-chaos-1k-${Date.now()}-`;
+      const expectedMessages = generateSequentialMessages(PREFIX, COUNT);
+
+      const channelId = await alice.page.evaluate(() => (window as any).__state?.activeChannelId);
+      expect(channelId).toBeTruthy();
+
+      await seedMessagesIntoStore(alice.page, channelId, expectedMessages);
+      const seededCount = await getMessageCountViaController(alice.page, PREFIX);
+      trace('alice-seeded', { seededCount, expected: COUNT });
+      expect(seededCount).toBe(COUNT);
+
+      const reconnectStart = Date.now();
+
+      // Bring Bob online and intentionally flap his network while catch-up runs.
+      await bob.context.setOffline(false);
+      trace('bob-online-phase1');
+
+      await bob.page.waitForFunction(
+        () => {
+          const t = (window as any).__transport;
+          return t?._ws?.readyState === 1;
+        },
+        { timeout: 30_000 },
+      );
+      await bob.page.waitForTimeout(150);
+      await alice.page.evaluate(() => (window as any).__ctrl?.runPeerMaintenanceNow?.('offline-chaos-phase1'));
+      trace('alice-maintenance-phase1');
+
+      // Perform deterministic reconnect flaps to stress retry/idempotency.
+      const flapPlan = [
+        { onlineMs: 2_500, offlineMs: 1_200 },
+        { onlineMs: 3_000, offlineMs: 1_500 },
+      ];
+
+      for (let i = 0; i < flapPlan.length; i++) {
+        const phase = flapPlan[i];
+        await bob.page.waitForTimeout(phase.onlineMs);
+        await bob.context.setOffline(true);
+        trace('bob-flap-offline', { flap: i + 1, ...phase });
+        await alice.page.waitForTimeout(300);
+
+        await bob.page.waitForTimeout(phase.offlineMs);
+        await bob.context.setOffline(false);
+        trace('bob-flap-online', { flap: i + 1, ...phase });
+
+        await bob.page.waitForFunction(
+          () => {
+            const t = (window as any).__transport;
+            return t?._ws?.readyState === 1;
+          },
+          { timeout: 30_000 },
+        );
+        await bob.page.waitForTimeout(150);
+
+        await alice.page.evaluate((n) => (window as any).__ctrl?.runPeerMaintenanceNow?.(`offline-chaos-phase-${n}`), i + 2);
+        trace('alice-maintenance-after-flap', { flap: i + 1 });
+      }
+
+      await waitForPrefixCountWithTrace(
+        bob.page,
+        PREFIX,
+        COUNT,
+        240_000,
+        trace,
+        'offline-chaos-catchup',
+      );
+
+      const catchupMs = Date.now() - reconnectStart;
+      const bobCount = await getMessageCountViaController(bob.page, PREFIX);
+      trace('bob-final-count', { bobCount, expected: COUNT, catchupMs });
+      expect(bobCount).toBe(COUNT);
+
+      const bobMessages = await getPrefixedMessagesViaController(bob.page, PREFIX);
+      expect(bobMessages).toHaveLength(COUNT);
+
+      for (const idx of getDeterministicSampleIndices(COUNT)) {
+        expect(bobMessages[idx]).toBe(expectedMessages[idx]);
+      }
+
+      const ordered = bobMessages.every((msg, idx) => {
+        if (idx === 0) return true;
+        const prev = Number(bobMessages[idx - 1].slice(PREFIX.length));
+        const curr = Number(msg.slice(PREFIX.length));
+        return Number.isFinite(prev) && Number.isFinite(curr) && curr > prev;
+      });
+      expect(ordered).toBe(true);
+
+      // Guardrail: even with reconnect flaps, full catch-up should finish within 4 minutes.
+      expect(catchupMs).toBeLessThan(240_000);
     } finally {
       await closeUser(alice);
       await closeUser(bob);
@@ -600,10 +762,11 @@ test.describe('Sync Reliability', () => {
 
       const COUNT = 1_000;
       const PREFIX = `history-${Date.now()}-`;
+      const expectedMessages = generateSequentialMessages(PREFIX, COUNT);
 
       // Seed 1 000 messages directly into Alice's store
       // (bypasses encryption so seeding is fast; tests the Negentropy/Merkle sync path)
-      await seedMessagesIntoStore(alice.page, channelId, PREFIX, COUNT);
+      await seedMessagesIntoStore(alice.page, channelId, expectedMessages);
 
       // Verify Alice's store has all messages before Bob joins
       const aliceCount = await getMessageCountViaController(alice.page, PREFIX);
@@ -635,8 +798,8 @@ test.describe('Sync Reliability', () => {
 
       // Spot-check first and last
       const bobTexts = (await getMessageTexts(bob.page)).filter(t => t.startsWith(PREFIX));
-      expect(bobTexts[0]).toBe(`${PREFIX}${(0).toString().padStart(5, '0')}`);
-      expect(bobTexts[COUNT - 1]).toBe(`${PREFIX}${(COUNT - 1).toString().padStart(5, '0')}`);
+      expect(bobTexts[0]).toBe(expectedMessages[0]);
+      expect(bobTexts[COUNT - 1]).toBe(expectedMessages[COUNT - 1]);
     } finally {
       await closeUser(alice);
       await closeUser(bob);

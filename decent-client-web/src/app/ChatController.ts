@@ -138,6 +138,7 @@ export class ChatController {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  private lastMessageSyncRequestAt = new Map<string, number>();
 
   /** DEP-002: Peer Exchange for signaling server discovery */
   readonly storageQuota: StorageQuotaManager = new StorageQuotaManager();
@@ -293,7 +294,7 @@ export class ChatController {
   private isTrustedOfflineReplayMessage(_peerId: string, data: any): boolean {
     // Offline queue replay lane: allow higher throughput for messages explicitly
     // marked as local outbox replay after reconnect.
-    return data?._offlineReplay === 1 && !!data?.encrypted;
+    return data?._offlineReplay === 1 && (!!data?.encrypted || !!data?.ratchet);
   }
 
   setupTransportHandlers(): void {
@@ -1894,11 +1895,25 @@ export class ChatController {
     if (!ws) return 0;
 
     const connectedPeers = new Set(this.transport.getConnectedPeers());
+    const now = Date.now();
     let attempted = 0;
 
     for (const member of ws.members) {
       if (member.peerId === this.state.myPeerId) continue;
-      if (connectedPeers.has(member.peerId)) continue;
+      if (connectedPeers.has(member.peerId)) {
+        // Even when transport still thinks a peer is connected, traffic can be
+        // dropped during relay outages. Periodic sync closes those gaps.
+        if (this.state.readyPeers.has(member.peerId)) {
+          const last = this.lastMessageSyncRequestAt.get(member.peerId) ?? 0;
+          if (now - last >= 10_000) {
+            this.lastMessageSyncRequestAt.set(member.peerId, now);
+            this.requestMessageSync(member.peerId).catch(err => {
+              console.warn('[Maintenance] Periodic message sync failed:', err);
+            });
+          }
+        }
+        continue;
+      }
       // Use the transport's own in-flight state (connectingTo + pending reconnect
       // timers) instead of app-level connectingPeers, which can go stale when
       // connect() returns immediately (dedup early-return, no catch fired).
@@ -3542,7 +3557,11 @@ export class ChatController {
   // =========================================================================
 
   private async requestMessageSync(peerId: string): Promise<void> {
-    if (this.peerSupportsCapability(peerId, NEGENTROPY_SYNC_CAPABILITY)) {
+    const hasCapabilities = this.peerCapabilities.has(peerId);
+    const supportsNegentropy = this.peerSupportsCapability(peerId, NEGENTROPY_SYNC_CAPABILITY);
+
+    // Optimistically try negentropy when capability info is missing (handshake race on reconnect).
+    if (supportsNegentropy || !hasCapabilities) {
       try {
         await this.requestNegentropyMessageSync(peerId);
         return;
@@ -3722,9 +3741,7 @@ export class ChatController {
       const since = channelTimestamps[ch.id] ?? 0;
       const msgs = this.messageStore.getMessages(ch.id);
       const newer = msgs.filter(m => m.timestamp > since);
-      // Limit to 50 per channel
-      const limited = newer.slice(0, 50);
-      for (const m of limited) {
+      for (const m of newer) {
         allMessages.push({
           id: m.id,
           channelId: m.channelId,
@@ -3755,6 +3772,8 @@ export class ChatController {
 
     const messages: any[] = data.messages || [];
     let added = 0;
+    let touchedActiveChannel = false;
+    const persistTasks: Array<Promise<void>> = [];
 
     for (const msg of messages) {
       // Skip if we already have this message
@@ -3785,14 +3804,21 @@ export class ChatController {
           wallTime: newMsg.timestamp,
           prevHash: newMsg.prevHash || '',
         });
-        await this.persistMessage(newMsg);
+        persistTasks.push(this.persistMessage(newMsg));
         added++;
 
-        // Re-render if this is the active channel
+        // Re-render once after batch if active channel changed.
         if (msg.channelId === this.state.activeChannelId) {
-          this.ui?.renderMessages();
+          touchedActiveChannel = true;
         }
       }
+    }
+
+    if (persistTasks.length > 0) {
+      await Promise.all(persistTasks);
+    }
+    if (touchedActiveChannel) {
+      this.ui?.renderMessages();
     }
 
     if (added > 0) {
@@ -3818,6 +3844,7 @@ export class ChatController {
 
     let delivered = 0;
     let failed = 0;
+    let hitBackpressure = false;
 
     for (const item of queued as any[]) {
       const envelope = item?.data ?? item;
@@ -3827,7 +3854,10 @@ export class ChatController {
       try {
         const sent = this.transport.send(peerId, envelope);
         if (!sent) {
-          throw new Error('transport.send returned false');
+          // Transport backpressure/transient readiness race. Keep item queued
+          // and retry shortly without increasing attempt counters.
+          hitBackpressure = true;
+          break;
         }
         // Remove only after successful transport acceptance.
         if (typeof item?.id === 'number') {
@@ -3854,15 +3884,18 @@ export class ChatController {
         `⚠️ ${failed} queued message${failed > 1 ? 's' : ''} still pending for ${peerId.slice(0, 8)}`,
         'error',
       );
+    }
 
-      // Retry pending queue shortly while peer remains ready.
+    // Retry pending queue shortly while peer remains ready.
+    // Use fast retry after transient backpressure, otherwise normal retry.
+    if (failed > 0 || hitBackpressure) {
       setTimeout(() => {
         if (this.state.readyPeers.has(peerId)) {
           this.flushOfflineQueue(peerId).catch((err) => {
             console.warn('[OfflineQueue] retry flush failed:', (err as Error)?.message || err);
           });
         }
-      }, 1_500);
+      }, hitBackpressure ? 250 : 1_500);
     }
   }
 

@@ -15,7 +15,6 @@ export { MessageCipher } from './crypto/MessageCipher';
 // ─── CRDT ───────────────────────────────────────────────────────────────────
 export { VectorClock } from './crdt/VectorClock';
 export { MessageCRDT } from './crdt/MessageCRDT';
-export { MerkleTree } from './crdt/MerkleTree';
 export { Negentropy } from './crdt/Negentropy';
 
 // ─── Workspace ──────────────────────────────────────────────────────────────
@@ -93,7 +92,6 @@ export type {
 export type { KeyPair, SerializedKeyPair, EncryptedData, SignedMessage } from './crypto/types';
 export type { HashableMessage, ChainVerificationResult } from './crypto/HashChain';
 export type { CRDTMessage } from './crdt/MessageCRDT';
-export type { MerkleNode } from './crdt/MerkleTree';
 export type {
   NegentropyItem,
   NegentropyRange,

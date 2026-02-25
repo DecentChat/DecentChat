@@ -13,11 +13,18 @@ export class WorkspaceManager {
 
   // === Workspace CRUD ===
 
-  createWorkspace(name: string, myPeerId: string, myAlias: string, myPublicKey: string): Workspace {
+  createWorkspace(
+    name: string,
+    myPeerId: string,
+    myAlias: string,
+    myPublicKey: string,
+    opts?: { workspaceId?: string; inviteCode?: string },
+  ): Workspace {
+    const workspaceId = opts?.workspaceId || this.generateId();
     const workspace: Workspace = {
-      id: this.generateId(),
+      id: workspaceId,
       name,
-      inviteCode: this.generateInviteCode(),
+      inviteCode: opts?.inviteCode || this.generateInviteCode(),
       createdBy: myPeerId,
       createdAt: Date.now(),
       members: [

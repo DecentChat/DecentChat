@@ -1,49 +1,25 @@
 /**
- * Negentropy - Set reconciliation protocol
- * DEP-001 implementation
+ * Negentropy - set reconciliation primitive.
  *
- * Achieves O(differences) complexity instead of Merkle tree's O(log n).
- * Based on: https://github.com/hoytech/negentropy
- *
- * How it works:
- * 1. Split message set into ranges by timestamp/ID
- * 2. Each range gets a fingerprint (XOR of all item hashes)
- * 3. Recursively subdivide ranges where fingerprints differ
- * 4. Only transfer items in differing leaf ranges
- *
- * Example:
- *   Alice has messages 1-1000
- *   Bob has messages 1-995, 1001-1005
- *   
- *   Ranges: [1-500], [501-1000], [1001-1005]
- *   [1-500]: fingerprints match ✓ (skip)
- *   [501-1000]: fingerprints differ → subdivide
- *     [501-750]: match ✓
- *     [751-1000]: differ → subdivide
- *       [751-875]: match ✓
- *       [876-1000]: differ → subdivide
- *         [876-937]: match ✓
- *         [938-1000]: differ → transfer (5 messages: 996-1000)
- *   [1001-1005]: Alice doesn't have → Bob sends (5 messages)
- *
- * Result: 10 messages transferred instead of 1005
+ * This implementation follows the upstream negentropy strategy:
+ * - Canonical item ordering
+ * - Range fingerprint comparison
+ * - Recursive partitioning of divergent ranges
+ * - Enumeration when ranges are small
  */
 
 export interface NegentropyItem {
-  /** Unique identifier (message ID) */
   id: string;
-  /** Timestamp (for ordering) */
   timestamp: number;
 }
 
+/**
+ * Ordered-key range [start, end), where null denotes an open bound.
+ */
 export interface NegentropyRange {
-  /** Range start (inclusive, timestamp) */
-  start: number;
-  /** Range end (exclusive, timestamp) */
-  end: number;
-  /** XOR fingerprint of all items in range */
+  start: string | null;
+  end: string | null;
   fingerprint: string;
-  /** Number of items in range */
   count: number;
 }
 
@@ -52,246 +28,119 @@ export interface NegentropyQuery {
 }
 
 export interface NegentropyResponse {
-  /** Items initiator has but responder doesn't */
+  /** IDs that responder has in mismatching/enumerated ranges. */
   have: string[];
-  /** Items responder has but initiator doesn't */
+  /** Reserved for future bidirectional-on-wire use. */
   need: string[];
-  /** If non-empty, initiator should send another query with these ranges */
+  /** Additional subranges the initiator should compare next. */
   continueWith?: NegentropyRange[];
 }
 
-/** Minimum items per range before subdivision (tunable) */
-const MIN_RANGE_SIZE = 16;
+const EMPTY_FINGERPRINT = '0'.repeat(64);
+const DEFAULT_MAX_ROUNDS = 24;
+const ENUMERATE_THRESHOLD = 256;
+const SPLIT_BUCKETS = 16;
 
-/** Maximum recursion depth (prevent infinite loops) */
-const MAX_DEPTH = 20;
+interface Entry {
+  key: string;
+  item: NegentropyItem;
+}
 
 export class Negentropy {
   private items: NegentropyItem[] = [];
+  private entries: Entry[] = [];
   private itemMap: Map<string, NegentropyItem> = new Map();
 
-  /**
-   * Build Negentropy state from items
-   */
   async build(items: NegentropyItem[]): Promise<void> {
-    // Sort by timestamp (stable ordering is crucial)
     this.items = [...items].sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
-      return a.id.localeCompare(b.id); // Tie-break by ID
+      return a.id.localeCompare(b.id);
     });
 
-    this.itemMap = new Map(this.items.map(item => [item.id, item]));
+    this.entries = this.items.map((item) => ({
+      key: this.makeKey(item),
+      item,
+    }));
+
+    this.itemMap = new Map(this.items.map((item) => [item.id, item]));
   }
 
-  /**
-   * Create initial query
-   * 
-   * Split items into ranges based on timestamp gaps.
-   * This allows efficient sync when there are large gaps in the dataset.
-   */
   async createQuery(): Promise<NegentropyQuery> {
-    if (this.items.length === 0) {
+    if (this.entries.length === 0) {
       return { ranges: [] };
     }
 
-    // Detect gaps in timestamps and split into multiple ranges
-    const ranges: NegentropyRange[] = [];
-    let rangeStart = this.items[0].timestamp;
-    let rangeItems: NegentropyItem[] = [this.items[0]];
-
-    // Gap threshold: if items are more than MIN_RANGE_SIZE * 1000ms apart, split
-    const GAP_THRESHOLD = MIN_RANGE_SIZE * 1000;
-
-    for (let i = 1; i < this.items.length; i++) {
-      const prev = this.items[i - 1];
-      const curr = this.items[i];
-
-      // Check if there's a significant gap
-      if (curr.timestamp - prev.timestamp > GAP_THRESHOLD) {
-        // Finalize current range
-        const rangeEnd = prev.timestamp + 1;
-        const fingerprint = await this.fingerprintItems(rangeItems);
-        ranges.push({
-          start: rangeStart,
-          end: rangeEnd,
-          fingerprint,
-          count: rangeItems.length,
-        });
-
-        // Start new range
-        rangeStart = curr.timestamp;
-        rangeItems = [curr];
-      } else {
-        rangeItems.push(curr);
-      }
-    }
-
-    // Finalize last range
-    const lastItem = this.items[this.items.length - 1];
-    const rangeEnd = lastItem.timestamp + 1;
-    const fingerprint = await this.fingerprintItems(rangeItems);
-    ranges.push({
-      start: rangeStart,
-      end: rangeEnd,
-      fingerprint,
-      count: rangeItems.length,
-    });
-
-    return { ranges };
+    return {
+      ranges: [{
+        start: null,
+        end: null,
+        fingerprint: await this.fingerprintEntries(this.entries),
+        count: this.entries.length,
+      }],
+    };
   }
 
-  /**
-   * Process a query and generate response
-   * 
-   * When processing a query from the initiator:
-   * 1. If query is empty (initiator has nothing), send ALL our items
-   * 2. Compare fingerprints for each range
-   * 3. If fingerprints match → skip (ranges are identical)
-   * 4. If fingerprints differ and range is small → send our items
-   * 5. If fingerprints differ and range is large → subdivide and send back sub-ranges
-   * 6. IMPORTANT: Also send items we have OUTSIDE the query ranges (items remote doesn't know about)
-   * 
-   * Returns:
-   * - have: message IDs that responder has (for initiator to check)
-   * - need: Always empty in this implementation (initiator figures out what they need)
-   * - continueWith: Sub-ranges for initiator to query next
-   */
   async processQuery(query: NegentropyQuery): Promise<NegentropyResponse> {
-    const have: Set<string> = new Set();
+    const have = new Set<string>();
     const continueWith: NegentropyRange[] = [];
 
-    // Special case: empty query means remote has nothing, send everything
     if (query.ranges.length === 0) {
-      for (const item of this.items) {
-        have.add(item.id);
+      for (const entry of this.entries) {
+        have.add(entry.item.id);
       }
-      return { have: Array.from(have), need: [], continueWith: undefined };
+      return { have: [...have], need: [] };
     }
-
-    // Track all ranges covered by the query
-    const queriedRanges: Array<[number, number]> = [];
 
     for (const remoteRange of query.ranges) {
-      queriedRanges.push([remoteRange.start, remoteRange.end]);
+      const localEntries = this.getEntriesInRange(remoteRange.start, remoteRange.end);
+      const localFingerprint = await this.fingerprintEntries(localEntries);
 
-      const localItems = this.getItemsInRange(remoteRange.start, remoteRange.end);
-      const localFingerprint = await this.fingerprintItems(localItems);
-
-      // Fingerprints match → ranges are identical
-      if (localFingerprint === remoteRange.fingerprint) {
+      if (remoteRange.count === localEntries.length && remoteRange.fingerprint === localFingerprint) {
         continue;
       }
 
-      // If range is small enough, send all our items in this range
-      // Use a slightly larger threshold for enumeration to avoid infinite subdivision
-      const ENUMERATE_THRESHOLD = MIN_RANGE_SIZE * 2;
-      const canSubdivide = remoteRange.end - remoteRange.start > 1;
-      if (
-        !canSubdivide ||
-        localItems.length <= ENUMERATE_THRESHOLD ||
-        remoteRange.count <= ENUMERATE_THRESHOLD
-      ) {
-        for (const item of localItems) {
-          have.add(item.id);
+      const smallerSide = Math.min(remoteRange.count, localEntries.length);
+      if (smallerSide <= ENUMERATE_THRESHOLD || localEntries.length <= 1 || remoteRange.count <= 1) {
+        for (const entry of localEntries) {
+          have.add(entry.item.id);
         }
         continue;
       }
 
-      // Range is too large → subdivide
-      const midpoint = Math.floor((remoteRange.start + remoteRange.end) / 2);
-
-      const leftItems = this.getItemsInRange(remoteRange.start, midpoint);
-      const rightItems = this.getItemsInRange(midpoint, remoteRange.end);
-
-      if (leftItems.length > 0) {
-        const leftFingerprint = await this.fingerprintItems(leftItems);
+      const partitions = this.partitionRange(remoteRange, localEntries);
+      for (const partition of partitions) {
+        const partEntries = this.getEntriesInRange(partition.start, partition.end);
         continueWith.push({
-          start: remoteRange.start,
-          end: midpoint,
-          fingerprint: leftFingerprint,
-          count: leftItems.length,
+          start: partition.start,
+          end: partition.end,
+          count: partEntries.length,
+          fingerprint: await this.fingerprintEntries(partEntries),
         });
-      }
-
-      if (rightItems.length > 0) {
-        const rightFingerprint = await this.fingerprintItems(rightItems);
-        continueWith.push({
-          start: midpoint,
-          end: remoteRange.end,
-          fingerprint: rightFingerprint,
-          count: rightItems.length,
-        });
-      }
-    }
-
-    // Also send items we have that are OUTSIDE the queried ranges
-    // (items the remote doesn't even know to ask about)
-    if (queriedRanges.length > 0) {
-      // Sort ranges by start time
-      const sortedRanges = [...queriedRanges].sort((a, b) => a[0] - b[0]);
-      
-      // Items before the first queried range
-      const minQueried = sortedRanges[0][0];
-      const beforeItems = this.items.filter(item => item.timestamp < minQueried);
-      for (const item of beforeItems) {
-        have.add(item.id);
-      }
-
-      // Items in gaps between queried ranges
-      for (let i = 0; i < sortedRanges.length - 1; i++) {
-        const gapStart = sortedRanges[i][1]; // End of current range
-        const gapEnd = sortedRanges[i + 1][0]; // Start of next range
-        
-        const gapItems = this.items.filter(
-          item => item.timestamp >= gapStart && item.timestamp < gapEnd
-        );
-        for (const item of gapItems) {
-          have.add(item.id);
-        }
-      }
-
-      // Items after the last queried range
-      const maxQueried = sortedRanges[sortedRanges.length - 1][1];
-      const afterItems = this.items.filter(item => item.timestamp >= maxQueried);
-      for (const item of afterItems) {
-        have.add(item.id);
       }
     }
 
     return {
-      have: Array.from(have),
-      need: [], // Initiator determines what they need based on 'have'
-      continueWith: continueWith.length > 0 ? continueWith : undefined
+      have: [...have],
+      need: [],
+      continueWith: continueWith.length > 0 ? continueWith : undefined,
     };
   }
 
-  /**
-   * Reconcile with a remote peer (finds what WE need)
-   * 
-   * This is a ONE-WAY reconciliation where we (initiator) query the remote
-   * to find out what items they have that we're missing.
-   * 
-   * For BIDIRECTIONAL sync, run this from both sides:
-   * - Alice runs reconcile() against Bob → gets what Alice needs
-   * - Bob runs reconcile() against Alice → gets what Bob needs
-   * 
-   * Returns: { need } where need = message IDs remote has that we don't have
-   */
   async reconcile(
     remoteProcessQuery: (query: NegentropyQuery) => Promise<NegentropyResponse>,
-    maxRounds: number = MAX_DEPTH
+    maxRounds: number = DEFAULT_MAX_ROUNDS,
   ): Promise<{ need: string[] }> {
+    const localIds = new Set(this.items.map((item) => item.id));
+    const need = new Set<string>();
+
     let query = await this.createQuery();
-    const allNeed: Set<string> = new Set();
-    const localIds = new Set(this.items.map(item => item.id));
 
     for (let round = 0; round < maxRounds; round++) {
       const response = await remoteProcessQuery(query);
 
-      // Check which items remote has that we don't
       for (const id of response.have) {
         if (!localIds.has(id)) {
-          allNeed.add(id);
+          need.add(id);
         }
       }
 
@@ -299,91 +148,112 @@ export class Negentropy {
         break;
       }
 
-      // Build next query from our local view of the requested sub-ranges.
-      // We must never reuse remote fingerprints directly, or all subsequent
-      // comparisons will appear to match and reconciliation terminates early.
       const nextRanges: NegentropyRange[] = [];
       for (const requestedRange of response.continueWith) {
-        const localItems = this.getItemsInRange(requestedRange.start, requestedRange.end);
-        const localFingerprint = await this.fingerprintItems(localItems);
+        const localEntries = this.getEntriesInRange(requestedRange.start, requestedRange.end);
         nextRanges.push({
           start: requestedRange.start,
           end: requestedRange.end,
-          fingerprint: localFingerprint,
-          count: localItems.length,
+          count: localEntries.length,
+          fingerprint: await this.fingerprintEntries(localEntries),
         });
       }
+
       query = { ranges: nextRanges };
     }
 
-    return {
-      need: Array.from(allNeed),
-    };
+    return { need: [...need] };
   }
 
-  /**
-   * Get items in timestamp range [start, end)
-   */
-  private getItemsInRange(start: number, end: number): NegentropyItem[] {
-    return this.items.filter(item => item.timestamp >= start && item.timestamp < end);
-  }
-
-  /**
-   * Compute fingerprint for a range
-   */
-  private async fingerprintRange(start: number, end: number): Promise<string> {
-    const items = this.getItemsInRange(start, end);
-    return this.fingerprintItems(items);
-  }
-
-  /**
-   * Compute fingerprint for items (XOR of hashes)
-   */
-  private async fingerprintItems(items: NegentropyItem[]): Promise<string> {
-    if (items.length === 0) return '0'.repeat(64); // Empty fingerprint
-
-    // XOR all item hashes together
-    let xor = new Uint8Array(32);
-
-    for (const item of items) {
-      const hash = await this.hashItem(item);
-      for (let i = 0; i < 32; i++) {
-        xor[i] ^= hash[i];
-      }
-    }
-
-    // Convert to hex
-    return Array.from(xor).map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  /**
-   * Hash a single item
-   */
-  private async hashItem(item: NegentropyItem): Promise<Uint8Array> {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(`${item.id}:${item.timestamp}`);
-    const buffer = await crypto.subtle.digest('SHA-256', data);
-    return new Uint8Array(buffer);
-  }
-
-  /**
-   * Get item by ID
-   */
   getItem(id: string): NegentropyItem | undefined {
     return this.itemMap.get(id);
   }
 
-  /**
-   * Get all items
-   */
   getItems(): NegentropyItem[] {
     return [...this.items];
   }
 
-  /**
-   * Get item count
-   */
   size(): number {
     return this.items.length;
+  }
+
+  private makeKey(item: NegentropyItem): string {
+    // Fixed-width timestamp keeps lexical ordering aligned with numeric ordering.
+    return `${item.timestamp.toString().padStart(16, '0')}:${item.id}`;
+  }
+
+  private getEntriesInRange(start: string | null, end: string | null): Entry[] {
+    if (this.entries.length === 0) return [];
+
+    const startIdx = start === null ? 0 : this.lowerBound(start);
+    const endIdx = end === null ? this.entries.length : this.lowerBound(end);
+    if (startIdx >= endIdx) return [];
+    return this.entries.slice(startIdx, endIdx);
+  }
+
+  private lowerBound(key: string): number {
+    let lo = 0;
+    let hi = this.entries.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.entries[mid].key < key) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+  }
+
+  private partitionRange(range: NegentropyRange, localEntries: Entry[]): Array<{ start: string | null; end: string | null }> {
+    if (localEntries.length === 0) {
+      return [{ start: range.start, end: range.end }];
+    }
+
+    const segments = Math.min(SPLIT_BUCKETS, localEntries.length);
+    if (segments <= 1) {
+      return [{ start: range.start, end: range.end }];
+    }
+
+    const boundaries: Array<string | null> = [range.start];
+    for (let i = 1; i < segments; i++) {
+      const idx = Math.floor((i * localEntries.length) / segments);
+      boundaries.push(localEntries[idx].key);
+    }
+    boundaries.push(range.end);
+
+    const ranges: Array<{ start: string | null; end: string | null }> = [];
+    for (let i = 0; i < boundaries.length - 1; i++) {
+      const start = boundaries[i];
+      const end = boundaries[i + 1];
+      if (start !== null && end !== null && start >= end) continue;
+      ranges.push({ start, end });
+    }
+
+    return ranges.length > 0 ? ranges : [{ start: range.start, end: range.end }];
+  }
+
+  private async fingerprintEntries(entries: Entry[]): Promise<string> {
+    if (entries.length === 0) return EMPTY_FINGERPRINT;
+
+    const xor = new Uint8Array(32);
+    for (const entry of entries) {
+      const hash = await this.hashItem(entry.item);
+      for (let i = 0; i < xor.length; i++) {
+        xor[i] ^= hash[i];
+      }
+    }
+
+    let hex = '';
+    for (let i = 0; i < xor.length; i++) {
+      hex += xor[i].toString(16).padStart(2, '0');
+    }
+    return hex;
+  }
+
+  private async hashItem(item: NegentropyItem): Promise<Uint8Array> {
+    const payload = new TextEncoder().encode(`${item.id}:${item.timestamp}`);
+    const digest = await crypto.subtle.digest('SHA-256', payload);
+    return new Uint8Array(digest);
   }
 }

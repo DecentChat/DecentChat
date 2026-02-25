@@ -1,8 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
-const SIGNAL_PORT = Number(
-  process.env.PW_SIGNAL_PORT || String(20000 + Math.floor(Math.random() * 20000)),
-);
+const SIGNAL_PORT = Number(process.env.PW_SIGNAL_PORT || '9000');
+const ENABLE_SIGNALING = process.env.PW_ENABLE_SIGNALING === '1';
 process.env.PW_SIGNAL_PORT = String(SIGNAL_PORT);
 
 export default defineConfig({
@@ -13,24 +12,26 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: 'http://127.0.0.1:5173',
     headless: true,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },
   webServer: [
+    ...(ENABLE_SIGNALING
+      ? [{
+          command: `SIGNAL_PORT=${SIGNAL_PORT} bun run scripts/signaling-server.ts`,
+          port: SIGNAL_PORT,
+          reuseExistingServer: false,
+          timeout: 60000,
+          cwd: '..',
+        }]
+      : []),
     {
-      command: `SIGNAL_PORT=${SIGNAL_PORT} bun run scripts/signaling-server.ts`,
-      url: `http://localhost:${SIGNAL_PORT}/peerjs`,
-      reuseExistingServer: false,
-      timeout: 10000,
-      cwd: '..',
-    },
-    {
-      command: `VITE_SIGNAL_PORT=${SIGNAL_PORT} bun run dev`,
+      command: `VITE_SIGNAL_PORT=${SIGNAL_PORT} bun run dev -- --host 127.0.0.1 --port 5173`,
       port: 5173,
       reuseExistingServer: true,
-      timeout: 15000,
+      timeout: 45000,
     },
   ],
   projects: [

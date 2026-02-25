@@ -6,7 +6,7 @@ import '../setup';
 import { describe, test, expect, beforeEach } from 'bun:test';
 import {
   CryptoManager, MessageCipher, MessageStore, WorkspaceManager,
-  MessageCRDT, VectorClock, MerkleTree, PersistentStore,
+  MessageCRDT, VectorClock, PersistentStore,
 } from '../../src/index';
 import { SeedPhraseManager } from '../../src/identity/SeedPhrase';
 import { IdentityManager } from '../../src/identity/Identity';
@@ -177,39 +177,6 @@ describe('E2E - Offline Divergence + Merge', () => {
     expect(aliceOrder).toEqual(bobOrder);
   });
 
-  test('MerkleTree identifies missing messages before merge', async () => {
-    const aliceCRDT = new MessageCRDT('alice');
-    const bobCRDT = new MessageCRDT('bob');
-    const channelId = 'ch-1';
-
-    // Shared messages (both have these)
-    const shared1 = aliceCRDT.createMessage(channelId, 'Shared 1');
-    const shared2 = aliceCRDT.createMessage(channelId, 'Shared 2');
-    bobCRDT.addMessage(shared1);
-    bobCRDT.addMessage(shared2);
-
-    // Alice-only messages
-    aliceCRDT.createMessage(channelId, 'Alice only 1');
-    aliceCRDT.createMessage(channelId, 'Alice only 2');
-
-    // Bob-only messages
-    bobCRDT.createMessage(channelId, 'Bob only 1');
-
-    // Build Merkle trees
-    const aliceTree = new MerkleTree();
-    const bobTree = new MerkleTree();
-
-    await aliceTree.build(aliceCRDT.getMessages(channelId).map(m => m.id));
-    await bobTree.build(bobCRDT.getMessages(channelId).map(m => m.id));
-
-    // Trees have different roots (because different message sets)
-    expect(aliceTree.getRoot()).not.toBe(bobTree.getRoot());
-
-    // After merge, both should converge
-    const newForBob = bobCRDT.merge(aliceCRDT.getAllMessages());
-    expect(newForBob).toHaveLength(2); // Alice's 2 unique messages
-    expect(bobCRDT.getMessages(channelId)).toHaveLength(5); // 2 shared + 2 alice + 1 bob
-  });
 });
 
 describe('E2E - Three-Peer Workspace with DMs', () => {

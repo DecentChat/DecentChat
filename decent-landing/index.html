@@ -448,11 +448,11 @@
     .feature-card:hover .feature-tentacle { opacity: 0.08; }
 
     /* ============================================
-       HOW IT WORKS — 3 Steps
+       HOW IT WORKS — 2 Steps
        ============================================ */
     .steps {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       gap: 32px;
       position: relative;
     }
@@ -461,8 +461,8 @@
       content: '';
       position: absolute;
       top: 52px;
-      left: calc(16.66% + 40px);
-      right: calc(16.66% + 40px);
+      left: calc(25% + 40px);
+      right: calc(25% + 40px);
       height: 2px;
       background: linear-gradient(90deg, var(--primary), var(--accent), var(--primary));
       opacity: 0.3;
@@ -1125,27 +1125,20 @@
     <div class="container">
       <div class="section-header">
         <div class="section-label reveal">⚡ Dead simple</div>
-        <h2 class="reveal reveal-delay-1">Three steps to freedom</h2>
+        <h2 class="reveal reveal-delay-1">Two steps to freedom</h2>
         <p class="reveal reveal-delay-2">No signup forms. No email verification. No terms of service. Just chat.</p>
       </div>
 
       <div class="steps">
         <div class="step reveal">
           <div class="step-number">1</div>
-          <div class="step-visual">🌱</div>
-          <h3>Generate Your Seed</h3>
-          <p>Open the app and get a 12-word BIP39 seed phrase. That's your identity — cryptographically unique, entirely yours.</p>
+          <div class="step-visual">🔗</div>
+          <h3>Open an Invite</h3>
+          <p>Paste a DecentChat invite link to join a workspace. Your identity seed is generated automatically in the app.</p>
         </div>
 
         <div class="step reveal reveal-delay-2">
           <div class="step-number">2</div>
-          <div class="step-visual">🔗</div>
-          <h3>Share an Invite</h3>
-          <p>Send a link to a friend. It contains just enough info to establish a direct P2P connection — nothing sensitive.</p>
-        </div>
-
-        <div class="step reveal reveal-delay-4">
-          <div class="step-number">3</div>
           <div class="step-visual">💬</div>
           <h3>Chat Directly</h3>
           <p>Messages flow device-to-device with Double Ratchet encryption. No servers in the middle. Ever.</p>

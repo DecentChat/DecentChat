@@ -36,6 +36,8 @@ export interface InviteData {
   peerId?: string;
   /** Inviter's public key (for verification before connecting) */
   publicKey?: string;
+  /** Canonical workspace ID (recommended; avoids provisional-ID join races) */
+  workspaceId?: string;
   /** Workspace name (display only) */
   workspaceName?: string;
 }
@@ -53,7 +55,7 @@ export class InviteURI {
    * Use encodeNative() for the decent:// protocol format.
    */
   static encode(data: InviteData, webDomain = 'decentchat.app'): string {
-    const { host, port, inviteCode, secure, peerId, publicKey, workspaceName, path } = data;
+    const { host, port, inviteCode, secure, peerId, publicKey, workspaceName, workspaceId, path } = data;
 
     // Build web URL: https://decentchat.app/join/CODE?signal=host:port&...
     const params = new URLSearchParams();
@@ -62,6 +64,7 @@ export class InviteURI {
     if (peerId) params.set('peer', peerId);
     if (publicKey) params.set('pk', publicKey);
     if (workspaceName) params.set('name', workspaceName);
+    if (workspaceId) params.set('ws', workspaceId);
     if (secure) params.set('secure', '1');
     if (path && path !== '/peerjs') params.set('path', path);
 
@@ -108,6 +111,7 @@ export class InviteURI {
     if (data.peerId) params.set('peer', data.peerId);
     if (data.publicKey) params.set('pk', data.publicKey);
     if (data.workspaceName) params.set('name', data.workspaceName);
+    if (data.workspaceId) params.set('ws', data.workspaceId);
     if (secure) params.set('secure', '1');
     if (data.path && data.path !== '/peerjs') params.set('path', data.path);
 
@@ -166,6 +170,7 @@ export class InviteURI {
       peerId: params.get('peer') || undefined,
       publicKey: params.get('pk') || undefined,
       workspaceName: params.get('name') || undefined,
+      workspaceId: params.get('ws') || undefined,
     };
   }
 
@@ -208,6 +213,7 @@ export class InviteURI {
       peerId: parsed.searchParams.get('peer') || undefined,
       publicKey: parsed.searchParams.get('pk') || undefined,
       workspaceName: parsed.searchParams.get('name') || undefined,
+      workspaceId: parsed.searchParams.get('ws') || undefined,
     };
   }
 
@@ -275,6 +281,7 @@ export class InviteURI {
     peerId?: string;
     publicKey?: string;
     workspaceName?: string;
+    workspaceId?: string;
     secure?: boolean;
   }): string {
     return this.encode({
@@ -288,6 +295,7 @@ export class InviteURI {
       peerId: opts.peerId,
       publicKey: opts.publicKey,
       workspaceName: opts.workspaceName,
+      workspaceId: opts.workspaceId,
     });
   }
 

@@ -16,6 +16,10 @@
     "dev:client": "cd decent-client-web && bun run dev",
     "dev:signal": "bun run scripts/signaling-server.ts",
     "dev": "bun run dev:signal & bun run dev:client",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
+    "deploy:docs": "./scripts/deploy-docs.sh",
     "test:e2e": "cd decent-client-web && bun run test:e2e",
     "test:integration": "cd decent-client-web && bun run test:integration",
     "test:unit": "cd decent-client-web && bun run test:unit",
@@ -30,6 +34,7 @@
   "devDependencies": {
     "@playwright/test": "^1.58.2",
     "peer": "^1.0.2",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitepress": "^1.6.4"
   }
 }

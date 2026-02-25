@@ -20,7 +20,7 @@
     "mesh",
     "protocol",
     "vector-clock",
-    "merkle-tree",
+    "negentropy",
     "webrtc"
   ],
   "license": "MIT",

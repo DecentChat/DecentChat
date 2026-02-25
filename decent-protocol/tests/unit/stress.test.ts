@@ -2,7 +2,7 @@
  * Stress & Edge Case Tests for decent-protocol
  *
  * Covers: hash chain integrity at scale, CRDT convergence proofs,
- * vector clock precision, Merkle tree diffing, offline queue isolation,
+ * vector clock precision, offline queue isolation,
  * persistent store batch ops, and concurrent CRDT merge scenarios.
  */
 
@@ -12,7 +12,6 @@ import type { HashableMessage } from '../../src/crypto/HashChain';
 import { VectorClock } from '../../src/crdt/VectorClock';
 import { MessageCRDT } from '../../src/crdt/MessageCRDT';
 import type { CRDTMessage } from '../../src/crdt/MessageCRDT';
-import { MerkleTree } from '../../src/crdt/MerkleTree';
 import { OfflineQueue } from '../../src/messages/OfflineQueue';
 import { PersistentStore } from '../../src/storage/PersistentStore';
 
@@ -275,71 +274,7 @@ describe('VectorClock Many Peers', () => {
   });
 });
 
-// ─── 5. MerkleTree Large Dataset ─────────────────────────────────────────────
-
-describe('MerkleTree Large Dataset', () => {
-  test('builds tree with 1000 messages and diffs against tree with 5 extras', async () => {
-    const baseIds = Array.from({ length: 1000 }, (_, i) => `msg-${i.toString().padStart(6, '0')}`);
-    const extraIds = Array.from({ length: 5 }, (_, i) => `extra-${i.toString().padStart(6, '0')}`);
-
-    // Tree A: 1000 base messages (sorted for determinism)
-    const treeA = new MerkleTree();
-    await treeA.build([...baseIds].sort());
-
-    // Tree B: same 995 base messages + 5 extras (simulating peer B has 5 new messages)
-    // We use the first 995 from base plus the 5 extras
-    const treeBIds = [...baseIds.slice(0, 995), ...extraIds].sort();
-    const treeB = new MerkleTree();
-    await treeB.build(treeBIds);
-
-    // Roots should differ
-    expect(treeA.getRootHash()).not.toBe(treeB.getRootHash());
-
-    // Diff: what does B have that A doesn't?
-    // We want to know what's in B but not in A
-    const diff = treeA.diff(treeB);
-
-    // Should find the 5 extra messages plus potentially flag the 5 replaced ones
-    // Since A has 995 base + none of extra, B has 995 base + 5 extra
-    // The 5 missing from A (extra-*) should appear in the diff
-    const extraSet = new Set(extraIds);
-    const foundExtras = diff.filter(id => extraSet.has(id));
-    expect(foundExtras.length).toBe(5);
-  }, 60_000);
-
-  test('identical trees produce empty diff', async () => {
-    const ids = Array.from({ length: 500 }, (_, i) => `msg-${i}`).sort();
-
-    const treeA = new MerkleTree();
-    const treeB = new MerkleTree();
-    await treeA.build(ids);
-    await treeB.build(ids);
-
-    expect(treeA.getRootHash()).toBe(treeB.getRootHash());
-    expect(treeA.diff(treeB)).toHaveLength(0);
-  }, 30_000);
-
-  test('tree depth is logarithmic in message count', async () => {
-    const ids1000 = Array.from({ length: 1000 }, (_, i) => `m-${i}`);
-    const ids100 = Array.from({ length: 100 }, (_, i) => `m-${i}`);
-
-    const tree1000 = new MerkleTree();
-    const tree100 = new MerkleTree();
-    await tree1000.build(ids1000);
-    await tree100.build(ids100);
-
-    const depth1000 = tree1000.getDepth();
-    const depth100 = tree100.getDepth();
-
-    // 1000 messages should be roughly 10 levels deep (log2(1000) ≈ 10)
-    expect(depth1000).toBeGreaterThan(5);
-    expect(depth1000).toBeLessThan(20);
-    // Depth should grow logarithmically, not linearly
-    expect(depth1000).toBeLessThan(depth100 * 5);
-  }, 30_000);
-});
-
-// ─── 6. Offline Queue Stress ─────────────────────────────────────────────────
+// ─── 5. Offline Queue Stress ─────────────────────────────────────────────────
 
 describe('Offline Queue Stress', () => {
   test('500 messages across 10 peers — flush one at a time with isolation', async () => {
