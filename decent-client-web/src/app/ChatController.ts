@@ -3871,7 +3871,7 @@ export class ChatController {
         if (msg.channelId === this.state.activeChannelId) touchedActiveChannel = true;
       }
       const bulkAdded = this.messageStore.bulkAdd(toInsert);
-      console.log(`[Sync] bulkAdd: ${bulkAdded} inserted from ${toInsert.length} prepared`);
+      console.log(`[Sync] bulkAdd: ${bulkAdded} inserted from ${toInsert.length} prepared (handler path)`);
 
       added = toSync.length;
       const _syncElapsed = performance.now() - _syncT0;
