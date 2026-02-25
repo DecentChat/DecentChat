@@ -333,12 +333,6 @@ export class ChatController {
     this.transport.onMessage = async (peerId: string, rawData: unknown) => {
       const data = rawData as any;
       
-      // Track what types of messages we receive
-      if (data?.type === 'message-sync-response' || data?.type === 'message-sync-request') {
-        const msgCount = (data.messages || []).length;
-        console.log(`[Sync] Received ${data.type} from ${peerId.slice(0, 8)}: ${msgCount} messages`);
-      }
-
       // Rate limit + validate before any processing.
       // Trusted sync-control traffic gets its own lane (still authenticated by
       // workspace membership checks in handlers) so reconnect catch-up is not
@@ -346,9 +340,6 @@ export class ChatController {
       const bypassGuard = this.isTrustedSyncControlMessage(peerId, data)
         || this.isTrustedOfflineReplayMessage(peerId, data);
       if (!bypassGuard) {
-        if (data?.type === 'message-sync-response' || data?.type === 'message-sync-request') {
-          console.warn(`[Sync] Guard NOT bypassed for ${data.type} from ${peerId.slice(0, 8)}, wsId=${data?.workspaceId?.slice(0, 8)}`);
-        }
         const guardResult = this.messageGuard.check(peerId, data);
         if (!guardResult.allowed) {
           console.warn(`[Guard] Blocked message from ${peerId.slice(0, 8)}: ${guardResult.reason} type=${data?.type}`);
@@ -3635,6 +3626,7 @@ export class ChatController {
     }
   }
 
+  /** @deprecated — kept for future incremental diff sync. Currently unused; requestMessageSync always uses timestamp sync. */
   private async requestNegentropyMessageSync(peerId: string): Promise<void> {
     const wsId = this.state.activeWorkspaceId;
     if (!wsId) return;
@@ -3807,6 +3799,7 @@ export class ChatController {
 
     const allMessages: any[] = [];
     const channelTimestamps: Record<string, number> = data.channelTimestamps || {};
+    const MAX_SYNC_MESSAGES = 10_000;
 
     for (const ch of ws.channels) {
       const since = channelTimestamps[ch.id] ?? 0;
@@ -3827,6 +3820,12 @@ export class ChatController {
       }
     }
 
+    if (allMessages.length > MAX_SYNC_MESSAGES) {
+      const originalCount = allMessages.length;
+      allMessages.length = MAX_SYNC_MESSAGES;
+      console.warn(`[Sync] Truncated message-sync-response for ${peerId.slice(0, 8)}: ${originalCount} -> ${MAX_SYNC_MESSAGES} messages`);
+    }
+
     // Chunk to avoid WebSocket frame size limits
     const CHUNK_SIZE = 100;
     for (let i = 0; i < allMessages.length; i += CHUNK_SIZE) {
@@ -3834,13 +3833,6 @@ export class ChatController {
         type: 'message-sync-response',
         workspaceId: wsId,
         messages: allMessages.slice(i, i + CHUNK_SIZE),
-      });
-    }
-    if (allMessages.length === 0) {
-      this.transport.send(peerId, {
-        type: 'message-sync-response',
-        workspaceId: wsId,
-        messages: [],
       });
     }
   }
@@ -3854,7 +3846,6 @@ export class ChatController {
       if (!ws.members.some((m: any) => m.peerId === _peerId)) { console.log('[Sync] handleMessageSyncResponse: peer not member', _peerId.slice(0, 8)); return; }
 
       const messages: any[] = data.messages || [];
-      const _syncT0 = performance.now();
       console.log(`[Sync] handleMessageSyncResponse: ${messages.length} msgs from ${_peerId.slice(0, 8)} at ${Date.now()}`);
       if (messages.length === 0) return;
 
@@ -3882,13 +3873,19 @@ export class ChatController {
           if (unknownChannelRemap.has(targetChannelId)) {
             targetChannelId = unknownChannelRemap.get(targetChannelId)!;
           } else {
-            // Map to first available channel (workspace typically has 1 "general" channel)
-            const firstLocalCh = ws.channels[0]?.id;
-            if (firstLocalCh) {
-              unknownChannelRemap.set(targetChannelId, firstLocalCh);
-              targetChannelId = firstLocalCh;
-              console.log(`[Sync] Remapping unknown channel ${msg.channelId.slice(0, 8)} → ${firstLocalCh.slice(0, 8)}`);
+            // Incoming sync payloads do not carry channel names, so only remap when
+            // this workspace has exactly one local channel.
+            if (ws.channels.length === 1) {
+              const firstLocalCh = ws.channels[0]?.id;
+              if (firstLocalCh) {
+                unknownChannelRemap.set(targetChannelId, firstLocalCh);
+                targetChannelId = firstLocalCh;
+                console.log(`[Sync] Remapping unknown channel ${msg.channelId.slice(0, 8)} → ${firstLocalCh.slice(0, 8)}`);
+              } else {
+                continue;
+              }
             } else {
+              console.warn(`[Sync] Skipping message ${msg.id?.slice?.(0, 8) || 'unknown'}: unknown channel ${msg.channelId?.slice?.(0, 8) || 'unknown'} in multi-channel workspace ${ws.id.slice(0, 8)}`);
               continue;
             }
           }
@@ -3912,16 +3909,13 @@ export class ChatController {
         };
 
         toInsert.push(syncMsg);
-        existingIds.get(msg.channelId)!.add(msg.id);
+        existingIds.get(targetChannelId)!.add(msg.id);
         toSync.push(syncMsg);
         if (msg.channelId === this.state.activeChannelId) touchedActiveChannel = true;
       }
-      const bulkAdded = this.messageStore.bulkAdd(toInsert);
-      console.log(`[Sync] bulkAdd: ${bulkAdded} inserted from ${toInsert.length} prepared (handler path)`);
+      this.messageStore.bulkAdd(toInsert);
 
       added = toSync.length;
-      const _syncElapsed = performance.now() - _syncT0;
-      console.log(`[Sync] bulkAdd complete: added=${added} total_received=${messages.length} elapsed=${_syncElapsed.toFixed(1)}ms`);
 
       // Phase 2: CRDT + persist — deferred to not block message availability
       // Messages are already in-memory and queryable via bulkAdd above.
