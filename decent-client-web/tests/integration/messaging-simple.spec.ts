@@ -48,6 +48,12 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 15000 });
+
+  const openAppBtn = page.getByRole('button', { name: /open app/i });
+  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await openAppBtn.click();
+  }
+
   await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
 
   return { name, context, page };
@@ -107,7 +113,7 @@ test('simple P2P message exchange', async ({ browser }) => {
       { timeout: 15000 },
     );
 
-    const bobMsgs = await bob.page.locator('.message-content').allTextContents();
+    const bobMsgs = (await bob.page.locator('.message-content').allTextContents()).map(t => t.trim());
     expect(bobMsgs).toContain(msg);
   } finally {
     await alice.context.close();
