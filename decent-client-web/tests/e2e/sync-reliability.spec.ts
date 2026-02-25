@@ -534,6 +534,22 @@ test.describe('Sync Reliability', () => {
     const alice = await createUser(browser, 'Alice');
     const bob   = await createUser(browser, 'Bob');
 
+    // Capture browser console for debugging sync issues
+    const bobSyncLogs: string[] = [];
+    const aliceSyncLogs: string[] = [];
+    alice.page.on('console', msg => {
+      const t = msg.text();
+      if (t.includes('Sync') || t.includes('excess') || t.includes('Negentropy') || t.includes('forceAdd'))
+        aliceSyncLogs.push(t);
+    });
+    bob.page.on('console', msg => {
+      const t = msg.text();
+      if (t.includes('Sync') || t.includes('excess') || t.includes('Negentropy') || t.includes('forceAdd'))
+        bobSyncLogs.push(t);
+    });
+    alice.page.on('pageerror', err => aliceSyncLogs.push(`PAGE_ERROR: ${err.message}`));
+    bob.page.on('pageerror', err => bobSyncLogs.push(`PAGE_ERROR: ${err.message}`));
+
     try {
       trace('start');
       await createWorkspace(alice.page, 'Offline Catchup 1k', 'Alice');
@@ -597,6 +613,12 @@ test.describe('Sync Reliability', () => {
 
       const catchupMs = Date.now() - reconnectStart;
       console.log(`[SyncTest] Offline 1k catch-up: ${catchupMs}ms`);
+
+      // Dump browser logs for debugging
+      console.log(`[SyncTest] Alice sync logs (${aliceSyncLogs.length}):`);
+      for (const l of aliceSyncLogs.slice(0, 20)) console.log(`  [A] ${l}`);
+      console.log(`[SyncTest] Bob sync logs (${bobSyncLogs.length}):`);
+      for (const l of bobSyncLogs.slice(0, 20)) console.log(`  [B] ${l}`);
 
       const bobCount = await getMessageCountViaController(bob.page, PREFIX);
       trace('bob-final-count', { bobCount, expected: COUNT, catchupMs });

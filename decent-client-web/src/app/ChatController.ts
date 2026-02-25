@@ -3796,65 +3796,78 @@ export class ChatController {
   }
 
   private async handleMessageSyncResponse(_peerId: string, data: any): Promise<void> {
-    const wsId = data.workspaceId;
-    if (!wsId) return;
-    const ws = this.workspaceManager.getWorkspace(wsId);
-    if (!ws) return;
-    if (!ws.members.some((m: any) => m.peerId === _peerId)) return;
+    try {
+      const wsId = data.workspaceId;
+      if (!wsId) { console.log('[Sync] handleMessageSyncResponse: no wsId'); return; }
+      const ws = this.workspaceManager.getWorkspace(wsId);
+      if (!ws) { console.log('[Sync] handleMessageSyncResponse: no workspace for', wsId); return; }
+      if (!ws.members.some((m: any) => m.peerId === _peerId)) { console.log('[Sync] handleMessageSyncResponse: peer not member', _peerId.slice(0, 8)); return; }
 
-    const messages: any[] = data.messages || [];
-    let added = 0;
-    let touchedActiveChannel = false;
-    const persistTasks: Array<Promise<void>> = [];
+      const messages: any[] = data.messages || [];
+      console.log(`[Sync] handleMessageSyncResponse: ${messages.length} msgs from ${_peerId.slice(0, 8)}`);
+      if (messages.length === 0) return;
 
-    for (const msg of messages) {
-      // Skip if we already have this message
-      const existing = this.messageStore.getMessages(msg.channelId);
-      if (existing.some(m => m.id === msg.id)) continue;
-
-      // Skip if channel not in this workspace
-      if (!ws.channels.some((ch: any) => ch.id === msg.channelId)) continue;
-
-      // Create and add the message
-      const newMsg = await this.messageStore.createMessage(
-        msg.channelId, msg.senderId, msg.content, msg.type || 'text', msg.threadId,
-      );
-      newMsg.id = msg.id;
-      newMsg.timestamp = msg.timestamp;
-      (newMsg as any).vectorClock = msg.vectorClock;
-
-      const result = await this.messageStore.addMessage(newMsg);
-      if (result.success) {
-        const crdt = this.getOrCreateCRDT(msg.channelId);
-        crdt.addMessage({
-          id: newMsg.id,
-          channelId: newMsg.channelId,
-          senderId: newMsg.senderId,
-          content: newMsg.content,
-          type: (newMsg.type || 'text') as any,
-          vectorClock: msg.vectorClock || {},
-          wallTime: newMsg.timestamp,
-          prevHash: newMsg.prevHash || '',
-        });
-        persistTasks.push(this.persistMessage(newMsg));
-        added++;
-
-        // Re-render once after batch if active channel changed.
-        if (msg.channelId === this.state.activeChannelId) {
-          touchedActiveChannel = true;
-        }
+      const channelIds = new Set(ws.channels.map((ch: any) => ch.id));
+      // Pre-build dedup sets per channel — O(1) lookup instead of O(n) per message
+      const existingIds = new Map<string, Set<string>>();
+      for (const chId of channelIds) {
+        existingIds.set(chId, new Set(this.messageStore.getMessages(chId).map(m => m.id)));
       }
-    }
 
-    if (persistTasks.length > 0) {
-      await Promise.all(persistTasks);
-    }
-    if (touchedActiveChannel) {
-      this.ui?.renderMessages();
-    }
+      let added = 0;
+      let touchedActiveChannel = false;
+      const toSync: any[] = [];
 
-    if (added > 0) {
-      console.log(`[Sync] Message sync: added ${added} missing message(s)`);
+      // Phase 1: synchronous batch insert (no async, no SHA-256)
+      for (const msg of messages) {
+        if (!channelIds.has(msg.channelId)) continue;
+        if (existingIds.get(msg.channelId)!.has(msg.id)) continue;
+
+        const syncMsg = {
+          id: msg.id,
+          channelId: msg.channelId,
+          senderId: msg.senderId,
+          content: msg.content,
+          timestamp: msg.timestamp,
+          type: (msg.type || 'text') as 'text' | 'file' | 'system',
+          threadId: msg.threadId,
+          prevHash: msg.prevHash || '',
+          status: 'delivered' as const,
+          vectorClock: msg.vectorClock,
+        };
+
+        this.messageStore.forceAdd(syncMsg);
+        existingIds.get(msg.channelId)!.add(msg.id);
+        toSync.push(syncMsg);
+        if (msg.channelId === this.state.activeChannelId) touchedActiveChannel = true;
+      }
+
+      // Phase 2: CRDT + persist (batched)
+      const persistTasks: Array<Promise<void>> = [];
+      for (const msg of toSync) {
+        try {
+          const crdt = this.getOrCreateCRDT(msg.channelId);
+          crdt.addMessage({
+            id: msg.id, channelId: msg.channelId, senderId: msg.senderId,
+            content: msg.content, type: msg.type,
+            vectorClock: msg.vectorClock || {}, wallTime: msg.timestamp,
+            prevHash: msg.prevHash || '',
+          });
+        } catch { /* CRDT dup safe to ignore */ }
+        persistTasks.push(this.persistMessage(msg));
+        added++;
+      }
+
+      console.log(`[Sync] forceAdd result: added=${added} total_received=${messages.length}`);
+
+      if (persistTasks.length > 0) {
+        await Promise.all(persistTasks);
+      }
+      if (touchedActiveChannel) {
+        this.ui?.renderMessages();
+      }
+    } catch (err) {
+      console.error('[Sync] handleMessageSyncResponse FATAL:', (err as any)?.message, (err as any)?.stack);
     }
   }
 
