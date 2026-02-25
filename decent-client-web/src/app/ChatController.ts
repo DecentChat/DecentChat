@@ -332,6 +332,12 @@ export class ChatController {
 
     this.transport.onMessage = async (peerId: string, rawData: unknown) => {
       const data = rawData as any;
+      
+      // Track what types of messages we receive
+      if (data?.type === 'message-sync-response' || data?.type === 'message-sync-request') {
+        const msgCount = (data.messages || []).length;
+        console.log(`[Sync] Received ${data.type} from ${peerId.slice(0, 8)}: ${msgCount} messages`);
+      }
 
       // Rate limit + validate before any processing.
       // Trusted sync-control traffic gets its own lane (still authenticated by
