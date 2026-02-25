@@ -45,21 +45,6 @@ export interface GuardResult {
   rateLimit?: RateLimitResult;
 }
 
-/** Known message types and their expected shapes */
-const KNOWN_TYPES = new Set([
-  'handshake',
-  'workspace-sync',
-  'time-sync-request',
-  'time-sync-response',
-  'media-request',
-  'media-response',
-  'media-chunk',
-  // Assistant streaming control frames
-  'stream-start',
-  'stream-delta',
-  'stream-done',
-]);
-
 export class MessageGuard {
   readonly rateLimiter: RateLimiter;
   private sizeLimits: SizeLimits;

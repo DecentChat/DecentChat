@@ -295,7 +295,7 @@ export class IdentityManager {
   /**
    * Add a device to the identity's device group
    */
-  addDevice(identity: DecentIdentity, deviceId: string, deviceLabel: string): DecentIdentity {
+  addDevice(identity: DecentIdentity, deviceId: string, _deviceLabel: string): DecentIdentity {
     return {
       ...identity,
       deviceGroup: [...identity.deviceGroup, deviceId],

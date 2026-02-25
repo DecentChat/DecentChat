@@ -164,7 +164,18 @@ describe('Sync Performance', () => {
 
     for (const msg of messages) {
       aliceStore.forceAdd(msg);
-      try { aliceCrdt.addReceived(msg as any); } catch {}
+      try {
+        aliceCrdt.addMessage({
+          id: msg.id,
+          channelId: msg.channelId,
+          senderId: msg.senderId,
+          content: msg.content,
+          type: msg.type,
+          vectorClock: {},
+          wallTime: msg.timestamp,
+          prevHash: msg.prevHash,
+        });
+      } catch {}
     }
 
     // Bob side: empty
@@ -200,11 +211,16 @@ describe('Sync Performance', () => {
     for (const msg of pushMessages) {
       bobStore.forceAdd(msg);
       try {
-        bobCrdt.addReceived({
-          id: msg.id, channelId: msg.channelId, senderId: msg.senderId,
-          content: msg.content, type: msg.type as any,
-          vectorClock: {}, wallTime: msg.timestamp, prevHash: msg.prevHash,
-        } as any);
+        bobCrdt.addMessage({
+          id: msg.id,
+          channelId: msg.channelId,
+          senderId: msg.senderId,
+          content: msg.content,
+          type: msg.type,
+          vectorClock: {},
+          wallTime: msg.timestamp,
+          prevHash: msg.prevHash,
+        });
       } catch {}
     }
     const insertMs = performance.now() - startInsert;

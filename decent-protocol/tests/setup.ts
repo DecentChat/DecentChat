@@ -19,8 +19,7 @@ import { webcrypto } from 'crypto';
 (window as any).crypto = webcrypto;
 
 // Use fake-indexeddb for proper IndexedDB support in Node environment
-import { IDBFactory } from 'fake-indexeddb';
-import IDBKeyRange from 'fake-indexeddb/lib/FDBKeyRange.js';
+import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 
 const fakeIDB = new IDBFactory();
 (global as any).indexedDB = fakeIDB;

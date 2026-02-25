@@ -6,7 +6,7 @@
  * and message history sync.
  */
 
-import type { Workspace, WorkspaceMember, Channel, SyncMessage, PEXServer } from './types';
+import type { Workspace, WorkspaceMember, Channel, SyncMessage } from './types';
 import type { PlaintextMessage } from '../messages/types';
 import { WorkspaceManager } from './WorkspaceManager';
 import { MessageStore } from '../messages/MessageStore';
@@ -36,9 +36,6 @@ export class SyncProtocol {
   private onEvent: OnEvent;
   private myPeerId: string;
   private serverDiscovery?: ServerDiscovery; // DEP-002: Optional PEX support
-
-  // Track pending join requests
-  private pendingJoins = new Map<string, { inviteCode: string; member: WorkspaceMember }>();
 
   constructor(
     workspaceManager: WorkspaceManager,

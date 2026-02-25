@@ -87,7 +87,6 @@ export class ChunkedReceiver {
   readonly totalChunks: number;
   private expectedHash: string;
   private chunks = new Map<number, ArrayBuffer>();
-  private startTime: number;
   private bytesReceived = 0;
   private lastProgressTime: number;
   private lastProgressBytes = 0;
@@ -96,7 +95,6 @@ export class ChunkedReceiver {
     this.attachmentId = attachmentId;
     this.totalChunks = totalChunks;
     this.expectedHash = expectedHash;
-    this.startTime = Date.now();
     this.lastProgressTime = Date.now();
   }
 

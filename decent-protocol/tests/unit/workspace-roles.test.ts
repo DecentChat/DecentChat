@@ -8,7 +8,7 @@
 import { describe, expect, it, beforeEach } from 'bun:test';
 import { WorkspaceManager } from '../../src/workspace/WorkspaceManager';
 import { WorkspaceRole, DEFAULT_WORKSPACE_PERMISSIONS } from '../../src/workspace/types';
-import type { Workspace, WorkspaceMember, WorkspacePermissions } from '../../src/workspace/types';
+import type { Workspace, WorkspacePermissions } from '../../src/workspace/types';
 
 // Helper to create a workspace with specific members
 function setupWorkspace(wm: WorkspaceManager, opts?: {
@@ -44,9 +44,9 @@ function setupWorkspace(wm: WorkspaceManager, opts?: {
 
 describe('WorkspaceRole enum', () => {
   it('has correct values', () => {
-    expect(WorkspaceRole.Owner).toBe('owner');
-    expect(WorkspaceRole.Admin).toBe('admin');
-    expect(WorkspaceRole.Member).toBe('member');
+    expect(WorkspaceRole.Owner).toBe('owner' as WorkspaceRole);
+    expect(WorkspaceRole.Admin).toBe('admin' as WorkspaceRole);
+    expect(WorkspaceRole.Member).toBe('member' as WorkspaceRole);
   });
 });
 

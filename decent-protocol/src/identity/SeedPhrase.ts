@@ -17,7 +17,7 @@
 // BIP39 English wordlist (2048 words)
 // Using a minimal curated list for portability — no external deps
 import { WORDLIST } from './wordlist';
-import { HDKeyDerivation, HDPurpose } from './HDKeyDerivation';
+import { HDKeyDerivation } from './HDKeyDerivation';
 import type { HDDerivedKeys } from './HDKeyDerivation';
 
 export interface SeedPhraseResult {

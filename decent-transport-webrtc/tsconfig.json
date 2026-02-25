@@ -19,8 +19,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"],
-  "references": [
-    { "path": "../decent-protocol" }
-  ]
+  "include": ["src"]
 }

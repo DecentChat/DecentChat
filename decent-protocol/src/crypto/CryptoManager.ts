@@ -174,7 +174,7 @@ export class CryptoManager {
   async deserializeKeyPair(
     serialized: SerializedKeyPair,
     algorithm: 'ECDH' | 'ECDSA',
-    usages: KeyUsage[]
+    _usages: KeyUsage[]
   ): Promise<KeyPair> {
     const publicJwk = JSON.parse(atob(serialized.publicKey));
     const privateJwk = JSON.parse(atob(serialized.privateKey));

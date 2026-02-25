@@ -30,6 +30,7 @@ class MockTransport implements Transport {
     return true;
   }
   getConnectedPeers(): string[] { return Array.from(this.connectedPeers); }
+  isConnectingToPeer(_peerId: string): boolean { return false; }
   destroy(): void { this.sent = []; this.connectedPeers.clear(); }
 }
 
@@ -170,6 +171,8 @@ async function handleMessageSyncResponse(
 
   return added;
 }
+
+void handleMessageSyncRequest;
 
 // ---------------------------------------------------------------------------
 // Tests

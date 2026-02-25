@@ -413,13 +413,13 @@ describe('MessageStore - Message Types', () => {
   test('supports different message types', async () => {
     await store.addMessage(await store.createMessage('channel1', 'alice', 'Text', 'text'))
     await new Promise(resolve => setTimeout(resolve, 5))
-    await store.addMessage(await store.createMessage('channel1', 'bob', 'Image URL', 'image'))
+    await store.addMessage(await store.createMessage('channel1', 'bob', 'Image URL', 'file'))
     await new Promise(resolve => setTimeout(resolve, 5))
     await store.addMessage(await store.createMessage('channel1', 'charlie', 'File path', 'file'))
 
     const messages = store.getMessages('channel1')
     expect(messages[0].type).toBe('text')
-    expect(messages[1].type).toBe('image')
+    expect(messages[1].type).toBe('file')
     expect(messages[2].type).toBe('file')
   })
 

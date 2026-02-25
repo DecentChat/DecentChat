@@ -26,7 +26,6 @@ const MAX_SKIP = 100;
 
 /** HKDF info strings */
 const ROOT_KDF_INFO = 'decent-root-kdf-v1';
-const CHAIN_KDF_INFO = 'decent-chain-kdf-v1';
 
 /** Ratchet state for one peer session */
 export interface RatchetState {

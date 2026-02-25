@@ -5,7 +5,7 @@
  * No server involved.
  */
 
-import type { Workspace, WorkspaceMember, Channel, SyncMessage, WorkspacePermissions } from './types';
+import type { Workspace, WorkspaceMember, Channel, WorkspacePermissions } from './types';
 import { DEFAULT_WORKSPACE_PERMISSIONS } from './types';
 
 export class WorkspaceManager {
