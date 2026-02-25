@@ -222,3 +222,48 @@ describe('Sync Performance', () => {
     expect(totalMs).toBeLessThan(500); // Entire pipeline < 500ms
   });
 });
+
+describe('bulkAdd Performance', () => {
+  test('bulkAdd 1000 messages', async () => {
+    const { MessageStore } = await import('../../src/messages/MessageStore');
+    const store = new MessageStore();
+    const msgs = Array.from({ length: 1000 }, (_, i) => ({
+      id: `msg-${i.toString().padStart(5, '0')}`,
+      channelId: 'ch-1',
+      senderId: 'alice',
+      timestamp: 1000000 + i,
+      content: `Message ${i}`,
+      type: 'text' as const,
+      prevHash: '0'.repeat(64),
+      status: 'delivered' as const,
+    }));
+    const start = performance.now();
+    const added = store.bulkAdd(msgs);
+    const elapsed = performance.now() - start;
+    console.log(`[PERF] bulkAdd 1000: ${elapsed.toFixed(1)}ms, added=${added}`);
+    expect(added).toBe(1000);
+    expect(store.getMessages('ch-1').length).toBe(1000);
+    expect(elapsed).toBeLessThan(50);
+  });
+
+  test('bulkAdd 10000 messages', async () => {
+    const { MessageStore } = await import('../../src/messages/MessageStore');
+    const store = new MessageStore();
+    const msgs = Array.from({ length: 10000 }, (_, i) => ({
+      id: `msg-${i.toString().padStart(6, '0')}`,
+      channelId: 'ch-1',
+      senderId: 'alice',
+      timestamp: 1000000 + i,
+      content: `Message ${i}`,
+      type: 'text' as const,
+      prevHash: '0'.repeat(64),
+      status: 'delivered' as const,
+    }));
+    const start = performance.now();
+    const added = store.bulkAdd(msgs);
+    const elapsed = performance.now() - start;
+    console.log(`[PERF] bulkAdd 10000: ${elapsed.toFixed(1)}ms, added=${added}`);
+    expect(added).toBe(10000);
+    expect(elapsed).toBeLessThan(100);
+  });
+});

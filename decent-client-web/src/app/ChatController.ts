@@ -340,9 +340,12 @@ export class ChatController {
       const bypassGuard = this.isTrustedSyncControlMessage(peerId, data)
         || this.isTrustedOfflineReplayMessage(peerId, data);
       if (!bypassGuard) {
+        if (data?.type === 'message-sync-response' || data?.type === 'message-sync-request') {
+          console.warn(`[Sync] Guard NOT bypassed for ${data.type} from ${peerId.slice(0, 8)}, wsId=${data?.workspaceId?.slice(0, 8)}`);
+        }
         const guardResult = this.messageGuard.check(peerId, data);
         if (!guardResult.allowed) {
-          console.warn(`[Guard] Blocked message from ${peerId.slice(0, 8)}: ${guardResult.reason}`);
+          console.warn(`[Guard] Blocked message from ${peerId.slice(0, 8)}: ${guardResult.reason} type=${data?.type}`);
           return;
         }
       }
@@ -3828,7 +3831,8 @@ export class ChatController {
       if (!ws.members.some((m: any) => m.peerId === _peerId)) { console.log('[Sync] handleMessageSyncResponse: peer not member', _peerId.slice(0, 8)); return; }
 
       const messages: any[] = data.messages || [];
-      console.log(`[Sync] handleMessageSyncResponse: ${messages.length} msgs from ${_peerId.slice(0, 8)}`);
+      const _syncT0 = performance.now();
+      console.log(`[Sync] handleMessageSyncResponse: ${messages.length} msgs from ${_peerId.slice(0, 8)} at ${Date.now()}`);
       if (messages.length === 0) return;
 
       const channelIds = new Set(ws.channels.map((ch: any) => ch.id));
@@ -3842,9 +3846,8 @@ export class ChatController {
       let touchedActiveChannel = false;
       const toSync: any[] = [];
 
-      // Phase 1: bulk insert — bypass forceAdd's O(n) dedup/search
-      // Pre-sort messages by timestamp then bulk-append to each channel
-      const byChannel = new Map<string, any[]>();
+      // Phase 1: bulk insert via bulkAdd — O(n log n) instead of O(n²)
+      const toInsert: any[] = [];
       for (const msg of messages) {
         if (!channelIds.has(msg.channelId)) continue;
         if (existingIds.get(msg.channelId)!.has(msg.id)) continue;
@@ -3862,50 +3865,40 @@ export class ChatController {
           vectorClock: msg.vectorClock,
         };
 
-        if (!byChannel.has(msg.channelId)) byChannel.set(msg.channelId, []);
-        byChannel.get(msg.channelId)!.push(syncMsg);
+        toInsert.push(syncMsg);
         existingIds.get(msg.channelId)!.add(msg.id);
         toSync.push(syncMsg);
         if (msg.channelId === this.state.activeChannelId) touchedActiveChannel = true;
       }
+      const bulkAdded = this.messageStore.bulkAdd(toInsert);
+      console.log(`[Sync] bulkAdd: ${bulkAdded} inserted from ${toInsert.length} prepared`);
 
-      // Bulk append sorted messages to each channel — O(n log n) instead of O(n²)
-      for (const [chId, newMsgs] of byChannel) {
-        newMsgs.sort((a: any, b: any) => a.timestamp - b.timestamp);
-        const existing = this.messageStore.getMessages(chId);
-        // Since synced messages typically have later timestamps,
-        // we can just append and re-sort once
-        for (const m of newMsgs) {
-          existing.push(m);
+      added = toSync.length;
+      const _syncElapsed = performance.now() - _syncT0;
+      console.log(`[Sync] bulkAdd complete: added=${added} total_received=${messages.length} elapsed=${_syncElapsed.toFixed(1)}ms`);
+
+      // Phase 2: CRDT + persist — deferred to not block message availability
+      // Messages are already in-memory and queryable via bulkAdd above.
+      setTimeout(() => {
+        const persistTasks: Array<Promise<void>> = [];
+        for (const msg of toSync) {
+          try {
+            const crdt = this.getOrCreateCRDT(msg.channelId);
+            crdt.addMessage({
+              id: msg.id, channelId: msg.channelId, senderId: msg.senderId,
+              content: msg.content, type: msg.type,
+              vectorClock: msg.vectorClock || {}, wallTime: msg.timestamp,
+              prevHash: msg.prevHash || '',
+            });
+          } catch { /* CRDT dup safe to ignore */ }
+          persistTasks.push(this.persistMessage(msg));
         }
-        existing.sort((a: any, b: any) => a.timestamp - b.timestamp);
-      }
-
-      // Phase 2: CRDT + persist (batched)
-      const persistTasks: Array<Promise<void>> = [];
-      for (const msg of toSync) {
-        try {
-          const crdt = this.getOrCreateCRDT(msg.channelId);
-          crdt.addMessage({
-            id: msg.id, channelId: msg.channelId, senderId: msg.senderId,
-            content: msg.content, type: msg.type,
-            vectorClock: msg.vectorClock || {}, wallTime: msg.timestamp,
-            prevHash: msg.prevHash || '',
-          });
-        } catch { /* CRDT dup safe to ignore */ }
-        persistTasks.push(this.persistMessage(msg));
-        added++;
-      }
-
-      console.log(`[Sync] forceAdd result: added=${added} total_received=${messages.length}`);
-
-      // Batch persist: fire all IndexedDB writes concurrently but don't block
-      // the sync completion. Messages are already in-memory via forceAdd.
-      if (persistTasks.length > 0) {
-        Promise.all(persistTasks).catch(err =>
-          console.warn('[Sync] Batch persist error:', err),
-        );
-      }
+        if (persistTasks.length > 0) {
+          Promise.all(persistTasks).catch(err =>
+            console.warn('[Sync] Batch persist error:', err),
+          );
+        }
+      }, 0);
       if (touchedActiveChannel) {
         this.ui?.renderMessages();
       }

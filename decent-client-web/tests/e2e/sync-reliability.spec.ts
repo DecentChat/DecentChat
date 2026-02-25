@@ -544,7 +544,7 @@ test.describe('Sync Reliability', () => {
     });
     bob.page.on('console', msg => {
       const t = msg.text();
-      if (t.includes('Sync') || t.includes('excess') || t.includes('Negentropy') || t.includes('forceAdd'))
+      if (t.includes('Sync') || t.includes('excess') || t.includes('Negentropy') || t.includes('forceAdd') || t.includes('bulkAdd'))
         bobSyncLogs.push(t);
     });
     alice.page.on('pageerror', err => aliceSyncLogs.push(`PAGE_ERROR: ${err.message}`));
@@ -600,25 +600,29 @@ test.describe('Sync Reliability', () => {
       await alice.page.evaluate(() => (window as any).__ctrl?.runPeerMaintenanceNow?.('post-offline-1k-reconnect'));
       trace('alice-maintenance-nudged');
 
-      // Wait for Negentropy to deliver all 1 000 messages to Bob's store.
-      // Each maintenance cycle pushes ~30 msgs; at ~6 msg/s this needs ~170s.
-      await waitForPrefixCountWithTrace(
-        bob.page,
-        PREFIX,
-        COUNT,
-        240_000,
-        trace,
-        'offline-catchup-negentropy',
-      );
+      // Wait up to 30s — we want to see what rate we get, not wait for completion
+      try {
+        await waitForPrefixCountWithTrace(
+          bob.page,
+          PREFIX,
+          COUNT,
+          30_000,
+          trace,
+          'offline-catchup-negentropy',
+        );
+      } catch (e) {
+        // Expected to timeout — we want the logs
+      }
 
       const catchupMs = Date.now() - reconnectStart;
-      console.log(`[SyncTest] Offline 1k catch-up: ${catchupMs}ms`);
+      const currentCount = await getMessageCountViaController(bob.page, PREFIX).catch(() => -1);
+      console.log(`[SyncTest] Offline 1k catch-up: ${catchupMs}ms, got ${currentCount}/${COUNT}`);
 
-      // Dump browser logs for debugging
+      // Dump ALL browser logs for debugging
       console.log(`[SyncTest] Alice sync logs (${aliceSyncLogs.length}):`);
-      for (const l of aliceSyncLogs.slice(0, 20)) console.log(`  [A] ${l}`);
+      for (const l of aliceSyncLogs) console.log(`  [A] ${l}`);
       console.log(`[SyncTest] Bob sync logs (${bobSyncLogs.length}):`);
-      for (const l of bobSyncLogs.slice(0, 20)) console.log(`  [B] ${l}`);
+      for (const l of bobSyncLogs) console.log(`  [B] ${l}`);
 
       const bobCount = await getMessageCountViaController(bob.page, PREFIX);
       trace('bob-final-count', { bobCount, expected: COUNT, catchupMs });

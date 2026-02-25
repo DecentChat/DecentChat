@@ -123,6 +123,38 @@ export class MessageStore {
   }
 
   /**
+   * Bulk-add pre-sorted messages. O(n log n) instead of O(n²).
+   * Messages MUST be sorted by timestamp ascending.
+   * Skips duplicates. Creates channel if needed.
+   */
+  bulkAdd(messages: PlaintextMessage[]): number {
+    if (messages.length === 0) return 0;
+    let added = 0;
+    // Group by channel
+    const byChannel = new Map<string, PlaintextMessage[]>();
+    for (const msg of messages) {
+      if (!byChannel.has(msg.channelId)) byChannel.set(msg.channelId, []);
+      byChannel.get(msg.channelId)!.push(msg);
+    }
+    for (const [channelId, newMsgs] of byChannel) {
+      if (!this.channels.has(channelId)) {
+        this.channels.set(channelId, []);
+      }
+      const existing = this.channels.get(channelId)!;
+      const existingIds = new Set(existing.map(m => m.id));
+      const deduped = newMsgs.filter(m => !existingIds.has(m.id));
+      if (deduped.length === 0) continue;
+      // Merge: push all then sort once — O(n log n)
+      for (const m of deduped) {
+        existing.push(m);
+      }
+      existing.sort((a, b) => a.timestamp - b.timestamp);
+      added += deduped.length;
+    }
+    return added;
+  }
+
+  /**
    * Get messages for a channel
    */
   getMessages(channelId: string): PlaintextMessage[] {
