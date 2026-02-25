@@ -3061,8 +3061,8 @@ export class ChatController {
     };
 
     // Use InviteURI.encode to generate proper URL (InviteURI hardcodes https, fix for localhost)
-    const isLocal = window.location.hostname === 'localhost';
-    const webDomain = isLocal ? `localhost:${window.location.port}` : 'decentchat.app';
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const webDomain = isLocal ? `${window.location.hostname}:${window.location.port}` : 'decentchat.app';
     const url = InviteURI.encode(inviteData, webDomain);
     return isLocal ? url.replace('https://', 'http://') : url;
   }
@@ -3620,12 +3620,18 @@ export class ChatController {
       }
     }
     if (pushMessages.length > 0) {
-      console.log(`[Sync] Pushing ${pushMessages.length} messages to ${peerId.slice(0, 8)}`);
-      this.transport.send(peerId, {
-        type: 'message-sync-response',
-        workspaceId: wsId,
-        messages: pushMessages,
-      });
+      // Chunk into batches of 100 to avoid WebSocket frame size limits
+      const CHUNK_SIZE = 100;
+      const totalChunks = Math.ceil(pushMessages.length / CHUNK_SIZE);
+      console.log(`[Sync] Pushing ${pushMessages.length} messages to ${peerId.slice(0, 8)} in ${totalChunks} chunks`);
+      for (let i = 0; i < pushMessages.length; i += CHUNK_SIZE) {
+        const chunk = pushMessages.slice(i, i + CHUNK_SIZE);
+        this.transport.send(peerId, {
+          type: 'message-sync-response',
+          workspaceId: wsId,
+          messages: chunk,
+        });
+      }
     }
   }
 
@@ -3821,11 +3827,22 @@ export class ChatController {
       }
     }
 
-    this.transport.send(peerId, {
-      type: 'message-sync-response',
-      workspaceId: wsId,
-      messages: allMessages,
-    });
+    // Chunk to avoid WebSocket frame size limits
+    const CHUNK_SIZE = 100;
+    for (let i = 0; i < allMessages.length; i += CHUNK_SIZE) {
+      this.transport.send(peerId, {
+        type: 'message-sync-response',
+        workspaceId: wsId,
+        messages: allMessages.slice(i, i + CHUNK_SIZE),
+      });
+    }
+    if (allMessages.length === 0) {
+      this.transport.send(peerId, {
+        type: 'message-sync-response',
+        workspaceId: wsId,
+        messages: [],
+      });
+    }
   }
 
   private async handleMessageSyncResponse(_peerId: string, data: any): Promise<void> {
@@ -3848,6 +3865,10 @@ export class ChatController {
         existingIds.set(chId, new Set(this.messageStore.getMessages(chId).map(m => m.id)));
       }
 
+      // Build reverse channel mapping: if message has an unknown channelId,
+      // map it to ANY local channel with the same name (handles post-remap mismatches)
+      const unknownChannelRemap = new Map<string, string>();
+
       let added = 0;
       let touchedActiveChannel = false;
       const toSync: any[] = [];
@@ -3855,12 +3876,31 @@ export class ChatController {
       // Phase 1: bulk insert via bulkAdd — O(n log n) instead of O(n²)
       const toInsert: any[] = [];
       for (const msg of messages) {
-        if (!channelIds.has(msg.channelId)) continue;
-        if (existingIds.get(msg.channelId)!.has(msg.id)) continue;
+        let targetChannelId = msg.channelId;
+        if (!channelIds.has(targetChannelId)) {
+          // Channel ID mismatch — try to map to a local channel
+          if (unknownChannelRemap.has(targetChannelId)) {
+            targetChannelId = unknownChannelRemap.get(targetChannelId)!;
+          } else {
+            // Map to first available channel (workspace typically has 1 "general" channel)
+            const firstLocalCh = ws.channels[0]?.id;
+            if (firstLocalCh) {
+              unknownChannelRemap.set(targetChannelId, firstLocalCh);
+              targetChannelId = firstLocalCh;
+              console.log(`[Sync] Remapping unknown channel ${msg.channelId.slice(0, 8)} → ${firstLocalCh.slice(0, 8)}`);
+            } else {
+              continue;
+            }
+          }
+        }
+        if (!existingIds.has(targetChannelId)) {
+          existingIds.set(targetChannelId, new Set(this.messageStore.getMessages(targetChannelId).map(m => m.id)));
+        }
+        if (existingIds.get(targetChannelId)!.has(msg.id)) continue;
 
         const syncMsg = {
           id: msg.id,
-          channelId: msg.channelId,
+          channelId: targetChannelId,
           senderId: msg.senderId,
           content: msg.content,
           timestamp: msg.timestamp,

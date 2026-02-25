@@ -53,8 +53,25 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
   });
 
   // Fresh IndexedDB
-  await page.goto('/');
+  // Navigate with cache-busting to prevent service workers from intercepting
+  await page.goto('/?_cb=' + Date.now());
   await page.evaluate(async () => {
+    // Unregister ALL service workers (prevents stale cached code from deployed version)
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const reg of regs) {
+        await reg.unregister();
+        console.log('[Test] Unregistered SW:', reg.scope);
+      }
+    }
+    // Clear all caches
+    if ('caches' in window) {
+      const names = await caches.keys();
+      for (const name of names) {
+        await caches.delete(name);
+        console.log('[Test] Deleted cache:', name);
+      }
+    }
     if (indexedDB.databases) {
       for (const db of await indexedDB.databases()) {
         if (db.name) indexedDB.deleteDatabase(db.name);
@@ -63,7 +80,8 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
     localStorage.clear();
     sessionStorage.clear();
   });
-  await page.reload();
+  // Hard reload to bypass any remaining cached resources
+  await page.reload({ waitUntil: 'networkidle' });
 
   await page.waitForFunction(() => {
     const el = document.getElementById('loading');
