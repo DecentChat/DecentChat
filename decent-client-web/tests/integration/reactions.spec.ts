@@ -307,11 +307,15 @@ async function expectNoReactionPill(page: Page, messageText: string, emoji: stri
 
 /** Get the numeric count shown in a reaction pill */
 async function getReactionCount(page: Page, messageText: string, emoji: string): Promise<number> {
-  const msg = page.locator('.message', { hasText: messageText }).first();
-  const pill = msg.locator('.reaction-pill').filter({ hasText: emoji }).first();
-  const text = await pill.textContent();
-  const m = text?.match(/\d+/);
-  return m ? parseInt(m[0], 10) : 0;
+  return page.evaluate(({ msgText, em }) => {
+    const msgs = Array.from(document.querySelectorAll('.message'));
+    const msg = msgs.find(m => m.querySelector('.message-content')?.textContent?.includes(msgText));
+    if (!msg) return 0;
+    const pill = Array.from(msg.querySelectorAll('.reaction-pill')).find(p => p.textContent?.includes(em));
+    if (!pill) return 0;
+    const m = pill.textContent?.match(/\d+/);
+    return m ? parseInt(m[0], 10) : 0;
+  }, { msgText: messageText, em: emoji });
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -92,6 +92,12 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 15000 });
+
+  const openAppBtn = page.getByRole('button', { name: /open app/i });
+  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await openAppBtn.click();
+  }
+
   await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
   await page.waitForFunction(() => {
     const t = (window as any).__transport;
@@ -102,7 +108,7 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
 }
 
 async function closeUser(user: TestUser): Promise<void> {
-  await user.context.close();
+  try { await user.context.close(); } catch {}
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
