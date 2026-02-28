@@ -280,6 +280,82 @@ export class SeedPhraseManager {
     return this.hd.deriveDeviceKey(masterKey, deviceIndex);
   }
 
+  // === Multi-Device Derivation ===
+
+  /**
+   * Derive the canonical identityId from a seed phrase.
+   * Uses the HD identity key at m/0'/identity/0 — stable across all devices.
+   *
+   * identityId = SHA-256(base64(SPKI(identityECDH.publicKey)))[0:8].hex() → 16 hex chars
+   */
+  async deriveIdentityId(mnemonic: string): Promise<string> {
+    const identityKeys = await this.deriveHDIdentityKey(mnemonic, 0);
+    const spki = await crypto.subtle.exportKey('spki', identityKeys.ecdhKeyPair.publicKey);
+    const base64 = this.arrayBufferToBase64(spki);
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(base64));
+    return Array.from(new Uint8Array(hash).slice(0, 8))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  /**
+   * Derive a device-specific peerId from a seed phrase and device index.
+   * Uses the HD device key at m/3'/device/<deviceIndex>.
+   *
+   * peerId = SHA-256(SPKI(deviceECDH.publicKey))[0:9].hex() → 18 hex chars
+   *
+   * Each device gets a unique peerId; all share the same identityId.
+   */
+  async deriveDevicePeerId(mnemonic: string, deviceIndex: number): Promise<string> {
+    if (!Number.isInteger(deviceIndex) || deviceIndex < 0) {
+      throw new Error('Device index must be a non-negative integer');
+    }
+    const deviceKeys = await this.deriveHDDeviceKey(mnemonic, deviceIndex);
+    const spki = await crypto.subtle.exportKey('spki', deviceKeys.ecdhKeyPair.publicKey);
+    const hash = await crypto.subtle.digest('SHA-256', spki);
+    return Array.from(new Uint8Array(hash).slice(0, 9))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  /**
+   * Derive full key material for a specific device: peerId, identityId, and both key sets.
+   * Convenience method combining deriveDevicePeerId + deriveIdentityId + key pairs.
+   */
+  async deriveDeviceKeys(mnemonic: string, deviceIndex: number): Promise<{
+    peerId: string;
+    identityId: string;
+    deviceKeys: HDDerivedKeys;
+    identityKeys: HDDerivedKeys;
+  }> {
+    if (!Number.isInteger(deviceIndex) || deviceIndex < 0) {
+      throw new Error('Device index must be a non-negative integer');
+    }
+    const masterKey = await this.deriveHDMasterKey(mnemonic);
+
+    // Identity keys: m/0'/identity/0 — same for all devices
+    const identityKeys = await this.hd.deriveIdentityKey(masterKey, 0);
+    // Device keys: m/3'/device/<deviceIndex> — unique per device
+    const deviceKeys = await this.hd.deriveDeviceKey(masterKey, deviceIndex);
+
+    // identityId from identity ECDH public key
+    const identitySpki = await crypto.subtle.exportKey('spki', identityKeys.ecdhKeyPair.publicKey);
+    const identityBase64 = this.arrayBufferToBase64(identitySpki);
+    const identityHash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identityBase64));
+    const identityId = Array.from(new Uint8Array(identityHash).slice(0, 8))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+
+    // peerId from device ECDH public key
+    const deviceSpki = await crypto.subtle.exportKey('spki', deviceKeys.ecdhKeyPair.publicKey);
+    const deviceHash = await crypto.subtle.digest('SHA-256', deviceSpki);
+    const peerId = Array.from(new Uint8Array(deviceHash).slice(0, 9))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+
+    return { peerId, identityId, deviceKeys, identityKeys };
+  }
+
   // === Internal: Mnemonic ↔ Entropy ===
 
   private entropyToMnemonic(entropy: Uint8Array): string {

@@ -2443,7 +2443,8 @@ body.compact .messages-list { gap: 0; }
   transition: background 0.1s;
 }
 
-.command-suggestion:hover { background: var(--bg-hover); }
+.command-suggestion:hover,
+.command-suggestion.selected { background: var(--bg-hover); }
 
 .cmd-name {
   font-family: 'SF Mono', 'Fira Code', monospace;
@@ -3882,22 +3883,30 @@ html, body {
 }
 
 
-/* Member row redesign */
+/* Member row redesign — Discord-style */
 .member-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 12px !important;
+  gap: 10px;
+  padding: 4px 8px !important;
+  margin: 1px 8px;
+  border-radius: 4px;
+  min-height: 42px;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.member-row:hover {
+  background: var(--sidebar-hover) !important;
 }
 
 .member-avatar-sm {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   color: #fff;
   flex-shrink: 0;
@@ -3906,44 +3915,87 @@ html, body {
 
 .member-presence {
   position: absolute;
-  bottom: -1px;
-  right: -1px;
-  width: 10px;
-  height: 10px;
+  bottom: -2px;
+  right: -2px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  border: 2px solid var(--bg-secondary);
+  border: 2.5px solid var(--sidebar-bg);
 }
 .member-presence.online {
-  background: #2ecc71;
+  background: #23a559;
 }
 .member-presence.offline {
-  background: #636e72;
+  background: #80848e;
+}
+
+.member-name-wrapper {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
 }
 
 .member-name-text {
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--sidebar-text-active);
+  line-height: 1.3;
+}
+
+.member-name-inline {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 
 .member-role-tag {
-  font-size: 11px;
-  margin-left: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+  line-height: 1.4;
+}
+.member-role-tag.owner {
+  background: #f0b232;
+  color: #1a1a2e;
+}
+.member-role-tag.admin {
+  background: #5865f2;
+  color: #fff;
 }
 
 .member-group-header {
   font-size: 11px !important;
+  font-weight: 700 !important;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-muted) !important;
-  padding: 10px 12px 4px !important;
-  margin-top: 4px;
+  letter-spacing: 0.02em;
+  color: var(--sidebar-text) !important;
+  padding: 16px 16px 4px !important;
+  margin-top: 0;
 }
 
-.members-offline {
-  opacity: 0.55;
+.members-offline .member-name-text {
+  color: var(--sidebar-text);
 }
-.members-offline .member-row:hover {
-  opacity: 1;
+.members-offline .member-avatar-sm {
+  opacity: 0.5;
+  filter: saturate(0.3);
+}
+.members-offline .member-row:hover .member-avatar-sm {
+  opacity: 0.8;
+  filter: saturate(0.7);
+}
+.members-offline .member-row:hover .member-name-text {
+  color: var(--sidebar-text-active);
 }

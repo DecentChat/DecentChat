@@ -849,14 +849,20 @@ export class UIRenderer {
       const initial = m.alias.charAt(0).toUpperCase();
       const color = this.peerColor(m.peerId);
       const youTag = m.isMe ? ' <span class="sidebar-item-meta">(you)</span>' : '';
-      const roleTag = m.role === 'owner' ? ' <span class="member-role-tag">👑</span>' : m.role === 'admin' ? ' <span class="member-role-tag">⚙️</span>' : '';
+      const roleTag = m.role === 'owner' ? ' <span class="member-role-tag owner">owner</span>'
+        : m.role === 'admin' ? ' <span class="member-role-tag admin">admin</span>' : '';
       return `
         <div class="sidebar-item member-row" data-member-peer-id="${m.peerId}">
           <div class="member-avatar-sm" style="background: ${color}">
             ${this.escapeHtml(initial)}
             <span class="member-presence ${m.isOnline ? 'online' : 'offline'}"></span>
           </div>
-          <span class="member-name-text">${this.escapeHtml(m.alias)}${youTag}${roleTag}</span>
+          <div class="member-name-wrapper">
+            <div class="member-name-inline">
+              <span class="member-name-text">${this.escapeHtml(m.alias)}${youTag}</span>
+              ${roleTag}
+            </div>
+          </div>
         </div>`;
     };
 
@@ -3510,20 +3516,71 @@ export class UIRenderer {
       input.parentElement!.appendChild(popup);
     }
 
-    popup.innerHTML = suggestions.slice(0, 8).map(s =>
-      `<div class="command-suggestion" data-cmd="/${s.name}">
+    popup.innerHTML = suggestions.slice(0, 8).map((s, i) =>
+      `<div class="command-suggestion${i === 0 ? ' selected' : ''}" data-cmd="/${s.name}">
         <span class="cmd-name">/${s.name}</span>
         <span class="cmd-desc">${s.description}</span>
       </div>`
     ).join('');
 
+    // Click to select
     popup.querySelectorAll('.command-suggestion').forEach(el => {
-      el.addEventListener('click', () => {
+      el.addEventListener('mousedown', (e) => {
+        e.preventDefault();
         input.value = (el as HTMLElement).dataset.cmd + ' ';
         input.focus();
         popup?.remove();
       });
     });
+
+    // Keyboard navigation
+    const existingHandler = (input as any).__cmdKeyHandler;
+    if (existingHandler) input.removeEventListener('keydown', existingHandler);
+
+    const keyHandler = (e: KeyboardEvent) => {
+      const currentPopup = document.getElementById('command-autocomplete');
+      if (!currentPopup) {
+        input.removeEventListener('keydown', keyHandler);
+        (input as any).__cmdKeyHandler = null;
+        return;
+      }
+
+      const options = currentPopup.querySelectorAll('.command-suggestion');
+      let selectedIdx = Array.from(options).findIndex(o => o.classList.contains('selected'));
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        options[selectedIdx]?.classList.remove('selected');
+        selectedIdx = (selectedIdx + 1) % options.length;
+        options[selectedIdx]?.classList.add('selected');
+        (options[selectedIdx] as HTMLElement)?.scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        options[selectedIdx]?.classList.remove('selected');
+        selectedIdx = (selectedIdx - 1 + options.length) % options.length;
+        options[selectedIdx]?.classList.add('selected');
+        (options[selectedIdx] as HTMLElement)?.scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        const selected = currentPopup.querySelector('.command-suggestion.selected') as HTMLElement;
+        if (selected) {
+          e.preventDefault();
+          e.stopPropagation();
+          input.value = selected.dataset.cmd + ' ';
+          input.selectionStart = input.selectionEnd = input.value.length;
+          currentPopup.remove();
+          input.removeEventListener('keydown', keyHandler);
+          (input as any).__cmdKeyHandler = null;
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        currentPopup.remove();
+        input.removeEventListener('keydown', keyHandler);
+        (input as any).__cmdKeyHandler = null;
+      }
+    };
+
+    (input as any).__cmdKeyHandler = keyHandler;
+    input.addEventListener('keydown', keyHandler);
   }
 
   private openLightbox(src: string, name: string): void {
