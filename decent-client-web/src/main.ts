@@ -471,6 +471,9 @@ async function init(): Promise<void> {
     state.myPeerId = myPeerId;
     state.myAlias = myPeerId.slice(0, 8);
 
+    // Reload reaction usage now that peerId is known (localStorage key depends on it)
+    ui.reloadReactionUsage();
+
     // Initialize huddle (voice calling) — needs myPeerId
     ctrl.initHuddle();
 

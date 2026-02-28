@@ -214,6 +214,12 @@ export class UIRenderer {
     return `decentchat:reactionUsage:${this.state.myPeerId || 'anon'}`;
   }
 
+  /** Reload reaction usage from localStorage (call after myPeerId is set) */
+  reloadReactionUsage(): void {
+    this.reactionUsage = this.loadReactionUsage();
+    this.frequentReactions = this.loadFrequentReactions();
+  }
+
   private loadReactionUsage(): Record<string, number> {
     try {
       const raw = localStorage.getItem(this.reactionUsageKey());
