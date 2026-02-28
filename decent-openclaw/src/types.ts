@@ -9,6 +9,11 @@ export type DecentChatChannelConfig = {
   channels?: Record<string, { requireMention?: boolean }>;
   streamEnabled?: boolean;
   replyToMode?: "off" | "first" | "all";
+  replyToModeByChatType?: {
+    direct?: "off" | "first" | "all";
+    group?: "off" | "first" | "all";
+    channel?: "off" | "first" | "all";
+  };
   thread?: {
     historyScope?: "thread" | "channel";
     inheritParent?: boolean;
@@ -28,6 +33,11 @@ export type ResolvedDecentChatAccount = {
   dataDir?: string;
   streamEnabled: boolean;
   replyToMode: "off" | "first" | "all";
+  replyToModeByChatType: {
+    direct?: "off" | "first" | "all";
+    group?: "off" | "first" | "all";
+    channel?: "off" | "first" | "all";
+  };
   thread: {
     historyScope: "thread" | "channel";
     inheritParent: boolean;

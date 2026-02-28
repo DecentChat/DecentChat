@@ -354,15 +354,28 @@ function resolveThreadSessionKeys(params: {
   };
 }
 
-function resolveDecentThreadingFlags(cfg: OpenClawConfig): {
+export function resolveDecentThreadingFlags(cfg: OpenClawConfig, chatType?: "direct" | "group" | "channel"): {
   replyToMode: "off" | "first" | "all";
   historyScope: "thread" | "channel";
   inheritParent: boolean;
 } {
   const ch = (cfg as any)?.channels?.decentchat ?? {};
-  const replyToMode = (ch.replyToMode === "off" || ch.replyToMode === "first" || ch.replyToMode === "all")
+  const globalReplyToMode = (ch.replyToMode === "off" || ch.replyToMode === "first" || ch.replyToMode === "all")
     ? ch.replyToMode
     : "all";
+  const byType = ch.replyToModeByChatType ?? {};
+  const directMode = (byType.direct === "off" || byType.direct === "first" || byType.direct === "all") ? byType.direct : undefined;
+  const groupMode = (byType.group === "off" || byType.group === "first" || byType.group === "all") ? byType.group : undefined;
+  const channelMode = (byType.channel === "off" || byType.channel === "first" || byType.channel === "all") ? byType.channel : undefined;
+
+  let replyToMode = globalReplyToMode;
+  if (chatType === "direct") {
+    replyToMode = directMode ?? globalReplyToMode;
+  } else if (chatType === "group") {
+    replyToMode = groupMode ?? channelMode ?? globalReplyToMode;
+  } else if (chatType === "channel") {
+    replyToMode = channelMode ?? groupMode ?? globalReplyToMode;
+  }
   const historyScope = (ch.thread?.historyScope === "channel" || ch.thread?.historyScope === "thread")
     ? ch.thread.historyScope
     : "thread";
@@ -442,7 +455,7 @@ async function processInboundMessage(
   }
 
   const cfg = core.config.loadConfig() as OpenClawConfig;
-  const threadingFlags = resolveDecentThreadingFlags(cfg);
+  const threadingFlags = resolveDecentThreadingFlags(cfg, msg.chatType === "direct" ? "direct" : "channel");
   const channel = "decentchat";
   const peerId = msg.chatType === "direct"
     ? msg.senderId

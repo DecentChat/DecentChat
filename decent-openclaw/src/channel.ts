@@ -19,6 +19,11 @@ const DecentChatConfigSchema = z.object({
   streamEnabled: z.boolean().optional().default(true),
   dmPolicy: z.enum(["open", "pairing", "allowlist", "disabled"]).optional().default("open"),
   replyToMode: z.enum(["off", "first", "all"]).optional().default("all"),
+  replyToModeByChatType: z.object({
+    direct: z.enum(["off", "first", "all"]).optional(),
+    group: z.enum(["off", "first", "all"]).optional(),
+    channel: z.enum(["off", "first", "all"]).optional(),
+  }).optional(),
   thread: z.object({
     historyScope: z.enum(["thread", "channel"]).optional().default("thread"),
     inheritParent: z.boolean().optional().default(false),
@@ -44,6 +49,11 @@ function resolveDecentChatAccount(cfg: any, accountId?: string | null): Resolved
     dataDir: ch.dataDir,
     streamEnabled: ch.streamEnabled !== false,
     replyToMode: ch.replyToMode ?? "all",
+    replyToModeByChatType: {
+      direct: ch.replyToModeByChatType?.direct,
+      group: ch.replyToModeByChatType?.group,
+      channel: ch.replyToModeByChatType?.channel,
+    },
     thread: {
       historyScope: ch.thread?.historyScope ?? "thread",
       inheritParent: ch.thread?.inheritParent ?? false,
@@ -75,6 +85,7 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       streamEnabled: { label: "Enable streaming", help: "Stream token deltas to peers in real time" },
       dmPolicy: { label: "DM Policy" },
       replyToMode: { label: "Reply-to mode", help: "off|first|all (Slack-compatible semantics)" },
+      replyToModeByChatType: { label: "Reply-to mode by chat type", help: "Overrides for direct|group|channel" },
       thread: { label: "Thread settings", advanced: true },
       invites: { label: "Invite URLs", advanced: true, help: "DecentChat invite URIs for workspaces to join on startup" },
     },
@@ -105,8 +116,17 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
   },
 
   threading: {
-    resolveReplyToMode: ({ cfg, accountId }) => {
+    resolveReplyToMode: ({ cfg, accountId, chatType }) => {
       const account = resolveDecentChatAccount(cfg, accountId);
+      if (chatType === "direct") {
+        return account.replyToModeByChatType.direct ?? account.replyToMode;
+      }
+      if (chatType === "group") {
+        return account.replyToModeByChatType.group ?? account.replyToModeByChatType.channel ?? account.replyToMode;
+      }
+      if (chatType === "channel") {
+        return account.replyToModeByChatType.channel ?? account.replyToModeByChatType.group ?? account.replyToMode;
+      }
       return account.replyToMode;
     },
     allowExplicitReplyTagsWhenOff: true,
