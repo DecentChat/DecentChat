@@ -16,13 +16,20 @@ export interface PeerIdBindingResult {
 /**
  * Verify that a claimed peerId matches the DEP-003 derivation from a public key.
  *
+ * Accepts the public key in multiple formats:
+ *   - ArrayBuffer: raw SPKI bytes
+ *   - string: either base64-encoded SPKI, or base64-encoded JWK (as used in handshakes)
+ *
+ * JWK detection: if the decoded base64 starts with '{' it's treated as JWK,
+ * imported as an ECDH P-256 key, and re-exported as SPKI for hashing.
+ *
  * @param claimedPeerId  The peerId the peer claims to own (18-char hex string)
- * @param publicKeySPKI  The peer's ECDH public key in SPKI format (ArrayBuffer or base64 string)
+ * @param publicKey      The peer's ECDH public key (ArrayBuffer SPKI, base64 SPKI, or base64 JWK)
  * @returns Verification result with valid flag and optional reason for rejection
  */
 export async function verifyPeerIdBinding(
   claimedPeerId: string,
-  publicKeySPKI: ArrayBuffer | string,
+  publicKey: ArrayBuffer | string,
 ): Promise<PeerIdBindingResult> {
   // Validate peerId format: must be 18-char hex (9 bytes)
   if (!claimedPeerId || claimedPeerId.length !== 18) {
@@ -32,11 +39,36 @@ export async function verifyPeerIdBinding(
     };
   }
 
-  // Decode base64 if string was provided
-  const spkiBuffer =
-    typeof publicKeySPKI === 'string'
-      ? base64ToArrayBuffer(publicKeySPKI)
-      : publicKeySPKI;
+  let spkiBuffer: ArrayBuffer;
+
+  if (typeof publicKey === 'string') {
+    // Decode the base64 string
+    const decoded = atob(publicKey);
+    if (decoded.startsWith('{')) {
+      // It's a JWK — import as ECDH key and re-export as SPKI
+      try {
+        const jwk = JSON.parse(decoded) as JsonWebKey;
+        const cryptoKey = await crypto.subtle.importKey(
+          'jwk',
+          jwk,
+          { name: 'ECDH', namedCurve: 'P-256' },
+          true,
+          [],
+        );
+        spkiBuffer = await crypto.subtle.exportKey('spki', cryptoKey);
+      } catch (err) {
+        return {
+          valid: false,
+          reason: `Failed to import JWK public key: ${err}`,
+        };
+      }
+    } else {
+      // It's base64-encoded SPKI bytes
+      spkiBuffer = base64ToArrayBuffer(publicKey);
+    }
+  } else {
+    spkiBuffer = publicKey;
+  }
 
   // Derive peerId from public key using DEP-003 algorithm
   const hash = await crypto.subtle.digest('SHA-256', spkiBuffer);

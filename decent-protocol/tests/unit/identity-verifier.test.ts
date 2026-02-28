@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import { verifyPeerIdBinding } from '../../src/security/IdentityVerifier';
 
 describe('IdentityVerifier', () => {
-  test('valid binding: peerId matches publicKey hash', async () => {
+  test('valid binding: peerId matches publicKey hash (SPKI ArrayBuffer)', async () => {
     const kp = await crypto.subtle.generateKey(
       { name: 'ECDH', namedCurve: 'P-256' },
       true,
@@ -83,11 +83,71 @@ describe('IdentityVerifier', () => {
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
 
-    // Encode SPKI as base64
     const base64Spki = btoa(String.fromCharCode(...new Uint8Array(spki)));
 
     const result = await verifyPeerIdBinding(expectedPeerId, base64Spki);
     expect(result.valid).toBe(true);
+  });
+
+  test('accepts base64-encoded JWK (handshake format)', async () => {
+    // This is what the handshake actually sends: base64(JSON(JWK))
+    const kp = await crypto.subtle.generateKey(
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      ['deriveKey'],
+    );
+    const spki = await crypto.subtle.exportKey('spki', kp.publicKey);
+    const hash = await crypto.subtle.digest('SHA-256', spki);
+    const expectedPeerId = Array.from(new Uint8Array(hash).slice(0, 9))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+
+    // Export as JWK and encode as base64 (matching CryptoManager.exportPublicKey)
+    const jwk = await crypto.subtle.exportKey('jwk', kp.publicKey);
+    const jwkBase64 = btoa(JSON.stringify(jwk));
+
+    const result = await verifyPeerIdBinding(expectedPeerId, jwkBase64);
+    expect(result.valid).toBe(true);
+  });
+
+  test('JWK format: wrong peerId still rejected', async () => {
+    const kp = await crypto.subtle.generateKey(
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      ['deriveKey'],
+    );
+    const jwk = await crypto.subtle.exportKey('jwk', kp.publicKey);
+    const jwkBase64 = btoa(JSON.stringify(jwk));
+
+    const result = await verifyPeerIdBinding('000000000000000000', jwkBase64);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain('mismatch');
+  });
+
+  test('JWK and SPKI formats produce the same peerId', async () => {
+    const kp = await crypto.subtle.generateKey(
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      ['deriveKey'],
+    );
+    const spki = await crypto.subtle.exportKey('spki', kp.publicKey);
+    const hash = await crypto.subtle.digest('SHA-256', spki);
+    const expectedPeerId = Array.from(new Uint8Array(hash).slice(0, 9))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+
+    // Both formats should verify the same peerId
+    const jwk = await crypto.subtle.exportKey('jwk', kp.publicKey);
+    const jwkBase64 = btoa(JSON.stringify(jwk));
+    const spkiBase64 = btoa(String.fromCharCode(...new Uint8Array(spki)));
+
+    const resultJwk = await verifyPeerIdBinding(expectedPeerId, jwkBase64);
+    const resultSpki = await verifyPeerIdBinding(expectedPeerId, spkiBase64);
+    const resultRaw = await verifyPeerIdBinding(expectedPeerId, spki);
+
+    expect(resultJwk.valid).toBe(true);
+    expect(resultSpki.valid).toBe(true);
+    expect(resultRaw.valid).toBe(true);
   });
 
   test('different keys produce different peerIds', async () => {
@@ -110,7 +170,6 @@ describe('IdentityVerifier', () => {
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
 
-    // Verify kp1's peerId against kp2's key → should fail
     const result = await verifyPeerIdBinding(peerId1, spki2);
     expect(result.valid).toBe(false);
   });
