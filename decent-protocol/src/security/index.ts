@@ -9,3 +9,6 @@ export type { SizeLimits, GuardResult } from './MessageGuard';
 
 export { verifyHandshakeKey } from './HandshakeVerifier';
 export type { HandshakeVerificationResult } from './HandshakeVerifier';
+
+export { verifyPeerIdBinding } from './IdentityVerifier';
+export type { PeerIdBindingResult } from './IdentityVerifier';
