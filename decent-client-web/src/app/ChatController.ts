@@ -2673,23 +2673,36 @@ export class ChatController {
     // If user is currently reading this thread, don't create unread activity.
     const isCurrentlyOpen = this.state.activeChannelId === channelId && this.state.threadOpen && this.state.activeThreadId === threadId;
 
-    // Record all incoming thread replies (Slack-like Activity behavior),
-    // except when the thread is currently open and being read.
-    const id = `thread:${wsId}:${channelId}:${msg.id}`;
-    if (this.activityItems.some(i => i.id === id)) return;
+    // One activity item per thread — update existing instead of accumulating.
+    // Uses thread-level ID so multiple replies in the same thread merge into one entry.
+    const threadActivityId = `thread:${wsId}:${channelId}:${threadId}`;
+    const existingIdx = this.activityItems.findIndex(i => i.id === threadActivityId);
 
-    this.activityItems.unshift({
-      id,
-      type: 'thread-reply',
-      workspaceId: wsId,
-      channelId,
-      threadId,
-      messageId: msg.id,
-      actorId: msg.senderId,
-      snippet: msg.content.slice(0, 140),
-      timestamp: msg.timestamp,
-      read: isCurrentlyOpen,
-    });
+    if (existingIdx >= 0) {
+      // Update existing entry with latest reply info and bump to top
+      const existing = this.activityItems[existingIdx];
+      existing.actorId = msg.senderId;
+      existing.snippet = msg.content.slice(0, 140);
+      existing.messageId = msg.id;
+      existing.timestamp = msg.timestamp;
+      if (!isCurrentlyOpen) existing.read = false; // re-mark as unread
+      // Move to top
+      this.activityItems.splice(existingIdx, 1);
+      this.activityItems.unshift(existing);
+    } else {
+      this.activityItems.unshift({
+        id: threadActivityId,
+        type: 'thread-reply',
+        workspaceId: wsId,
+        channelId,
+        threadId,
+        messageId: msg.id,
+        actorId: msg.senderId,
+        snippet: msg.content.slice(0, 140),
+        timestamp: msg.timestamp,
+        read: isCurrentlyOpen,
+      });
+    }
 
     // Keep list bounded
     if (this.activityItems.length > 500) this.activityItems.length = 500;
