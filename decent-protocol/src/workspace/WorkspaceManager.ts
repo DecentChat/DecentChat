@@ -295,6 +295,12 @@ export class WorkspaceManager {
     return workspace?.members.find(m => m.peerId === peerId);
   }
 
+  /** Look up a workspace member by their canonical identityId. */
+  getMemberByIdentity(workspaceId: string, identityId: string): WorkspaceMember | undefined {
+    const workspace = this.workspaces.get(workspaceId);
+    return workspace?.members.find(m => m.identityId === identityId);
+  }
+
   // === Channel Management ===
 
   createChannel(
