@@ -194,6 +194,8 @@ export class ChatController {
   private activeSenders = new Map<string, ChunkedSender>();
 
   myPublicKey: string = '';
+  /** Canonical identity ID (hash of public key). Set during init. */
+  myIdentityId: string = '';
   huddle: HuddleManager | null = null;
   private ui: UIUpdater | null = null;
   private reactionsPersistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2346,6 +2348,7 @@ export class ChatController {
       'text',
       threadId,
     );
+    if (this.myIdentityId) (msg as any).senderIdentityId = this.myIdentityId;
 
     const result = await this.messageStore.addMessage(msg);
     if (!result.success) {
@@ -3120,6 +3123,7 @@ export class ChatController {
       'text',
       threadId,
     );
+    if (this.myIdentityId) (msg as any).senderIdentityId = this.myIdentityId;
     (msg as any).recipientPeerIds = [conv.contactPeerId];
     (msg as any).ackedBy = [] as string[];
     (msg as any).ackedAt = {} as Record<string, number>;
@@ -3445,6 +3449,7 @@ export class ChatController {
       'text',
       threadId,
     );
+    if (this.myIdentityId) (msg as any).senderIdentityId = this.myIdentityId;
     (msg as any).attachments = [meta];
     const recipientPeerIds = this.getWorkspaceRecipientPeerIds();
     (msg as any).recipientPeerIds = recipientPeerIds;

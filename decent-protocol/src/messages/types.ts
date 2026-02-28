@@ -6,6 +6,8 @@ export interface ChatMessage {
   id: string;
   channelId: string;
   senderId: string;
+  /** Canonical identity of the sender (stable across devices). Falls back to senderId for old messages. */
+  senderIdentityId?: string;
   timestamp: number;
   content: string;
   type: 'text' | 'file' | 'system';
@@ -36,6 +38,8 @@ export interface PlaintextMessage {
   id: string;
   channelId: string;
   senderId: string;
+  /** Canonical identity of the sender (stable across devices). Falls back to senderId for old messages. */
+  senderIdentityId?: string;
   timestamp: number;
   content: string;
   type: 'text' | 'file' | 'system';

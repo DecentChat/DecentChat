@@ -16,7 +16,7 @@ import { UIRenderer } from './ui/UIRenderer';
 import { CommandParser } from './commands/CommandParser';
 import { registerCommands } from './commands/registerCommands';
 import type { AppSettings } from './storage/types';
-import { SeedPhraseManager as _SeedPhraseManager } from 'decent-protocol';
+import { SeedPhraseManager as _SeedPhraseManager, IdentityManager as _IdentityManager } from 'decent-protocol';
 const _spm = new _SeedPhraseManager();
 
 function hydrateTitleTooltips(root: ParentNode = document): void {
@@ -378,6 +378,12 @@ async function init(): Promise<void> {
     }
 
     ctrl.myPublicKey = await ctrl.cryptoManager.exportPublicKey(ecdhKeyPair.publicKey);
+
+    // Compute canonical identityId from public key (SPKI hash)
+    const spkiBytes = await crypto.subtle.exportKey('spki', ecdhKeyPair.publicKey);
+    const spkiBase64 = btoa(String.fromCharCode(...new Uint8Array(spkiBytes)));
+    const idMgr = new _IdentityManager();
+    ctrl.myIdentityId = await idMgr.computeIdentityId(spkiBase64);
 
     // Bootstrap transport + peer ID
     const settingsDefaults: AppSettings = { theme: 'auto', notifications: true };
