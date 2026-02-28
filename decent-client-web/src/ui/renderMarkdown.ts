@@ -29,7 +29,10 @@ marked.use({
 export function renderMarkdown(content: string): string {
   if (!content) return '';
   try {
-    const raw = marked.parse(content) as string;
+    // Highlight @mentions before markdown parsing
+    const withMentions = content.replace(/(^|\s)@([A-Za-z0-9_.\-]+)/g,
+      '$1<span class="mention">@$2</span>');
+    const raw = marked.parse(withMentions) as string;
     return DOMPurify.sanitize(raw, {
       ALLOWED_TAGS: [
         'p', 'br', 'strong', 'em', 'del', 'code', 'pre',

@@ -1759,6 +1759,7 @@ export class UIRenderer {
       this.autoResizeTextarea(input);
       updateSendButtons();
       this.handleCommandAutocomplete(input);
+      this.handleMentionAutocomplete(input);
       // Typing indicator: broadcast and reset auto-stop timer
       this.callbacks.broadcastTyping?.();
       clearTimeout(typingTimeout);
@@ -1815,6 +1816,7 @@ export class UIRenderer {
     threadInput?.addEventListener('input', () => {
       this.autoResizeTextarea(threadInput);
       updateSendButtons();
+      if (threadInput) this.handleMentionAutocomplete(threadInput);
     });
 
     threadSendBtn?.addEventListener('click', () => {
@@ -3327,7 +3329,116 @@ export class UIRenderer {
   }
 
   /** Handle command autocomplete popup */
-  private handleCommandAutocomplete(input: HTMLTextAreaElement): void {
+  /** Handle @mention autocomplete popup */
+  private handleMentionAutocomplete(input: HTMLTextAreaElement): void {
+    let popup = document.getElementById('mention-autocomplete');
+    const value = input.value;
+    const cursorPos = input.selectionStart || value.length;
+
+    // Find the @mention being typed at cursor position
+    const textBeforeCursor = value.slice(0, cursorPos);
+    const mentionMatch = textBeforeCursor.match(/(^|\s)@(\S*)$/);
+
+    if (!mentionMatch) {
+      popup?.remove();
+      return;
+    }
+
+    const query = mentionMatch[2].toLowerCase();
+    const atStart = mentionMatch.index! + mentionMatch[1].length; // position of @
+
+    // Get workspace members
+    const ws = this.state.activeWorkspaceId
+      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+      : null;
+    if (!ws) { popup?.remove(); return; }
+
+    const members = ws.members
+      .filter(m => m.peerId !== this.state.myPeerId) // exclude self
+      .map(m => ({
+        peerId: m.peerId,
+        name: this.getPeerAlias(m.peerId),
+      }))
+      .filter(m => !query || m.name.toLowerCase().includes(query) || m.peerId.toLowerCase().startsWith(query))
+      .slice(0, 8);
+
+    if (members.length === 0) {
+      popup?.remove();
+      return;
+    }
+
+    if (!popup) {
+      popup = document.createElement('div');
+      popup.id = 'mention-autocomplete';
+      popup.className = 'mention-autocomplete';
+      input.parentElement?.appendChild(popup);
+    }
+
+    popup.innerHTML = members.map((m, i) =>
+      `<div class="mention-option${i === 0 ? ' selected' : ''}" data-peer-id="${m.peerId}" data-name="${this.escapeHtml(m.name)}">
+        <span class="mention-option-name">${this.escapeHtml(m.name)}</span>
+        <span class="mention-option-id">${m.peerId.slice(0, 8)}</span>
+      </div>`
+    ).join('');
+
+    // Click to select
+    popup.querySelectorAll('.mention-option').forEach(el => {
+      el.addEventListener('mousedown', (e) => {
+        e.preventDefault(); // prevent blur
+        const name = (el as HTMLElement).dataset.name || '';
+        const replacement = '@' + name.replace(/\s+/g, '-') + ' ';
+        input.value = value.slice(0, atStart) + replacement + value.slice(cursorPos);
+        input.selectionStart = input.selectionEnd = atStart + replacement.length;
+        popup?.remove();
+        input.focus();
+      });
+    });
+
+    // Keyboard navigation
+    const existingHandler = (input as any).__mentionKeyHandler;
+    if (existingHandler) input.removeEventListener('keydown', existingHandler);
+
+    const keyHandler = (e: KeyboardEvent) => {
+      const currentPopup = document.getElementById('mention-autocomplete');
+      if (!currentPopup) {
+        input.removeEventListener('keydown', keyHandler);
+        return;
+      }
+
+      const options = currentPopup.querySelectorAll('.mention-option');
+      let selectedIdx = Array.from(options).findIndex(o => o.classList.contains('selected'));
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        options[selectedIdx]?.classList.remove('selected');
+        selectedIdx = (selectedIdx + 1) % options.length;
+        options[selectedIdx]?.classList.add('selected');
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        options[selectedIdx]?.classList.remove('selected');
+        selectedIdx = (selectedIdx - 1 + options.length) % options.length;
+        options[selectedIdx]?.classList.add('selected');
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        const selected = currentPopup.querySelector('.mention-option.selected') as HTMLElement;
+        if (selected) {
+          e.preventDefault();
+          const name = selected.dataset.name || '';
+          const replacement = '@' + name.replace(/\s+/g, '-') + ' ';
+          input.value = value.slice(0, atStart) + replacement + value.slice(cursorPos);
+          input.selectionStart = input.selectionEnd = atStart + replacement.length;
+          currentPopup.remove();
+        }
+      } else if (e.key === 'Escape') {
+        currentPopup.remove();
+        input.removeEventListener('keydown', keyHandler);
+      }
+    };
+
+    (input as any).__mentionKeyHandler = keyHandler;
+    input.addEventListener('keydown', keyHandler);
+  }
+
+    private handleCommandAutocomplete(input: HTMLTextAreaElement): void {
     let popup = document.getElementById('command-autocomplete');
 
     const value = input.value.trim();

@@ -3824,3 +3824,59 @@ html, body {
     padding: 0 8px max(14px, env(safe-area-inset-bottom));
   }
 }
+
+
+/* @mention highlighting in messages */
+.mention {
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+  color: var(--primary);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mention:hover {
+  background: color-mix(in srgb, var(--primary) 25%, transparent);
+}
+
+/* @mention autocomplete popup */
+.mention-autocomplete {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  margin-bottom: 4px;
+  padding: 4px 0;
+}
+
+.mention-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.mention-option:hover,
+.mention-option.selected {
+  background: var(--bg-hover);
+}
+
+.mention-option-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mention-option-id {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: monospace;
+}
