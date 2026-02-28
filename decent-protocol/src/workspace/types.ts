@@ -87,4 +87,23 @@ export type SyncMessage =
   | { type: 'sync-request'; workspaceId: string }
   // `messageHistory` intentionally omits plaintext message content during sync.
   | { type: 'sync-response'; workspace: Workspace; messageHistory: Record<string, any[]> }
-  | { type: 'peer-exchange'; servers: PEXServer[] };
+  | { type: 'peer-exchange'; servers: PEXServer[] }
+  | { type: 'device-announce'; identityId: string; device: DeviceInfoSync; proof: DeviceProofSync }
+  | { type: 'device-ack'; identityId: string; deviceId: string };
+
+/** Device info for sync messages */
+export interface DeviceInfoSync {
+  deviceId: string;
+  peerId: string;
+  deviceLabel: string;
+  lastSeen: number;
+}
+
+/** Cryptographic proof of device ownership for sync */
+export interface DeviceProofSync {
+  identityId: string;
+  deviceId: string;
+  timestamp: number;
+  /** ECDSA signature over (identityId + deviceId + timestamp), base64-encoded */
+  signature: string;
+}
