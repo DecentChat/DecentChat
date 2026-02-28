@@ -181,6 +181,163 @@ describe("runtime streaming relay integration", () => {
 
 
 
+  test("logs route decision when message is routed to thread session", async () => {
+    const logs: string[] = [];
+
+    const core = {
+      config: {
+        loadConfig: () => ({
+          channels: {
+            decentchat: {
+              replyToMode: "all",
+              thread: { historyScope: "thread", inheritParent: false, initialHistoryLimit: 2 },
+            },
+          },
+        }),
+      },
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({ sessionKey: "session:group:ws:chan", agentId: "agent-1", accountId: "acct-1" }),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/decent-openclaw-stream-test-store",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: async () => {},
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope: (params: { body: string }) => params.body,
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher: async ({ dispatcherOptions }: any) => {
+            await dispatcherOptions.deliver({ text: "ok" });
+          },
+        },
+      },
+    } as any;
+
+    const xenaPeer = {
+      startStream: async () => {},
+      startDirectStream: async () => {},
+      sendStreamDelta: async () => {},
+      sendDirectStreamDelta: async () => {},
+      sendStreamDone: async () => {},
+      sendDirectStreamDone: async () => {},
+      sendDirectToPeer: async () => {},
+      sendToChannel: async () => {},
+      sendReadReceipt: async () => {},
+      requestFullImage: async () => null,
+      getThreadHistory: () => [],
+    } as any;
+
+    await relayInboundMessageToPeer({
+      incoming: {
+        channelId: "chan-1",
+        workspaceId: "ws-1",
+        content: "hello",
+        senderId: "peer-1",
+        senderName: "Peer",
+        messageId: "msg-route-thread",
+        chatType: "channel",
+        timestamp: Date.now(),
+        threadId: "root-777",
+      },
+      ctx: {
+        account: { streamEnabled: false } as any,
+        accountId: "acct-1",
+        log: {
+          info: (line: string) => logs.push(`INFO ${line}`),
+          debug: (line: string) => logs.push(`DEBUG ${line}`),
+          warn: (line: string) => logs.push(`WARN ${line}`),
+          error: (line: string) => logs.push(`ERROR ${line}`),
+        },
+      },
+      core,
+      xenaPeer,
+    });
+
+    const routeLog = logs.find((line) => line.includes("[decentchat] route"));
+    expect(routeLog).toBeDefined();
+    expect(routeLog).toContain("mode=thread");
+    expect(routeLog).toContain("replyToMode=all");
+    expect(routeLog).toContain("thread=root-777");
+    expect(routeLog).toContain("session=session:group:ws:chan:thread:root-777");
+    expect(routeLog).toContain("bootstrap=enabled");
+  });
+
+  test("logs route decision when thread split is disabled", async () => {
+    const logs: string[] = [];
+
+    const core = {
+      config: { loadConfig: () => ({ channels: { decentchat: { replyToMode: "off" } } }) },
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({ sessionKey: "session:group:ws:chan", agentId: "agent-1", accountId: "acct-1" }),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/decent-openclaw-stream-test-store",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: async () => {},
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope: (params: { body: string }) => params.body,
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher: async ({ dispatcherOptions }: any) => {
+            await dispatcherOptions.deliver({ text: "ok" });
+          },
+        },
+      },
+    } as any;
+
+    const xenaPeer = {
+      startStream: async () => {},
+      startDirectStream: async () => {},
+      sendStreamDelta: async () => {},
+      sendDirectStreamDelta: async () => {},
+      sendStreamDone: async () => {},
+      sendDirectStreamDone: async () => {},
+      sendDirectToPeer: async () => {},
+      sendToChannel: async () => {},
+      sendReadReceipt: async () => {},
+      requestFullImage: async () => null,
+    } as any;
+
+    await relayInboundMessageToPeer({
+      incoming: {
+        channelId: "chan-1",
+        workspaceId: "ws-1",
+        content: "hello",
+        senderId: "peer-1",
+        senderName: "Peer",
+        messageId: "msg-route-base",
+        chatType: "channel",
+        timestamp: Date.now(),
+        threadId: "root-777",
+      },
+      ctx: {
+        account: { streamEnabled: false } as any,
+        accountId: "acct-1",
+        log: {
+          info: (line: string) => logs.push(`INFO ${line}`),
+          debug: (line: string) => logs.push(`DEBUG ${line}`),
+          warn: (line: string) => logs.push(`WARN ${line}`),
+          error: (line: string) => logs.push(`ERROR ${line}`),
+        },
+      },
+      core,
+      xenaPeer,
+    });
+
+    const routeLog = logs.find((line) => line.includes("[decentchat] route"));
+    expect(routeLog).toBeDefined();
+    expect(routeLog).toContain("mode=base");
+    expect(routeLog).toContain("replyToMode=off");
+    expect(routeLog).toContain("thread=-");
+    expect(routeLog).toContain("session=session:group:ws:chan");
+    expect(routeLog).toContain("bootstrap=not-thread");
+  });
+
+
   test("replyToModeByChatType.channel=off keeps base channel session even when global is all", async () => {
     const recorded: Array<{ sessionKey: string; ctx: any }> = [];
 

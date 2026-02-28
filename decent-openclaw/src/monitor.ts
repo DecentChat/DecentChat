@@ -94,6 +94,42 @@ function formatThreadHistoryContent(content: string, maxChars = 220): string {
   return `${normalized.slice(0, Math.max(1, maxChars - 1))}…`;
 }
 
+function logThreadRouteDecision(
+  log: { info?: (s: string) => void; debug?: (s: string) => void } | undefined,
+  params: {
+    chatType: "direct" | "channel";
+    replyToMode: "off" | "first" | "all";
+    historyScope: "thread" | "channel";
+    mode: "thread" | "base";
+    candidateThreadId?: string;
+    derivedThreadId?: string;
+    sessionKey: string;
+    previousTimestampPresent: boolean;
+    bootstrapReason: "enabled" | "not-thread" | "not-first-turn" | "limit-zero";
+    initialHistoryLimit: number;
+  },
+): void {
+  const message = [
+    "[decentchat] route",
+    `chatType=${params.chatType}`,
+    `replyToMode=${params.replyToMode}`,
+    `historyScope=${params.historyScope}`,
+    `mode=${params.mode}`,
+    `candidateThread=${params.candidateThreadId || "-"}`,
+    `thread=${params.derivedThreadId || "-"}`,
+    `session=${params.sessionKey}`,
+    `hasSessionHistory=${params.previousTimestampPresent ? "yes" : "no"}`,
+    `bootstrap=${params.bootstrapReason}`,
+    `initialHistoryLimit=${params.initialHistoryLimit}`,
+  ].join(" ");
+
+  if (log?.debug) {
+    log.debug(message);
+    return;
+  }
+  log?.info?.(message);
+}
+
 export async function finalizePeerStream(params: {
   xenaPeer: {
     sendDirectStreamDone: (args: { peerId: string; messageId: string }) => Promise<void>;
@@ -535,6 +571,26 @@ async function processInboundMessage(
   const bootstrapParentSessionKey = isThreadReply && !previousTimestamp ? baseSessionKey : undefined;
   const effectiveParentSessionKey = threadKeys.parentSessionKey ?? bootstrapParentSessionKey;
 
+  const bootstrapReason = !isThreadReply
+    ? "not-thread"
+    : previousTimestamp
+      ? "not-first-turn"
+      : threadingFlags.initialHistoryLimit <= 0
+        ? "limit-zero"
+        : "enabled";
+  logThreadRouteDecision(ctx.log, {
+    chatType: msg.chatType,
+    replyToMode: threadingFlags.replyToMode,
+    historyScope: threadingFlags.historyScope,
+    mode: isThreadReply ? "thread" : "base",
+    candidateThreadId,
+    derivedThreadId,
+    sessionKey,
+    previousTimestampPresent: Boolean(previousTimestamp),
+    bootstrapReason,
+    initialHistoryLimit: threadingFlags.initialHistoryLimit,
+  });
+
   let threadContextPrefix = "";
   let threadHistoryCount = 0;
   const shouldBootstrapThreadHistory = isThreadReply && !previousTimestamp && threadingFlags.initialHistoryLimit > 0;
@@ -557,10 +613,15 @@ async function processInboundMessage(
         });
         threadContextPrefix = `[Thread context: last ${history.length} messages]\n${lines.join("\n")}`;
         threadHistoryCount = history.length;
+        ctx.log?.debug?.(`[decentchat] thread-bootstrap thread=${derivedThreadId} fetched=${history.length} limit=${threadingFlags.initialHistoryLimit}`);
       }
     } catch (err) {
       ctx.log?.warn?.(`[decentchat] thread history bootstrap failed: ${String(err)}`);
     }
+  }
+
+  if (shouldBootstrapThreadHistory && !xenaPeer.getThreadHistory) {
+    ctx.log?.warn?.("[decentchat] thread history bootstrap requested but adapter does not expose getThreadHistory");
   }
 
   const bodySource = threadContextPrefix ? `${threadContextPrefix}\n\n${rawBody}` : rawBody;
