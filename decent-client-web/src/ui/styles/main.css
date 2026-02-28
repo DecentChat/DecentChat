@@ -2134,14 +2134,25 @@ body.debug-mode .msg-delivery-detail {
 .search-result-time { font-size: 11px; color: var(--text-light); }
 .search-result-text { font-size: 13px; color: var(--text-muted); }
 
-/* Message highlight (when clicking search result) */
+/* Message highlight (when clicking search/activity result) */
 .message.highlight {
-  animation: msgHighlight 2s ease-out;
+  animation: msgHighlight 2.5s ease-out;
+  border-radius: 6px;
 }
 
 @keyframes msgHighlight {
-  0% { background: rgba(108, 92, 231, 0.2); }
-  100% { background: transparent; }
+  0% {
+    background: rgba(108, 92, 231, 0.3);
+    box-shadow: 0 0 0 2px rgba(108, 92, 231, 0.4), 0 0 12px rgba(108, 92, 231, 0.15);
+  }
+  30% {
+    background: rgba(108, 92, 231, 0.2);
+    box-shadow: 0 0 0 1px rgba(108, 92, 231, 0.2), 0 0 8px rgba(108, 92, 231, 0.1);
+  }
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
 }
 
 /* === Settings Panel === */

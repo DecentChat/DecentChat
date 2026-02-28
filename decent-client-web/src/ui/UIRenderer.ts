@@ -996,6 +996,30 @@ export class UIRenderer {
   }
 
   /**
+   * Scroll to a specific message by ID and highlight it with a fade-out animation.
+   * Works in both the main message list and the thread panel.
+   */
+  scrollToMessageAndHighlight(messageId: string, containerId?: string): void {
+    // Small delay to let DOM settle after channel switch / thread open
+    requestAnimationFrame(() => {
+      const selector = `[data-message-id="${messageId}"]`;
+      // Search in specific container first, then fall back to global
+      const container = containerId ? document.getElementById(containerId) : null;
+      const msgEl = container?.querySelector(selector) ?? document.querySelector(selector);
+      if (!msgEl) return;
+
+      // Remove any existing highlight first
+      msgEl.classList.remove('highlight');
+      // Force reflow so re-adding the class restarts the animation
+      void (msgEl as HTMLElement).offsetWidth;
+
+      msgEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      msgEl.classList.add('highlight');
+      setTimeout(() => msgEl.classList.remove('highlight'), 2500);
+    });
+  }
+
+  /**
    * Bind a one-time scroll listener on the messages container that detects
    * when the user intentionally scrolls away from the bottom during streaming.
    * Re-entering the bottom zone clears the flag so auto-scroll resumes.
@@ -2152,7 +2176,7 @@ export class UIRenderer {
       const time = this.relativeTime(item.timestamp);
       const meta = item.type === 'mention' ? '📣 Mention' : '💬 Thread reply';
       return `
-        <button class="activity-row ${isUnread ? 'unread' : ''}" data-activity-id="${item.id}" data-channel-id="${item.channelId}" data-thread-id="${item.threadId || ''}">
+        <button class="activity-row ${isUnread ? 'unread' : ''}" data-activity-id="${item.id}" data-channel-id="${item.channelId}" data-thread-id="${item.threadId || ''}" data-message-id="${item.messageId}">
           <div class="activity-row-top">
             <span class="activity-actor">${this.escapeHtml(actorName)}</span>
             <span class="activity-time">${time}</span>
@@ -2181,12 +2205,43 @@ export class UIRenderer {
         const activityId = (el as HTMLElement).getAttribute('data-activity-id');
         const channelId = (el as HTMLElement).getAttribute('data-channel-id');
         const threadId = (el as HTMLElement).getAttribute('data-thread-id');
+        const messageId = (el as HTMLElement).getAttribute('data-message-id');
         if (activityId) this.callbacks.markActivityRead?.(activityId);
         document.getElementById('modal-overlay')?.remove();
 
-        if (channelId) this.switchChannel(channelId);
-        if (threadId && threadId.trim()) this.openThread(threadId);
+        const needsChannelSwitch = channelId && channelId !== this.state.activeChannelId;
+        const needsThreadOpen = !!(threadId && threadId.trim());
+        const needsThreadSwitch = needsThreadOpen && (!this.state.threadOpen || this.state.activeThreadId !== threadId);
+
+        // Step 1: Switch channel only if needed (avoids unnecessary re-render + closeThread)
+        if (needsChannelSwitch) {
+          this.switchChannel(channelId!);
+        }
+
+        // Step 2: Open thread if needed
+        if (needsThreadOpen && needsThreadSwitch) {
+          // Small delay after channel switch to let DOM settle
+          const openDelay = needsChannelSwitch ? 50 : 0;
+          setTimeout(() => {
+            this.openThread(threadId!);
+            // Step 3: Scroll to specific message inside thread
+            if (messageId) {
+              setTimeout(() => this.scrollToMessageAndHighlight(messageId, 'thread-messages'), 100);
+            }
+          }, openDelay);
+        } else if (needsThreadOpen && !needsThreadSwitch) {
+          // Thread already open on the right thread — just scroll to message
+          if (messageId) {
+            this.scrollToMessageAndHighlight(messageId, 'thread-messages');
+          }
+        } else if (messageId) {
+          // No thread — scroll to message in main channel
+          const scrollDelay = needsChannelSwitch ? 100 : 0;
+          setTimeout(() => this.scrollToMessageAndHighlight(messageId, 'messages-list'), scrollDelay);
+        }
+
         this.updateChannelHeader();
+        this.updateWorkspaceRail();
       });
     });
   }
@@ -3096,12 +3151,7 @@ export class UIRenderer {
       resultsEl.querySelectorAll('.search-result').forEach(el => {
         el.addEventListener('click', () => {
           const msgId = (el as HTMLElement).dataset.msgId;
-          const msgEl = document.querySelector(`[data-message-id="${msgId}"]`);
-          if (msgEl) {
-            msgEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            msgEl.classList.add('highlight');
-            setTimeout(() => msgEl.classList.remove('highlight'), 2000);
-          }
+          if (msgId) this.scrollToMessageAndHighlight(msgId);
         });
       });
     });
