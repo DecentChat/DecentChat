@@ -1916,9 +1916,11 @@ export class UIRenderer {
       // Escape: close lightbox, thread panel, modals, autocomplete
       if (e.key === 'Escape') {
         if (document.getElementById('lightbox')?.style.display !== 'none') { this.closeLightbox(); return; }
-        document.getElementById('command-autocomplete')?.remove();
-        document.querySelector('.modal-overlay')?.remove();
-        if (this.state.threadOpen) this.closeThread();
+        const autocomplete = document.getElementById('command-autocomplete') || document.getElementById('mention-autocomplete');
+        if (autocomplete) { autocomplete.remove(); return; }
+        const modal = document.querySelector('.modal-overlay');
+        if (modal) { modal.remove(); return; }
+        if (this.state.threadOpen) { this.closeThread(); return; }
       }
 
       // Ctrl/Cmd + K: focus compose and type /
