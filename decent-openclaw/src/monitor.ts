@@ -17,6 +17,13 @@ type InboundAttachment = {
   height?: number;
 };
 
+type ThreadHistoryEntry = {
+  id: string;
+  senderId: string;
+  content: string;
+  timestamp: number;
+};
+
 type PeerContext = {
   account: ResolvedDecentChatAccount;
   accountId: string;
@@ -70,9 +77,22 @@ type StreamingPeerAdapter = {
   sendToChannel: (channelId: string, content: string, threadId?: string, replyToId?: string) => Promise<void>;
   sendReadReceipt: (peerId: string, channelId: string, messageId: string) => Promise<void>;
   requestFullImage: (peerId: string, attachmentId: string) => Promise<Buffer | null>;
+  getThreadHistory?: (args: {
+    channelId: string;
+    threadId: string;
+    limit: number;
+    excludeMessageId?: string;
+  }) => Promise<ThreadHistoryEntry[]> | ThreadHistoryEntry[];
 };
 
 const TOOL_CALL_MISMATCH_RE = /^No tool call found for function call output with call_id\b/i;
+
+function formatThreadHistoryContent(content: string, maxChars = 220): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (!normalized) return "[empty]";
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, Math.max(1, maxChars - 1))}…`;
+}
 
 export async function finalizePeerStream(params: {
   xenaPeer: {
@@ -358,6 +378,7 @@ export function resolveDecentThreadingFlags(cfg: OpenClawConfig, chatType?: "dir
   replyToMode: "off" | "first" | "all";
   historyScope: "thread" | "channel";
   inheritParent: boolean;
+  initialHistoryLimit: number;
 } {
   const ch = (cfg as any)?.channels?.decentchat ?? {};
   const globalReplyToMode = (ch.replyToMode === "off" || ch.replyToMode === "first" || ch.replyToMode === "all")
@@ -380,7 +401,11 @@ export function resolveDecentThreadingFlags(cfg: OpenClawConfig, chatType?: "dir
     ? ch.thread.historyScope
     : "thread";
   const inheritParent = ch.thread?.inheritParent === true;
-  return { replyToMode, historyScope, inheritParent };
+  const initialHistoryLimitRaw = ch.thread?.initialHistoryLimit;
+  const initialHistoryLimit = Number.isFinite(initialHistoryLimitRaw)
+    ? Math.max(0, Math.floor(initialHistoryLimitRaw))
+    : 20;
+  return { replyToMode, historyScope, inheritParent, initialHistoryLimit };
 }
 
 async function processInboundMessage(
@@ -398,7 +423,15 @@ async function processInboundMessage(
   },
   ctx: { accountId: string; log?: any },
   core: ReturnType<typeof getDecentChatRuntime>,
-  xenaPeer: Pick<StreamingPeerAdapter, "sendReadReceipt"> | { sendReadReceipt?: (peerId: string, channelId: string, messageId: string) => Promise<void> },
+  xenaPeer: Pick<StreamingPeerAdapter, "sendReadReceipt" | "getThreadHistory"> | {
+    sendReadReceipt?: (peerId: string, channelId: string, messageId: string) => Promise<void>;
+    getThreadHistory?: (args: {
+      channelId: string;
+      threadId: string;
+      limit: number;
+      excludeMessageId?: string;
+    }) => Promise<ThreadHistoryEntry[]> | ThreadHistoryEntry[];
+  },
   deliver: (text: string) => Promise<void>,
   onDeliverError?: (reason: string) => void,
   attachments?: InboundAttachment[],
@@ -502,13 +535,42 @@ async function processInboundMessage(
   const bootstrapParentSessionKey = isThreadReply && !previousTimestamp ? baseSessionKey : undefined;
   const effectiveParentSessionKey = threadKeys.parentSessionKey ?? bootstrapParentSessionKey;
 
+  let threadContextPrefix = "";
+  let threadHistoryCount = 0;
+  const shouldBootstrapThreadHistory = isThreadReply && !previousTimestamp && threadingFlags.initialHistoryLimit > 0;
+  if (shouldBootstrapThreadHistory && xenaPeer.getThreadHistory) {
+    try {
+      const history = await Promise.resolve(
+        xenaPeer.getThreadHistory({
+          channelId: msg.channelId,
+          threadId: derivedThreadId,
+          limit: threadingFlags.initialHistoryLimit,
+          excludeMessageId: msg.messageId,
+        }),
+      );
+      if (history.length > 0) {
+        const lines = history.map((entry) => {
+          const senderLabel = entry.senderId === msg.senderId
+            ? msg.senderName
+            : entry.senderId.slice(0, 8);
+          return `- ${senderLabel}: ${formatThreadHistoryContent(entry.content)}`;
+        });
+        threadContextPrefix = `[Thread context: last ${history.length} messages]\n${lines.join("\n")}`;
+        threadHistoryCount = history.length;
+      }
+    } catch (err) {
+      ctx.log?.warn?.(`[decentchat] thread history bootstrap failed: ${String(err)}`);
+    }
+  }
+
+  const bodySource = threadContextPrefix ? `${threadContextPrefix}\n\n${rawBody}` : rawBody;
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "DecentChat",
     from: fromLabel,
     timestamp: msg.timestamp,
     previousTimestamp,
     envelope: envelopeOptions,
-    body: rawBody,
+    body: bodySource,
   });
 
   const mediaType = mediaPaths.length > 0 ? "image/jpeg" : undefined;
@@ -536,6 +598,7 @@ async function processInboundMessage(
     MessageThreadId: isThreadReply ? derivedThreadId : undefined,
     ParentSessionKey: effectiveParentSessionKey,
     IsFirstThreadTurn: isThreadReply && !previousTimestamp ? true : undefined,
+    ThreadBootstrapHistoryCount: threadHistoryCount > 0 ? threadHistoryCount : undefined,
     MediaPath: mediaPaths[0],
     MediaType: mediaType,
     MediaPaths: mediaPaths.length > 1 ? mediaPaths : undefined,

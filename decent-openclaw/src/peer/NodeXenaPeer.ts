@@ -13,7 +13,7 @@ import {
   SeedPhraseManager,
   WorkspaceManager,
 } from 'decent-protocol';
-import type { Workspace, WorkspaceMember } from 'decent-protocol';
+import type { Workspace, WorkspaceMember, PlaintextMessage } from 'decent-protocol';
 import { PeerTransport } from 'decent-transport-webrtc';
 import { randomUUID } from 'node:crypto';
 import { FileStore } from './FileStore.js';
@@ -693,6 +693,32 @@ export class NodeXenaPeer {
 
   private persistMessagesForChannel(channelId: string): void {
     this.store.set(`messages-${channelId}`, this.messageStore.getMessages(channelId));
+  }
+
+  getThreadHistory(args: {
+    channelId: string;
+    threadId: string;
+    limit: number;
+    excludeMessageId?: string;
+  }): Array<Pick<PlaintextMessage, 'id' | 'senderId' | 'content' | 'timestamp'>> {
+    const safeChannelId = args.channelId.trim();
+    const safeThreadId = args.threadId.trim();
+    const safeLimit = Math.max(0, Math.floor(args.limit));
+    if (!safeChannelId || !safeThreadId || safeLimit === 0) return [];
+
+    const excludeMessageId = args.excludeMessageId?.trim();
+    return this.messageStore
+      .getThread(safeChannelId, safeThreadId)
+      .filter((message) => !excludeMessageId || message.id !== excludeMessageId)
+      .slice()
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .slice(-safeLimit)
+      .map((message) => ({
+        id: message.id,
+        senderId: message.senderId,
+        content: typeof message.content === 'string' ? message.content : '',
+        timestamp: message.timestamp,
+      }));
   }
 
   /** Public convenience: resolve workspace by channelId then call sendMessage. */

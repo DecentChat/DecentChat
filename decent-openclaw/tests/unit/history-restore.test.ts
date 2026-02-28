@@ -66,4 +66,33 @@ describe('NodeXenaPeer message restore', () => {
     expect(restored[0]?.id).toBe('msg-1');
     expect(restored[0]?.channelId).toBe('channel-current');
   });
+
+  test('getThreadHistory returns latest N thread messages and honors excludeMessageId', () => {
+    const peer = new NodeXenaPeer({
+      account: makeAccount(),
+      onIncomingMessage: async () => {},
+      onReply: () => {},
+    });
+
+    (peer as any).messageStore = {
+      getThread: () => [
+        { id: 'msg-1', senderId: 'alice', content: 'one', timestamp: 100 },
+        { id: 'msg-4', senderId: 'alice', content: 'four', timestamp: 400 },
+        { id: 'msg-3', senderId: 'bob', content: 'three', timestamp: 300 },
+        { id: 'msg-2', senderId: 'alice', content: 'two', timestamp: 200 },
+      ],
+    };
+
+    const history = (peer as any).getThreadHistory({
+      channelId: 'chan-1',
+      threadId: 'root-1',
+      limit: 2,
+      excludeMessageId: 'msg-4',
+    });
+
+    expect(history).toHaveLength(2);
+    expect(history[0]?.id).toBe('msg-2');
+    expect(history[1]?.id).toBe('msg-3');
+  });
+
 });
