@@ -35,6 +35,8 @@ export interface WorkspaceMember {
   alias: string;
   publicKey: string; // Base64 ECDH public key
   signingPublicKey?: string; // Base64 ECDSA signing public key (trust anchor for admin events)
+  /** Canonical identity ID (hash of ECDH public key). Optional for backward compat with old data. */
+  identityId?: string;
   joinedAt: number;
   role: 'owner' | 'admin' | 'member';
   addedBy?: string;
