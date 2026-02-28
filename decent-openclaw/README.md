@@ -12,3 +12,10 @@ OpenClaw channel plugin for DecentChat.
    - `invites` (optional DecentChat invite URIs)
 3. Enable OpenClaw in the DecentChat settings panel.
 4. Use `/activation` in any channel if you want responses to all messages.
+
+
+## Status
+
+- Thread-aware routing is supported (including `replyToId` fallback).
+- Per-chat-type reply mode overrides are supported via `replyToModeByChatType`.
+- Active implementation plan: `docs/plans/2026-02-28-decent-openclaw-parity-threading.md`.
