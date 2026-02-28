@@ -164,4 +164,94 @@ test.describe('Streaming Message Flow', () => {
 
     expect(persisted).toBe(true);
   });
+
+
+  test('streaming does not force-scroll when user scrolled up', async ({ page }) => {
+    const messageId = 'stream-msg-scroll-lock';
+    const peerId = 'assistant-peer-scroll';
+
+    const before = await page.evaluate(async () => {
+      const ctrl = (window as any).__ctrl;
+      const state = (window as any).__state;
+      if (!ctrl || !state?.activeChannelId || !state?.activeWorkspaceId) {
+        throw new Error('App state not ready for scroll test');
+      }
+
+      // Seed enough history to make the list scrollable.
+      for (let i = 0; i < 140; i++) {
+        const msg = await ctrl.messageStore.createMessage(
+          state.activeChannelId,
+          state.myPeerId,
+          `Backlog message ${i} ${'x'.repeat(80)}`,
+          'text',
+        );
+        ctrl.messageStore.forceAdd(msg);
+      }
+      ctrl.ui.renderMessages();
+
+      const list = document.getElementById('messages-list') as HTMLElement | null;
+      if (!list) throw new Error('messages-list missing');
+      list.scrollTop = 0; // user reads older messages
+
+      return {
+        top: list.scrollTop,
+        distanceFromBottom: list.scrollHeight - list.scrollTop - list.clientHeight,
+      };
+    });
+
+    expect(before.distanceFromBottom).toBeGreaterThan(400);
+
+    await page.evaluate(async ({ peerId, messageId }) => {
+      const ctrl = (window as any).__ctrl;
+      const state = (window as any).__state;
+
+      const ws = ctrl.workspaceManager.getWorkspace(state.activeWorkspaceId);
+      if (ws && !ws.members.some((m: any) => m.peerId === peerId)) {
+        ws.members.push({
+          peerId,
+          alias: 'Assistant',
+          publicKey: ctrl.myPublicKey,
+          joinedAt: Date.now(),
+          role: 'member',
+        });
+      }
+
+      await ctrl.persistentStore.savePeer({
+        peerId,
+        publicKey: ctrl.myPublicKey,
+        lastSeen: Date.now(),
+      });
+
+      await ctrl.transport.onMessage(peerId, {
+        type: 'stream-start',
+        messageId,
+        channelId: state.activeChannelId,
+        workspaceId: state.activeWorkspaceId,
+        senderId: peerId,
+        senderName: 'Assistant',
+        isDirect: false,
+      });
+
+      for (let i = 1; i <= 20; i++) {
+        await ctrl.transport.onMessage(peerId, {
+          type: 'stream-delta',
+          messageId,
+          content: `Streaming chunk ${i} ${'content '.repeat(i * 6)}`,
+        });
+      }
+    }, { peerId, messageId });
+
+    const after = await page.evaluate(() => {
+      const list = document.getElementById('messages-list') as HTMLElement | null;
+      if (!list) throw new Error('messages-list missing after stream');
+      return {
+        top: list.scrollTop,
+        distanceFromBottom: list.scrollHeight - list.scrollTop - list.clientHeight,
+      };
+    });
+
+    // Should stay near where user left it (top), not jump to the streaming bottom.
+    expect(after.top).toBeLessThan(80);
+    expect(after.distanceFromBottom).toBeGreaterThan(400);
+  });
 });

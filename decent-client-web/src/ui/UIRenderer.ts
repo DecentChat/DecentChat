@@ -970,6 +970,19 @@ export class UIRenderer {
   // Messages
   // =========================================================================
 
+  /**
+   * Return true when a scroll container is at (or near) the bottom.
+   * Used to avoid auto-scroll fighting when user intentionally scrolls up.
+   */
+  private shouldStickToBottom(container: HTMLElement, thresholdPx = 72): boolean {
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    return distanceFromBottom <= thresholdPx;
+  }
+
+  private scrollToBottom(container: HTMLElement): void {
+    container.scrollTop = container.scrollHeight;
+  }
+
   renderMessages(): void {
     const list = document.getElementById('messages-list')!;
     list.innerHTML = '';
@@ -1032,6 +1045,9 @@ export class UIRenderer {
 
     const emptyState = list.querySelector('.empty-state');
     if (emptyState) emptyState.remove();
+
+    // Capture user scroll intent before DOM mutations.
+    const shouldAutoScroll = this.shouldStickToBottom(list);
 
     const isMine = msg.senderId === this.state.myPeerId;
     const inThreadView = list.id === 'thread-messages';
@@ -1140,7 +1156,7 @@ export class UIRenderer {
     }
 
     list.appendChild(div);
-    list.scrollTop = list.scrollHeight;
+    if (shouldAutoScroll) this.scrollToBottom(list);
     this.upgradeInlineImagePreviews(div);
 
   }
@@ -1256,13 +1272,16 @@ export class UIRenderer {
   updateStreamingMessage(messageId: string, content: string): void {
     const msgEl = document.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
     if (!msgEl) return;
+
+    const container = msgEl.closest('.message-list, #thread-messages, #messages-list') as HTMLElement | null;
+    const shouldAutoScroll = container ? this.shouldStickToBottom(container) : false;
+
     const contentEl = msgEl.querySelector('.message-content') as HTMLElement | null;
     if (!contentEl) return;
     contentEl.innerHTML = renderMarkdown(content + ' ▋');
     msgEl.classList.add('streaming');
-    // Auto-scroll
-    const container = msgEl.closest('.message-list, #thread-messages, #messages-list');
-    if (container) container.scrollTop = container.scrollHeight;
+
+    if (container && shouldAutoScroll) this.scrollToBottom(container);
   }
 
   finalizeStreamingMessage(messageId: string): void {
