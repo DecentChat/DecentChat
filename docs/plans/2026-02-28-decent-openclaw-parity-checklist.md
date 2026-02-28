@@ -15,7 +15,12 @@ Plan reference: `docs/plans/2026-02-28-decent-openclaw-parity-threading.md`
 - [x] Enforce `thread.initialHistoryLimit` for first thread turn bootstrap in monitor runtime.
 - [x] Add tests for thread-history API and initial-history-limit behavior.
 
+## Batch 3 (Tasks 6-8)
+
+- [x] Capability signaling updated (`threads`, `media`) with guard test.
+- [x] Messaging target normalization + resolver hints (`peerId`, `channel:<id>`, canonical forms).
+- [x] Live directory adapter backed by NodeXenaPeer workspace cache.
+
 ## Deferred to next batches
 
-- [ ] Directory adapters and messaging target normalization.
 - [ ] Upstream design doc for full thread-bound session bindings.

@@ -83,6 +83,16 @@ type PendingMediaRequest = {
   timeout: ReturnType<typeof setTimeout>;
 };
 
+
+type DirectoryEntry = {
+  kind: 'user' | 'group';
+  id: string;
+  name?: string;
+  handle?: string;
+  rank?: number;
+  raw?: unknown;
+};
+
 export class NodeXenaPeer {
   private readonly store: FileStore;
   private readonly workspaceManager: WorkspaceManager;
@@ -719,6 +729,91 @@ export class NodeXenaPeer {
         content: typeof message.content === 'string' ? message.content : '',
         timestamp: message.timestamp,
       }));
+  }
+
+  listDirectoryPeersLive(params?: {
+    query?: string | null;
+    limit?: number | null;
+  }): DirectoryEntry[] {
+    const q = params?.query?.trim().toLowerCase() ?? '';
+    const limit = params?.limit && params.limit > 0 ? Math.floor(params.limit) : undefined;
+    const peers = new Map<string, { alias?: string; count: number }>();
+
+    for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+      for (const member of workspace.members) {
+        if (!member?.peerId || member.peerId === this.myPeerId) continue;
+        const prev = peers.get(member.peerId) ?? { alias: undefined, count: 0 };
+        peers.set(member.peerId, {
+          alias: member.alias?.trim() || prev.alias,
+          count: prev.count + 1,
+        });
+      }
+    }
+
+    const entries = Array.from(peers.entries())
+      .map(([peerId, meta]) => ({
+        kind: 'user' as const,
+        id: peerId,
+        name: meta.alias,
+        handle: `decentchat:${peerId}`,
+        rank: meta.count,
+      }))
+      .filter((entry) => {
+        if (!q) return true;
+        return entry.id.toLowerCase().includes(q)
+          || entry.handle.toLowerCase().includes(q)
+          || (entry.name?.toLowerCase().includes(q) ?? false);
+      })
+      .sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id));
+
+    return limit ? entries.slice(0, limit) : entries;
+  }
+
+  listDirectoryGroupsLive(params?: {
+    query?: string | null;
+    limit?: number | null;
+  }): DirectoryEntry[] {
+    const q = params?.query?.trim().toLowerCase() ?? '';
+    const limit = params?.limit && params.limit > 0 ? Math.floor(params.limit) : undefined;
+    const groups: DirectoryEntry[] = [];
+
+    for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+      for (const channel of workspace.channels) {
+        if (!channel?.id) continue;
+        if (channel.type === 'dm') continue;
+        const id = `decentchat:channel:${channel.id}`;
+        const name = workspace.name?.trim()
+          ? `${workspace.name} / #${channel.name}`
+          : `#${channel.name}`;
+        groups.push({
+          kind: 'group',
+          id,
+          name,
+          raw: {
+            workspaceId: workspace.id,
+            channelId: channel.id,
+            channelName: channel.name,
+          },
+        });
+      }
+    }
+
+    const deduped = new Map<string, DirectoryEntry>();
+    for (const group of groups) {
+      if (!deduped.has(group.id)) deduped.set(group.id, group);
+    }
+
+    const entries = Array.from(deduped.values())
+      .filter((entry) => {
+        if (!q) return true;
+        return entry.id.toLowerCase().includes(q)
+          || (entry.name?.toLowerCase().includes(q) ?? false)
+          || String((entry.raw as any)?.workspaceId ?? '').toLowerCase().includes(q)
+          || String((entry.raw as any)?.channelId ?? '').toLowerCase().includes(q);
+      })
+      .sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id));
+
+    return limit ? entries.slice(0, limit) : entries;
   }
 
   /** Public convenience: resolve workspace by channelId then call sendMessage. */

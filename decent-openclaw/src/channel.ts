@@ -34,6 +34,40 @@ const DecentChatConfigSchema = z.object({
   }).optional()).optional(),
 });
 
+
+export function normalizeDecentChatMessagingTarget(raw: string): string | undefined {
+  const value = raw.trim();
+  if (!value) return undefined;
+
+  if (value.startsWith("decentchat:channel:")) {
+    const channelId = value.slice("decentchat:channel:".length).trim();
+    return channelId ? `decentchat:channel:${channelId}` : undefined;
+  }
+
+  if (value.startsWith("channel:")) {
+    const channelId = value.slice("channel:".length).trim();
+    return channelId ? `decentchat:channel:${channelId}` : undefined;
+  }
+
+  if (value.startsWith("decentchat:")) {
+    const rest = value.slice("decentchat:".length).trim();
+    if (!rest) return undefined;
+    if (rest.startsWith("channel:")) {
+      const channelId = rest.slice("channel:".length).trim();
+      return channelId ? `decentchat:channel:${channelId}` : undefined;
+    }
+    return `decentchat:${rest}`;
+  }
+
+  return `decentchat:${value}`;
+}
+
+export function looksLikeDecentChatTargetId(raw: string, normalized?: string): boolean {
+  const value = (normalized ?? raw).trim();
+  if (!value) return false;
+  return value.startsWith("decentchat:channel:") || value.startsWith("decentchat:");
+}
+
 function resolveDecentChatAccount(cfg: any, accountId?: string | null): ResolvedDecentChatAccount {
   const ch = cfg?.channels?.decentchat ?? {};
   const seedPhrase = typeof ch.seedPhrase === "string" ? ch.seedPhrase : undefined;
@@ -72,7 +106,7 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
     blurb: "P2P encrypted chat via DecentChat.",
     aliases: ["decent", "decentchat"],
   },
-  capabilities: { chatTypes: ["direct", "group", "thread"] },
+  capabilities: { chatTypes: ["direct", "group", "thread"], threads: true, media: true },
   reload: { configPrefixes: ["channels.decentchat"] },
   configSchema: {
     ...buildChannelConfigSchema(DecentChatConfigSchema),
@@ -145,6 +179,14 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
     },
   },
 
+  messaging: {
+    normalizeTarget: normalizeDecentChatMessagingTarget,
+    targetResolver: {
+      looksLikeId: looksLikeDecentChatTargetId,
+      hint: "<peerId|channel:<id>|decentchat:channel:<id>>",
+    },
+  },
+
   outbound: {
     deliveryMode: "direct",
     sendText: async (ctx) => {
@@ -171,6 +213,39 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err : new Error(String(err)) };
       }
+    },
+  },
+
+  directory: {
+    self: async () => {
+      const peer = getActivePeer();
+      if (!peer?.peerId) return null;
+      return {
+        kind: "user" as const,
+        id: peer.peerId,
+        name: "Xena",
+        handle: `decentchat:${peer.peerId}`,
+      };
+    },
+    listPeers: async ({ query, limit }) => {
+      const peer = getActivePeer();
+      if (!peer) return [];
+      return peer.listDirectoryPeersLive({ query, limit });
+    },
+    listPeersLive: async ({ query, limit }) => {
+      const peer = getActivePeer();
+      if (!peer) return [];
+      return peer.listDirectoryPeersLive({ query, limit });
+    },
+    listGroups: async ({ query, limit }) => {
+      const peer = getActivePeer();
+      if (!peer) return [];
+      return peer.listDirectoryGroupsLive({ query, limit });
+    },
+    listGroupsLive: async ({ query, limit }) => {
+      const peer = getActivePeer();
+      if (!peer) return [];
+      return peer.listDirectoryGroupsLive({ query, limit });
     },
   },
 
