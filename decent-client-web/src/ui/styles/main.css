@@ -3880,3 +3880,70 @@ html, body {
   color: var(--text-muted);
   font-family: monospace;
 }
+
+
+/* Member row redesign */
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px !important;
+}
+
+.member-avatar-sm {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.member-presence {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--bg-secondary);
+}
+.member-presence.online {
+  background: #2ecc71;
+}
+.member-presence.offline {
+  background: #636e72;
+}
+
+.member-name-text {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.member-role-tag {
+  font-size: 11px;
+  margin-left: 2px;
+}
+
+.member-group-header {
+  font-size: 11px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted) !important;
+  padding: 10px 12px 4px !important;
+  margin-top: 4px;
+}
+
+.members-offline {
+  opacity: 0.55;
+}
+.members-offline .member-row:hover {
+  opacity: 1;
+}

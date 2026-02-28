@@ -822,7 +822,8 @@ export class UIRenderer {
     const channels = ws ? this.workspaceManager.getChannels(ws.id) : [];
     const dms = ws ? this.workspaceManager.getDMs(ws.id, this.state.myPeerId) : [];
     // Group members by identityId (dedup multi-device) — fall back to peerId if no identityId
-    const workspaceMembersHTML = ws
+    // Build member data with online/offline grouping
+    const memberData = ws
       ? (() => {
           const seen = new Set<string>();
           return ws.members.filter((m) => {
@@ -831,24 +832,36 @@ export class UIRenderer {
             seen.add(key);
             return true;
           }).map((m) => {
-            // For multi-device: find all peerIds for this identity
             const identityPeers = m.identityId
               ? ws.members.filter(other => other.identityId === m.identityId).map(other => other.peerId)
               : [m.peerId];
             const isOnline = identityPeers.some(pid => this.peerStatusClass(pid) === 'online');
             const isMe = identityPeers.includes(this.state.myPeerId);
             const alias = this.getPeerAlias(m.peerId);
-            const youTag = isMe ? ' <span class="sidebar-item-meta">(you)</span>' : '';
-            const statusClass = isOnline ? 'online' : this.peerStatusClass(m.peerId);
-            const statusTitle = isOnline ? 'Online' : this.peerStatusTitle(m.peerId);
-            return `
-              <div class="sidebar-item member-row" data-member-peer-id="${m.peerId}">
-                <span class="dm-status ${statusClass}" title="${statusTitle}"></span>
-                <span>${this.escapeHtml(alias)}${youTag}</span>
-              </div>`;
-          }).join('');
+            return { peerId: m.peerId, alias, isOnline, isMe, role: m.role };
+          });
         })()
-      : '';
+      : [];
+    const onlineMembers = memberData.filter(m => m.isOnline);
+    const offlineMembers = memberData.filter(m => !m.isOnline);
+
+    const renderMemberRow = (m: { peerId: string; alias: string; isOnline: boolean; isMe: boolean; role?: string }) => {
+      const initial = m.alias.charAt(0).toUpperCase();
+      const color = this.peerColor(m.peerId);
+      const youTag = m.isMe ? ' <span class="sidebar-item-meta">(you)</span>' : '';
+      const roleTag = m.role === 'owner' ? ' <span class="member-role-tag">👑</span>' : m.role === 'admin' ? ' <span class="member-role-tag">⚙️</span>' : '';
+      return `
+        <div class="sidebar-item member-row" data-member-peer-id="${m.peerId}">
+          <div class="member-avatar-sm" style="background: ${color}">
+            ${this.escapeHtml(initial)}
+            <span class="member-presence ${m.isOnline ? 'online' : 'offline'}"></span>
+          </div>
+          <span class="member-name-text">${this.escapeHtml(m.alias)}${youTag}${roleTag}</span>
+        </div>`;
+    };
+
+    const onlineMembersHTML = onlineMembers.map(renderMemberRow).join('');
+    const offlineMembersHTML = offlineMembers.map(renderMemberRow).join('');
 
     // Build standalone direct messages section
     const sortedDirectConversations = this.cachedDirectConversations
@@ -912,12 +925,21 @@ export class UIRenderer {
         ` : ''}
         ${ws ? `
         <div class="sidebar-section" id="workspace-members-section">
-          <div class="sidebar-section-header">Members</div>
-          <div id="workspace-member-list" data-testid="workspace-member-list">
-            ${workspaceMembersHTML}
+          ${onlineMembers.length > 0 ? `
+          <div class="sidebar-section-header member-group-header">Online — ${onlineMembers.length}</div>
+          <div id="workspace-member-list-online">
+            ${onlineMembersHTML}
           </div>
+          ` : ''}
+          ${offlineMembers.length > 0 ? `
+          <div class="sidebar-section-header member-group-header">Offline — ${offlineMembers.length}</div>
+          <div id="workspace-member-list-offline" class="members-offline">
+            ${offlineMembersHTML}
+          </div>
+          ` : ''}
         </div>
         ` : ''}
+        ${!ws ? `
         <div class="sidebar-section">
           <div class="sidebar-section-header">
             Direct Messages
@@ -930,6 +952,7 @@ export class UIRenderer {
             🔌 Connect to peer...
           </div>
         </div>
+        ` : ''}
       </div>
       ${ws ? `
         <div class="invite-banner" id="copy-invite" title="Click to copy invite link">
@@ -1750,6 +1773,9 @@ export class UIRenderer {
 
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
+        // Don't send if mention or command autocomplete is open — let the autocomplete handler pick it up
+        const autocompleteOpen = document.getElementById('mention-autocomplete') || document.getElementById('command-autocomplete');
+        if (autocompleteOpen) return;
         e.preventDefault();
         void sendComposed('main');
       }
@@ -1808,6 +1834,8 @@ export class UIRenderer {
 
     threadInput?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
+        const autocompleteOpen = document.getElementById('mention-autocomplete') || document.getElementById('command-autocomplete');
+        if (autocompleteOpen) return;
         e.preventDefault();
         void sendComposed('thread');
       }
@@ -3330,7 +3358,6 @@ export class UIRenderer {
     return `Message #${channel?.name || 'general'}`;
   }
 
-  /** Handle command autocomplete popup */
   /** Handle @mention autocomplete popup */
   private handleMentionAutocomplete(input: HTMLTextAreaElement): void {
     let popup = document.getElementById('mention-autocomplete');
@@ -3383,20 +3410,32 @@ export class UIRenderer {
       </div>`
     ).join('');
 
+    // Helper: insert selected mention into input using CURRENT input state (not stale closure)
+    const insertMention = (name: string) => {
+      const currentValue = input.value;
+      const currentCursor = input.selectionStart || currentValue.length;
+      const currentBefore = currentValue.slice(0, currentCursor);
+      const currentMatch = currentBefore.match(/(^|\s)@(\S*)$/);
+      const currentAtStart = currentMatch
+        ? currentMatch.index! + currentMatch[1].length
+        : atStart;
+      const replacement = '@' + name.replace(/\s+/g, '-') + ' ';
+      input.value = currentValue.slice(0, currentAtStart) + replacement + currentValue.slice(currentCursor);
+      input.selectionStart = input.selectionEnd = currentAtStart + replacement.length;
+    };
+
     // Click to select
     popup.querySelectorAll('.mention-option').forEach(el => {
       el.addEventListener('mousedown', (e) => {
         e.preventDefault(); // prevent blur
         const name = (el as HTMLElement).dataset.name || '';
-        const replacement = '@' + name.replace(/\s+/g, '-') + ' ';
-        input.value = value.slice(0, atStart) + replacement + value.slice(cursorPos);
-        input.selectionStart = input.selectionEnd = atStart + replacement.length;
+        insertMention(name);
         popup?.remove();
         input.focus();
       });
     });
 
-    // Keyboard navigation
+    // Keyboard navigation — only attach once per popup lifecycle
     const existingHandler = (input as any).__mentionKeyHandler;
     if (existingHandler) input.removeEventListener('keydown', existingHandler);
 
@@ -3404,6 +3443,7 @@ export class UIRenderer {
       const currentPopup = document.getElementById('mention-autocomplete');
       if (!currentPopup) {
         input.removeEventListener('keydown', keyHandler);
+        (input as any).__mentionKeyHandler = null;
         return;
       }
 
@@ -3415,24 +3455,30 @@ export class UIRenderer {
         options[selectedIdx]?.classList.remove('selected');
         selectedIdx = (selectedIdx + 1) % options.length;
         options[selectedIdx]?.classList.add('selected');
+        // Scroll selected option into view
+        (options[selectedIdx] as HTMLElement)?.scrollIntoView({ block: 'nearest' });
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         options[selectedIdx]?.classList.remove('selected');
         selectedIdx = (selectedIdx - 1 + options.length) % options.length;
         options[selectedIdx]?.classList.add('selected');
+        (options[selectedIdx] as HTMLElement)?.scrollIntoView({ block: 'nearest' });
       } else if (e.key === 'Enter' || e.key === 'Tab') {
         const selected = currentPopup.querySelector('.mention-option.selected') as HTMLElement;
         if (selected) {
           e.preventDefault();
+          e.stopPropagation(); // prevent Enter from sending the message
           const name = selected.dataset.name || '';
-          const replacement = '@' + name.replace(/\s+/g, '-') + ' ';
-          input.value = value.slice(0, atStart) + replacement + value.slice(cursorPos);
-          input.selectionStart = input.selectionEnd = atStart + replacement.length;
+          insertMention(name);
           currentPopup.remove();
+          input.removeEventListener('keydown', keyHandler);
+          (input as any).__mentionKeyHandler = null;
         }
       } else if (e.key === 'Escape') {
+        e.preventDefault();
         currentPopup.remove();
         input.removeEventListener('keydown', keyHandler);
+        (input as any).__mentionKeyHandler = null;
       }
     };
 

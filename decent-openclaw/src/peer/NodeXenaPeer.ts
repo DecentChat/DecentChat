@@ -486,6 +486,11 @@ export class NodeXenaPeer {
     }
 
     if (msg?.type === 'workspace-sync' && msg.sync) {
+      // Handle workspace-state directly (SyncProtocol doesn't have a case for it)
+      if (msg.sync.type === 'workspace-state' && msg.workspaceId) {
+        this.handleWorkspaceState(fromPeerId, msg.workspaceId, msg.sync);
+        return;
+      }
       const merged = msg.workspaceId ? { ...msg.sync, workspaceId: msg.workspaceId } : msg.sync;
       await this.syncProtocol.handleMessage(fromPeerId, merged);
       return;
@@ -600,7 +605,18 @@ export class NodeXenaPeer {
       const handshake = await this.messageProtocol.createHandshake();
       this.transport.send(peerId, { type: 'handshake', ...handshake });
       // Announce display name (separate unencrypted message — same pattern as the web client)
-      this.transport.send(peerId, { type: 'name-announce', alias: this.opts.account.alias });
+      // Include workspaceId so the peer can deterministically add us to the correct workspace
+      // (critical when the peer has multiple workspaces — without this, we'd only update
+      // existing members, never add new ones)
+      const allWorkspaces = this.workspaceManager.getAllWorkspaces();
+      const workspaceWithPeer = allWorkspaces.find(ws =>
+        ws.members.some(m => m.peerId === peerId)
+      );
+      this.transport.send(peerId, {
+        type: 'name-announce',
+        alias: this.opts.account.alias,
+        ...(workspaceWithPeer ? { workspaceId: workspaceWithPeer.id } : {}),
+      });
     } catch (err) {
       this.opts.log?.error?.(`[xena-peer] handshake failed for ${peerId}: ${String(err)}`);
     }
@@ -695,6 +711,102 @@ export class NodeXenaPeer {
       }
       this.messageStore.forceAdd(message as any);
     }
+  }
+
+  /**
+   * Handle workspace-state sync from a peer.
+   * The web client sends this on connect — it contains the full workspace
+   * (name, channels, members). We import or update our local copy so we
+   * can include the workspaceId in future name-announce messages.
+   */
+  private handleWorkspaceState(fromPeerId: string, workspaceId: string, sync: any): void {
+    let ws = this.workspaceManager.getWorkspace(workspaceId);
+
+    if (!ws) {
+      // First time receiving this workspace — create it
+      const workspace = {
+        id: workspaceId,
+        name: sync.name || workspaceId.slice(0, 8),
+        description: sync.description || '',
+        channels: (sync.channels || []).map((ch: any) => ({
+          id: ch.id,
+          workspaceId,
+          name: ch.name,
+          type: ch.type || 'channel',
+          members: [],
+          createdBy: fromPeerId,
+          createdAt: Date.now(),
+        })),
+        members: (sync.members || []).map((m: any) => ({
+          peerId: m.peerId,
+          alias: m.alias || m.peerId.slice(0, 8),
+          publicKey: m.publicKey || '',
+          signingPublicKey: m.signingPublicKey || undefined,
+          role: m.role || 'member',
+          joinedAt: Date.now(),
+        })),
+        inviteCode: sync.inviteCode || '',
+        permissions: sync.permissions || {},
+        createdAt: Date.now(),
+        createdBy: fromPeerId,
+      };
+
+      // Make sure we're in the member list
+      if (!workspace.members.some((m: any) => m.peerId === this.myPeerId)) {
+        workspace.members.push({
+          peerId: this.myPeerId,
+          alias: this.opts.account.alias,
+          publicKey: this.myPublicKey,
+          role: 'member',
+          joinedAt: Date.now(),
+        });
+      }
+
+      this.workspaceManager.importWorkspace(workspace);
+      this.opts.log?.info(`[xena-peer] imported workspace ${workspaceId.slice(0, 8)} "${sync.name}" with ${workspace.members.length} members, ${workspace.channels.length} channels`);
+    } else {
+      // Update existing workspace: sync members and channels
+      if (sync.name && ws.name !== sync.name) ws.name = sync.name;
+      if (sync.description !== undefined) ws.description = sync.description;
+
+      // Merge members
+      for (const remoteMember of (sync.members || [])) {
+        const existing = ws.members.find((m: any) => m.peerId === remoteMember.peerId);
+        if (!existing) {
+          ws.members.push({
+            peerId: remoteMember.peerId,
+            alias: remoteMember.alias || remoteMember.peerId.slice(0, 8),
+            publicKey: remoteMember.publicKey || '',
+            signingPublicKey: remoteMember.signingPublicKey || undefined,
+            role: remoteMember.role || 'member',
+            joinedAt: Date.now(),
+          });
+        } else if (remoteMember.alias && !/^[a-f0-9]{8}$/i.test(remoteMember.alias)) {
+          existing.alias = remoteMember.alias;
+          if (remoteMember.publicKey) existing.publicKey = remoteMember.publicKey;
+        }
+      }
+
+      // Merge channels
+      for (const remoteCh of (sync.channels || [])) {
+        const localCh = ws.channels.find((ch: any) => ch.id === remoteCh.id);
+        if (!localCh) {
+          ws.channels.push({
+            id: remoteCh.id,
+            workspaceId,
+            name: remoteCh.name,
+            type: remoteCh.type || 'channel',
+            members: [],
+            createdBy: fromPeerId,
+            createdAt: Date.now(),
+          });
+        }
+      }
+
+      this.opts.log?.info(`[xena-peer] updated workspace ${workspaceId.slice(0, 8)} "${ws.name}" — now ${ws.members.length} members, ${ws.channels.length} channels`);
+    }
+
+    this.persistWorkspaces();
   }
 
   private persistWorkspaces(): void {
