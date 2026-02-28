@@ -169,6 +169,7 @@ export class UIRenderer {
   private pendingMainAttachments: Array<{ id: string; file: File; previewUrl?: string }> = [];
   private pendingThreadAttachments: Array<{ id: string; file: File; previewUrl?: string }> = [];
   private lightboxBlobUrl: string | null = null;
+  private activityPanelOpen = false;
 
   /**
    * Scroll-lock state for streaming messages.
@@ -756,6 +757,8 @@ export class UIRenderer {
 
   private bindWorkspaceRailEvents(): void {
     document.getElementById('ws-rail-dms')?.addEventListener('click', () => {
+      this.activityPanelOpen = false;
+      document.getElementById('activity-btn')?.classList.remove('active');
       this.state.activeWorkspaceId = null;
       if (!this.state.activeDirectConversationId) {
         this.state.activeChannelId = null;
@@ -775,9 +778,7 @@ export class UIRenderer {
       });
     });
 
-    document.getElementById('activity-btn')?.addEventListener('click', () => {
-      this.showActivityModal();
-    });
+    document.getElementById('activity-btn')?.addEventListener('click', () => this.toggleActivityPanel());
 
     document.getElementById('ws-rail-add')?.addEventListener('click', () => {
       this.showCreateWorkspaceModal();
@@ -785,6 +786,8 @@ export class UIRenderer {
   }
 
   switchWorkspace(workspaceId: string): void {
+    this.activityPanelOpen = false;
+    document.getElementById('activity-btn')?.classList.remove('active');
     const ws = this.workspaceManager.getWorkspace(workspaceId);
     if (!ws) return;
 
@@ -2082,7 +2085,7 @@ export class UIRenderer {
       }
     });
     document.getElementById('qr-btn')?.addEventListener('click', () => this.showMyQR());
-    document.getElementById('activity-btn')?.addEventListener('click', () => this.showActivityModal());
+    document.getElementById('activity-btn')?.addEventListener('click', () => this.toggleActivityPanel());
     document.getElementById('channel-members-btn')?.addEventListener('click', () => this.showChannelMembersModal());
     document.getElementById('search-btn')?.addEventListener('click', () => this.showSearchPanel());
     document.getElementById('settings-btn')?.addEventListener('click', () => this.showSettings());
@@ -2168,48 +2171,83 @@ export class UIRenderer {
   // Modal helpers
   // =========================================================================
 
-  private showActivityModal(): void {
+  toggleActivityPanel(): void {
+    this.activityPanelOpen = !this.activityPanelOpen;
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+
+    if (this.activityPanelOpen) {
+      sidebar.innerHTML = this.renderActivityPanelHTML();
+      this.bindActivityPanelEvents();
+      // Highlight active rail icon
+      document.getElementById('activity-btn')?.classList.add('active');
+    } else {
+      sidebar.innerHTML = this.renderSidebarHTML();
+      this.bindSidebarEvents();
+      document.getElementById('activity-btn')?.classList.remove('active');
+    }
+  }
+
+  /** Refresh activity panel content if open */
+  refreshActivityPanel(): void {
+    if (!this.activityPanelOpen) return;
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+    sidebar.innerHTML = this.renderActivityPanelHTML();
+    this.bindActivityPanelEvents();
+  }
+
+  private renderActivityPanelHTML(): string {
     const items = (this.callbacks.getActivityItems?.() || []).sort((a, b) => b.timestamp - a.timestamp);
+    const unreadCount = items.filter(i => !i.read).length;
+
+    const header = `
+      <div class="activity-panel-header">
+        <h3 class="activity-panel-title">🔔 Activity</h3>
+        <div class="activity-panel-actions">
+          ${unreadCount > 0 ? '<button class="activity-mark-all-btn" id="activity-mark-all">Mark all read</button>' : ''}
+          <button class="activity-close-btn" id="activity-close" title="Close">✕</button>
+        </div>
+      </div>
+    `;
 
     if (items.length === 0) {
-      this.showModal('Activity', `
-        <div class="empty-state" style="padding:20px 8px;">
+      return header + `
+        <div class="activity-panel-empty">
           <div class="emoji">🔔</div>
-          <h3>No activity yet</h3>
-          <p>Thread replies and mentions will appear here.</p>
+          <p>No activity yet</p>
+          <p class="text-muted">Thread replies and mentions will appear here.</p>
         </div>
-      `, () => true);
-      return;
+      `;
     }
 
     const rows = items.map(item => {
       const actorName = this.getPeerAlias(item.actorId);
       const isUnread = !item.read;
       const time = this.relativeTime(item.timestamp);
-      const meta = item.type === 'mention' ? '📣 Mention' : '💬 Thread reply';
+      const icon = item.type === 'mention' ? '📣' : '💬';
       return `
         <button class="activity-row ${isUnread ? 'unread' : ''}" data-activity-id="${item.id}" data-channel-id="${item.channelId}" data-thread-id="${item.threadId || ''}" data-message-id="${item.messageId}">
           <div class="activity-row-top">
+            <span class="activity-row-icon">${icon}</span>
             <span class="activity-actor">${this.escapeHtml(actorName)}</span>
             <span class="activity-time">${time}</span>
           </div>
           <div class="activity-snippet">${this.escapeHtml(item.snippet || 'New activity')}</div>
-          <div class="activity-meta">${meta}</div>
         </button>
       `;
     }).join('');
 
-    this.showModal('Activity', `
-      <div class="activity-list">${rows}</div>
-      <div style="display:flex; justify-content:flex-end; margin-top:10px;">
-        <button type="button" class="btn-primary" id="activity-mark-all">Mark all as read</button>
-      </div>
-    `, () => true);
+    return header + `<div class="activity-panel-list">${rows}</div>`;
+  }
+
+  private bindActivityPanelEvents(): void {
+    document.getElementById('activity-close')?.addEventListener('click', () => this.toggleActivityPanel());
 
     document.getElementById('activity-mark-all')?.addEventListener('click', () => {
       this.callbacks.markAllActivityRead?.();
-      document.getElementById('modal-overlay')?.remove();
-      this.updateChannelHeader();
+      this.refreshActivityPanel();
+      this.updateWorkspaceRail();
     });
 
     document.querySelectorAll('.activity-row').forEach(el => {
@@ -2219,35 +2257,37 @@ export class UIRenderer {
         const threadId = (el as HTMLElement).getAttribute('data-thread-id');
         const messageId = (el as HTMLElement).getAttribute('data-message-id');
         if (activityId) this.callbacks.markActivityRead?.(activityId);
-        document.getElementById('modal-overlay')?.remove();
+
+        // Close activity panel and restore sidebar
+        this.activityPanelOpen = false;
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar) {
+          sidebar.innerHTML = this.renderSidebarHTML();
+          this.bindSidebarEvents();
+        }
+        document.getElementById('activity-btn')?.classList.remove('active');
 
         const needsChannelSwitch = channelId && channelId !== this.state.activeChannelId;
         const needsThreadOpen = !!(threadId && threadId.trim());
         const needsThreadSwitch = needsThreadOpen && (!this.state.threadOpen || this.state.activeThreadId !== threadId);
 
-        // Step 1: Switch channel only if needed (avoids unnecessary re-render + closeThread)
         if (needsChannelSwitch) {
           this.switchChannel(channelId!);
         }
 
-        // Step 2: Open thread if needed
         if (needsThreadOpen && needsThreadSwitch) {
-          // Small delay after channel switch to let DOM settle
           const openDelay = needsChannelSwitch ? 50 : 0;
           setTimeout(() => {
             this.openThread(threadId!);
-            // Step 3: Scroll to specific message inside thread
             if (messageId) {
               setTimeout(() => this.scrollToMessageAndHighlight(messageId, 'thread-messages'), 100);
             }
           }, openDelay);
         } else if (needsThreadOpen && !needsThreadSwitch) {
-          // Thread already open on the right thread — just scroll to message
           if (messageId) {
             this.scrollToMessageAndHighlight(messageId, 'thread-messages');
           }
         } else if (messageId) {
-          // No thread — scroll to message in main channel
           const scrollDelay = needsChannelSwitch ? 100 : 0;
           setTimeout(() => this.scrollToMessageAndHighlight(messageId, 'messages-list'), scrollDelay);
         }
