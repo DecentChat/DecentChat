@@ -169,6 +169,15 @@ export class UIRenderer {
   private pendingMainAttachments: Array<{ id: string; file: File; previewUrl?: string }> = [];
   private pendingThreadAttachments: Array<{ id: string; file: File; previewUrl?: string }> = [];
   private lightboxBlobUrl: string | null = null;
+
+  /**
+   * Scroll-lock state for streaming messages.
+   * When user intentionally scrolls up during an active stream, we stop
+   * auto-scrolling until they scroll back to bottom or the stream ends.
+   */
+  private _userScrolledAway = false;
+  private _programmaticScroll = false;
+  private _scrollListenerBound = false;
   private frequentReactions: string[] = [];
   private reactionUsage: Record<string, number> = {};
 
@@ -972,20 +981,45 @@ export class UIRenderer {
 
   /**
    * Return true when a scroll container is at (or near) the bottom.
-   * Used to avoid auto-scroll fighting when user intentionally scrolls up.
    */
-  private shouldStickToBottom(container: HTMLElement, thresholdPx = 72): boolean {
+  private isNearBottom(container: HTMLElement, thresholdPx = 80): boolean {
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     return distanceFromBottom <= thresholdPx;
   }
 
+  /** Programmatic scroll that won't trigger the user-scroll-away detector. */
   private scrollToBottom(container: HTMLElement): void {
+    this._programmaticScroll = true;
     container.scrollTop = container.scrollHeight;
+    // Clear flag after the scroll event fires (microtask timing).
+    requestAnimationFrame(() => { this._programmaticScroll = false; });
+  }
+
+  /**
+   * Bind a one-time scroll listener on the messages container that detects
+   * when the user intentionally scrolls away from the bottom during streaming.
+   * Re-entering the bottom zone clears the flag so auto-scroll resumes.
+   */
+  private ensureScrollListener(): void {
+    if (this._scrollListenerBound) return;
+    const list = document.getElementById('messages-list');
+    if (!list) return;
+    this._scrollListenerBound = true;
+    list.addEventListener('scroll', () => {
+      if (this._programmaticScroll) return; // ignore our own scrolls
+      if (this.isNearBottom(list, 80)) {
+        this._userScrolledAway = false;
+      } else {
+        this._userScrolledAway = true;
+      }
+    }, { passive: true });
   }
 
   renderMessages(): void {
     const list = document.getElementById('messages-list')!;
     list.innerHTML = '';
+    this._scrollListenerBound = false; // re-bind after DOM clear
+    this._userScrolledAway = false;
 
     if (!this.state.activeChannelId) {
       list.innerHTML = `
@@ -1029,6 +1063,7 @@ export class UIRenderer {
     }
 
     this.upgradeInlineImagePreviews(list);
+    this.ensureScrollListener();
   }
 
   appendMessageToDOM(msg: PlaintextMessage, container?: HTMLElement): void {
@@ -1047,7 +1082,7 @@ export class UIRenderer {
     if (emptyState) emptyState.remove();
 
     // Capture user scroll intent before DOM mutations.
-    const shouldAutoScroll = this.shouldStickToBottom(list);
+    const shouldAutoScroll = !this._userScrolledAway && this.isNearBottom(list);
 
     const isMine = msg.senderId === this.state.myPeerId;
     const inThreadView = list.id === 'thread-messages';
@@ -1273,15 +1308,19 @@ export class UIRenderer {
     const msgEl = document.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
     if (!msgEl) return;
 
-    const container = msgEl.closest('.message-list, #thread-messages, #messages-list') as HTMLElement | null;
-    const shouldAutoScroll = container ? this.shouldStickToBottom(container) : false;
+    this.ensureScrollListener();
 
     const contentEl = msgEl.querySelector('.message-content') as HTMLElement | null;
     if (!contentEl) return;
     contentEl.innerHTML = renderMarkdown(content + ' ▋');
     msgEl.classList.add('streaming');
 
-    if (container && shouldAutoScroll) this.scrollToBottom(container);
+    // Only auto-scroll if user hasn't intentionally scrolled away
+    // AND we're actually near the bottom (double-guard against missed events).
+    if (!this._userScrolledAway) {
+      const container = msgEl.closest('.message-list, #thread-messages, #messages-list') as HTMLElement | null;
+      if (container && this.isNearBottom(container)) this.scrollToBottom(container);
+    }
   }
 
   finalizeStreamingMessage(messageId: string): void {
@@ -1310,6 +1349,8 @@ export class UIRenderer {
     }
 
     msgEl.classList.remove('streaming');
+    // Reset scroll-lock so next message/stream auto-scrolls normally.
+    this._userScrolledAway = false;
   }
 
   // =========================================================================
