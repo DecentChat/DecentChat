@@ -11,6 +11,8 @@ export interface AppSettings {
   workspaceAlias?: string;
   /** BIP39 seed phrase for identity derivation */
   seedPhrase?: string;
+  /** Device index for multi-device (0 = primary, 1+ = additional devices) */
+  deviceIndex?: number;
   theme?: 'auto' | 'light' | 'dark';
   notifications?: boolean;
   notificationSound?: boolean;
@@ -96,6 +98,13 @@ export class SettingsPanel {
               </div>
             </div>
             <div id="seed-phrase-display" style="display:none; margin-top:8px; padding:12px; background:var(--bg-secondary); border-radius:var(--radius); font-family:monospace; font-size:13px; word-spacing:4px; line-height:1.8; user-select:all;"></div>
+            <div class="setting-row">
+              <label>Device index</label>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <code style="font-size:12px; color:var(--text-muted);">${settings.deviceIndex ?? 0}</code>
+                <span style="font-size:11px; color:var(--text-muted);">(${(settings.deviceIndex ?? 0) === 0 ? 'primary device' : 'device ' + (settings.deviceIndex ?? 0)})</span>
+              </div>
+            </div>
           </div>
 
           <div class="settings-section">

@@ -361,30 +361,6 @@ async function init(): Promise<void> {
       (id, patch) => ctrl.persistentStore.updateQueuedMessage(id, patch),
     );
 
-    // Generate / load crypto keys
-    let ecdhKeyPair = await ctrl.keyStore.getECDHKeyPair();
-    if (!ecdhKeyPair) {
-      ecdhKeyPair = await ctrl.cryptoManager.generateKeyPair();
-      await ctrl.keyStore.storeECDHKeyPair(ecdhKeyPair);
-    } else {
-      // Ensure CryptoManager uses the stored key pair (not a new random one)
-      ctrl.cryptoManager.setKeyPair(ecdhKeyPair);
-    }
-
-    let ecdsaKeyPair = await ctrl.keyStore.getECDSAKeyPair();
-    if (!ecdsaKeyPair) {
-      ecdsaKeyPair = await ctrl.cryptoManager.generateSigningKeyPair();
-      await ctrl.keyStore.storeECDSAKeyPair(ecdsaKeyPair);
-    }
-
-    ctrl.myPublicKey = await ctrl.cryptoManager.exportPublicKey(ecdhKeyPair.publicKey);
-
-    // Compute canonical identityId from public key (SPKI hash)
-    const spkiBytes = await crypto.subtle.exportKey('spki', ecdhKeyPair.publicKey);
-    const spkiBase64 = btoa(String.fromCharCode(...new Uint8Array(spkiBytes)));
-    const idMgr = new _IdentityManager();
-    ctrl.myIdentityId = await idMgr.computeIdentityId(spkiBase64);
-
     // Bootstrap transport + peer ID
     const settingsDefaults: AppSettings = { theme: 'auto', notifications: true };
     const settings = await ctrl.persistentStore.getSettings<AppSettings>(settingsDefaults);
@@ -412,29 +388,82 @@ async function init(): Promise<void> {
       }
     }
 
+    // === Multi-device key derivation (Phase 3) ===
+    // When seed phrase exists, derive device-specific keys from HD tree:
+    //   peerId     ← m/3'/device/<deviceIndex> (unique per device)
+    //   identityId ← m/0'/identity/0 (stable across all devices)
+    // This ensures peerId↔publicKey binding (Phase 1) works correctly.
+    const deviceIndex = (settings as any).deviceIndex ?? 0;
     let derivedPeerId: string | null = null;
+    let ecdhKeyPair: CryptoKeyPair;
+    let ecdsaKeyPair: CryptoKeyPair;
+
     if (typeof seedPhrase === 'string' && seedPhrase.trim()) {
       try {
         const { SeedPhraseManager, AtRestEncryption } = await import('decent-protocol');
         const seedPhraseManager = new SeedPhraseManager();
-        // Single PBKDF2 call — returns both peer ID and key material (fix #3)
-        const { peerId, keys } = await seedPhraseManager.deriveAll(seedPhrase);
-        derivedPeerId = peerId;
 
-        // T3.5: Derive at-rest encryption key from master seed (reuses same PBKDF2 result)
-        // Important: peer ID derivation success should not depend on at-rest encryption init.
+        // Derive device-specific keys from HD tree
+        const deviceResult = await seedPhraseManager.deriveDeviceKeys(seedPhrase, deviceIndex);
+        derivedPeerId = deviceResult.peerId;
+
+        // Use device ECDH key for transport (handshake, shared secrets)
+        ecdhKeyPair = deviceResult.deviceKeys.ecdhKeyPair;
+        ctrl.cryptoManager.setKeyPair(ecdhKeyPair);
+        await ctrl.keyStore.storeECDHKeyPair(ecdhKeyPair);
+
+        // Use device ECDSA key for message signing
+        ecdsaKeyPair = deviceResult.deviceKeys.ecdsaKeyPair;
+        await ctrl.keyStore.storeECDSAKeyPair(ecdsaKeyPair);
+
+        // identityId from HD identity key (stable across all devices)
+        ctrl.myIdentityId = deviceResult.identityId;
+
+        console.log(`[DecentChat] HD device key derivation: device=${deviceIndex}, peerId=${derivedPeerId.slice(0, 8)}…, identityId=${deviceResult.identityId.slice(0, 8)}…`);
+
+        // At-rest encryption from master seed (via legacy deriveAll for the master seed)
         try {
+          const { keys: legacyKeys } = await seedPhraseManager.deriveAll(seedPhrase);
           const atRest = new AtRestEncryption();
-          await atRest.init(keys.masterSeed);
+          await atRest.init(legacyKeys.masterSeed);
           ctrl.persistentStore.setAtRestEncryption(atRest);
           console.log('[DecentChat] At-rest encryption enabled');
         } catch (err) {
-          console.warn('[DecentChat] At-rest encryption init failed; continuing with derived peer ID:', (err as Error).message);
+          console.warn('[DecentChat] At-rest encryption init failed:', (err as Error).message);
         }
       } catch (err) {
-        console.warn('[DecentChat] Failed to derive peer ID from seed phrase, falling back:', (err as Error).message);
+        console.warn('[DecentChat] HD device key derivation failed, falling back to random keys:', (err as Error).message);
+        // Fall back to random key generation
+        ecdhKeyPair = await ctrl.keyStore.getECDHKeyPair() || await ctrl.cryptoManager.generateKeyPair();
+        await ctrl.keyStore.storeECDHKeyPair(ecdhKeyPair);
+        ctrl.cryptoManager.setKeyPair(ecdhKeyPair);
+        ecdsaKeyPair = await ctrl.keyStore.getECDSAKeyPair() || await ctrl.cryptoManager.generateSigningKeyPair();
+        await ctrl.keyStore.storeECDSAKeyPair(ecdsaKeyPair);
+        // Compute identityId from random key (legacy fallback)
+        const idMgr = new _IdentityManager();
+        const spkiBytes = await crypto.subtle.exportKey('spki', ecdhKeyPair.publicKey);
+        const spkiBase64 = btoa(String.fromCharCode(...new Uint8Array(spkiBytes)));
+        ctrl.myIdentityId = await idMgr.computeIdentityId(spkiBase64);
       }
+    } else {
+      // No seed phrase — use random keys (legacy behavior)
+      ecdhKeyPair = await ctrl.keyStore.getECDHKeyPair() || await ctrl.cryptoManager.generateKeyPair();
+      if (!(await ctrl.keyStore.getECDHKeyPair())) {
+        await ctrl.keyStore.storeECDHKeyPair(ecdhKeyPair);
+      }
+      ctrl.cryptoManager.setKeyPair(ecdhKeyPair);
+      ecdsaKeyPair = await ctrl.keyStore.getECDSAKeyPair() || await ctrl.cryptoManager.generateSigningKeyPair();
+      if (!(await ctrl.keyStore.getECDSAKeyPair())) {
+        await ctrl.keyStore.storeECDSAKeyPair(ecdsaKeyPair);
+      }
+      // Compute identityId from random key (legacy)
+      const idMgr = new _IdentityManager();
+      const spkiBytes = await crypto.subtle.exportKey('spki', ecdhKeyPair.publicKey);
+      const spkiBase64 = btoa(String.fromCharCode(...new Uint8Array(spkiBytes)));
+      ctrl.myIdentityId = await idMgr.computeIdentityId(spkiBase64);
     }
+
+    ctrl.myPublicKey = await ctrl.cryptoManager.exportPublicKey(ecdhKeyPair.publicKey);
 
     // DEP-003: derived ID is canonical whenever a seed phrase exists.
     // When a seed phrase exists, we MUST use the derived peer ID — don't let transport override it.
