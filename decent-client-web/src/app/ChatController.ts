@@ -2101,6 +2101,12 @@ export class ChatController {
     const savedAlias = await this.persistentStore.getSetting('myAlias');
     if (savedAlias) this.state.myAlias = savedAlias;
 
+    // Restore activity feed from IndexedDB
+    const savedActivity = await this.persistentStore.getSetting('activityItems');
+    if (Array.isArray(savedActivity)) {
+      this.activityItems = savedActivity;
+    }
+
     const savedWsAliases = await this.persistentStore.getSetting('workspaceAliases');
     if (savedWsAliases) {
       try { this.state.workspaceAliases = JSON.parse(savedWsAliases); } catch {}
@@ -2472,17 +2478,23 @@ export class ChatController {
 
   markActivityRead(id: string): void {
     const item = this.activityItems.find(i => i.id === id);
-    if (item) item.read = true;
+    if (item) { item.read = true; this.persistActivity(); }
   }
 
   markAllActivityRead(): void {
     for (const item of this.activityItems) item.read = true;
+    this.persistActivity();
   }
 
   markThreadActivityRead(channelId: string, threadId: string): void {
+    let changed = false;
     for (const item of this.activityItems) {
-      if (item.channelId === channelId && item.threadId === threadId) item.read = true;
+      if (item.channelId === channelId && item.threadId === threadId && !item.read) {
+        item.read = true;
+        changed = true;
+      }
     }
+    if (changed) this.persistActivity();
   }
 
   private resolveWorkspaceIdByChannelId(channelId: string): string | null {
@@ -2541,6 +2553,7 @@ export class ChatController {
     });
 
     if (this.activityItems.length > 500) this.activityItems.length = 500;
+    this.persistActivity();
   }
 
   private maybeRecordThreadActivity(msg: PlaintextMessage, channelId: string): void {
@@ -2574,6 +2587,12 @@ export class ChatController {
 
     // Keep list bounded
     if (this.activityItems.length > 500) this.activityItems.length = 500;
+    this.persistActivity();
+  }
+
+  /** Persist activity items to IndexedDB so they survive page refresh. */
+  private persistActivity(): void {
+    this.persistentStore.saveSetting('activityItems', this.activityItems).catch(() => {});
   }
 
   async removeChannel(channelId: string): Promise<{ success: boolean; error?: string }> {
