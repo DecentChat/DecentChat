@@ -46,3 +46,47 @@ export function verifyHandshakeKey(
 
   return { ok: true };
 }
+
+
+import { verifyPeerIdBinding } from './IdentityVerifier';
+
+export interface VerifyHandshakeParams {
+  /** Public key pre-stored from invite URL. Undefined = TOFU. */
+  preStoredKey?: string | null;
+  /** Public key received in the handshake message. */
+  handshakeKey?: string | null;
+  /** Claimed peerId. If provided, binding to handshakeKey is verified. */
+  peerId?: string | null;
+}
+
+/**
+ * Extended handshake verification: checks both key match AND peerId↔publicKey binding.
+ *
+ * 1. If preStoredKey is set, verify handshakeKey matches it (existing behavior).
+ * 2. If peerId and handshakeKey are both set, verify peerId is derived from handshakeKey
+ *    via the DEP-003 algorithm.
+ *
+ * Either check failing → rejection.
+ */
+export async function verifyHandshake(
+  params: VerifyHandshakeParams,
+): Promise<HandshakeVerificationResult> {
+  const { preStoredKey, handshakeKey, peerId } = params;
+
+  // Step 1: Existing key-match check
+  const keyResult = verifyHandshakeKey(preStoredKey, handshakeKey);
+  if (!keyResult.ok) return keyResult;
+
+  // Step 2: PeerId↔PublicKey binding check (if both provided)
+  if (peerId && handshakeKey) {
+    const binding = await verifyPeerIdBinding(peerId, handshakeKey);
+    if (!binding.valid) {
+      return {
+        ok: false,
+        reason: `PeerId binding failed: ${binding.reason}`,
+      };
+    }
+  }
+
+  return { ok: true };
+}
