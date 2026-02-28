@@ -1090,7 +1090,7 @@ export class UIRenderer {
     this.ensureScrollListener();
   }
 
-  appendMessageToDOM(msg: PlaintextMessage, container?: HTMLElement): void {
+  appendMessageToDOM(msg: PlaintextMessage, container?: HTMLElement, animate = false): void {
     console.log(this.tracePrefix(), 'appendMessageToDOM', {
       id: msg.id,
       content: msg.content,
@@ -1216,6 +1216,12 @@ export class UIRenderer {
 
     list.appendChild(div);
     if (shouldAutoScroll) this.scrollToBottom(list);
+
+    // Yellow border fade-out on new messages
+    if (animate) {
+      div.classList.add('message-new');
+      setTimeout(() => div.classList.remove('message-new'), 2000);
+    }
     this.upgradeInlineImagePreviews(div);
 
   }

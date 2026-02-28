@@ -141,7 +141,7 @@ async function init(): Promise<void> {
             'system',
           );
           ctrl.messageStore.addMessage(msg);
-          ui.appendMessageToDOM(msg);
+          ui.appendMessageToDOM(msg, undefined, true);
           return;
         }
       }
@@ -264,7 +264,7 @@ async function init(): Promise<void> {
     updateSidebar: () => ui.updateSidebar(),
     updateWorkspaceRail: () => ui.updateWorkspaceRail(),
     updateChannelHeader: () => ui.updateChannelHeader(),
-    appendMessageToDOM: (msg) => ui.appendMessageToDOM(msg),
+    appendMessageToDOM: (msg, animate) => ui.appendMessageToDOM(msg, undefined, animate),
     showToast: (message, type) => ui.showToast(message, type),
     renderThreadMessages: () => ui.renderThreadMessages(),
     renderMessages: () => {

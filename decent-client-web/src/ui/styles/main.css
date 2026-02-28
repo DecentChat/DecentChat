@@ -2134,6 +2134,24 @@ body.debug-mode .msg-delivery-detail {
 .search-result-time { font-size: 11px; color: var(--text-light); }
 .search-result-text { font-size: 13px; color: var(--text-muted); }
 
+/* New message yellow border fade-out */
+.message.message-new {
+  animation: msgNewBorder 2s ease-out forwards;
+  border-radius: 6px;
+}
+
+@keyframes msgNewBorder {
+  0% {
+    box-shadow: inset 0 0 0 2px rgba(255, 204, 0, 0.8), 0 0 8px rgba(255, 204, 0, 0.2);
+  }
+  40% {
+    box-shadow: inset 0 0 0 1.5px rgba(255, 204, 0, 0.5), 0 0 4px rgba(255, 204, 0, 0.1);
+  }
+  100% {
+    box-shadow: inset 0 0 0 0px rgba(255, 204, 0, 0), 0 0 0px rgba(255, 204, 0, 0);
+  }
+}
+
 /* Message highlight (when clicking search/activity result) */
 .message.highlight {
   animation: msgHighlight 2.5s ease-out;

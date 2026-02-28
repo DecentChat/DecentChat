@@ -75,7 +75,7 @@ function getDefaultSignalingServer(): string {
 export interface UIUpdater {
   updateSidebar: () => void;
   updateChannelHeader: () => void;
-  appendMessageToDOM: (msg: PlaintextMessage) => void;
+  appendMessageToDOM: (msg: PlaintextMessage, animate?: boolean) => void;
   showToast: (message: string, type?: 'info' | 'error' | 'success') => void;
   renderThreadMessages: () => void;
   renderMessages: () => void;
@@ -504,7 +504,7 @@ export class ChatController {
             }
             this.ui?.updateThreadIndicator?.(streamThreadId, targetChannelId);
           } else if (targetChannelId === this.state.activeChannelId) {
-            this.ui?.appendMessageToDOM(msg);
+            this.ui?.appendMessageToDOM(msg, true);
           }
           return;
         }
@@ -881,7 +881,7 @@ export class ChatController {
             }
 
             if (channelId === this.state.activeChannelId) {
-              this.ui?.appendMessageToDOM(msg);
+              this.ui?.appendMessageToDOM(msg, true);
               // Message is immediately visible to user in active channel → emit read receipt.
               this.transport.send(peerId, { type: 'read', messageId: msg.id, channelId });
               (msg as any).localReadAt = Date.now();
@@ -965,7 +965,7 @@ export class ChatController {
                 const updatedConv = await this.directConversationStore.get(channelId);
                 if (updatedConv) await this.persistentStore.saveDirectConversation(updatedConv);
                 if (channelId === this.state.activeChannelId) {
-                  this.ui?.appendMessageToDOM(msg);
+                  this.ui?.appendMessageToDOM(msg, true);
                   this.transport.send(peerId, { type: 'read', messageId: msg.id, channelId });
                   (msg as any).localReadAt = Date.now();
                   await this.persistentStore.saveMessage({ ...(msg as any), localReadAt: (msg as any).localReadAt });
@@ -1096,7 +1096,7 @@ export class ChatController {
                 this.ui?.renderThreadMessages();
               }
             } else {
-              this.ui?.appendMessageToDOM(msg);
+              this.ui?.appendMessageToDOM(msg, true);
             }
             // Message is visible in active channel.
             this.transport.send(peerId, { type: 'read', messageId: msg.id, channelId });
@@ -2253,7 +2253,7 @@ export class ChatController {
     if (threadId && this.state.threadOpen) {
       this.ui?.renderThreadMessages();
     } else if (!threadId) {
-      this.ui?.appendMessageToDOM(msg);
+      this.ui?.appendMessageToDOM(msg, true);
     }
     // Update reply count on parent message for the sender (peer events handle remote side)
     if (threadId) {
@@ -3028,7 +3028,7 @@ export class ChatController {
       if (threadId && this.state.threadOpen) {
         this.ui?.renderThreadMessages();
       } else if (!threadId) {
-        this.ui?.appendMessageToDOM(msg);
+        this.ui?.appendMessageToDOM(msg, true);
       }
       // Update reply count on parent message for the sender
       if (threadId) {
@@ -3343,7 +3343,7 @@ export class ChatController {
       this.ui?.renderThreadMessages();
       this.ui?.updateThreadIndicator(threadId, this.state.activeChannelId);
     } else if (!threadId) {
-      this.ui?.appendMessageToDOM(msg);
+      this.ui?.appendMessageToDOM(msg, true);
     }
 
     // Send to workspace peers
