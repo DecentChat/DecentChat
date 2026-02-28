@@ -62,8 +62,8 @@ export type { InviteData } from './invite/InviteURI';
 
 // ─── Transport ──────────────────────────────────────────────────────────────
 // ─── Security ───────────────────────────────────────────────────────────────
-export { RateLimiter, DEFAULT_LIMITS, MessageGuard, verifyHandshakeKey, verifyPeerIdBinding } from './security';
-export type { HandshakeVerificationResult, PeerIdBindingResult } from './security';
+export { RateLimiter, DEFAULT_LIMITS, MessageGuard, verifyHandshakeKey, verifyPeerIdBinding, PeerAuth } from './security';
+export type { HandshakeVerificationResult, PeerIdBindingResult, AuthChallenge, AuthResponse } from './security';
 export type {
   RateLimitAction, BucketConfig, ViolationSeverity,
   Violation, PeerReputation, RateLimitResult,

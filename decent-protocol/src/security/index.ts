@@ -12,3 +12,6 @@ export type { HandshakeVerificationResult } from './HandshakeVerifier';
 
 export { verifyPeerIdBinding } from './IdentityVerifier';
 export type { PeerIdBindingResult } from './IdentityVerifier';
+
+export { PeerAuth } from './PeerAuth';
+export type { AuthChallenge, AuthResponse } from './PeerAuth';
