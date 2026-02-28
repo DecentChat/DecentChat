@@ -2238,7 +2238,7 @@ export class UIRenderer {
       `;
     }
 
-    const rows = items.map(item => {
+    const renderRow = (item: ActivityItem) => {
       const actorName = this.getPeerAlias(item.actorId);
       const isUnread = !item.read;
       const time = this.relativeTime(item.timestamp);
@@ -2253,9 +2253,22 @@ export class UIRenderer {
           <div class="activity-snippet">${this.escapeHtml(item.snippet || 'New activity')}</div>
         </button>
       `;
-    }).join('');
+    };
 
-    return header + `<div class="activity-panel-list">${rows}</div>`;
+    const unreadItems = items.filter(i => !i.read);
+    const readItems = items.filter(i => i.read);
+
+    let html = '';
+    if (unreadItems.length > 0) {
+      html += `<div class="activity-section-label">New</div>`;
+      html += unreadItems.map(renderRow).join('');
+    }
+    if (readItems.length > 0) {
+      html += `<div class="activity-section-label">Earlier</div>`;
+      html += readItems.map(renderRow).join('');
+    }
+
+    return header + `<div class="activity-panel-list">${html}</div>`;
   }
 
   private bindActivityPanelEvents(): void {

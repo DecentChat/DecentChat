@@ -773,6 +773,16 @@ body {
   flex: 1;
 }
 
+.activity-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  padding: 10px 16px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
 .activity-row {
   width: 100%;
   text-align: left;
@@ -790,10 +800,12 @@ body {
 }
 
 .activity-row.unread {
-  background: color-mix(in srgb, var(--primary) 6%, transparent);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  border-left: 3px solid var(--primary);
+  padding-left: 13px;
 }
 .activity-row.unread:hover {
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
 }
 
 .activity-row-top {
@@ -831,6 +843,12 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   padding-left: 18px;
+}
+.activity-row.unread .activity-snippet {
+  color: var(--text);
+}
+.activity-row.unread .activity-actor {
+  color: var(--primary);
 }
 
 /* Highlight active activity button in rail */
