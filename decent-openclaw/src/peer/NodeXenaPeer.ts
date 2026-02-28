@@ -717,10 +717,25 @@ export class NodeXenaPeer {
     if (!safeChannelId || !safeThreadId || safeLimit === 0) return [];
 
     const excludeMessageId = args.excludeMessageId?.trim();
-    return this.messageStore
+
+    // Include the parent (root) message that started the thread.
+    // getThread() only returns replies (messages with threadId set),
+    // so we need to find the root message separately by its id.
+    const allChannelMessages = this.messageStore.getMessages(safeChannelId);
+    const parentMessage = allChannelMessages.find((m) => m.id === safeThreadId);
+
+    const threadReplies = this.messageStore
       .getThread(safeChannelId, safeThreadId)
-      .filter((message) => !excludeMessageId || message.id !== excludeMessageId)
-      .slice()
+      .filter((message) => !excludeMessageId || message.id !== excludeMessageId);
+
+    // Prepend parent message (if found and not excluded), then append replies
+    const combined: PlaintextMessage[] = [];
+    if (parentMessage && (!excludeMessageId || parentMessage.id !== excludeMessageId)) {
+      combined.push(parentMessage);
+    }
+    combined.push(...threadReplies);
+
+    return combined
       .sort((a, b) => a.timestamp - b.timestamp)
       .slice(-safeLimit)
       .map((message) => ({
