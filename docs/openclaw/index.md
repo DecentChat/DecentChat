@@ -25,6 +25,7 @@ Implemented:
 - Handshake + encrypted messaging (Double Ratchet with legacy fallback)
 - Group + direct messaging
 - Reply threading/session mapping controls
+- Thread bootstrap context with `thread.initialHistoryLimit` for first thread turn
 - Streaming replies (start/delta/done)
 - Offline outbound queue + ack tracking + resend after reconnect
 - Read receipt queue + flush after reconnect
@@ -33,7 +34,6 @@ Implemented:
 
 Partially implemented / gaps:
 
-- `thread.initialHistoryLimit` is exposed in config schema but currently not applied in runtime flow
 - `replyToMode: "first"` is accepted but handled effectively like `"all"` in monitor routing logic
 - `openclaw.plugin.json` schema/UI hints are behind `src/channel.ts` (missing newer fields like `streamEnabled`, `replyToMode`, `thread`, `allowFrom`)
 - Media chunk integrity hash is TODO (`chunkHash` left empty)
@@ -45,3 +45,4 @@ Partially implemented / gaps:
 - [Architecture](./architecture)
 - [Event Flow](./event-flow)
 - [Operations & Troubleshooting](./operations)
+- [DecentChat thread-binding parity design](./decent-thread-bindings-design)

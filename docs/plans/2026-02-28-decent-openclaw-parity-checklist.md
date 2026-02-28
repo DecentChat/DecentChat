@@ -21,6 +21,13 @@ Plan reference: `docs/plans/2026-02-28-decent-openclaw-parity-threading.md`
 - [x] Messaging target normalization + resolver hints (`peerId`, `channel:<id>`, canonical forms).
 - [x] Live directory adapter backed by NodeXenaPeer workspace cache.
 
+## Batch 4 (Tasks 9-10)
+
+- [x] Added structured route observability logs in monitor runtime.
+- [x] Added tests covering thread/base routing log branches.
+- [x] Added upstream design doc for DecentChat thread-bound session parity and linked it in docs.
+
 ## Deferred to next batches
 
-- [ ] Upstream design doc for full thread-bound session bindings.
+- [ ] Task 11: full verification gate docs + full regression command pack update.
+- [ ] Task 12: rollout strategy docs (migration examples, rollback checklist).
