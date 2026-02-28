@@ -27,7 +27,12 @@ Plan reference: `docs/plans/2026-02-28-decent-openclaw-parity-threading.md`
 - [x] Added tests covering thread/base routing log branches.
 - [x] Added upstream design doc for DecentChat thread-bound session parity and linked it in docs.
 
+## Batch 5 (Tasks 11-12)
+
+- [x] Added full decent-openclaw regression command pack to `docs/testing.md`.
+- [x] Executed verification pack + typecheck (all green).
+- [x] Added rollout strategy docs (migration examples, staging dry-run, rollback toggles) in `decent-openclaw/README.md` and `docs/deployment.md`.
+
 ## Deferred to next batches
 
-- [ ] Task 11: full verification gate docs + full regression command pack update.
-- [ ] Task 12: rollout strategy docs (migration examples, rollback checklist).
+- [x] None — parity plan batches 1-5 completed.

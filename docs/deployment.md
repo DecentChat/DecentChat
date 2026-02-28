@@ -57,3 +57,59 @@ If production shows regressions:
 ## Notes
 
 Credentials and environment-specific deployment details are intentionally kept outside this document. Use secure local config and team runbooks.
+
+
+## Decent OpenClaw rollout strategy
+
+### Config migration
+
+Before:
+
+```yaml
+channels:
+  decentchat:
+    replyToMode: all
+```
+
+After:
+
+```yaml
+channels:
+  decentchat:
+    replyToMode: all
+    replyToModeByChatType:
+      direct: off
+      group: all
+      channel: all
+    thread:
+      historyScope: thread
+      inheritParent: false
+      initialHistoryLimit: 10
+```
+
+### Staging dry-run checklist
+
+1. Start OpenClaw with updated config in staging account.
+2. Validate direct chat behavior:
+   - direct message routes to base direct session when `direct: off`.
+3. Validate group/thread behavior:
+   - reply in thread routes to `:thread:<id>` session.
+4. Check logs include structured route line (`[decentchat] route ...`).
+5. Validate message send targets:
+   - `peerId`, `channel:<id>`, and `decentchat:channel:<id>`.
+6. Run regression pack from `docs/testing.md`.
+
+### Fast rollback
+
+If regressions appear, apply conservative toggles and restart:
+
+```yaml
+channels:
+  decentchat:
+    replyToMode: off
+    thread:
+      historyScope: channel
+      initialHistoryLimit: 0
+```
+
+Then revert commit range if needed and re-run the regression pack.
