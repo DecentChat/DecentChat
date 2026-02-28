@@ -2102,7 +2102,6 @@ export class UIRenderer {
       }
     });
     document.getElementById('qr-btn')?.addEventListener('click', () => this.showMyQR());
-    document.getElementById('activity-btn')?.addEventListener('click', () => this.toggleActivityPanel());
     document.getElementById('channel-members-btn')?.addEventListener('click', () => this.showChannelMembersModal());
     document.getElementById('search-btn')?.addEventListener('click', () => this.showSearchPanel());
     document.getElementById('settings-btn')?.addEventListener('click', () => this.showSettings());
