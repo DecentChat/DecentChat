@@ -32,7 +32,7 @@ describe('IdentityVerifier', () => {
     expect(result.reason).toContain('mismatch');
   });
 
-  test('rejects peerId that is wrong length (too short)', async () => {
+  test('skips check for non-DEP-003 peerId (too short)', async () => {
     const kp = await crypto.subtle.generateKey(
       { name: 'ECDH', namedCurve: 'P-256' },
       true,
@@ -40,12 +40,12 @@ describe('IdentityVerifier', () => {
     );
     const spki = await crypto.subtle.exportKey('spki', kp.publicKey);
 
+    // Non-DEP-003 format → skip binding check (backward compat)
     const result = await verifyPeerIdBinding('abc', spki);
-    expect(result.valid).toBe(false);
-    expect(result.reason).toContain('length');
+    expect(result.valid).toBe(true);
   });
 
-  test('rejects peerId that is wrong length (too long)', async () => {
+  test('skips check for UUID peerId (legacy PeerJS format)', async () => {
     const kp = await crypto.subtle.generateKey(
       { name: 'ECDH', namedCurve: 'P-256' },
       true,
@@ -53,9 +53,9 @@ describe('IdentityVerifier', () => {
     );
     const spki = await crypto.subtle.exportKey('spki', kp.publicKey);
 
-    const result = await verifyPeerIdBinding('0000000000000000001234', spki);
-    expect(result.valid).toBe(false);
-    expect(result.reason).toContain('length');
+    // UUID format — not DEP-003, should skip
+    const result = await verifyPeerIdBinding('d38d93d2-f17a-47f1-aedd-1d1cee2b5812', spki);
+    expect(result.valid).toBe(true);
   });
 
   test('rejects empty peerId', async () => {

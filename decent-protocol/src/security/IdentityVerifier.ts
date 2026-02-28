@@ -31,12 +31,15 @@ export async function verifyPeerIdBinding(
   claimedPeerId: string,
   publicKey: ArrayBuffer | string,
 ): Promise<PeerIdBindingResult> {
-  // Validate peerId format: must be 18-char hex (9 bytes)
-  if (!claimedPeerId || claimedPeerId.length !== 18) {
-    return {
-      valid: false,
-      reason: `Invalid peerId length: ${claimedPeerId?.length ?? 0}, expected 18`,
-    };
+  // Validate peerId format: DEP-003 peerIds are exactly 18-char hex (9 bytes).
+  // Legacy/UUID peerIds (e.g. 36-char UUIDs from PeerJS) are not DEP-003 derived,
+  // so we skip the binding check for them — they can't be verified this way.
+  if (!claimedPeerId) {
+    return { valid: false, reason: 'Empty peerId' };
+  }
+  if (claimedPeerId.length !== 18 || !/^[0-9a-f]{18}$/.test(claimedPeerId)) {
+    // Not a DEP-003 peerId — skip binding check (backward compat with legacy peers)
+    return { valid: true };
   }
 
   let spkiBuffer: ArrayBuffer;
