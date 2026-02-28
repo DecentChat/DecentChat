@@ -262,6 +262,7 @@ async function init(): Promise<void> {
   // Give the controller a handle to the UI for push updates
   ctrl.setUI({
     updateSidebar: () => ui.updateSidebar(),
+    updateWorkspaceRail: () => ui.updateWorkspaceRail(),
     updateChannelHeader: () => ui.updateChannelHeader(),
     appendMessageToDOM: (msg) => ui.appendMessageToDOM(msg),
     showToast: (message, type) => ui.showToast(message, type),
@@ -415,19 +416,25 @@ async function init(): Promise<void> {
         derivedPeerId = peerId;
 
         // T3.5: Derive at-rest encryption key from master seed (reuses same PBKDF2 result)
-        const atRest = new AtRestEncryption();
-        await atRest.init(keys.masterSeed);
-        ctrl.persistentStore.setAtRestEncryption(atRest);
-        console.log('[DecentChat] At-rest encryption enabled');
+        // Important: peer ID derivation success should not depend on at-rest encryption init.
+        try {
+          const atRest = new AtRestEncryption();
+          await atRest.init(keys.masterSeed);
+          ctrl.persistentStore.setAtRestEncryption(atRest);
+          console.log('[DecentChat] At-rest encryption enabled');
+        } catch (err) {
+          console.warn('[DecentChat] At-rest encryption init failed; continuing with derived peer ID:', (err as Error).message);
+        }
       } catch (err) {
         console.warn('[DecentChat] Failed to derive peer ID from seed phrase, falling back:', (err as Error).message);
       }
     }
 
     // DEP-003: derived ID is canonical whenever a seed phrase exists.
+    // When a seed phrase exists, we MUST use the derived peer ID — don't let transport override it.
     const preferredPeerId = derivedPeerId || settings.myPeerId;
-
     let myPeerId: string = preferredPeerId || crypto.randomUUID();
+
     const initDelaysMs = [0, 800, 2000, 5000, 10_000];
     let initError: Error | null = null;
     for (let attempt = 0; attempt < initDelaysMs.length; attempt++) {
@@ -435,9 +442,17 @@ async function init(): Promise<void> {
         await sleep(initDelaysMs[attempt]);
       }
       try {
-        myPeerId = attempt === 0
-          ? await ctrl.transport.init(preferredPeerId)
-          : await ctrl.recreateTransportAndInit(preferredPeerId, `startup-retry-${attempt}`);
+        // Call transport.init() but don't use the returned ID if we have a derived peer ID.
+        // The derived peer ID from seed is canonical and must not change.
+        const transportId = attempt === 0
+          ? await ctrl.transport.init(myPeerId)
+          : await ctrl.recreateTransportAndInit(myPeerId, `startup-retry-${attempt}`);
+        
+        // Only use transport-returned ID if we don't have a seed-derived ID.
+        // This ensures seed-based identity is stable across restarts.
+        if (!derivedPeerId) {
+          myPeerId = transportId;
+        }
         initError = null;
         break;
       } catch (err) {
@@ -555,10 +570,7 @@ async function init(): Promise<void> {
       sessionStorage.removeItem('pendingInvite');
       // Invite link — show welcome screen with join modal
       ui.renderWelcome();
-      // Small delay to ensure DOM is ready
-      setTimeout(() => {
-        ui.showJoinWithInvite(pendingInvite!.code, pendingInvite!.peerId, pendingInvite!.name, pendingInvite!.inviteData);
-      }, 100);
+      ui.showJoinWithInvite(pendingInvite!.code, pendingInvite!.peerId, pendingInvite!.name, pendingInvite!.inviteData);
     } else if (!isAppRoute) {
       // Landing page is always reachable at /
       ui.renderWelcome();
@@ -612,10 +624,8 @@ async function init(): Promise<void> {
       const pendingWelcomeAction = sessionStorage.getItem('decent:welcomeAction');
       if (pendingWelcomeAction === 'create' || pendingWelcomeAction === 'join') {
         sessionStorage.removeItem('decent:welcomeAction');
-        setTimeout(() => {
-          if (pendingWelcomeAction === 'create') ui.showCreateWorkspaceModal();
-          else ui.showJoinWorkspaceModal();
-        }, 100);
+        if (pendingWelcomeAction === 'create') ui.showCreateWorkspaceModal();
+        else ui.showJoinWorkspaceModal();
       }
     }
 

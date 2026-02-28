@@ -1,1373 +1,672 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DecentChat — Chat Without Chains</title>
-  <meta name="description" content="Peer-to-peer encrypted chat with no servers, no accounts, no compromises. Powered by Deci 🐙⚡">
-  <meta name="theme-color" content="#6c5ce7">
-  <link rel="icon" type="image/png" sizes="32x32" href="../decent-client-web/dist/icons/icon-32.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="../decent-client-web/dist/icons/apple-touch-icon.png">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DecentChat — Private by Topology</title>
+  <meta name="description" content="DecentChat is a peer-to-peer encrypted messenger with no accounts, no central server, and no surveillance business model." />
+  <meta name="theme-color" content="#0c1117" />
 
-  <!-- Open Graph -->
-  <meta property="og:title" content="DecentChat — Chat Without Chains">
-  <meta property="og:description" content="Peer-to-peer encrypted chat. No servers. No accounts. No compromises.">
-  <meta property="og:type" content="website">
-  <meta property="og:url" content="https://decentchat.app">
+  <meta property="og:title" content="DecentChat — Private by Topology" />
+  <meta property="og:description" content="Peer-to-peer encrypted chat. No account. No central inbox. Just direct channels between people." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://decentchat.app" />
 
-  <!-- Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <link rel="icon" type="image/png" sizes="32x32" href="../decent-client-web/dist/icons/icon-32.png" />
 
   <style>
-    /* ============================================
-       RESET & BASE
-       ============================================ */
-    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-
     :root {
-      --bg: #0a0a1a;
-      --bg-surface: #0f0f23;
-      --bg-card: #13132a;
-      --bg-card-hover: #1a1a35;
-      --border: #1e1e3a;
-      --border-glow: rgba(108, 92, 231, 0.3);
-      --primary: #6c5ce7;
-      --primary-dark: #5a4bd1;
-      --primary-light: #a29bfe;
-      --primary-glow: rgba(108, 92, 231, 0.15);
-      --accent: #00d2ff;
-      --accent-glow: rgba(0, 210, 255, 0.15);
-      --electric: #7c6cf0;
-      --text: #e2e4e9;
-      --text-muted: #8b8fa3;
-      --text-dim: #5c5f72;
-      --bolt-yellow: #ffd43b;
-      --radius: 12px;
-      --radius-lg: 20px;
-      --font: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      --mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+      --bg: #060a0f;
+      --bg-2: #0b1118;
+      --panel: #0e1621;
+      --panel-2: #111c2a;
+      --ink: #edf3ff;
+      --muted: #97a7c0;
+      --line: #1d2b3f;
+      --aqua: #5cf4ff;
+      --violet: #a78bfa;
+      --lime: #bcff5c;
+      --danger: #ff7b8f;
+      --radius: 18px;
+      --radius-sm: 12px;
+      --shadow-1: 0 20px 70px rgba(0, 0, 0, 0.45);
+      --shadow-2: 0 10px 30px rgba(92, 244, 255, 0.14);
     }
 
-    html {
-      scroll-behavior: smooth;
-      -webkit-font-smoothing: antialiased;
-      -moz-osx-font-smoothing: grayscale;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body { width: 100%; overflow-x: hidden; }
 
     body {
-      font-family: var(--font);
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.6;
-      overflow-x: hidden;
+      font-family: 'Sora', sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1100px 700px at 80% -20%, rgba(167, 139, 250, 0.17), transparent 60%),
+        radial-gradient(900px 640px at 0% 10%, rgba(92, 244, 255, 0.14), transparent 58%),
+        linear-gradient(180deg, #05080d 0%, #060a0f 45%, #080d14 100%);
+      min-height: 100vh;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
     }
 
-    a { color: var(--primary-light); text-decoration: none; transition: color 0.2s; }
-    a:hover { color: var(--accent); }
-
-    /* ============================================
-       BACKGROUND GRID / PARTICLES
-       ============================================ */
-    .bg-grid {
+    .noise {
       position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.18;
+      z-index: 0;
+      background-image: radial-gradient(rgba(255,255,255,0.08) 0.45px, transparent 0.45px);
+      background-size: 3px 3px;
+      mix-blend-mode: overlay;
+    }
+
+    .grid {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0.16;
       background-image:
-        linear-gradient(rgba(108, 92, 231, 0.03) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(108, 92, 231, 0.03) 1px, transparent 1px);
-      background-size: 60px 60px;
-      pointer-events: none;
-      z-index: 0;
+        linear-gradient(rgba(167,139,250,0.18) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(92,244,255,0.17) 1px, transparent 1px);
+      background-size: 52px 52px;
+      mask-image: radial-gradient(circle at center, black 35%, transparent 90%);
+      -webkit-mask-image: radial-gradient(circle at center, black 35%, transparent 90%);
     }
 
-    .bg-glow {
-      position: fixed;
-      width: 600px;
-      height: 600px;
-      border-radius: 50%;
-      filter: blur(120px);
-      pointer-events: none;
-      z-index: 0;
-      opacity: 0.4;
+    .wrap { position: relative; z-index: 1; }
+
+    .container {
+      width: min(1160px, calc(100% - 2.4rem));
+      margin: 0 auto;
     }
 
-    .bg-glow--purple {
-      background: var(--primary);
-      top: -200px;
-      left: 50%;
-      transform: translateX(-50%);
-      opacity: 0.15;
-    }
-
-    .bg-glow--blue {
-      background: var(--accent);
-      bottom: -300px;
-      right: -100px;
-      opacity: 0.08;
-    }
-
-    /* ============================================
-       NAV
-       ============================================ */
     .nav {
-      position: fixed;
-      top: 0; left: 0; right: 0;
-      z-index: 100;
-      padding: 16px 24px;
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      backdrop-filter: blur(16px);
+      background: rgba(6, 10, 15, 0.7);
+      border-bottom: 1px solid rgba(29, 43, 63, 0.62);
+    }
+
+    .nav-inner {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      background: rgba(10, 10, 26, 0.8);
-      backdrop-filter: blur(20px);
-      border-bottom: 1px solid rgba(30, 30, 58, 0.5);
-      transition: background 0.3s;
+      min-height: 74px;
+      gap: 16px;
     }
 
-    .nav-brand {
-      display: flex;
+    .brand {
+      display: inline-flex;
       align-items: center;
       gap: 10px;
-      font-weight: 800;
-      font-size: 18px;
-      color: var(--text);
-      letter-spacing: -0.3px;
+      color: var(--ink);
+      text-decoration: none;
+      font-weight: 700;
+      letter-spacing: -0.02em;
     }
 
-    .nav-brand img {
-      width: 32px;
-      height: 32px;
-      object-fit: contain;
-    }
+    .brand img { width: 30px; height: 30px; }
 
     .nav-links {
+      list-style: none;
       display: flex;
       align-items: center;
-      gap: 32px;
-      list-style: none;
+      gap: 28px;
+      font-size: 14px;
     }
 
     .nav-links a {
-      color: var(--text-muted);
-      font-size: 14px;
-      font-weight: 500;
-      transition: color 0.2s;
+      color: var(--muted);
+      text-decoration: none;
+      transition: color .22s ease;
     }
 
-    .nav-links a:hover { color: var(--text); }
+    .nav-links a:hover { color: var(--ink); }
 
-    .nav-cta {
-      background: var(--primary);
-      color: #fff !important;
-      padding: 8px 20px;
-      border-radius: 8px;
-      font-weight: 600;
-      font-size: 14px;
-      transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
-      box-shadow: 0 0 20px rgba(108, 92, 231, 0.3);
-    }
-
-    .nav-cta:hover {
-      background: var(--primary-dark);
-      transform: translateY(-1px);
-      box-shadow: 0 0 30px rgba(108, 92, 231, 0.5);
-      color: #fff !important;
-    }
-
-    .nav-mobile-toggle {
-      display: none;
-      background: none;
-      border: none;
-      color: var(--text);
-      font-size: 24px;
-      cursor: pointer;
-      padding: 4px;
-    }
-
-    /* ============================================
-       HERO
-       ============================================ */
-    .hero {
-      position: relative;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
+    .launch {
+      display: inline-flex;
       align-items: center;
       justify-content: center;
-      text-align: center;
-      padding: 120px 24px 80px;
-      z-index: 1;
+      gap: 8px;
+      padding: 10px 16px;
+      border: 1px solid rgba(92,244,255,0.45);
+      border-radius: 999px;
+      color: var(--ink);
+      background: linear-gradient(135deg, rgba(92,244,255,0.2), rgba(167,139,250,0.2));
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+      transition: transform .2s ease, box-shadow .2s ease;
     }
 
-    .hero-mascot-wrap {
-      margin-bottom: 32px;
-      animation: float 6s ease-in-out infinite;
+    .launch:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-2);
     }
 
-    .hero-mascot {
-      width: 320px;
-      height: 320px;
-      filter: drop-shadow(0 0 60px rgba(108, 92, 231, 0.4));
-      transition: transform 0.15s ease-out;
+    .hero {
+      padding: 92px 0 84px;
     }
 
-    @keyframes float {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-16px); }
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 28px;
+      align-items: stretch;
     }
 
-    .hero-badge {
+    .hero-main {
+      padding: 40px;
+      border-radius: calc(var(--radius) + 6px);
+      border: 1px solid var(--line);
+      background: linear-gradient(145deg, rgba(14,22,33,0.95), rgba(11,17,24,0.96));
+      box-shadow: var(--shadow-1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-main:before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(125deg, rgba(92,244,255,0.09), transparent 40%, rgba(167,139,250,0.11));
+      pointer-events: none;
+    }
+
+    .stamp {
+      position: relative;
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      background: var(--primary-glow);
-      border: 1px solid var(--border-glow);
-      border-radius: 100px;
-      padding: 6px 16px;
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--primary-light);
-      margin-bottom: 24px;
-      backdrop-filter: blur(10px);
+      border: 1px solid rgba(92,244,255,0.45);
+      background: rgba(7, 14, 20, 0.78);
+      color: #c9faff;
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-family: 'IBM Plex Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 22px;
     }
 
-    .hero-badge .bolt { color: var(--bolt-yellow); }
-
-    .hero h1 {
-      font-size: clamp(40px, 7vw, 72px);
-      font-weight: 800;
-      line-height: 1.05;
-      letter-spacing: -2px;
-      margin-bottom: 20px;
-      background: linear-gradient(135deg, #fff 0%, var(--primary-light) 50%, var(--accent) 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
+    h1 {
+      position: relative;
+      font-size: clamp(2rem, 5.1vw, 4.5rem);
+      line-height: 1.03;
+      letter-spacing: -0.03em;
+      margin-bottom: 18px;
+      max-width: 17ch;
     }
 
-    .hero p {
-      font-size: clamp(16px, 2.5vw, 20px);
-      color: var(--text-muted);
-      max-width: 560px;
-      margin-bottom: 40px;
-      line-height: 1.7;
+    .lede {
+      position: relative;
+      color: var(--muted);
+      max-width: 58ch;
+      font-size: clamp(1rem, 1.5vw, 1.14rem);
+      margin-bottom: 28px;
     }
 
     .hero-actions {
       display: flex;
-      gap: 16px;
       flex-wrap: wrap;
-      justify-content: center;
+      gap: 12px;
+      margin-bottom: 32px;
+      position: relative;
     }
 
     .btn {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      padding: 14px 32px;
-      border-radius: var(--radius);
-      font-size: 16px;
-      font-weight: 600;
-      font-family: var(--font);
-      cursor: pointer;
-      border: none;
-      transition: all 0.2s;
+      justify-content: center;
       text-decoration: none;
-    }
-
-    .btn--primary {
-      background: var(--primary);
-      color: #fff;
-      box-shadow: 0 4px 24px rgba(108, 92, 231, 0.4), inset 0 1px 0 rgba(255,255,255,0.1);
-    }
-
-    .btn--primary:hover {
-      background: var(--primary-dark);
-      transform: translateY(-2px);
-      box-shadow: 0 8px 32px rgba(108, 92, 231, 0.5), inset 0 1px 0 rgba(255,255,255,0.15);
-      color: #fff;
-    }
-
-    .btn--ghost {
-      background: transparent;
-      color: var(--text-muted);
-      border: 1px solid var(--border);
-    }
-
-    .btn--ghost:hover {
-      background: rgba(255,255,255,0.03);
-      border-color: var(--primary);
-      color: var(--text);
-    }
-
-    .hero-stats {
-      display: flex;
-      gap: 40px;
-      margin-top: 60px;
-      padding-top: 40px;
-      border-top: 1px solid var(--border);
-    }
-
-    .hero-stat {
-      text-align: center;
-    }
-
-    .hero-stat-value {
-      font-size: 28px;
-      font-weight: 800;
-      color: var(--primary-light);
-      font-family: var(--mono);
-    }
-
-    .hero-stat-label {
-      font-size: 13px;
-      color: var(--text-dim);
-      margin-top: 4px;
-    }
-
-    /* ============================================
-       SECTION COMMON
-       ============================================ */
-    section {
-      position: relative;
-      z-index: 1;
-      padding: 100px 24px;
-    }
-
-    .container {
-      max-width: 1100px;
-      margin: 0 auto;
-    }
-
-    .section-header {
-      text-align: center;
-      margin-bottom: 64px;
-    }
-
-    .section-label {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 2px;
-      color: var(--primary-light);
-      margin-bottom: 16px;
-    }
-
-    .section-header h2 {
-      font-size: clamp(28px, 4vw, 44px);
-      font-weight: 800;
-      letter-spacing: -1px;
-      line-height: 1.15;
-      margin-bottom: 16px;
-    }
-
-    .section-header p {
-      font-size: 17px;
-      color: var(--text-muted);
-      max-width: 540px;
-      margin: 0 auto;
-    }
-
-    /* ============================================
-       FEATURES — Tentacle Grid
-       ============================================ */
-    .features-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 20px;
-    }
-
-    .feature-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      padding: 32px;
-      transition: all 0.3s;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .feature-card::before {
-      content: '';
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 2px;
-      background: linear-gradient(90deg, transparent, var(--primary), transparent);
-      opacity: 0;
-      transition: opacity 0.3s;
-    }
-
-    .feature-card:hover {
-      background: var(--bg-card-hover);
-      border-color: var(--border-glow);
-      transform: translateY(-4px);
-      box-shadow: 0 12px 40px rgba(108, 92, 231, 0.1);
-    }
-
-    .feature-card:hover::before { opacity: 1; }
-
-    .feature-icon {
-      width: 48px;
-      height: 48px;
       border-radius: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 24px;
-      margin-bottom: 20px;
-      background: var(--primary-glow);
-      border: 1px solid rgba(108, 92, 231, 0.2);
-    }
-
-    .feature-card h3 {
-      font-size: 18px;
-      font-weight: 700;
-      margin-bottom: 8px;
-      letter-spacing: -0.3px;
-    }
-
-    .feature-card p {
-      font-size: 15px;
-      color: var(--text-muted);
-      line-height: 1.6;
-    }
-
-    .feature-tentacle {
-      position: absolute;
-      bottom: -8px;
-      right: -8px;
-      width: 80px;
-      height: 80px;
-      opacity: 0.04;
-      transition: opacity 0.3s;
-    }
-
-    .feature-card:hover .feature-tentacle { opacity: 0.08; }
-
-    /* ============================================
-       HOW IT WORKS — 2 Steps
-       ============================================ */
-    .steps {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 32px;
-      position: relative;
-    }
-
-    .steps::before {
-      content: '';
-      position: absolute;
-      top: 52px;
-      left: calc(25% + 40px);
-      right: calc(25% + 40px);
-      height: 2px;
-      background: linear-gradient(90deg, var(--primary), var(--accent), var(--primary));
-      opacity: 0.3;
-    }
-
-    .step {
-      text-align: center;
-      position: relative;
-    }
-
-    .step-number {
-      width: 56px;
-      height: 56px;
-      border-radius: 50%;
-      background: var(--bg-card);
-      border: 2px solid var(--primary);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: var(--mono);
-      font-size: 20px;
-      font-weight: 700;
-      color: var(--primary-light);
-      margin: 0 auto 20px;
-      position: relative;
-      z-index: 2;
-      box-shadow: 0 0 24px rgba(108, 92, 231, 0.2);
-    }
-
-    .step-visual {
-      width: 80px;
-      height: 80px;
-      margin: 0 auto 20px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 48px;
-    }
-
-    .step h3 {
-      font-size: 18px;
-      font-weight: 700;
-      margin-bottom: 8px;
-      letter-spacing: -0.3px;
-    }
-
-    .step p {
+      border: 1px solid transparent;
+      font-weight: 600;
       font-size: 14px;
-      color: var(--text-muted);
-      max-width: 260px;
-      margin: 0 auto;
-      line-height: 1.6;
+      min-height: 44px;
+      padding: 0 16px;
+      transition: transform .2s ease, border-color .2s ease, background .2s ease;
     }
 
-    /* ============================================
-       CODE BLOCK / PROTOCOL
-       ============================================ */
-    .protocol-section {
-      background: var(--bg-surface);
-      border-top: 1px solid var(--border);
-      border-bottom: 1px solid var(--border);
+    .btn-primary {
+      color: #071016;
+      background: linear-gradient(135deg, var(--aqua), #83f9cf);
+      box-shadow: 0 10px 30px rgba(92, 244, 255, 0.28);
     }
 
-    .protocol-layout {
+    .btn-primary:hover { transform: translateY(-1px); }
+
+    .btn-secondary {
+      color: var(--ink);
+      background: transparent;
+      border-color: #2a3b54;
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--aqua);
+      background: rgba(92, 244, 255, 0.07);
+    }
+
+    .metrics {
+      position: relative;
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 60px;
-      align-items: center;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
     }
 
-    .protocol-text h2 {
-      font-size: clamp(28px, 4vw, 40px);
-      font-weight: 800;
-      letter-spacing: -1px;
-      margin-bottom: 16px;
-      line-height: 1.15;
+    .metric {
+      border-radius: var(--radius-sm);
+      border: 1px solid #22344c;
+      background: rgba(5, 10, 15, 0.7);
+      padding: 12px;
     }
 
-    .protocol-text p {
-      font-size: 16px;
-      color: var(--text-muted);
-      line-height: 1.7;
-      margin-bottom: 24px;
+    .metric .v {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 17px;
+      color: var(--aqua);
+      margin-bottom: 4px;
     }
 
-    .protocol-list {
-      list-style: none;
+    .metric .k {
+      font-size: 12px;
+      color: #8ea1be;
+    }
+
+    .hero-side {
+      display: grid;
+      gap: 14px;
+    }
+
+    .card {
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(14,22,33,0.88), rgba(9,14,21,0.9));
+      padding: 18px;
+    }
+
+    .terminal {
+      font-family: 'IBM Plex Mono', monospace;
+      box-shadow: var(--shadow-1);
+    }
+
+    .term-head {
       display: flex;
-      flex-direction: column;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 12px;
+    }
+
+    .dot { width: 9px; height: 9px; border-radius: 999px; }
+    .dot.r { background: #ff7b8f; }
+    .dot.y { background: #ffd06e; }
+    .dot.g { background: #72ffba; }
+
+    .line {
+      color: #a7b9d5;
+      font-size: 12.5px;
+      margin-bottom: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .line b { color: #d4f8ff; font-weight: 600; }
+    .line .ok { color: var(--lime); }
+
+    .small-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: #98acc8;
+      margin-bottom: 10px;
+      font-family: 'IBM Plex Mono', monospace;
+    }
+
+    .principles {
+      display: grid;
+      gap: 8px;
+    }
+
+    .pill {
+      border-radius: 999px;
+      border: 1px solid #24364d;
+      padding: 7px 11px;
+      color: #b8c9e2;
+      font-size: 12.5px;
+      width: fit-content;
+      background: rgba(8, 14, 22, 0.75);
+    }
+
+    section { padding: 42px 0; }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-end;
+      margin-bottom: 20px;
+    }
+
+    .section-head h2 {
+      font-size: clamp(1.45rem, 2.5vw, 2.2rem);
+      letter-spacing: -0.02em;
+    }
+
+    .section-head p {
+      color: var(--muted);
+      max-width: 52ch;
+      font-size: 0.95rem;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 12px;
     }
 
-    .protocol-list li {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 15px;
-      color: var(--text-muted);
+    .feature {
+      border: 1px solid #223248;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(180deg, rgba(13,20,31,0.96), rgba(9,14,21,0.96));
+      padding: 16px;
+      min-height: 170px;
+      transition: border-color .2s ease, transform .2s ease;
     }
 
-    .protocol-list .check {
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
-      background: var(--primary-glow);
-      border: 1px solid rgba(108, 92, 231, 0.3);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
+    .feature:hover {
+      border-color: rgba(92,244,255,0.52);
+      transform: translateY(-2px);
     }
 
-    .code-block {
-      background: #080818;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      overflow: hidden;
-      font-family: var(--mono);
-      font-size: 13px;
-      line-height: 1.7;
-    }
-
-    .code-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 12px 16px;
-      background: rgba(255,255,255,0.02);
-      border-bottom: 1px solid var(--border);
-    }
-
-    .code-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-    }
-
-    .code-dot--red { background: #ff5f57; }
-    .code-dot--yellow { background: #febc2e; }
-    .code-dot--green { background: #28c840; }
-
-    .code-header span {
-      margin-left: 8px;
-      font-size: 12px;
-      color: var(--text-dim);
-    }
-
-    .code-body {
-      padding: 20px;
-      overflow-x: auto;
-    }
-
-    .code-body .comment { color: var(--text-dim); }
-    .code-body .keyword { color: #c792ea; }
-    .code-body .string { color: #c3e88d; }
-    .code-body .func { color: #82aaff; }
-    .code-body .type { color: #ffcb6b; }
-    .code-body .const { color: var(--accent); }
-
-    /* ============================================
-       CTA SECTION
-       ============================================ */
-    .cta-section {
-      text-align: center;
-      padding: 120px 24px;
-    }
-
-    .cta-card {
-      background: linear-gradient(135deg, var(--bg-card) 0%, rgba(108, 92, 231, 0.08) 100%);
-      border: 1px solid var(--border-glow);
-      border-radius: 24px;
-      padding: 64px 40px;
-      max-width: 700px;
-      margin: 0 auto;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .cta-card::before {
-      content: '';
-      position: absolute;
-      top: -50%; left: -50%;
-      width: 200%; height: 200%;
-      background: radial-gradient(ellipse at center, rgba(108, 92, 231, 0.08) 0%, transparent 60%);
-      pointer-events: none;
-    }
-
-    .cta-mascot {
-      width: 100px;
-      height: 100px;
-      margin: 0 auto 24px;
-      filter: drop-shadow(0 0 30px rgba(108, 92, 231, 0.4));
-      animation: float 4s ease-in-out infinite;
-    }
-
-    .cta-card h2 {
-      font-size: clamp(28px, 4vw, 40px);
-      font-weight: 800;
-      letter-spacing: -1px;
+    .tag {
+      display: inline-block;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px;
+      border: 1px solid #2e4664;
+      color: #9fc2e2;
+      border-radius: 999px;
+      padding: 4px 8px;
       margin-bottom: 12px;
-      position: relative;
+      text-transform: uppercase;
     }
 
-    .cta-card p {
-      font-size: 17px;
-      color: var(--text-muted);
-      margin-bottom: 32px;
-      position: relative;
+    .feature h3 {
+      font-size: 1.04rem;
+      margin-bottom: 8px;
+      letter-spacing: -0.01em;
     }
 
-    .cta-card .btn { position: relative; }
+    .feature p { font-size: 14px; color: #9eb0cb; }
 
-    /* ============================================
-       FOOTER
-       ============================================ */
-    .footer {
-      position: relative;
-      z-index: 1;
-      border-top: 1px solid var(--border);
-      padding: 40px 24px;
-    }
-
-    .footer-inner {
-      max-width: 1100px;
-      margin: 0 auto;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
       gap: 16px;
+      align-items: stretch;
     }
 
-    .footer-brand {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-weight: 700;
-      font-size: 15px;
-      color: var(--text-muted);
+    .spec {
+      border: 1px solid #223248;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(180deg, rgba(14,22,33,0.95), rgba(8,13,20,0.95));
+      padding: 18px;
     }
 
-    .footer-brand img {
-      width: 24px;
-      height: 24px;
-      object-fit: contain;
-      opacity: 0.6;
-    }
-
-    .footer-links {
-      display: flex;
-      gap: 24px;
+    .spec-list {
       list-style: none;
+      display: grid;
+      gap: 9px;
+      margin-top: 10px;
+      font-size: 14px;
+      color: #b0c2da;
     }
 
-    .footer-links a {
+    .spec-list li::before {
+      content: "◆";
+      color: var(--aqua);
+      margin-right: 8px;
+    }
+
+    .cta {
+      padding: 60px 0 80px;
+    }
+
+    .cta-box {
+      border: 1px solid rgba(92,244,255,0.35);
+      border-radius: calc(var(--radius) + 6px);
+      padding: 28px;
+      background:
+        linear-gradient(135deg, rgba(92,244,255,0.1), rgba(167,139,250,0.12)),
+        linear-gradient(180deg, rgba(12,19,28,0.95), rgba(7,11,17,0.95));
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .cta-box h3 {
+      font-size: clamp(1.4rem, 2.3vw, 2rem);
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+    }
+
+    .cta-box p {
+      color: #a5b8d4;
+      max-width: 56ch;
+      font-size: 14px;
+    }
+
+    .footer {
+      border-top: 1px solid rgba(29,43,63,0.6);
+      padding: 24px 0 34px;
+      color: #8ba0be;
       font-size: 13px;
-      color: var(--text-dim);
-      transition: color 0.2s;
     }
 
-    .footer-links a:hover { color: var(--text-muted); }
-
-    .footer-tagline {
-      font-size: 13px;
-      color: var(--text-dim);
+    .foot-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
     }
 
-    /* ============================================
-       SCROLL ANIMATIONS
-       ============================================ */
-    .reveal {
-      opacity: 0;
-      transform: translateY(30px);
-      transition: opacity 0.6s ease, transform 0.6s ease;
+    @media (max-width: 1020px) {
+      .hero-grid { grid-template-columns: 1fr; }
+      .feature-grid { grid-template-columns: 1fr 1fr; }
+      .split { grid-template-columns: 1fr; }
     }
 
-    .reveal.visible {
-      opacity: 1;
-      transform: translateY(0);
-    }
-
-    .reveal-delay-1 { transition-delay: 0.1s; }
-    .reveal-delay-2 { transition-delay: 0.2s; }
-    .reveal-delay-3 { transition-delay: 0.3s; }
-    .reveal-delay-4 { transition-delay: 0.4s; }
-    .reveal-delay-5 { transition-delay: 0.5s; }
-
-    /* ============================================
-       RESPONSIVE
-       ============================================ */
-    @media (max-width: 768px) {
+    @media (max-width: 700px) {
+      .container { width: min(1160px, calc(100% - 1.4rem)); }
+      .nav-inner { min-height: 66px; }
       .nav-links { display: none; }
-      .nav-links.open {
-        display: flex;
-        flex-direction: column;
-        position: absolute;
-        top: 100%; left: 0; right: 0;
-        background: rgba(10, 10, 26, 0.95);
-        backdrop-filter: blur(20px);
-        padding: 20px 24px;
-        gap: 16px;
-        border-bottom: 1px solid var(--border);
-      }
-      .nav-mobile-toggle { display: block; }
-
-      .hero-mascot { width: 220px; height: 220px; }
-      .hero-stats { flex-direction: column; gap: 20px; }
-
-      .features-grid { grid-template-columns: 1fr; }
-
-      .steps {
-        grid-template-columns: 1fr;
-        gap: 40px;
-      }
-      .steps::before { display: none; }
-
-      .protocol-layout {
-        grid-template-columns: 1fr;
-        gap: 40px;
-      }
-
-      .cta-card { padding: 40px 24px; }
-    }
-
-    @media (max-width: 480px) {
-      .hero h1 { letter-spacing: -1px; }
-      .hero-actions { flex-direction: column; align-items: stretch; }
-      .btn { justify-content: center; }
-    }
-
-    /* ============================================
-       DECI MASCOT SVG ANIMATIONS
-       ============================================ */
-    .deci-tentacle {
-      transform-origin: center top;
-      animation: tentacleWave 4s ease-in-out infinite;
-    }
-
-    .deci-tentacle:nth-child(2) { animation-delay: -0.5s; }
-    .deci-tentacle:nth-child(3) { animation-delay: -1s; }
-    .deci-tentacle:nth-child(4) { animation-delay: -1.5s; }
-    .deci-tentacle:nth-child(5) { animation-delay: -2s; }
-    .deci-tentacle:nth-child(6) { animation-delay: -2.5s; }
-    .deci-tentacle:nth-child(7) { animation-delay: -3s; }
-    .deci-tentacle:nth-child(8) { animation-delay: -3.5s; }
-
-    @keyframes tentacleWave {
-      0%, 100% { transform: rotate(0deg); }
-      25% { transform: rotate(3deg); }
-      75% { transform: rotate(-3deg); }
-    }
-
-    .deci-eye {
-      animation: blink 4s ease-in-out infinite;
-    }
-
-    @keyframes blink {
-      0%, 42%, 44%, 100% { transform: scaleY(1); }
-      43% { transform: scaleY(0.1); }
-    }
-
-    .deci-bolt {
-      animation: boltPulse 2s ease-in-out infinite;
-    }
-
-    @keyframes boltPulse {
-      0%, 100% { opacity: 0.9; filter: drop-shadow(0 0 4px rgba(255, 212, 59, 0.3)); }
-      50% { opacity: 1; filter: drop-shadow(0 0 12px rgba(255, 212, 59, 0.8)); }
-    }
-
-    /* Sparkle particles */
-    .sparkle {
-      position: absolute;
-      width: 4px;
-      height: 4px;
-      border-radius: 50%;
-      background: var(--primary-light);
-      pointer-events: none;
-      animation: sparkle 3s ease-in-out infinite;
-    }
-
-    @keyframes sparkle {
-      0%, 100% { opacity: 0; transform: scale(0); }
-      50% { opacity: 0.6; transform: scale(1); }
+      .hero { padding-top: 58px; }
+      .hero-main { padding: 22px; }
+      .metrics { grid-template-columns: 1fr; }
+      .feature-grid { grid-template-columns: 1fr; }
+      .cta-box { padding: 20px; }
     }
   </style>
 </head>
 <body>
+  <div class="noise"></div>
+  <div class="grid"></div>
 
-  <!-- Background effects -->
-  <div class="bg-grid"></div>
-  <div class="bg-glow bg-glow--purple"></div>
-  <div class="bg-glow bg-glow--blue"></div>
+  <div class="wrap">
+    <header class="nav">
+      <div class="container nav-inner">
+        <a class="brand" href="#top" aria-label="DecentChat home">
+          <img src="../decent-client-web/dist/icons/logo-dark.png" alt="DecentChat" />
+          <span>DecentChat</span>
+        </a>
 
-  <!-- ============================================
-       NAV
-       ============================================ -->
-  <nav class="nav" id="nav">
-    <a href="#" class="nav-brand">
-      <img src="../decent-client-web/dist/icons/logo-dark.png" alt="DecentChat">
-      DecentChat
-    </a>
-    <button class="nav-mobile-toggle" id="navToggle" aria-label="Menu">&#9776;</button>
-    <ul class="nav-links" id="navLinks">
-      <li><a href="#features">Features</a></li>
-      <li><a href="#how-it-works">How It Works</a></li>
-      <li><a href="#protocol">Protocol</a></li>
-      <li><a href="/web/" class="nav-cta">Launch App ⚡</a></li>
-    </ul>
-  </nav>
+        <ul class="nav-links" aria-label="Main navigation">
+          <li><a href="#architecture">Architecture</a></li>
+          <li><a href="#features">Features</a></li>
+          <li><a href="#security">Security</a></li>
+        </ul>
 
-  <!-- ============================================
-       HERO
-       ============================================ -->
-  <section class="hero" id="hero">
-    <!-- DECI SVG MASCOT -->
-    <div class="hero-mascot-wrap">
-    <svg class="hero-mascot" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Deci the octopus mascot">
-      <!-- Ambient glow -->
-      <defs>
-        <radialGradient id="bodyGrad" cx="50%" cy="40%" r="50%">
-          <stop offset="0%" stop-color="#8b7cf0"/>
-          <stop offset="70%" stop-color="#6c5ce7"/>
-          <stop offset="100%" stop-color="#5a4bd1"/>
-        </radialGradient>
-        <radialGradient id="headGrad" cx="50%" cy="35%" r="50%">
-          <stop offset="0%" stop-color="#9b8df7"/>
-          <stop offset="60%" stop-color="#7c6cf0"/>
-          <stop offset="100%" stop-color="#6c5ce7"/>
-        </radialGradient>
-        <filter id="glow">
-          <feGaussianBlur stdDeviation="3" result="blur"/>
-          <feMerge>
-            <feMergeNode in="blur"/>
-            <feMergeNode in="SourceGraphic"/>
-          </feMerge>
-        </filter>
-        <filter id="boltGlow">
-          <feGaussianBlur stdDeviation="4" result="blur"/>
-          <feMerge>
-            <feMergeNode in="blur"/>
-            <feMergeNode in="SourceGraphic"/>
-          </feMerge>
-        </filter>
-      </defs>
-
-      <!-- Tentacle 1 — back left -->
-      <g class="deci-tentacle" style="transform-origin: 140px 240px">
-        <path d="M140 240 Q100 290 80 330 Q70 355 90 360 Q105 362 110 340 Q120 310 140 280" fill="url(#bodyGrad)" stroke="#5a4bd1" stroke-width="1"/>
-      </g>
-      <!-- Tentacle 2 — left -->
-      <g class="deci-tentacle" style="transform-origin: 120px 250px">
-        <path d="M120 250 Q75 300 60 345 Q52 370 72 372 Q88 372 92 350 Q100 315 120 285" fill="url(#bodyGrad)" stroke="#5a4bd1" stroke-width="1"/>
-      </g>
-      <!-- Tentacle 3 — front left -->
-      <g class="deci-tentacle" style="transform-origin: 150px 260px">
-        <path d="M150 260 Q125 320 115 360 Q110 385 130 384 Q146 381 145 358 Q148 325 155 290" fill="url(#bodyGrad)" stroke="#5a4bd1" stroke-width="1"/>
-      </g>
-      <!-- Tentacle 4 — front center-left -->
-      <g class="deci-tentacle" style="transform-origin: 180px 265px">
-        <path d="M180 265 Q170 325 168 365 Q166 390 186 388 Q202 385 198 362 Q195 328 190 290" fill="url(#bodyGrad)" stroke="#5a4bd1" stroke-width="1"/>
-      </g>
-      <!-- Tentacle 5 — front center-right -->
-      <g class="deci-tentacle" style="transform-origin: 210px 265px">
-        <path d="M210 265 Q220 325 222 365 Q224 390 204 388 Q188 385 192 362 Q195 328 210 290" fill="url(#bodyGrad)" stroke="#5a4bd1" stroke-width="1"/>
-      </g>
-      <!-- Tentacle 6 — front right -->
-      <g class="deci-tentacle" style="transform-origin: 240px 260px">
-        <path d="M240 260 Q265 320 275 360 Q280 385 260 384 Q244 381 245 358 Q242 325 240 290" fill="url(#bodyGrad)" stroke="#5a4bd1" stroke-width="1"/>
-      </g>
-      <!-- Tentacle 7 — right -->
-      <g class="deci-tentacle" style="transform-origin: 270px 250px">
-        <path d="M270 250 Q315 300 330 345 Q338 370 318 372 Q302 372 298 350 Q290 315 270 285" fill="url(#bodyGrad)" stroke="#5a4bd1" stroke-width="1"/>
-      </g>
-      <!-- Tentacle 8 — back right (holding bolt!) -->
-      <g class="deci-tentacle" style="transform-origin: 260px 240px">
-        <path d="M260 240 Q300 280 320 310 Q335 335 315 345 Q300 348 295 330 Q285 305 265 275" fill="url(#bodyGrad)" stroke="#5a4bd1" stroke-width="1"/>
-      </g>
-
-      <!-- Body / Head -->
-      <ellipse cx="195" cy="210" rx="90" ry="75" fill="url(#headGrad)"/>
-      <!-- Head top bump -->
-      <ellipse cx="195" cy="170" rx="75" ry="60" fill="url(#headGrad)"/>
-      <!-- Head highlight -->
-      <ellipse cx="178" cy="155" rx="30" ry="18" fill="rgba(255,255,255,0.08)" transform="rotate(-15 178 155)"/>
-
-      <!-- Eyes -->
-      <g class="deci-eye" style="transform-origin: 170px 195px">
-        <circle cx="170" cy="195" r="14" fill="#0f0f23"/>
-        <circle cx="170" cy="195" r="10" fill="#1a1a30"/>
-        <circle cx="166" cy="191" r="5" fill="white"/>
-        <circle cx="174" cy="197" r="2.5" fill="rgba(255,255,255,0.5)"/>
-      </g>
-      <g class="deci-eye" style="transform-origin: 220px 195px">
-        <circle cx="220" cy="195" r="14" fill="#0f0f23"/>
-        <circle cx="220" cy="195" r="10" fill="#1a1a30"/>
-        <circle cx="216" cy="191" r="5" fill="white"/>
-        <circle cx="224" cy="197" r="2.5" fill="rgba(255,255,255,0.5)"/>
-      </g>
-
-      <!-- Cute little mouth -->
-      <path d="M185 218 Q195 225 205 218" stroke="#5a4bd1" stroke-width="2" fill="none" stroke-linecap="round"/>
-
-      <!-- Lightning Bolt (held by tentacle 8) -->
-      <g class="deci-bolt" filter="url(#boltGlow)">
-        <polygon points="310,280 295,310 308,308 292,340 320,300 307,302" fill="#ffd43b" stroke="#f0c020" stroke-width="1" stroke-linejoin="round"/>
-      </g>
-
-      <!-- Small sparkles around Deci -->
-      <circle cx="100" cy="150" r="2" fill="var(--primary-light)" opacity="0.4">
-        <animate attributeName="opacity" values="0.4;0.8;0.4" dur="3s" repeatCount="indefinite"/>
-        <animate attributeName="r" values="2;3;2" dur="3s" repeatCount="indefinite"/>
-      </circle>
-      <circle cx="300" cy="140" r="1.5" fill="var(--accent)" opacity="0.3">
-        <animate attributeName="opacity" values="0.3;0.7;0.3" dur="2.5s" repeatCount="indefinite" begin="0.5s"/>
-      </circle>
-      <circle cx="80" cy="230" r="1.5" fill="#ffd43b" opacity="0.3">
-        <animate attributeName="opacity" values="0.3;0.6;0.3" dur="4s" repeatCount="indefinite" begin="1s"/>
-      </circle>
-      <circle cx="330" cy="200" r="2" fill="var(--primary-light)" opacity="0.3">
-        <animate attributeName="opacity" values="0.3;0.7;0.3" dur="3.5s" repeatCount="indefinite" begin="1.5s"/>
-      </circle>
-    </svg>
-    </div>
-
-    <div class="hero-badge reveal">
-      <span class="bolt">⚡</span> Peer-to-peer. End-to-end encrypted. Zero servers.
-    </div>
-
-    <h1 class="reveal reveal-delay-1">Chat Without<br>Chains</h1>
-
-    <p class="reveal reveal-delay-2">
-      DecentChat is a free, open-source messenger that connects you directly to your friends — no servers, no accounts, no surveillance. Just humans talking.
-    </p>
-
-    <div class="hero-actions reveal reveal-delay-3">
-      <a href="/web/" class="btn btn--primary">
-        Launch DecentChat ⚡
-      </a>
-      <a href="https://github.com" class="btn btn--ghost" target="_blank" rel="noopener">
-        View on GitHub
-      </a>
-    </div>
-
-    <div class="hero-stats reveal reveal-delay-4">
-      <div class="hero-stat">
-        <div class="hero-stat-value">0</div>
-        <div class="hero-stat-label">Servers needed</div>
+        <a class="launch" href="/web/">Launch App ⚡</a>
       </div>
-      <div class="hero-stat">
-        <div class="hero-stat-value">256-bit</div>
-        <div class="hero-stat-label">Encryption</div>
-      </div>
-      <div class="hero-stat">
-        <div class="hero-stat-value">100%</div>
-        <div class="hero-stat-label">Open source</div>
-      </div>
-    </div>
-  </section>
+    </header>
 
-  <!-- ============================================
-       FEATURES
-       ============================================ -->
-  <section id="features">
-    <div class="container">
-      <div class="section-header">
-        <div class="section-label reveal">🐙 Eight arms, eight features</div>
-        <h2 class="reveal reveal-delay-1">Everything Deci's<br>tentacles can hold</h2>
-        <p class="reveal reveal-delay-2">Every feature is a tentacle of a greater organism — decentralized, resilient, and surprisingly cuddly.</p>
-      </div>
+    <main id="top">
+      <section class="hero">
+        <div class="container hero-grid">
+          <article class="hero-main">
+            <div class="stamp">no account • no central inbox • no surveillance</div>
+            <h1>Private by topology.<br />Not by policy.</h1>
+            <p class="lede">
+              DecentChat routes messages directly between people. No cloud mailbox to subpoena,
+              no central operator to profile you, no "trust us" architecture.
+            </p>
 
-      <div class="features-grid">
-        <!-- Feature 1 -->
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary-light)">
-              <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-              <path d="M2 17l10 5 10-5"/>
-              <path d="M2 12l10 5 10-5"/>
-            </svg>
+            <div class="hero-actions">
+              <a class="btn btn-primary" href="/web/">Open DecentChat</a>
+              <a class="btn btn-secondary" href="#architecture">See how it works</a>
+            </div>
+
+            <div class="metrics" aria-label="Platform metrics">
+              <div class="metric">
+                <div class="v">0</div>
+                <div class="k">central message servers</div>
+              </div>
+              <div class="metric">
+                <div class="v">AES-GCM</div>
+                <div class="k">end-to-end encryption</div>
+              </div>
+              <div class="metric">
+                <div class="v">P2P</div>
+                <div class="k">delivery over WebRTC</div>
+              </div>
+            </div>
+          </article>
+
+          <aside class="hero-side">
+            <div class="card terminal" aria-label="Protocol preview terminal">
+              <div class="term-head">
+                <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+              </div>
+              <div class="line">$ decentchat <b>new-identity</b></div>
+              <div class="line">mnemonic: <b>ocean ... lantern</b></div>
+              <div class="line">ecdsa keypair: <span class="ok">generated</span></div>
+              <div class="line">webrtc channel: <span class="ok">connected</span></div>
+              <div class="line">ratchet state: <span class="ok">active</span></div>
+            </div>
+
+            <div class="card">
+              <div class="small-title">core principles</div>
+              <div class="principles">
+                <div class="pill">Identity from seed phrase</div>
+                <div class="pill">No mandatory phone/email login</div>
+                <div class="pill">Offline-first local storage</div>
+                <div class="pill">Open protocol, auditable behavior</div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="features">
+        <div class="container">
+          <div class="section-head">
+            <h2>What you actually get</h2>
+            <p>Not marketing fluff. Real properties that change who controls communication.</p>
           </div>
-          <h3>Peer-to-Peer</h3>
-          <p>Messages travel directly between devices via WebRTC. No middleman, no server, no single point of failure.</p>
-          <svg class="feature-tentacle" viewBox="0 0 80 80" fill="none"><path d="M80 0 Q40 40 20 80" stroke="var(--primary)" stroke-width="8" stroke-linecap="round" opacity="0.5"/></svg>
-        </div>
 
-        <!-- Feature 2 -->
-        <div class="feature-card reveal reveal-delay-1">
-          <div class="feature-icon">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary-light)">
-              <rect x="3" y="11" width="18" height="11" rx="2"/>
-              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-            </svg>
-          </div>
-          <h3>End-to-End Encrypted</h3>
-          <p>Double Ratchet protocol ensures every message is encrypted with forward secrecy. Not even we can read it — because there is no "we."</p>
-          <svg class="feature-tentacle" viewBox="0 0 80 80" fill="none"><path d="M80 0 Q40 40 20 80" stroke="var(--primary)" stroke-width="8" stroke-linecap="round" opacity="0.5"/></svg>
-        </div>
-
-        <!-- Feature 3 -->
-        <div class="feature-card reveal reveal-delay-2">
-          <div class="feature-icon">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary-light)">
-              <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
-            </svg>
-          </div>
-          <h3>BIP39 Seed Identity</h3>
-          <p>Your identity is a 12-word seed phrase. No email, no phone number, no signup. Memorize it or write it down.</p>
-          <svg class="feature-tentacle" viewBox="0 0 80 80" fill="none"><path d="M80 0 Q40 40 20 80" stroke="var(--primary)" stroke-width="8" stroke-linecap="round" opacity="0.5"/></svg>
-        </div>
-
-        <!-- Feature 4 -->
-        <div class="feature-card reveal reveal-delay-3">
-          <div class="feature-icon">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary-light)">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M2 12h20"/>
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-            </svg>
-          </div>
-          <h3>Works Offline</h3>
-          <p>It's a PWA. Install it, go offline, come back — your keys and history stay on your device.</p>
-          <svg class="feature-tentacle" viewBox="0 0 80 80" fill="none"><path d="M80 0 Q40 40 20 80" stroke="var(--primary)" stroke-width="8" stroke-linecap="round" opacity="0.5"/></svg>
-        </div>
-
-        <!-- Feature 5 -->
-        <div class="feature-card reveal reveal-delay-4">
-          <div class="feature-icon">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary-light)">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-              <line x1="16" y1="13" x2="8" y2="13"/>
-              <line x1="16" y1="17" x2="8" y2="17"/>
-            </svg>
-          </div>
-          <h3>Open Source</h3>
-          <p>Every line of code is public. Audit it, fork it, improve it. Trust is verified, not assumed.</p>
-          <svg class="feature-tentacle" viewBox="0 0 80 80" fill="none"><path d="M80 0 Q40 40 20 80" stroke="var(--primary)" stroke-width="8" stroke-linecap="round" opacity="0.5"/></svg>
-        </div>
-
-        <!-- Feature 6 -->
-        <div class="feature-card reveal reveal-delay-5">
-          <div class="feature-icon">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary-light)">
-              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="rgba(255,212,59,0.15)" stroke="var(--bolt-yellow)"/>
-            </svg>
-          </div>
-          <h3>Instant Connections</h3>
-          <p>Share an invite link, scan a code — connected in seconds via WebRTC signaling. No accounts to create first.</p>
-          <svg class="feature-tentacle" viewBox="0 0 80 80" fill="none"><path d="M80 0 Q40 40 20 80" stroke="var(--primary)" stroke-width="8" stroke-linecap="round" opacity="0.5"/></svg>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================================
-       HOW IT WORKS
-       ============================================ -->
-  <section id="how-it-works">
-    <div class="container">
-      <div class="section-header">
-        <div class="section-label reveal">⚡ Dead simple</div>
-        <h2 class="reveal reveal-delay-1">Two steps to freedom</h2>
-        <p class="reveal reveal-delay-2">No signup forms. No email verification. No terms of service. Just chat.</p>
-      </div>
-
-      <div class="steps">
-        <div class="step reveal">
-          <div class="step-number">1</div>
-          <div class="step-visual">🔗</div>
-          <h3>Open an Invite</h3>
-          <p>Paste a DecentChat invite link to join a workspace. Your identity seed is generated automatically in the app.</p>
-        </div>
-
-        <div class="step reveal reveal-delay-2">
-          <div class="step-number">2</div>
-          <div class="step-visual">💬</div>
-          <h3>Chat Directly</h3>
-          <p>Messages flow device-to-device with Double Ratchet encryption. No servers in the middle. Ever.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================================
-       PROTOCOL / UNDER THE HOOD
-       ============================================ -->
-  <section class="protocol-section" id="protocol">
-    <div class="container">
-      <div class="protocol-layout">
-        <div class="protocol-text reveal">
-          <h2>Under the hood</h2>
-          <p>DecentChat is built on real cryptographic primitives — the same foundations as Signal. No security theater.</p>
-          <ul class="protocol-list">
-            <li>
-              <span class="check">
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4.5-5" stroke="var(--primary-light)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </span>
-              X25519 Diffie-Hellman key exchange
-            </li>
-            <li>
-              <span class="check">
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4.5-5" stroke="var(--primary-light)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </span>
-              Double Ratchet with AES-256-GCM
-            </li>
-            <li>
-              <span class="check">
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4.5-5" stroke="var(--primary-light)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </span>
-              BIP39 mnemonic for deterministic key generation
-            </li>
-            <li>
-              <span class="check">
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4.5-5" stroke="var(--primary-light)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </span>
-              WebRTC data channels for P2P transport
-            </li>
-            <li>
-              <span class="check">
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4.5-5" stroke="var(--primary-light)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </span>
-              Forward secrecy — compromised keys can't decrypt past messages
-            </li>
-          </ul>
-        </div>
-
-        <div class="code-block reveal reveal-delay-2">
-          <div class="code-header">
-            <div class="code-dot code-dot--red"></div>
-            <div class="code-dot code-dot--yellow"></div>
-            <div class="code-dot code-dot--green"></div>
-            <span>protocol.ts</span>
-          </div>
-          <div class="code-body">
-<pre><span class="comment">// Generate your identity from a seed phrase</span>
-<span class="keyword">const</span> seed = <span class="func">generateMnemonic</span>();
-<span class="comment">// "ocean drum capable antenna rally..."</span>
-
-<span class="comment">// Derive crypto keys deterministically</span>
-<span class="keyword">const</span> identity = <span class="keyword">await</span> <span class="func">deriveKeys</span>(seed);
-
-<span class="comment">// Create an invite for a friend</span>
-<span class="keyword">const</span> invite = <span class="func">createInvite</span>({
-  <span class="const">publicKey</span>: identity.<span class="const">publicKey</span>,
-  <span class="const">signal</span>: <span class="keyword">await</span> <span class="func">createOffer</span>()
-});
-
-<span class="comment">// Connect P2P — messages are encrypted</span>
-<span class="comment">// with the Double Ratchet protocol</span>
-<span class="keyword">const</span> channel = <span class="keyword">await</span> <span class="func">connect</span>(invite);
-channel.<span class="func">send</span>(<span class="string">"hey, no servers here 🐙"</span>);</pre>
+          <div class="feature-grid">
+            <article class="feature">
+              <span class="tag">transport</span>
+              <h3>Peer-to-peer delivery</h3>
+              <p>Messages travel between peers over encrypted data channels instead of a permanent central inbox.</p>
+            </article>
+            <article class="feature">
+              <span class="tag">crypto</span>
+              <h3>Forward secrecy</h3>
+              <p>Session keys rotate. Exposure of a current key does not unlock historical conversation history.</p>
+            </article>
+            <article class="feature">
+              <span class="tag">identity</span>
+              <h3>BIP39 seed identity</h3>
+              <p>Your cryptographic identity derives from a mnemonic phrase you control and can back up independently.</p>
+            </article>
+            <article class="feature">
+              <span class="tag">reliability</span>
+              <h3>Offline + sync recovery</h3>
+              <p>Local persistence and sync logic let peers catch up after disconnects without losing conversation continuity.</p>
+            </article>
+            <article class="feature">
+              <span class="tag">governance</span>
+              <h3>Open protocol evolution</h3>
+              <p>Changes are tracked in DEPs, so architecture shifts are explicit, reviewable, and testable.</p>
+            </article>
+            <article class="feature">
+              <span class="tag">product</span>
+              <h3>PWA-ready UX</h3>
+              <p>Runs in the browser, installable, responsive, and usable without forcing app-store distribution.</p>
+            </article>
           </div>
         </div>
+      </section>
+
+      <section id="architecture">
+        <div class="container split">
+          <article class="spec">
+            <div class="small-title">architecture / simplified</div>
+            <h2 style="font-size:1.55rem; margin-bottom: 8px; letter-spacing:-.02em;">How a new conversation starts</h2>
+            <ul class="spec-list">
+              <li>Generate identity from mnemonic phrase (deterministic keys).</li>
+              <li>Exchange invite metadata through signaling path.</li>
+              <li>Establish WebRTC data channel between peers.</li>
+              <li>Encrypt payloads with ratcheting session keys.</li>
+              <li>Merge state with CRDT/vector-clock rules on reconnect.</li>
+            </ul>
+          </article>
+
+          <article class="spec" id="security">
+            <div class="small-title">security model</div>
+            <h2 style="font-size:1.55rem; margin-bottom: 8px; letter-spacing:-.02em;">Threat model, not trust model</h2>
+            <ul class="spec-list">
+              <li>No default central history bucket to harvest.</li>
+              <li>Cryptography is in protocol flow, not optional settings.</li>
+              <li>Source is inspectable; behavior can be verified.</li>
+              <li>Identity and keys stay user-controlled by design.</li>
+              <li>Security posture improves through DEP-driven iteration.</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="cta">
+        <div class="container">
+          <div class="cta-box">
+            <div>
+              <h3>Use chat infrastructure that respects users.</h3>
+              <p>Launch DecentChat and open a direct encrypted workspace in minutes.</p>
+            </div>
+            <a class="btn btn-primary" href="/web/">Launch DecentChat ⚡</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container foot-row">
+        <div>DecentChat — encrypted peer-to-peer messaging</div>
+        <div>Built for sovereignty, not surveillance.</div>
       </div>
-    </div>
-  </section>
-
-  <!-- ============================================
-       CTA
-       ============================================ -->
-  <section class="cta-section">
-    <div class="cta-card reveal">
-      <!-- Mini Deci -->
-      <svg class="cta-mascot" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <g class="deci-tentacle" style="transform-origin: 140px 240px">
-          <path d="M140 240 Q100 290 80 330 Q70 355 90 360 Q105 362 110 340 Q120 310 140 280" fill="#6c5ce7"/>
-        </g>
-        <g class="deci-tentacle" style="transform-origin: 120px 250px">
-          <path d="M120 250 Q75 300 60 345 Q52 370 72 372 Q88 372 92 350 Q100 315 120 285" fill="#6c5ce7"/>
-        </g>
-        <g class="deci-tentacle" style="transform-origin: 150px 260px">
-          <path d="M150 260 Q125 320 115 360 Q110 385 130 384 Q146 381 145 358 Q148 325 155 290" fill="#6c5ce7"/>
-        </g>
-        <g class="deci-tentacle" style="transform-origin: 180px 265px">
-          <path d="M180 265 Q170 325 168 365 Q166 390 186 388 Q202 385 198 362 Q195 328 190 290" fill="#6c5ce7"/>
-        </g>
-        <g class="deci-tentacle" style="transform-origin: 210px 265px">
-          <path d="M210 265 Q220 325 222 365 Q224 390 204 388 Q188 385 192 362 Q195 328 210 290" fill="#6c5ce7"/>
-        </g>
-        <g class="deci-tentacle" style="transform-origin: 240px 260px">
-          <path d="M240 260 Q265 320 275 360 Q280 385 260 384 Q244 381 245 358 Q242 325 240 290" fill="#6c5ce7"/>
-        </g>
-        <g class="deci-tentacle" style="transform-origin: 270px 250px">
-          <path d="M270 250 Q315 300 330 345 Q338 370 318 372 Q302 372 298 350 Q290 315 270 285" fill="#6c5ce7"/>
-        </g>
-        <g class="deci-tentacle" style="transform-origin: 260px 240px">
-          <path d="M260 240 Q300 280 320 310 Q335 335 315 345 Q300 348 295 330 Q285 305 265 275" fill="#6c5ce7"/>
-        </g>
-        <ellipse cx="195" cy="210" rx="90" ry="75" fill="#7c6cf0"/>
-        <ellipse cx="195" cy="170" rx="75" ry="60" fill="#7c6cf0"/>
-        <ellipse cx="178" cy="155" rx="30" ry="18" fill="rgba(255,255,255,0.08)" transform="rotate(-15 178 155)"/>
-        <g class="deci-eye" style="transform-origin: 170px 195px">
-          <circle cx="170" cy="195" r="14" fill="#0f0f23"/>
-          <circle cx="170" cy="195" r="10" fill="#1a1a30"/>
-          <circle cx="166" cy="191" r="5" fill="white"/>
-          <circle cx="174" cy="197" r="2.5" fill="rgba(255,255,255,0.5)"/>
-        </g>
-        <g class="deci-eye" style="transform-origin: 220px 195px">
-          <circle cx="220" cy="195" r="14" fill="#0f0f23"/>
-          <circle cx="220" cy="195" r="10" fill="#1a1a30"/>
-          <circle cx="216" cy="191" r="5" fill="white"/>
-          <circle cx="224" cy="197" r="2.5" fill="rgba(255,255,255,0.5)"/>
-        </g>
-        <path d="M185 218 Q195 225 205 218" stroke="#5a4bd1" stroke-width="2" fill="none" stroke-linecap="round"/>
-        <g class="deci-bolt" filter="url(#boltGlow)">
-          <polygon points="310,280 295,310 308,308 292,340 320,300 307,302" fill="#ffd43b" stroke="#f0c020" stroke-width="1"/>
-        </g>
-      </svg>
-
-      <h2>Ready to break free?</h2>
-      <p>No signup. No download. Just click and chat.</p>
-      <a href="/web/" class="btn btn--primary">
-        Launch DecentChat ⚡
-      </a>
-    </div>
-  </section>
-
-  <!-- ============================================
-       FOOTER
-       ============================================ -->
-  <footer class="footer">
-    <div class="footer-inner">
-      <div class="footer-brand">
-        <img src="../decent-client-web/dist/icons/logo-dark.png" alt="DecentChat">
-        DecentChat
-      </div>
-      <ul class="footer-links">
-        <li><a href="https://github.com" target="_blank" rel="noopener">GitHub</a></li>
-        <li><a href="/web/">Launch App</a></li>
-      </ul>
-      <div class="footer-tagline">Built with 🐙⚡ by humans and AI</div>
-    </div>
-  </footer>
-
-  <!-- ============================================
-       JAVASCRIPT
-       ============================================ -->
-  <script>
-    // Scroll reveal
-    const revealEls = document.querySelectorAll('.reveal');
-    const revealObserver = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('visible');
-          revealObserver.unobserve(entry.target);
-        }
-      });
-    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
-
-    revealEls.forEach(el => revealObserver.observe(el));
-
-    // Mobile nav toggle
-    const navToggle = document.getElementById('navToggle');
-    const navLinks = document.getElementById('navLinks');
-    navToggle.addEventListener('click', () => {
-      navLinks.classList.toggle('open');
-    });
-
-    // Close mobile nav on link click
-    navLinks.querySelectorAll('a').forEach(link => {
-      link.addEventListener('click', () => {
-        navLinks.classList.remove('open');
-      });
-    });
-
-    // Smooth scroll for anchor links
-    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-      anchor.addEventListener('click', (e) => {
-        e.preventDefault();
-        const target = document.querySelector(anchor.getAttribute('href'));
-        if (target) {
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      });
-    });
-
-    // Nav background on scroll
-    const nav = document.getElementById('nav');
-    let ticking = false;
-    window.addEventListener('scroll', () => {
-      if (!ticking) {
-        requestAnimationFrame(() => {
-          if (window.scrollY > 50) {
-            nav.style.background = 'rgba(10, 10, 26, 0.95)';
-            nav.style.borderBottomColor = 'rgba(30, 30, 58, 0.8)';
-          } else {
-            nav.style.background = 'rgba(10, 10, 26, 0.8)';
-            nav.style.borderBottomColor = 'rgba(30, 30, 58, 0.5)';
-          }
-          ticking = false;
-        });
-        ticking = true;
-      }
-    });
-
-    // Parallax-lite on hero mascot
-    const heroMascot = document.querySelector('.hero-mascot');
-    window.addEventListener('mousemove', (e) => {
-      if (window.innerWidth < 768) return;
-      const x = (e.clientX / window.innerWidth - 0.5) * 12;
-      const y = (e.clientY / window.innerHeight - 0.5) * 12;
-      heroMascot.style.transform = `translate(${x}px, ${y}px)`;
-    });
-  </script>
-
+    </footer>
+  </div>
 </body>
 </html>

@@ -560,7 +560,7 @@ body {
   border-color: var(--connecting);
   opacity: 0.85;
 }
-body.show-reconnect-activity .sidebar-item .dm-status.connecting {
+.sidebar-item .dm-status.connecting {
   animation: pulse-connecting 1.2s ease-in-out infinite;
 }
 @keyframes pulse-connecting {

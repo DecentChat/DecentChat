@@ -80,18 +80,26 @@ async function createWorkspaceAndGetInvite(page: Page, name: string, alias: stri
 // Helper: send message
 async function sendMessage(page: Page, text: string) {
   const input = page.locator('#compose-input');
+  await expect(input).toBeVisible({ timeout: 5000 });
+  const beforeCount = await page.locator('.message-content').count();
+
   await input.fill(text);
   await input.press('Enter');
+
   await page.waitForFunction(
-    (t) => document.querySelector('.messages-list')?.textContent?.includes(t),
-    text,
-    { timeout: 5000 }
+    ({ t, before }) => {
+      const messages = Array.from(document.querySelectorAll('.message-content'));
+      return messages.length > before && messages.some((m) => (m.textContent || '').includes(t));
+    },
+    { t: text, before: beforeCount },
+    { timeout: 10000 }
   );
 }
 
 // Helper: get all message texts
 async function getMessages(page: Page): Promise<string[]> {
-  return page.locator('.message-content').allTextContents();
+  const items = await page.locator('.message-content').allTextContents();
+  return items.map((t) => t.trim());
 }
 
 // Helper: get peer ID from the page

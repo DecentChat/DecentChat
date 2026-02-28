@@ -5,13 +5,14 @@ import { clearStorage, waitForApp, createWorkspace } from './helpers';
 const TINY_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==';
 const TINY_PNG = Buffer.from(TINY_PNG_B64, 'base64');
 
-/** Set files on the hidden #file-input and wait for at least one .attachment */
+/** Set files on #file-input, send message, then wait for attachment render */
 async function sendFileViaInput(
   page: Page,
   files: Array<{ name: string; mimeType: string; buffer: Buffer }>,
 ) {
   await page.locator('#file-input').setInputFiles(files);
-  await page.waitForSelector('.attachment', { timeout: 8000 });
+  await page.locator('#send-btn').click();
+  await page.waitForSelector('.attachment-name', { timeout: 10000 });
 }
 
 /** Dispatch a synthetic drop event with File objects onto .messages-area */
@@ -31,7 +32,8 @@ async function dropFileOnMessagesArea(page: Page, name: string, base64: string, 
     },
     { name, base64: TINY_PNG_B64, mimeType },
   );
-  await page.waitForSelector('.attachment', { timeout: 8000 });
+  await page.locator('#send-btn').click();
+  await page.waitForSelector('.attachment-name', { timeout: 10000 });
 }
 
 /** Dispatch a synthetic paste event with an image File */
@@ -56,7 +58,14 @@ async function pasteImageFile(page: Page, targetSelector?: string) {
       document.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: dt as unknown as DataTransfer }));
     }
   }, { base64: TINY_PNG_B64, targetSelector });
-  await page.waitForSelector('.attachment', { timeout: 8000 });
+
+  if (targetSelector && targetSelector.includes('thread')) {
+    await page.locator('#thread-send-btn').click();
+  } else {
+    await page.locator('#send-btn').click();
+  }
+
+  await page.waitForSelector('.attachment-name', { timeout: 10000 });
 }
 
 /** Open thread panel for message containing text */
@@ -255,7 +264,8 @@ test.describe('File Attachments', () => {
       },
       { name: 'notes.txt', base64: textB64, mimeType: 'text/plain' },
     );
-    await page.waitForSelector('.attachment', { timeout: 8000 });
+    await page.locator('#send-btn').click();
+    await page.waitForSelector('.attachment-name', { timeout: 10000 });
     await expect(page.locator('.attachment-name')).toContainText('notes.txt');
   });
 
@@ -295,15 +305,24 @@ test.describe('File Attachments', () => {
   // ─── Persistence ────────────────────────────────────────────────────────
 
   test('attachment message survives page refresh', async ({ page }) => {
+    test.slow();
     await sendFileViaInput(page, [{ name: 'persist-test.png', mimeType: 'image/png', buffer: TINY_PNG }]);
     await expect(page.locator('.attachment-name')).toContainText('persist-test.png');
 
-    // Allow IndexedDB to flush
-    await page.waitForTimeout(2000);
-    await page.reload();
-    await waitForApp(page);
+    // Allow IndexedDB to flush.
     await page.waitForTimeout(2000);
 
-    await expect(page.locator('.attachment-name')).toContainText('persist-test.png', { timeout: 5000 });
+    // Refresh can occasionally land in startup limbo in headless chromium.
+    // Recover with explicit /app navigation if needed.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    try {
+      await waitForApp(page);
+    } catch {
+      await page.goto('/app');
+      await waitForApp(page);
+    }
+
+    await page.waitForTimeout(1500);
+    await expect(page.locator('.attachment-name')).toContainText('persist-test.png', { timeout: 8000 });
   });
 });

@@ -325,10 +325,35 @@ export class PeerTransport implements Transport {
   send(peerId: string, data: unknown): boolean {
     const active = this.connections.get(peerId);
     if (!active || active.status !== 'connected') return false;
+
+    const markDisconnected = () => {
+      const current = this.connections.get(peerId);
+      if (current?.conn !== active.conn) return;
+      this._stopHeartbeat(peerId);
+      current.status = 'failed';
+      this.connections.delete(peerId);
+      this.onDisconnect?.(peerId);
+      this._scheduleReconnect(peerId);
+    };
+
+    if (!active.conn.open) {
+      markDisconnected();
+      return false;
+    }
+
     try {
       active.conn.send(data as any);
       return true;
-    } catch {
+    } catch (err) {
+      markDisconnected();
+
+      const message = err instanceof Error ? err.message : String(err ?? '');
+      // Ignore this noisy PeerJS race — ChatController already treats send=false as expected.
+      if (!message.includes('Connection is not open') &&
+          !message.includes('listen for the `open` event before sending')) {
+        this.onError?.(err instanceof Error ? err : new Error(message));
+      }
+
       return false;
     }
   }

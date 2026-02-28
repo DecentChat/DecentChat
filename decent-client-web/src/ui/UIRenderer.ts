@@ -760,6 +760,10 @@ export class UIRenderer {
       });
     });
 
+    document.getElementById('activity-btn')?.addEventListener('click', () => {
+      this.showActivityModal();
+    });
+
     document.getElementById('ws-rail-add')?.addEventListener('click', () => {
       this.showCreateWorkspaceModal();
     });
@@ -799,6 +803,17 @@ export class UIRenderer {
       : null;
     const channels = ws ? this.workspaceManager.getChannels(ws.id) : [];
     const dms = ws ? this.workspaceManager.getDMs(ws.id, this.state.myPeerId) : [];
+    const workspaceMembersHTML = ws
+      ? ws.members.map((m) => {
+          const alias = this.getPeerAlias(m.peerId);
+          const youTag = m.peerId === this.state.myPeerId ? ' <span class="sidebar-item-meta">(you)</span>' : '';
+          return `
+            <div class="sidebar-item member-row" data-member-peer-id="${m.peerId}">
+              <span class="dm-status ${this.peerStatusClass(m.peerId)}" title="${this.peerStatusTitle(m.peerId)}"></span>
+              <span>${this.escapeHtml(alias)}${youTag}</span>
+            </div>`;
+        }).join('')
+      : '';
 
     // Build standalone direct messages section
     const sortedDirectConversations = this.cachedDirectConversations
@@ -858,6 +873,14 @@ export class UIRenderer {
               ${unreadCh > 0 ? `<span class="unread-badge">${unreadCh > 99 ? '99+' : unreadCh}</span>` : ''}
             </div>`;
           }).join('')}
+        </div>
+        ` : ''}
+        ${ws ? `
+        <div class="sidebar-section" id="workspace-members-section">
+          <div class="sidebar-section-header">Members</div>
+          <div id="workspace-member-list" data-testid="workspace-member-list">
+            ${workspaceMembersHTML}
+          </div>
         </div>
         ` : ''}
         <div class="sidebar-section">
@@ -3264,16 +3287,14 @@ export class UIRenderer {
   /** 3-state presence CSS class: 'online' | 'connecting' | '' */
   private peerStatusClass(peerId: string): string {
     if (this.state.readyPeers.has(peerId)) return 'online';
-    const showReconnect = (window as any).__DECENT_SHOW_RECONNECT_ACTIVITY === true;
-    if (showReconnect && this.state.connectingPeers.has(peerId)) return 'connecting';
+    if (this.state.connectingPeers.has(peerId)) return 'connecting';
     return '';
   }
 
   /** Tooltip text for the presence dot */
   private peerStatusTitle(peerId: string): string {
     if (this.state.readyPeers.has(peerId)) return 'Online';
-    const showReconnect = (window as any).__DECENT_SHOW_RECONNECT_ACTIVITY === true;
-    if (showReconnect && this.state.connectingPeers.has(peerId)) return 'Reconnecting';
+    if (this.state.connectingPeers.has(peerId)) return 'Connecting...';
     return 'Offline';
   }
 

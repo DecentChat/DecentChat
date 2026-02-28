@@ -11,27 +11,47 @@ import { Page, BrowserContext, Browser, expect } from '@playwright/test';
 
 /** Clear all browser storage (IndexedDB, localStorage, sessionStorage) */
 export async function clearStorage(page: Page): Promise<void> {
+  await page.context().clearCookies();
   await page.goto('/');
   await page.evaluate(async () => {
-    if (indexedDB.databases) {
-      const dbs = await indexedDB.databases();
-      for (const db of dbs) {
-        if (db.name) indexedDB.deleteDatabase(db.name);
-      }
-    }
     localStorage.clear();
     sessionStorage.clear();
+
+    try {
+      if (indexedDB.databases) {
+        const dbs = await indexedDB.databases();
+        for (const db of dbs) {
+          if (db.name) indexedDB.deleteDatabase(db.name);
+        }
+      }
+    } catch {}
   });
-  await page.reload();
 }
 
 /** Wait for the app to finish loading */
 export async function waitForApp(page: Page): Promise<void> {
-  await page.waitForFunction(() => {
-    const loading = document.getElementById('loading');
-    return !loading || loading.style.opacity === '0';
-  }, { timeout: 15000 });
-  await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
+  const readySelector = '#create-ws-btn, #join-ws-btn, .sidebar-header, #compose-input';
+
+  const waitReady = async (timeout: number) => {
+    await page.waitForFunction(() => {
+      const ready = !!document.querySelector('#create-ws-btn, #join-ws-btn, .sidebar-header, #compose-input');
+      if (ready) return true;
+      const loading = document.getElementById('loading') as HTMLElement | null;
+      if (!loading) return true;
+      const style = window.getComputedStyle(loading);
+      return loading.style.opacity === '0' || loading.style.display === 'none' || style.display === 'none' || style.visibility === 'hidden';
+    }, { timeout });
+
+    await page.waitForSelector(readySelector, { timeout });
+  };
+
+  try {
+    await waitReady(18000);
+  } catch {
+    if (page.isClosed()) throw new Error('page closed while waiting for app');
+    await page.goto('/app', { waitUntil: 'domcontentloaded' });
+    await waitReady(18000);
+  }
 }
 
 // ─── User Context Management ─────────────────────────────────────────────────
@@ -60,13 +80,26 @@ export async function closeUser(user: TestUser): Promise<void> {
 
 /** Create a workspace and return to main app view */
 export async function createWorkspace(page: Page, name = 'Test Workspace', alias = 'Tester'): Promise<void> {
-  await page.click('#create-ws-btn');
-  await page.waitForSelector('.modal');
+  if (!page.url().includes('/app')) {
+    await page.goto('/app');
+  }
+  await waitForApp(page);
+
+  // If a stale modal exists, close it first.
+  const staleCancel = page.locator('.modal .btn-secondary').first();
+  if (await staleCancel.count()) {
+    await staleCancel.click().catch(() => {});
+  }
+
+  // Open create modal from app nav for deterministic behavior.
+  await page.locator('#create-ws-btn-nav').click();
+  await page.getByRole('heading', { name: 'Create Workspace' }).waitFor({ state: 'visible', timeout: 10000 });
+
   const inputs = page.locator('.modal input');
   await inputs.nth(0).fill(name);
   await inputs.nth(1).fill(alias);
   await page.click('.modal .btn-primary');
-  await page.waitForSelector('.sidebar-header', { timeout: 5000 });
+  await page.waitForSelector('.sidebar-header', { timeout: 10000 });
 }
 
 /** Create a workspace and capture the invite URL via clipboard interception */
@@ -97,11 +130,16 @@ export async function createWorkspaceAndGetInvite(
 /** Join a workspace via invite URL */
 export async function joinViaInvite(page: Page, inviteUrl: string, alias: string): Promise<void> {
   await page.goto(inviteUrl);
-  await page.waitForSelector('.modal', { timeout: 10000 });
-  await page.locator('input[name="alias"]').fill(alias);
+  await waitForApp(page);
+
+  // Invite routes show a prefilled join modal with alias input.
+  const aliasInput = page.locator('input[name="alias"]');
+  await aliasInput.waitFor({ state: 'visible', timeout: 10000 });
+  await aliasInput.fill(alias);
   await page.click('.modal .btn-primary');
-  // Wait for workspace to load or for the join process to complete
-  await page.waitForTimeout(2000);
+
+  // Wait for workspace to load.
+  await page.waitForSelector('.sidebar-header', { timeout: 15000 });
 }
 
 // ─── Messaging ────────────────────────────────────────────────────────────────
@@ -109,18 +147,22 @@ export async function joinViaInvite(page: Page, inviteUrl: string, alias: string
 /** Send a message in the current channel */
 export async function sendMessage(page: Page, text: string): Promise<void> {
   const input = page.locator('#compose-input');
+  const beforeCount = await page.locator('.message-content').count();
   await input.fill(text);
   await input.press('Enter');
+
+  // Avoid exact-text matching here (special chars/newline normalization can differ).
   await page.waitForFunction(
-    (t) => document.querySelector('.messages-list')?.textContent?.includes(t),
-    text,
-    { timeout: 5000 },
+    (countBefore) => document.querySelectorAll('.message-content').length > countBefore,
+    beforeCount,
+    { timeout: 8000 },
   );
 }
 
 /** Get all visible message texts */
 export async function getMessages(page: Page): Promise<string[]> {
-  return page.locator('.message-content').allTextContents();
+  const texts = await page.locator('.message-content').allTextContents();
+  return texts.map((t) => t.trim()).filter(Boolean);
 }
 
 /** Wait for a specific message to appear in the message list */

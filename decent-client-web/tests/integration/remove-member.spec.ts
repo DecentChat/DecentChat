@@ -83,7 +83,7 @@ test.describe('Remove member from workspace', () => {
 
   // ─── Test 2: UI remove keeps modal open ───────────────────────────────────
 
-  test.fixme('owner removes member via Members modal and modal stays open', async ({ browser }) => {
+  test('owner removes member via Members modal and modal stays open', async ({ browser }) => {
     const alice = await createUser(browser, 'Alice');
     const bob = await createUser(browser, 'Bob');
     try {

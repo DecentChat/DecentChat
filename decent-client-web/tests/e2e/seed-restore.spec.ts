@@ -270,9 +270,19 @@ test.describe('Settings — Transfer / Seed QR', () => {
     await clearStorage(page);
     await page.goto('/');
     await waitForApp(page);
-    // Create a workspace to get past the welcome screen (this generates a seed phrase)
     await createWorkspace(page, 'Test Workspace', 'Tester');
     await openSettings(page);
+
+    // Transfer button appears only when a seed phrase already exists.
+    // If missing, generate once and reopen settings to refresh conditional UI.
+    if (await page.locator('#seed-transfer-btn').count() === 0) {
+      await page.locator('#seed-phrase-btn').click();
+      await page.waitForTimeout(500);
+      await page.click('#settings-close');
+      await openSettings(page);
+    }
+
+    await expect(page.locator('#seed-transfer-btn')).toBeVisible({ timeout: 5000 });
   });
 
   test('settings panel shows "Transfer" button next to seed phrase', async ({ page }) => {
@@ -345,9 +355,19 @@ test.describe('Settings — Transfer / Seed QR', () => {
   test('seed QR modal can be closed with ✕ button', async ({ page }) => {
     await page.locator('#seed-transfer-btn').click();
     await page.waitForSelector('.qr-modal', { timeout: 3000 });
+    // Count overlays before close (should be 2: settings + qr)
+    const beforeClose = await page.locator('.modal-overlay').count();
+    expect(beforeClose).toBeGreaterThanOrEqual(2);
+    
+    // Close the QR modal
     await page.locator('.qr-modal #qr-close').click();
     await page.waitForTimeout(300);
-    await expect(page.locator('.modal-overlay')).toHaveCount(0);
+    
+    // After closing QR, should have 1 less overlay (settings remains)
+    const afterClose = await page.locator('.modal-overlay').count();
+    expect(afterClose).toBe(beforeClose - 1);
+    // QR modal should be gone
+    await expect(page.locator('.qr-modal')).not.toBeVisible();
   });
 
   test('QR image src is a data: URL (generated locally)', async ({ page }) => {

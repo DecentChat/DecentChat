@@ -1,9 +1,12 @@
+const RUN_LIVE_P2P = process.env.PW_RUN_LIVE_P2P === '1';
+
 /**
  * Live P2P test: Chromium (Alice) ↔ Firefox (Bob) on production
  */
 import { test, expect, chromium, firefox } from '@playwright/test';
 
 test('Alice (Chromium) and Bob (Firefox) can chat via P2P on production', async () => {
+  test.skip(!RUN_LIVE_P2P, 'Live production P2P test — opt-in via PW_RUN_LIVE_P2P=1');
   test.setTimeout(180000);
 
   const chromiumBrowser = await chromium.launch({ headless: false });

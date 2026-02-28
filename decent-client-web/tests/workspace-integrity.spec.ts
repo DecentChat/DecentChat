@@ -17,7 +17,7 @@ type WorkspaceSnapshot = {
 };
 
 async function clearStorage(page: Page): Promise<void> {
-  await page.goto('/');
+  await page.goto('/app');
   await page.evaluate(async () => {
     if (indexedDB.databases) {
       const dbs = await indexedDB.databases();
@@ -59,6 +59,19 @@ async function createWorkspace(page: Page, name: string, alias: string): Promise
   await expect(page.locator('.sidebar-header h1')).toContainText(name, { timeout: 10000 });
   const wsId = await page.evaluate(() => (window as any).__state?.activeWorkspaceId || '');
   expect(wsId).toBeTruthy();
+
+  // Ensure workspace write is persisted before tests trigger reloads.
+  const persisted = await page.evaluate(async (workspaceId) => {
+    const ctrl = (window as any).__ctrl;
+    for (let i = 0; i < 30; i++) {
+      const all = await ctrl?.persistentStore?.getAllWorkspaces?.();
+      if (Array.isArray(all) && all.some((w: any) => w.id === workspaceId)) return true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
+  }, wsId);
+  expect(persisted).toBe(true);
+
   return wsId;
 }
 
@@ -251,7 +264,7 @@ test.describe('Workspace Data Integrity', () => {
       await bob.page.goto('about:blank');
       await alice.page.waitForTimeout(1500);
 
-      await bob.page.goto('/');
+      await bob.page.goto('/app');
       await waitForApp(bob.page);
       await waitForPeerHandshake(alice.page, bob.page);
 
@@ -326,7 +339,7 @@ test.describe('Workspace Data Integrity', () => {
       expect(disconnectB.id).toBe(beforeB.id);
       expect(disconnectB.channels.map((c) => c.name)).toContain('b-only');
 
-      await bob.page.goto('/');
+      await bob.page.goto('/app');
       await waitForApp(bob.page);
       await waitForPeerHandshake(alice.page, bob.page);
       await alice.page.waitForTimeout(1200);

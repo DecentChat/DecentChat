@@ -1,12 +1,13 @@
 import { defineConfig } from '@playwright/test';
 
 const SIGNAL_PORT = Number(process.env.PW_SIGNAL_PORT || '9000');
-const ENABLE_SIGNALING = process.env.PW_ENABLE_SIGNALING === '1';
+const ENABLE_SIGNALING = process.env.PW_ENABLE_SIGNALING !== '0';
 process.env.PW_SIGNAL_PORT = String(SIGNAL_PORT);
 
 export default defineConfig({
   testDir: './tests',
-  testIgnore: ['**/*.live-smoke.spec.ts'],
+  testMatch: '**/*.spec.ts',
+  testIgnore: ['**/*.live-smoke.spec.ts', '**/p2p-live.spec.ts', '**/production-test.spec.ts'],
   timeout: 30000,
   retries: 0,
   workers: 1,

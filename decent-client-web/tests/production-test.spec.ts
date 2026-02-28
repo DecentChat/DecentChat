@@ -1,6 +1,9 @@
+const RUN_LIVE_P2P = process.env.PW_RUN_LIVE_P2P === '1';
+
 import { test, expect, chromium } from '@playwright/test';
 
 test('production P2P chat between Alice and Bob', async () => {
+  test.skip(!RUN_LIVE_P2P, 'Live production P2P test — opt-in via PW_RUN_LIVE_P2P=1');
   test.setTimeout(90000);
   const browser = await chromium.launch({ headless: false });
   const context1 = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });

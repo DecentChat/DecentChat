@@ -10,6 +10,7 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
+import { SeedPhraseManager } from 'decent-protocol';
 import { clearStorage, waitForApp, createWorkspace } from './helpers';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -20,23 +21,20 @@ async function openSettings(page: Page) {
   await page.waitForSelector('.settings-modal', { timeout: 3000 });
 }
 
-/**
- * Generate (if needed) and extract seed phrase from Settings panel.
- * Click the seed button — if no seed exists it generates one; if it does, it shows it.
- * Either way, the seed phrase display becomes visible.
- */
+/** Read canonical seed phrase from persistent storage */
 async function extractSeedPhrase(page: Page): Promise<string> {
-  const seedBtn = page.locator('#seed-phrase-btn');
-  await seedBtn.click();
-
-  // Wait for the seed phrase display to appear
-  const seedDisplay = page.locator('#seed-phrase-display');
-  await expect(seedDisplay).toBeVisible({ timeout: 5000 });
-
-  const phrase = await seedDisplay.textContent();
+  const phrase = await page.evaluate(async () => {
+    return await (window as any).__ctrl?.persistentStore?.getSetting?.('seedPhrase');
+  });
   expect(phrase).toBeTruthy();
+  return String(phrase).trim();
+}
 
-  return phrase!.trim();
+/** Read canonical in-memory peer ID */
+async function extractCurrentPeerId(page: Page): Promise<string> {
+  const peerId = await page.evaluate(() => (window as any).__state?.myPeerId || '');
+  expect(peerId).toBeTruthy();
+  return String(peerId).trim();
 }
 
 /** Extract peer ID from Settings — the <code> element in the Peer ID row */
@@ -88,15 +86,14 @@ test.describe('Seed generate & import round-trip', () => {
     await waitForApp(page);
     await createWorkspace(page, 'Seed Test', 'Alice');
 
-    // 2. Open settings, extract seed phrase and peer ID
-    await openSettings(page);
+    // 2. Extract canonical seed + peer ID from app state
     const originalSeed = await extractSeedPhrase(page);
     expect(originalSeed.split(/\s+/).length).toBeGreaterThanOrEqual(12);
-    const originalPeerId = await extractPeerId(page);
+    const originalPeerId = await extractCurrentPeerId(page);
 
-    // Close settings
-    await page.click('#settings-close');
-    await page.waitForTimeout(300);
+    const spm = new SeedPhraseManager();
+    const { peerId: derivedOriginalPeerId } = await spm.deriveAll(originalSeed);
+    expect(originalPeerId).toBe(derivedOriginalPeerId);
 
     // 3. Nuke everything — simulate fresh device
     await clearStorage(page);
@@ -113,12 +110,13 @@ test.describe('Seed generate & import round-trip', () => {
     await expect(page.locator('#create-ws-btn, .sidebar-header')).toBeVisible({ timeout: 8000 });
     await createWorkspace(page, 'Restored WS', 'Alice');
 
-    // 6. Verify both seed phrase AND peer ID match
-    await openSettings(page);
+    // 6. Verify seed phrase and peer identity restored
     const restoredSeed = await extractSeedPhrase(page);
-    const restoredPeerId = await extractPeerId(page);
+    const restoredPeerId = await extractCurrentPeerId(page);
+    const { peerId: derivedRestoredPeerId } = await spm.deriveAll(restoredSeed);
 
     expect(restoredSeed).toBe(originalSeed);
+    expect(restoredPeerId).toBe(derivedRestoredPeerId);
     expect(restoredPeerId).toBe(originalPeerId);
   });
 
@@ -166,30 +164,30 @@ test.describe('Seed generate & import round-trip', () => {
     await page.goto('/');
     await waitForApp(page);
     await createWorkspace(page, 'Consistency', 'Eve');
-    await openSettings(page);
     const seedPhrase = await extractSeedPhrase(page);
-    const originalPeerId = await extractPeerId(page);
+    const originalPeerId = await extractCurrentPeerId(page);
+    const spm = new SeedPhraseManager();
+    const { peerId: expectedPeerId } = await spm.deriveAll(seedPhrase);
+    expect(originalPeerId).toBe(expectedPeerId);
 
     // First restore
-    await page.click('#settings-close');
     await clearStorage(page);
     await page.goto('/');
     await waitForApp(page);
     await restoreFromSeed(page, seedPhrase);
     await createWorkspace(page, 'Restore 1', 'Eve');
-    await openSettings(page);
-    const peerId1 = await extractPeerId(page);
+    const peerId1 = await extractCurrentPeerId(page);
 
     // Second restore
-    await page.click('#settings-close');
     await clearStorage(page);
     await page.goto('/');
     await waitForApp(page);
     await restoreFromSeed(page, seedPhrase);
     await createWorkspace(page, 'Restore 2', 'Eve');
-    await openSettings(page);
-    const peerId2 = await extractPeerId(page);
+    const peerId2 = await extractCurrentPeerId(page);
 
+    expect(peerId1).toBe(expectedPeerId);
+    expect(peerId2).toBe(expectedPeerId);
     expect(peerId1).toBe(originalPeerId);
     expect(peerId2).toBe(originalPeerId);
   });

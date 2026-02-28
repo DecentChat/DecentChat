@@ -1,14 +1,14 @@
 {
   "name": "decent-chat",
   "version": "0.1.0",
-  "private": true,
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "peer": "^1.0.2",
+    "typescript": "^5.6.0",
+    "vitepress": "^1.6.4"
+  },
   "description": "Monorepo for decent-protocol SDK and decent-client-web reference implementation",
-  "workspaces": [
-    "decent-protocol",
-    "decent-transport-webrtc",
-    "decent-client-web",
-    "decent-openclaw"
-  ],
+  "private": true,
   "scripts": {
     "test": "cd decent-protocol && bun test",
     "test:protocol": "cd decent-protocol && bun test",
@@ -31,10 +31,10 @@
     "gate:quick": "cd decent-protocol && bun test tests/unit/perf-integrity-audit.test.ts && bun run tests/perf/run.ts --scenario=smoke --check-integrity --peers=5",
     "test:e2e:live-smoke": "cd decent-client-web && bun run test:e2e:live-smoke"
   },
-  "devDependencies": {
-    "@playwright/test": "^1.58.2",
-    "peer": "^1.0.2",
-    "typescript": "^5.6.0",
-    "vitepress": "^1.6.4"
-  }
+  "workspaces": [
+    "decent-protocol",
+    "decent-transport-webrtc",
+    "decent-client-web",
+    "decent-openclaw"
+  ]
 }

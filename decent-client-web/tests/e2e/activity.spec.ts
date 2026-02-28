@@ -31,15 +31,25 @@ test('activity shows thread reply and opens thread on click', async ({ page }) =
   await page.locator('#compose-input').press('Enter');
   await expect(page.locator('.message-content')).toContainText(rootText);
 
-  // Deterministic injection of an incoming thread reply + activity item.
-  await page.evaluate(async ({ replyText }) => {
+  // Get the root message and its ID for threading
+  const rootMsgId = await page.evaluate(() => {
+    const state = (window as any).__state;
+    const ctrl = (window as any).__ctrl;
+    const messages = ctrl.messageStore.getMessages(state.activeChannelId);
+    return messages.find((m: any) => !m.threadId)?.id;
+  });
+
+  // Simulate receiving a thread reply from another peer
+  await page.evaluate(async ({ rootMsgId, replyText }) => {
     const state = (window as any).__state;
     const ctrl = (window as any).__ctrl;
     const wsId = state.activeWorkspaceId;
     const channelId = state.activeChannelId;
 
+    const bobId = 'bob-thread-peer-' + Date.now();
+    
+    // Add Bob as a workspace member
     const ws = ctrl.workspaceManager.getWorkspace(wsId);
-    const bobId = 'bob-e2e-peer';
     if (!ws.members.some((m: any) => m.peerId === bobId)) {
       ws.members.push({
         peerId: bobId,
@@ -50,29 +60,35 @@ test('activity shows thread reply and opens thread on click', async ({ page }) =
       });
     }
 
-    const root = ctrl.messageStore.getMessages(channelId).find((m: any) => !m.threadId);
-    const reply = await ctrl.messageStore.createMessage(channelId, bobId, replyText, 'text', root.id);
+    // Create a reply message in the thread
+    const reply = await ctrl.messageStore.createMessage(channelId, bobId, replyText, 'text', rootMsgId);
     ctrl.messageStore.forceAdd(reply);
 
-    const activityId = `thread:${wsId}:${channelId}:${reply.id}`;
-    ctrl.activityItems = ctrl.activityItems || [];
-    ctrl.activityItems.unshift({
-      id: activityId,
-      type: 'thread-reply',
-      workspaceId: wsId,
-      channelId,
-      threadId: root.id,
-      messageId: reply.id,
-      actorId: bobId,
-      snippet: replyText,
-      timestamp: Date.now(),
-      read: false,
-    });
+    // Simulate receiving this as an incoming message (triggers activity tracking)
+    // by manually triggering the activity check as would happen in onIncomingMessage
+    const id = `thread:${wsId}:${channelId}:${reply.id}`;
+    if (!ctrl.activityItems?.some((i: any) => i.id === id)) {
+      (ctrl as any).activityItems.unshift({
+        id,
+        type: 'thread-reply',
+        workspaceId: wsId,
+        channelId,
+        threadId: rootMsgId,
+        messageId: reply.id,
+        actorId: bobId,
+        snippet: replyText.slice(0, 140),
+        timestamp: reply.timestamp,
+        read: false,
+      });
+    }
 
     ctrl.ui.renderMessages();
     ctrl.ui.updateChannelHeader();
-  }, { replyText });
+    ctrl.ui.updateWorkspaceRail();
+  }, { rootMsgId, replyText });
 
+  // Wait for activity badge to appear
+  await page.waitForTimeout(500);  // Let DOM updates settle
   await page.waitForSelector('#activity-btn .activity-badge', { timeout: 10000 });
   await page.click('#activity-btn');
   await page.waitForSelector('.activity-row', { timeout: 10000 });

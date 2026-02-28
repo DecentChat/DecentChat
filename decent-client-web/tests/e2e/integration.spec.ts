@@ -761,8 +761,9 @@ test.describe('Edge Cases', () => {
     await sendMessage(alice.page, specialMsg);
 
     const messages = await getMessages(alice.page);
-    // Message should be escaped/sanitized, not execute script
-    expect(messages.some(m => m.includes('alert'))).toBe(true);
+    // Message should be sanitized: payload text remains usable, script tags removed.
+    expect(messages.some(m => m.includes('Hello') && m.includes('quotes') && m.includes('backtick'))).toBe(true);
+    expect(messages.some(m => m.includes('<script>'))).toBe(false);
   });
 
   test('unicode and emoji in messages', async () => {
