@@ -98,6 +98,11 @@ export class MessageProtocol {
   /** Persistence backend (optional) */
   private persistence: RatchetPersistence | null = null;
 
+  /** Get a peer's ECDSA signing public key (for auth verification) */
+  getSigningPublicKey(peerId: string): CryptoKey | undefined {
+    return this.signingPublicKeys.get(peerId);
+  }
+
   constructor(cryptoManager: CryptoManager, myPeerId: string) {
     this.cryptoManager = cryptoManager;
     this.cipher = new MessageCipher();
