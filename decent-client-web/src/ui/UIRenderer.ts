@@ -821,16 +821,33 @@ export class UIRenderer {
       : null;
     const channels = ws ? this.workspaceManager.getChannels(ws.id) : [];
     const dms = ws ? this.workspaceManager.getDMs(ws.id, this.state.myPeerId) : [];
+    // Group members by identityId (dedup multi-device) — fall back to peerId if no identityId
     const workspaceMembersHTML = ws
-      ? ws.members.map((m) => {
-          const alias = this.getPeerAlias(m.peerId);
-          const youTag = m.peerId === this.state.myPeerId ? ' <span class="sidebar-item-meta">(you)</span>' : '';
-          return `
-            <div class="sidebar-item member-row" data-member-peer-id="${m.peerId}">
-              <span class="dm-status ${this.peerStatusClass(m.peerId)}" title="${this.peerStatusTitle(m.peerId)}"></span>
-              <span>${this.escapeHtml(alias)}${youTag}</span>
-            </div>`;
-        }).join('')
+      ? (() => {
+          const seen = new Set<string>();
+          return ws.members.filter((m) => {
+            const key = m.identityId || m.peerId;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          }).map((m) => {
+            // For multi-device: find all peerIds for this identity
+            const identityPeers = m.identityId
+              ? ws.members.filter(other => other.identityId === m.identityId).map(other => other.peerId)
+              : [m.peerId];
+            const isOnline = identityPeers.some(pid => this.peerStatusClass(pid) === 'online');
+            const isMe = identityPeers.includes(this.state.myPeerId);
+            const alias = this.getPeerAlias(m.peerId);
+            const youTag = isMe ? ' <span class="sidebar-item-meta">(you)</span>' : '';
+            const statusClass = isOnline ? 'online' : this.peerStatusClass(m.peerId);
+            const statusTitle = isOnline ? 'Online' : this.peerStatusTitle(m.peerId);
+            return `
+              <div class="sidebar-item member-row" data-member-peer-id="${m.peerId}">
+                <span class="dm-status ${statusClass}" title="${statusTitle}"></span>
+                <span>${this.escapeHtml(alias)}${youTag}</span>
+              </div>`;
+          }).join('');
+        })()
       : '';
 
     // Build standalone direct messages section
