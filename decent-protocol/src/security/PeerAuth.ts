@@ -59,7 +59,7 @@ export class PeerAuth {
     signingKey: CryptoKey,
   ): Promise<AuthResponse> {
     const payload = buildPayload(nonce, challengerPeerId);
-    const signatureBuffer = await crypto.subtle.sign(ECDSA_SIGN_PARAMS, signingKey, payload);
+    const signatureBuffer = await crypto.subtle.sign(ECDSA_SIGN_PARAMS, signingKey, payload as BufferSource);
     const signature = btoa(String.fromCharCode(...new Uint8Array(signatureBuffer)));
     return { signature };
   }
@@ -81,7 +81,7 @@ export class PeerAuth {
     try {
       const payload = buildPayload(nonce, ourPeerId);
       const sigBytes = Uint8Array.from(atob(signature), (c) => c.charCodeAt(0));
-      return await crypto.subtle.verify(ECDSA_SIGN_PARAMS, peerSigningKey, sigBytes, payload);
+      return await crypto.subtle.verify(ECDSA_SIGN_PARAMS, peerSigningKey, sigBytes as BufferSource, payload as BufferSource);
     } catch {
       return false;
     }
