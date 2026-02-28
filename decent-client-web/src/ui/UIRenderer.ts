@@ -835,8 +835,8 @@ export class UIRenderer {
             const identityPeers = m.identityId
               ? ws.members.filter(other => other.identityId === m.identityId).map(other => other.peerId)
               : [m.peerId];
-            const isOnline = identityPeers.some(pid => this.peerStatusClass(pid) === 'online');
             const isMe = identityPeers.includes(this.state.myPeerId);
+            const isOnline = isMe || identityPeers.some(pid => this.peerStatusClass(pid) === 'online');
             const alias = this.getPeerAlias(m.peerId);
             return { peerId: m.peerId, alias, isOnline, isMe, role: m.role };
           });
