@@ -540,6 +540,27 @@ export class ChatController {
           if (msg?.threadId) {
             this.ui?.updateThreadIndicator?.(msg.threadId, msg.channelId);
           }
+
+          // Record thread/mention activity for streamed messages (same as normal inbound)
+          if (msg && msg.senderId !== this.state.myPeerId) {
+            let activityChanged = false;
+            const wsId = this.resolveWorkspaceIdByChannelId(msg.channelId);
+            if (wsId) {
+              const before = this.activityItems.length;
+              this.maybeRecordMentionActivity(msg, msg.channelId, wsId);
+              if (this.activityItems.length !== before) activityChanged = true;
+            }
+            if (msg.threadId) {
+              const before = this.activityItems.length;
+              this.maybeRecordThreadActivity(msg, msg.channelId);
+              if (this.activityItems.length !== before) activityChanged = true;
+            }
+            if (activityChanged) {
+              this.ui?.updateChannelHeader();
+              this.ui?.updateWorkspaceRail?.();
+            }
+          }
+
           this.ui?.finalizeStreamingMessage?.(messageId);
           return;
         }
@@ -1061,7 +1082,10 @@ export class ChatController {
             this.maybeRecordThreadActivity(msg, channelId);
             if (this.activityItems.length !== before) activityChanged = true;
           }
-          if (activityChanged) this.ui?.updateChannelHeader();
+          if (activityChanged) {
+            this.ui?.updateChannelHeader();
+            this.ui?.updateWorkspaceRail?.();
+          }
 
           if (channelId === this.state.activeChannelId) {
             if (msg.threadId) {
@@ -4008,6 +4032,27 @@ export class ChatController {
       }, 0);
       if (touchedActiveChannel) {
         this.ui?.renderMessages();
+      }
+
+      // Record activity for synced thread replies + mentions (batch)
+      let syncActivityChanged = false;
+      for (const msg of toSync) {
+        if (msg.senderId === this.state.myPeerId) continue;
+        const wsId = this.resolveWorkspaceIdByChannelId(msg.channelId);
+        if (wsId) {
+          const before = this.activityItems.length;
+          this.maybeRecordMentionActivity(msg as any, msg.channelId, wsId);
+          if (this.activityItems.length !== before) syncActivityChanged = true;
+        }
+        if (msg.threadId) {
+          const before = this.activityItems.length;
+          this.maybeRecordThreadActivity(msg as any, msg.channelId);
+          if (this.activityItems.length !== before) syncActivityChanged = true;
+        }
+      }
+      if (syncActivityChanged) {
+        this.ui?.updateChannelHeader();
+        this.ui?.updateWorkspaceRail?.();
       }
     } catch (err) {
       console.error('[Sync] handleMessageSyncResponse FATAL:', (err as any)?.message, (err as any)?.stack);
