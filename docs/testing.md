@@ -50,3 +50,25 @@ bun run gate:predeploy
 - Validate env/config differences (ports, signaling config)
 - Check if failure is deterministic or timing-dependent
 - Document root cause in PR/commit notes
+
+
+## Decent OpenClaw plugin regression pack
+
+Use this command set before merging/deploying `decent-openclaw` runtime/threading changes:
+
+```bash
+bun test ./decent-openclaw/tests/unit/reply-to-mode-by-chat-type.test.ts
+bun test ./decent-openclaw/tests/unit/thread-initial-history-limit.test.ts
+bun test ./decent-openclaw/tests/unit/messaging-target-normalization.test.ts
+bun test ./decent-openclaw/tests/unit/directory-live.test.ts
+bun test ./decent-openclaw/tests/unit/plugin-capabilities.test.ts
+bun test ./decent-openclaw/tests/unit/runtime-streaming-e2e.test.ts
+bun test ./decent-openclaw/tests/unit/history-restore.test.ts
+bun run typecheck
+```
+
+Optional one-liner (same gate):
+
+```bash
+bun test ./decent-openclaw/tests/unit/reply-to-mode-by-chat-type.test.ts   && bun test ./decent-openclaw/tests/unit/thread-initial-history-limit.test.ts   && bun test ./decent-openclaw/tests/unit/messaging-target-normalization.test.ts   && bun test ./decent-openclaw/tests/unit/directory-live.test.ts   && bun test ./decent-openclaw/tests/unit/plugin-capabilities.test.ts   && bun test ./decent-openclaw/tests/unit/runtime-streaming-e2e.test.ts   && bun test ./decent-openclaw/tests/unit/history-restore.test.ts   && bun run typecheck
+```
