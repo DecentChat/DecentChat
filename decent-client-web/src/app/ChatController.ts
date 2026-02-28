@@ -99,6 +99,8 @@ export interface UIUpdater {
   onHuddleStateChange?: (state: HuddleState, channelId: string | null) => void;
   /** Huddle participants list updated */
   onHuddleParticipantsChange?: (participants: HuddleParticipant[]) => void;
+  /** Refresh the activity sidebar panel if open */
+  refreshActivityPanel?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -1207,6 +1209,23 @@ export class ChatController {
             this.transport.send(peerId, { type: 'read', messageId: msg.id, channelId });
             (msg as any).localReadAt = Date.now();
             await this.persistentStore.saveMessage({ ...(msg as any), localReadAt: (msg as any).localReadAt });
+
+            // Auto-mark activity as read if the thread/channel is currently visible
+            if (msg.threadId && this.state.threadOpen && this.state.activeThreadId === msg.threadId) {
+              this.markThreadActivityRead(channelId, msg.threadId);
+              this.ui?.updateWorkspaceRail?.();
+              this.ui?.refreshActivityPanel?.();
+            } else if (!msg.threadId) {
+              // Channel-level mention — mark read if we're viewing this channel
+              const mentionId = `mention:${this.resolveWorkspaceIdByChannelId(channelId)}:${channelId}:${msg.id}`;
+              const item = this.activityItems.find(i => i.id === mentionId);
+              if (item && !item.read) {
+                item.read = true;
+                this.persistActivity();
+                this.ui?.updateWorkspaceRail?.();
+                this.ui?.refreshActivityPanel?.();
+              }
+            }
           }
 
           // Notify
