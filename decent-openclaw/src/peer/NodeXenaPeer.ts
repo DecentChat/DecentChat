@@ -20,6 +20,7 @@ import { FileStore } from './FileStore.js';
 import { NodeMessageProtocol } from './NodeMessageProtocol.js';
 import { SyncProtocol, type SyncEvent } from './SyncProtocol.js';
 import type { ResolvedDecentChatAccount } from '../types.js';
+import { BotHuddleManager } from '../huddle/BotHuddleManager.js';
 
 export interface NodeXenaPeerOptions {
   account: ResolvedDecentChatAccount;
@@ -109,6 +110,7 @@ export class NodeXenaPeer {
   private readonly opts: NodeXenaPeerOptions;
   private readonly pendingMediaRequests = new Map<string, PendingMediaRequest>();
   private readonly mediaChunkTimeout = 30000;
+  public botHuddle: BotHuddleManager | null = null;
 
   constructor(opts: NodeXenaPeerOptions) {
     this.opts = opts;
@@ -263,6 +265,21 @@ export class NodeXenaPeer {
     this.myPeerId = await this.transport.init(this.myPeerId);
     this.opts.log?.info(`[xena-peer] online as ${this.myPeerId}, signaling: ${allServers.join(', ')}`);
     this.startPeerMaintenance();
+
+    // Initialize huddle manager after transport is ready
+    this.botHuddle = new BotHuddleManager(this.myPeerId, {
+      sendSignal: (peerId, data) => this.transport?.send(peerId, data) ?? false,
+      broadcastSignal: (data) => {
+        if (!this.transport) return;
+        for (const peerId of this.transport.getConnectedPeers()) {
+          if (peerId !== this.myPeerId) {
+            this.transport.send(peerId, data);
+          }
+        }
+      },
+      getDisplayName: (peerId) => this.resolveSenderName('', peerId),
+      log: this.opts.log,
+    });
 
     for (const inviteUri of this.opts.account.invites ?? []) {
       // Try immediately; if the peer is offline, retry with backoff
@@ -522,6 +539,12 @@ export class NodeXenaPeer {
     }
     if (msg?.type === 'media-chunk') {
       await this.handleMediaChunk(fromPeerId, msg as MediaChunk);
+      return;
+    }
+
+    // Route huddle signals to BotHuddleManager (unencrypted, like browser client)
+    if (typeof msg?.type === 'string' && msg.type.startsWith('huddle-')) {
+      await this.botHuddle?.handleSignal(fromPeerId, msg);
       return;
     }
 
