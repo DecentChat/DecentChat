@@ -13,6 +13,9 @@ import './ui/styles/tooltips.css';
 // Prevent multiple tabs from running simultaneously (shared IndexedDB,
 // WebRTC peer ID, and signaling connection would cause race conditions).
 (() => {
+  // Only lock tabs on /app routes — landing page, docs etc. can open freely
+  const p = window.location.pathname;
+  if (p !== "/app" && !p.startsWith("/app/")) return;
   if (typeof BroadcastChannel === 'undefined') return; // SSR / old browser fallback
 
   const LOCK_CHANNEL = 'decentchat-tab-lock';
