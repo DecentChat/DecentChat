@@ -277,7 +277,8 @@ describe('BotHuddleManager', () => {
         fromPeerId: PEER_A,
       });
 
-      expect(cb.logs.some(l => l.includes('received ICE candidate from') && l.includes(PEER_A))).toBe(true);
+      // With real WebRTC impl, ICE without a prior offer logs 'no PC found'
+      expect(cb.logs.some(l => l.includes('no PC found for ICE from') && l.includes(PEER_A))).toBe(true);
     });
   });
 

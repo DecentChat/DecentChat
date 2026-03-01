@@ -19,6 +19,15 @@ export type DecentChatChannelConfig = {
     inheritParent?: boolean;
     initialHistoryLimit?: number;
   };
+  huddle?: {
+    enabled?: boolean;
+    autoJoin?: boolean;
+    sttEngine?: 'whisper-cpp' | 'whisper-python';
+    whisperModel?: string;
+    ttsVoice?: string;
+    vadSilenceMs?: number;
+    vadThreshold?: number;
+  };
 };
 
 export type ResolvedDecentChatAccount = {
@@ -42,5 +51,14 @@ export type ResolvedDecentChatAccount = {
     historyScope: "thread" | "channel";
     inheritParent: boolean;
     initialHistoryLimit: number;
+  };
+  huddle?: {
+    enabled?: boolean;
+    autoJoin?: boolean;
+    sttEngine?: 'whisper-cpp' | 'whisper-python';
+    whisperModel?: string;
+    ttsVoice?: string;
+    vadSilenceMs?: number;
+    vadThreshold?: number;
   };
 };
