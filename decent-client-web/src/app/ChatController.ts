@@ -2382,6 +2382,11 @@ export class ChatController {
           try {
             this.messageStore.forceAdd(msg);
           } catch {}
+          // Clear streaming flag on recovered messages (interrupted streams)
+          if ((msg as any).streaming) {
+            (msg as any).streaming = false;
+            this.persistMessage(msg).catch(() => {});
+          }
           try {
             const crdtMsg = {
               id: msg.id,
