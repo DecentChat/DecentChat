@@ -3707,6 +3707,13 @@ body:has(.landing-page) #app {
   font-weight: 700;
   color: #fff;
   cursor: default;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+  --audio-level: 0;
+}
+
+.huddle-avatar.speaking {
+  box-shadow: 0 0 0 2px #48bb78, 0 0 calc(4px + 8px * var(--audio-level)) rgba(72, 187, 120, 0.5);
+  transform: scale(calc(1 + 0.08 * var(--audio-level)));
 }
 
 .huddle-bar-controls {

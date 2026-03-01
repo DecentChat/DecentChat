@@ -2239,7 +2239,9 @@ export class UIRenderer {
           const initials = p.displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
           const color = this.peerColor(p.peerId);
           const muteIcon = p.muted ? ' 🔇' : '';
-          return `<span class="huddle-avatar" style="background:${color}" title="${this.escapeHtml(p.displayName)}${muteIcon}">${this.escapeHtml(initials)}</span>`;
+          const speakingClass = p.speaking ? ' speaking' : '';
+          const levelStyle = p.speaking && p.audioLevel ? ` --audio-level: ${p.audioLevel}` : '';
+          return `<span class="huddle-avatar${speakingClass}" style="background:${color};${levelStyle}" title="${this.escapeHtml(p.displayName)}${muteIcon}">${this.escapeHtml(initials)}</span>`;
         }).join('');
       }
 

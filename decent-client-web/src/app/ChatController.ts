@@ -402,7 +402,12 @@ export class ChatController {
       // Trusted sync-control traffic gets its own lane (still authenticated by
       // workspace membership checks in handlers) so reconnect catch-up is not
       // throttled by normal chat message limits.
-      const bypassGuard = this.isTrustedSyncControlMessage(peerId, data)
+      // Huddle signaling (SDP offers/answers, ICE candidates) is control-plane
+      // traffic that arrives in rapid bursts — must bypass rate limiting or
+      // the WebRTC audio connection will silently fail.
+      const isHuddleSignaling = typeof data?.type === 'string' && data.type.startsWith('huddle-');
+      const bypassGuard = isHuddleSignaling
+        || this.isTrustedSyncControlMessage(peerId, data)
         || this.isTrustedOfflineReplayMessage(peerId, data);
       if (!bypassGuard) {
         const guardResult = this.messageGuard.check(peerId, data);
