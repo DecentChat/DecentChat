@@ -1742,44 +1742,51 @@ export class ChatController {
         return;
       }
 
-      const oldWorkspaceId = localWs.id;
-      console.log(`[Sync] Adopting remote workspace ID ${remoteWorkspaceId.slice(0, 8)} (was ${oldWorkspaceId.slice(0, 8)}) for invite ${localWs.inviteCode}`);
+      // SECURITY: Only the JOINER should adopt the owner's canonical workspace ID.
+      // The owner must never adopt a joiner's provisional ID — that corrupts
+      // the canonical workspace state for all existing members.
+      if (this.workspaceManager.isOwner(localWs.id, this.state.myPeerId)) {
+        console.log(`[Sync] Skipping workspace ID adoption from ${peerId.slice(0, 8)}: I am the owner`);
+      } else {
+        const oldWorkspaceId = localWs.id;
+        console.log(`[Sync] Adopting remote workspace ID ${remoteWorkspaceId.slice(0, 8)} (was ${oldWorkspaceId.slice(0, 8)}) for invite ${localWs.inviteCode}`);
 
-      // Remap local channel IDs to the owner's canonical channel IDs by name/type.
-      if (Array.isArray(sync.channels)) {
-        for (const remoteCh of sync.channels) {
-          const localCh = localWs.channels.find((ch: any) => ch.name === remoteCh.name && ch.type === remoteCh.type);
-          if (localCh && localCh.id !== remoteCh.id) {
-            const oldId = localCh.id;
-            localCh.id = remoteCh.id;
-            localCh.workspaceId = remoteWorkspaceId;
-            this.messageStore.remapChannel(oldId, remoteCh.id);
-            await this.persistentStore.remapChannelMessages(oldId, remoteCh.id);
-            if (this.messageCRDTs.has(oldId)) {
-              const crdt = this.messageCRDTs.get(oldId)!;
-              this.messageCRDTs.set(remoteCh.id, crdt);
-              this.messageCRDTs.delete(oldId);
-            }
-            if (this.state.activeChannelId === oldId) {
-              this.state.activeChannelId = remoteCh.id;
+        // Remap local channel IDs to the owner's canonical channel IDs by name/type.
+        if (Array.isArray(sync.channels)) {
+          for (const remoteCh of sync.channels) {
+            const localCh = localWs.channels.find((ch: any) => ch.name === remoteCh.name && ch.type === remoteCh.type);
+            if (localCh && localCh.id !== remoteCh.id) {
+              const oldId = localCh.id;
+              localCh.id = remoteCh.id;
+              localCh.workspaceId = remoteWorkspaceId;
+              this.messageStore.remapChannel(oldId, remoteCh.id);
+              await this.persistentStore.remapChannelMessages(oldId, remoteCh.id);
+              if (this.messageCRDTs.has(oldId)) {
+                const crdt = this.messageCRDTs.get(oldId)!;
+                this.messageCRDTs.set(remoteCh.id, crdt);
+                this.messageCRDTs.delete(oldId);
+              }
+              if (this.state.activeChannelId === oldId) {
+                this.state.activeChannelId = remoteCh.id;
+              }
             }
           }
         }
-      }
 
-      // Replace provisional workspace ID with canonical one.
-      this.workspaceManager.removeWorkspace(oldWorkspaceId);
-      localWs.id = remoteWorkspaceId;
-      for (const ch of localWs.channels) {
-        ch.workspaceId = remoteWorkspaceId;
-      }
-      this.workspaceManager.importWorkspace(localWs as any);
+        // Replace provisional workspace ID with canonical one.
+        this.workspaceManager.removeWorkspace(oldWorkspaceId);
+        localWs.id = remoteWorkspaceId;
+        for (const ch of localWs.channels) {
+          ch.workspaceId = remoteWorkspaceId;
+        }
+        this.workspaceManager.importWorkspace(localWs as any);
 
-      await this.persistentStore.deleteWorkspace(oldWorkspaceId);
-      await this.persistentStore.saveWorkspace(localWs as any);
+        await this.persistentStore.deleteWorkspace(oldWorkspaceId);
+        await this.persistentStore.saveWorkspace(localWs as any);
 
-      if (this.state.activeWorkspaceId === oldWorkspaceId) {
-        this.state.activeWorkspaceId = remoteWorkspaceId;
+        if (this.state.activeWorkspaceId === oldWorkspaceId) {
+          this.state.activeWorkspaceId = remoteWorkspaceId;
+        }
       }
     }
 
@@ -1937,6 +1944,12 @@ export class ChatController {
     await this.persistWorkspace(localWs.id);
     this.ui?.renderApp();
     console.log(`[Sync] Workspace state synced from ${peerId.slice(0, 8)}`);
+
+    // If we are the owner, send back our full workspace state so the joiner
+    // gets all channels/members (their provisional workspace only has #general).
+    if (this.workspaceManager.isOwner(localWs.id, this.state.myPeerId)) {
+      this.sendWorkspaceState(peerId, localWs.id);
+    }
   }
 
   /**
@@ -4112,7 +4125,15 @@ export class ChatController {
   }
 
   private async requestTimestampMessageSync(peerId: string): Promise<void> {
-    const wsId = this.state.activeWorkspaceId;
+    // Find the workspace where this peer is a member, not activeWorkspaceId
+    let wsId: string | null = null;
+    for (const ws of this.workspaceManager.getAllWorkspaces()) {
+      if (ws.members.some(m => m.peerId === peerId)) {
+        wsId = ws.id;
+        break;
+      }
+    }
+    if (!wsId) wsId = this.state.activeWorkspaceId;
     if (!wsId) return;
     const ws = this.workspaceManager.getWorkspace(wsId);
     if (!ws) return;
@@ -4587,9 +4608,9 @@ export class ChatController {
       : null;
 
     if (!ws) {
-      // Compatibility fallback for invite/join race windows: before membership sync lands,
-      // allow sending to transport-ready peers so initial messages aren't dropped.
-      return Array.from(this.state.readyPeers);
+      // SECURITY: Do NOT fallback to readyPeers — that sends to ALL connected peers
+      // regardless of workspace membership, leaking messages across workspaces.
+      return [];
     }
 
     // Build recipient set: for each member, include their primary peerId
