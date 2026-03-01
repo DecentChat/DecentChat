@@ -171,5 +171,53 @@ export class DeviceManager {
     getAllPeerIds(identityId: string): string[] {
       return this.getDevices(identityId).map(d => d.peerId);
     }
+
+    /**
+     * Reverse lookup: find the identityId that owns a given peerId.
+     */
+    getIdentityForPeerId(peerId: string): string | undefined {
+      for (const [identityId, devices] of this.devices.entries()) {
+        if (devices.some(d => d.peerId === peerId)) {
+          return identityId;
+        }
+      }
+      return undefined;
+    }
+  };
+
+  /**
+   * Message dedup for multi-device delivery.
+   * Tracks seen message IDs to prevent duplicate processing when the same
+   * message arrives from different device connections.
+   */
+  static MessageDedup = class MessageDedup {
+    private seen: string[] = [];
+    private seenSet = new Set<string>();
+    private maxSize: number;
+
+    constructor(maxSize = 10000) {
+      this.maxSize = maxSize;
+    }
+
+    /**
+     * Check if a message ID has already been seen.
+     */
+    isDuplicate(messageId: string): boolean {
+      return this.seenSet.has(messageId);
+    }
+
+    /**
+     * Mark a message ID as seen.
+     */
+    markSeen(messageId: string): void {
+      if (this.seenSet.has(messageId)) return;
+      this.seen.push(messageId);
+      this.seenSet.add(messageId);
+      // Evict oldest when exceeding max size
+      while (this.seen.length > this.maxSize) {
+        const evicted = this.seen.shift()!;
+        this.seenSet.delete(evicted);
+      }
+    }
   };
 }

@@ -36,6 +36,7 @@ export { IdentityManager } from './identity/Identity';
 export { SeedPhraseManager } from './identity/SeedPhrase';
 export { HDKeyDerivation, HDPurpose } from './identity/HDKeyDerivation';
 export { WORDLIST } from './identity/wordlist';
+export { DeviceManager } from './identity/DeviceManager';
 
 // ─── Media ──────────────────────────────────────────────────────────────────
 export {
@@ -118,3 +119,4 @@ export type {
 } from './identity/Identity';
 export type { SeedPhraseResult, DerivedKeys } from './identity/SeedPhrase';
 export type { HDDerivedKeys } from './identity/HDKeyDerivation';
+export type { DeviceInfo, DeviceProof, DeviceAnnouncement, DeviceAck } from './identity/DeviceManager';

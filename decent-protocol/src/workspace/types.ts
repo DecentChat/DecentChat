@@ -37,6 +37,8 @@ export interface WorkspaceMember {
   signingPublicKey?: string; // Base64 ECDSA signing public key (trust anchor for admin events)
   /** Canonical identity ID (hash of ECDH public key). Optional for backward compat with old data. */
   identityId?: string;
+  /** Known devices for this identity (multi-device support). */
+  devices?: DeviceInfoSync[];
   joinedAt: number;
   role: 'owner' | 'admin' | 'member';
   addedBy?: string;

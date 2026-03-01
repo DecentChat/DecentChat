@@ -22,6 +22,7 @@ import {
   verifyHandshakeKey,
   verifyPeerIdBinding,
   PeerAuth,
+  DeviceManager,
   hashBlob,
   createAttachmentMeta,
   generateImageThumbnail,
@@ -160,6 +161,11 @@ export class ChatController {
 
   /** Peers that have completed challenge-response authentication */
   private authenticatedPeers = new Set<string>();
+
+  /** Multi-device: tracks known devices per identity for message delivery */
+  private deviceRegistry = new DeviceManager.DeviceRegistry();
+  /** Multi-device: message ID dedup to prevent duplicate processing */
+  private multiDeviceDedup = new DeviceManager.MessageDedup();
   /** Pending auth challenges we sent (peerId → challenge data) */
   private pendingAuthChallenges = new Map<string, { nonce: string; timestamp: number }>();
   /** Auth timeout: fall back to TOFU if peer doesn't respond to challenge */
@@ -940,6 +946,13 @@ export class ChatController {
 
         // Direct message from a contact (outside workspace)
         if (data.isDirect) {
+          // Multi-device dedup for DMs
+          if (data.messageId && this.multiDeviceDedup.isDuplicate(data.messageId)) {
+            console.log(`[MultiDevice] Dedup: skipping duplicate DM ${(data.messageId as string).slice(0, 8)} from ${peerId.slice(0, 8)}`);
+            return;
+          }
+          if (data.messageId) this.multiDeviceDedup.markSeen(data.messageId);
+
           let conv = await this.directConversationStore.getByContact(peerId);
           if (!conv) {
             conv = await this.directConversationStore.create(peerId);
@@ -1148,6 +1161,14 @@ export class ChatController {
         // copy arrived (which has no _originalMessageId to check at the top of the handler).
         if (this._gossipSeen.has(msg.id)) return;
 
+        // Multi-device dedup: if same message arrives from multiple device connections
+        // of the same sender, skip duplicates. Uses messageId for dedup.
+        if (msg.id && this.multiDeviceDedup.isDuplicate(msg.id)) {
+          console.log(`[MultiDevice] Dedup: skipping duplicate message ${msg.id.slice(0, 8)} from ${peerId.slice(0, 8)}`);
+          return;
+        }
+        if (msg.id) this.multiDeviceDedup.markSeen(msg.id);
+
         const result = await this.messageStore.addMessage(msg);
 
         if (result.success) {
@@ -1355,7 +1376,7 @@ export class ChatController {
         name: ws.name,
         description: ws.description,
         channels: ws.channels.map(ch => ({ id: ch.id, name: ch.name, type: ch.type })),
-        members: ws.members.map(m => ({ peerId: m.peerId, alias: m.alias, publicKey: m.publicKey, signingPublicKey: m.signingPublicKey, role: m.role })),
+        members: ws.members.map(m => ({ peerId: m.peerId, alias: m.alias, publicKey: m.publicKey, signingPublicKey: m.signingPublicKey, identityId: m.identityId, devices: m.devices, role: m.role })),
         inviteCode: ws.inviteCode,
         permissions: ws.permissions,
       },
@@ -1566,6 +1587,50 @@ export class ChatController {
       return;
     }
 
+    // Multi-device: Handle device-announce sync messages
+    if (msg.sync?.type === 'device-announce' && msg.sync.identityId && msg.sync.device && msg.sync.proof) {
+      try {
+        // Verify the device proof before accepting
+        // Look up the signing public key for this identity from workspace members
+        const ws = msg.workspaceId ? this.workspaceManager.getWorkspace(msg.workspaceId) : null;
+        const member = ws?.members.find((m: any) => m.identityId === msg.sync.identityId);
+        if (member?.signingPublicKey) {
+          const signingKey = await this.cryptoManager.importSigningPublicKey(member.signingPublicKey);
+          const result = await DeviceManager.verifyDeviceProof(msg.sync.proof, signingKey);
+          if (result.valid) {
+            this.deviceRegistry.addDevice(msg.sync.identityId, msg.sync.device);
+            // Update workspace member's device list
+            if (member) {
+              if (!member.devices) member.devices = [];
+              const devIdx = member.devices.findIndex((d: any) => d.deviceId === msg.sync.device.deviceId);
+              if (devIdx >= 0) {
+                member.devices[devIdx] = msg.sync.device;
+              } else {
+                member.devices.push(msg.sync.device);
+              }
+              if (ws) this.persistWorkspace(ws.id).catch(() => {});
+            }
+            // Send ack
+            this.transport.send(peerId, {
+              type: 'sync',
+              sync: { type: 'device-ack', identityId: msg.sync.identityId, deviceId: msg.sync.device.deviceId },
+              workspaceId: msg.workspaceId,
+            });
+            console.log(`[MultiDevice] Registered device ${msg.sync.device.deviceLabel} for identity ${msg.sync.identityId.slice(0, 8)}`);
+          } else {
+            console.warn(`[MultiDevice] Rejected device-announce: ${result.reason}`);
+          }
+        } else {
+          // No signing key — can't verify, accept with warning (TOFU for devices)
+          this.deviceRegistry.addDevice(msg.sync.identityId, msg.sync.device);
+          console.warn(`[MultiDevice] Accepted device-announce without verification (no signing key for identity ${msg.sync.identityId.slice(0, 8)})`);
+        }
+      } catch (err) {
+        console.error('[MultiDevice] device-announce handling error:', err);
+      }
+      return;
+    }
+
     // DEP-002: Handle peer-exchange messages
     if (msg.sync?.type === 'peer-exchange' && msg.workspaceId) {
       const discovery = this.serverDiscovery.get(msg.workspaceId);
@@ -1759,6 +1824,21 @@ export class ChatController {
             if (validRoles.includes(remoteMember.role)) {
               existing.role = remoteMember.role;
             }
+          }
+
+          // Multi-device: sync identityId and device list
+          if (remoteMember.identityId && !existing.identityId) {
+            existing.identityId = remoteMember.identityId;
+          }
+          if (Array.isArray(remoteMember.devices) && remoteMember.devices.length > 0) {
+            existing.devices = remoteMember.devices;
+          }
+        }
+
+        // Multi-device: populate device registry from synced member data
+        if (remoteMember.identityId && Array.isArray(remoteMember.devices)) {
+          for (const device of remoteMember.devices) {
+            this.deviceRegistry.addDevice(remoteMember.identityId, device);
           }
         }
       }
@@ -4296,18 +4376,47 @@ export class ChatController {
       ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
       : null;
 
-    const workspaceRecipients = ws
-      ? ws.members
-          .map((m: any) => m.peerId)
-          .filter((p: string) => p !== this.state.myPeerId)
-      : [];
-
-    if (workspaceRecipients.length > 0) {
-      return workspaceRecipients;
+    if (!ws) {
+      // Compatibility fallback for invite/join race windows: before membership sync lands,
+      // allow sending to transport-ready peers so initial messages aren't dropped.
+      return Array.from(this.state.readyPeers);
     }
 
-    // Compatibility fallback for invite/join race windows: before membership sync lands,
-    // allow sending to transport-ready peers so initial messages aren't dropped.
+    // Build recipient set: for each member, include their primary peerId
+    // plus all known device peerIds from the device registry.
+    const myPeerId = this.state.myPeerId;
+    const recipientSet = new Set<string>();
+
+    for (const member of ws.members) {
+      if (member.peerId === myPeerId) continue;
+
+      // Add the member's primary peerId
+      recipientSet.add(member.peerId);
+
+      // Multi-device: if this member has a known identityId, add all their device peerIds
+      if (member.identityId) {
+        for (const devicePeerId of this.deviceRegistry.getAllPeerIds(member.identityId)) {
+          if (devicePeerId !== myPeerId) {
+            recipientSet.add(devicePeerId);
+          }
+        }
+      }
+
+      // Also include devices from workspace member data
+      if (member.devices) {
+        for (const device of member.devices) {
+          if (device.peerId !== myPeerId) {
+            recipientSet.add(device.peerId);
+          }
+        }
+      }
+    }
+
+    if (recipientSet.size > 0) {
+      return Array.from(recipientSet);
+    }
+
+    // Fallback
     return Array.from(this.state.readyPeers);
   }
 
