@@ -247,6 +247,18 @@ export class ChatController {
         this.ui?.showToast(`⚠️ Peer ${v.peerId.slice(0, 8)} temporarily banned (rate limit abuse)`, 'error');
       }
     };
+
+    // Best-effort flush of in-flight streaming messages on page unload
+    if (typeof window !== "undefined") {
+      window.addEventListener("beforeunload", () => {
+        for (const [messageId] of this.pendingStreams) {
+          const msg = this.findMessageById(messageId);
+          if (msg?.content) {
+            this.persistMessage(msg).catch(() => {});
+          }
+        }
+      });
+    }
   }
 
   /** Inject UI callbacks after construction (breaks circular dep). */
