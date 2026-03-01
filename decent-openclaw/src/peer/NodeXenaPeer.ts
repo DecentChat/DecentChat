@@ -292,6 +292,19 @@ export class NodeXenaPeer {
     }
   }
 
+  /** Persist a message to the local store (FileStore) without sending over WebRTC.
+   *  Used after streaming completes so the bot has the message for Negentropy sync. */
+  async persistMessageLocally(channelId: string, workspaceId: string, content: string, threadId?: string, replyToId?: string, messageId?: string): Promise<void> {
+    if (!content.trim()) return;
+    const msg = await this.messageStore.createMessage(channelId, this.myPeerId, content.trim(), 'text', threadId);
+    if (messageId) msg.id = messageId;
+    const added = await this.messageStore.addMessage(msg);
+    if (added.success) {
+      this.persistMessagesForChannel(channelId);
+      this.opts.log?.info?.(`[xena-peer] persisted message locally: ${msg.id.slice(0, 8)} (${content.length} chars)`);
+    }
+  }
+
   async sendMessage(channelId: string, workspaceId: string, content: string, threadId?: string, replyToId?: string, messageId?: string): Promise<void> {
     if (!this.transport || !this.messageProtocol || !content.trim()) return;
 

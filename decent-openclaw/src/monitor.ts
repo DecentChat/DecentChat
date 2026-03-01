@@ -75,6 +75,7 @@ type StreamingPeerAdapter = {
   sendStreamDone: (args: { channelId: string; workspaceId: string; messageId: string }) => Promise<void>;
   sendDirectToPeer: (peerId: string, content: string, threadId?: string, replyToId?: string, messageId?: string) => Promise<void>;
   sendToChannel: (channelId: string, content: string, threadId?: string, replyToId?: string, messageId?: string) => Promise<void>;
+  persistMessageLocally: (channelId: string, workspaceId: string, content: string, threadId?: string, replyToId?: string, messageId?: string) => Promise<void>;
   sendReadReceipt: (peerId: string, channelId: string, messageId: string) => Promise<void>;
   requestFullImage: (peerId: string, attachmentId: string) => Promise<Buffer | null>;
   getThreadHistory?: (args: {
@@ -205,19 +206,35 @@ export async function relayInboundMessageToPeer(params: {
         return;
       }
 
-      // Always send the final message as a normal encrypted message for sync resilience.
-      // The client deduplicates by messageId (streamed messages use the same ID).
-      // Pass the stream messageId so the client can match and dedup.
+      // When streaming was active (mid is set), the client already received
+      // the full content via stream deltas + stream-done and persisted it.
+      // Only persist locally in the bot's message store for sync resilience
+      // (so Negentropy can offer it to peers who were offline).
+      // Do NOT re-send over the wire — that causes duplicates.
+      if (mid && streamEnabled) {
+        try {
+          const persistThreadId = incoming.chatType === "direct"
+            ? incoming.threadId
+            : (incoming.threadId ?? incoming.messageId);
+          // Store in bot's message store (FileStore) without sending over WebRTC
+          await xenaPeer.persistMessageLocally(incoming.channelId, incoming.workspaceId, finalReply, persistThreadId, incoming.messageId, mid);
+          ctx.log?.info?.(`[decentchat] persisted streamed reply locally for sync (${finalReply.length} chars)`);
+        } catch (err) {
+          ctx.log?.error?.(`[decentchat] failed to persist streamed reply locally: ${String(err)}`);
+        }
+        return;
+      }
+
+      // Non-streaming fallback: send the message normally (encrypt + transmit + persist).
       try {
         const persistThreadId = incoming.chatType === "direct"
           ? incoming.threadId
           : (incoming.threadId ?? incoming.messageId);
-        const finalMessageId = mid || undefined;
 
         if (incoming.chatType === "direct") {
-          await xenaPeer.sendDirectToPeer(incoming.senderId, finalReply, persistThreadId, incoming.messageId, finalMessageId);
+          await xenaPeer.sendDirectToPeer(incoming.senderId, finalReply, persistThreadId, incoming.messageId);
         } else {
-          await xenaPeer.sendToChannel(incoming.channelId, finalReply, persistThreadId, incoming.messageId, finalMessageId);
+          await xenaPeer.sendToChannel(incoming.channelId, finalReply, persistThreadId, incoming.messageId);
         }
         ctx.log?.info?.(`[decentchat] persisted assistant reply (${finalReply.length} chars) in ${incoming.chatType}`);
       } catch (err) {
