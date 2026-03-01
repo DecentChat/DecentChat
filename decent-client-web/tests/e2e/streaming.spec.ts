@@ -263,3 +263,109 @@ test.describe('Streaming Message Flow', () => {
     expect(after.distanceFromBottom).toBeGreaterThan(400);
   });
 });
+
+test.describe('Streaming Message Persistence on Refresh', () => {
+  test.beforeEach(async ({ page }) => {
+    await clearStorage(page);
+    await page.goto('/');
+    await waitForApp(page);
+    await createWorkspace(page, 'Stream Persist Test', 'Alice');
+  });
+
+  test('partial streamed message recoverable after mid-stream refresh', async ({ page }) => {
+    const messageId = 'stream-msg-midrefresh';
+    await injectStreamMessage(page, {
+      peerId: 'assistant-peer-midrefresh',
+      messageId,
+      senderName: 'Assistant',
+      content: 'partial content before refresh',
+    });
+
+    // DO NOT call finalizeStreamMessage — simulate refresh mid-stream
+    await page.reload();
+    await waitForApp(page);
+
+    const recovered = await page.evaluate(async ({ id }) => {
+      const ctrl = (window as any).__ctrl;
+      const state = (window as any).__state;
+      const channelId = state?.activeChannelId;
+      if (!ctrl || !channelId) return null;
+      const msgs = await ctrl.persistentStore.getChannelMessages(channelId);
+      const found = msgs.find((m: any) => m.id === id);
+      return found ? { content: found.content, streaming: found.streaming } : null;
+    }, { id: messageId });
+
+    expect(recovered).not.toBeNull();
+    expect(recovered!.content).toBe('partial content before refresh');
+  });
+
+  test('recovered mid-stream message has streaming flag cleared', async ({ page }) => {
+    const messageId = 'stream-msg-incomplete';
+    await injectStreamMessage(page, {
+      peerId: 'assistant-peer-incomplete',
+      messageId,
+      senderName: 'Assistant',
+      content: 'this was interrupted',
+    });
+
+    await page.reload();
+    await waitForApp(page);
+
+    const state = await page.evaluate(async ({ id }) => {
+      const ctrl = (window as any).__ctrl;
+      const channelId = (window as any).__state?.activeChannelId;
+      if (!ctrl || !channelId) return null;
+      const msgs = await ctrl.persistentStore.getChannelMessages(channelId);
+      const found = msgs.find((m: any) => m.id === id);
+      return found ? { streaming: found.streaming, content: found.content } : null;
+    }, { id: messageId });
+
+    expect(state).not.toBeNull();
+    expect(state!.content).toBe('this was interrupted');
+    expect(state!.streaming).toBeFalsy();
+  });
+
+  test('no duplicate when final message arrives after streaming', async ({ page }) => {
+    const messageId = 'stream-msg-dedup';
+    const peerId = 'assistant-peer-dedup';
+
+    // Start streaming and finalize
+    await injectStreamMessage(page, {
+      peerId,
+      messageId,
+      senderName: 'Assistant',
+      content: 'final streamed content',
+    });
+    await finalizeStreamMessage(page, { peerId, messageId });
+
+    // Simulate a normal ciphertext message arriving with the same messageId
+    // (as if bot sent final message for sync)
+    await page.evaluate(async ({ peerId, messageId }) => {
+      const ctrl = (window as any).__ctrl;
+      const state = (window as any).__state;
+
+      // Mock decrypt to return same content
+      const originalDecrypt = ctrl.messageProtocol.decryptMessage.bind(ctrl.messageProtocol);
+      ctrl.messageProtocol.decryptMessage = async () => 'final streamed content';
+      try {
+        await ctrl.transport.onMessage(peerId, {
+          type: 'ciphertext',
+          channelId: state.activeChannelId,
+          workspaceId: state.activeWorkspaceId,
+          messageId,
+          timestamp: Date.now(),
+          vectorClock: {},
+        });
+      } finally {
+        ctrl.messageProtocol.decryptMessage = originalDecrypt;
+      }
+    }, { peerId, messageId });
+
+    // Count messages with this ID — should be exactly 1
+    const count = await page.evaluate(({ id }) => {
+      return document.querySelectorAll(`.message[data-message-id="${id}"]`).length;
+    }, { id: messageId });
+
+    expect(count).toBe(1);
+  });
+});

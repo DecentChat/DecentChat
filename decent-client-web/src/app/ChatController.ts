@@ -513,6 +513,7 @@ export class ChatController {
           (msg as any).senderName = senderName;
           (msg as any).streaming = true;
           await this.messageStore.addMessage(msg);
+          await this.persistMessage(msg); // Persist to IndexedDB immediately so it survives refresh
 
           if (streamThreadId) {
             // Auto-open thread panel (always, even if different channel is active)
@@ -543,6 +544,7 @@ export class ChatController {
             if (existing) {
               existing.content = normalizedContent;
               (existing as any).streaming = true;
+              await this.persistMessage(existing); // Persist partial content so it survives refresh
             }
             // Replace DOM element text with latest cumulative content
             this.ui?.updateStreamingMessage?.(messageId, normalizedContent);
@@ -1414,6 +1416,9 @@ export class ChatController {
   private async handleSyncMessage(peerId: string, msg: any): Promise<void> {
     // Handle workspace state sync (channels, members, name)
     if (msg.sync?.type === 'workspace-state' && msg.workspaceId) {
+      console.log('[Sync] Received workspace-state from', peerId.slice(0,8), 
+        'ws:', msg.sync?.name, 
+        'channels:', msg.sync?.channels?.map((c:any) => c.name));
       await this.handleWorkspaceStateSync(peerId, msg.workspaceId, msg.sync);
       return;
     }
