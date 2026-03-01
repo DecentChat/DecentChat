@@ -1190,6 +1190,15 @@ export class ChatController {
           // DEP-005: Send delivery ACK back to sender
           this.transport.send(peerId, { type: 'ack', messageId: msg.id, channelId });
 
+          // Ensure thread root snapshot for thread replies
+          if (normalizedThreadId) {
+            if (data.threadRootSnapshot) {
+              void this.ensureThreadRootFromSnapshot(normalizedThreadId, channelId, data.threadRootSnapshot);
+            } else {
+              void this.ensureThreadRoot(normalizedThreadId, channelId);
+            }
+          }
+
           // T3.2: Seed gossip seen-set with the canonical message ID so that a later
           // gossip-relayed copy of this same message (which uses msg.id as _originalMessageId)
           // is caught by the early dedup check and dropped without re-rendering.
@@ -2154,6 +2163,9 @@ export class ChatController {
         if (envelope.attachments?.length) {
           (relayEnv as any).attachments = envelope.attachments;  // carry thumbnail + metadata through relay hops
         }
+        if (envelope.threadRootSnapshot) {
+          (relayEnv as any).threadRootSnapshot = envelope.threadRootSnapshot;  // carry thread root through relay
+        }
         (relayEnv as any)._originalMessageId = originalMsgId;    // dedup key (checked before decryption)
         (relayEnv as any)._gossipOriginalSender = originalSenderId; // real author
         (relayEnv as any)._gossipHop = hop;
@@ -2305,6 +2317,16 @@ export class ChatController {
     const savedAlias = await this.persistentStore.getSetting('myAlias');
     if (savedAlias) this.state.myAlias = savedAlias;
 
+    // Restore thread root snapshots from IndexedDB
+    const savedThreadRoots = await this.persistentStore.getSetting('threadRoots');
+    if (savedThreadRoots && typeof savedThreadRoots === 'object') {
+      for (const [threadId, snapshot] of Object.entries(savedThreadRoots)) {
+        if (snapshot && typeof snapshot === 'object') {
+          this.messageStore.setThreadRoot(threadId, snapshot as PlaintextMessage);
+        }
+      }
+    }
+
     // Restore activity feed from IndexedDB
     const savedActivity = await this.persistentStore.getSetting('activityItems');
     if (Array.isArray(savedActivity)) {
@@ -2434,6 +2456,93 @@ export class ChatController {
   }
 
   // =========================================================================
+  // Thread Root Snapshots
+  // =========================================================================
+
+  /**
+   * Ensure a thread root snapshot exists for the given threadId.
+   * Creates a copy of the parent message so the thread is self-contained
+   * even if the parent is later compacted from the channel.
+   */
+  private async ensureThreadRoot(threadId: string, channelId: string): Promise<PlaintextMessage | undefined> {
+    if (this.messageStore.getThreadRoot(threadId)) {
+      return this.messageStore.getThreadRoot(threadId);
+    }
+
+    const allMsgs = this.messageStore.getMessages(channelId);
+    const parent = allMsgs.find(m => m.id === threadId);
+    if (!parent) return undefined;
+
+    const snapshot: PlaintextMessage = {
+      id: parent.id,
+      channelId: parent.channelId,
+      senderId: parent.senderId,
+      timestamp: parent.timestamp,
+      content: parent.content,
+      type: parent.type,
+      prevHash: '',
+      status: 'sent',
+    };
+    if ((parent as any).senderIdentityId) {
+      (snapshot as any).senderIdentityId = (parent as any).senderIdentityId;
+    }
+    if ((parent as any).attachments) {
+      (snapshot as any).attachments = (parent as any).attachments;
+    }
+
+    this.messageStore.setThreadRoot(threadId, snapshot);
+    await this.persistThreadRoots();
+    return snapshot;
+  }
+
+  /**
+   * Create a thread root from a received envelope's snapshot data.
+   * Used when the receiver doesn't have the parent message (e.g., joined late or compacted).
+   */
+  private async ensureThreadRootFromSnapshot(
+    threadId: string,
+    channelId: string,
+    snapshot: { senderId?: string; senderIdentityId?: string; content?: string; timestamp?: number; attachments?: any[] },
+  ): Promise<void> {
+    if (this.messageStore.getThreadRoot(threadId)) return;
+
+    // Try local parent first
+    const allMsgs = this.messageStore.getMessages(channelId);
+    const parent = allMsgs.find(m => m.id === threadId);
+    if (parent) {
+      await this.ensureThreadRoot(threadId, channelId);
+      return;
+    }
+
+    // Build from snapshot
+    const root: PlaintextMessage = {
+      id: threadId,
+      channelId,
+      senderId: snapshot.senderId || 'unknown',
+      timestamp: snapshot.timestamp || Date.now(),
+      content: snapshot.content || '',
+      type: 'text',
+      prevHash: '',
+      status: 'sent',
+    };
+    if (snapshot.senderIdentityId) (root as any).senderIdentityId = snapshot.senderIdentityId;
+    if (snapshot.attachments) (root as any).attachments = snapshot.attachments;
+
+    this.messageStore.setThreadRoot(threadId, root);
+    await this.persistThreadRoots();
+  }
+
+  /** Persist all thread roots to IndexedDB. */
+  private async persistThreadRoots(): Promise<void> {
+    const roots = this.messageStore.getAllThreadRoots();
+    const obj: Record<string, any> = {};
+    for (const [id, snapshot] of roots) {
+      obj[id] = snapshot;
+    }
+    await this.persistentStore.saveSetting('threadRoots', obj);
+  }
+
+  // =========================================================================
   // Send
   // =========================================================================
 
@@ -2460,6 +2569,11 @@ export class ChatController {
     (msg as any).vectorClock = crdtMsg.vectorClock;
 
     await this.persistMessage(msg);
+
+    // Ensure thread root snapshot exists so the thread is self-contained
+    if (threadId) {
+      await this.ensureThreadRoot(threadId, this.state.activeChannelId);
+    }
 
     if (threadId && this.state.threadOpen) {
       this.ui?.renderThreadMessages();
@@ -2489,6 +2603,20 @@ export class ChatController {
         (envelope as any).threadId = threadId;
         (envelope as any).vectorClock = (msg as any).vectorClock;
         (envelope as any).messageId = msg.id; // For reaction targeting — receiver must use same ID
+
+        // Include thread root snapshot so receiver can reconstruct thread context
+        if (threadId) {
+          const threadRoot = this.messageStore.getThreadRoot(threadId);
+          if (threadRoot) {
+            (envelope as any).threadRootSnapshot = {
+              senderId: threadRoot.senderId,
+              senderIdentityId: (threadRoot as any).senderIdentityId,
+              content: threadRoot.content,
+              timestamp: threadRoot.timestamp,
+              attachments: (threadRoot as any).attachments,
+            };
+          }
+        }
 
         if (this.state.readyPeers.has(peerId)) {
           const sent = this.transport.send(peerId, envelope);
@@ -3253,6 +3381,12 @@ export class ChatController {
     (msg as any).vectorClock = crdtMsg.vectorClock;
 
     await this.persistMessage(msg);
+
+    // Ensure thread root snapshot exists for DM thread replies
+    if (threadId) {
+      await this.ensureThreadRoot(threadId, conversationId);
+    }
+
     await this.directConversationStore.updateLastMessage(conversationId, msg.timestamp);
     const updatedConv = await this.directConversationStore.get(conversationId);
     if (updatedConv) {
@@ -3283,6 +3417,20 @@ export class ChatController {
       (envelope as any).threadId = threadId;
       (envelope as any).vectorClock = (msg as any).vectorClock;
       (envelope as any).isDirect = true;
+
+      // Include thread root snapshot for DM thread replies
+      if (threadId) {
+        const threadRoot = this.messageStore.getThreadRoot(threadId);
+        if (threadRoot) {
+          (envelope as any).threadRootSnapshot = {
+            senderId: threadRoot.senderId,
+            senderIdentityId: (threadRoot as any).senderIdentityId,
+            content: threadRoot.content,
+            timestamp: threadRoot.timestamp,
+            attachments: (threadRoot as any).attachments,
+          };
+        }
+      }
 
       if (this.state.readyPeers.has(peerId)) {
         this.transport.send(peerId, envelope);

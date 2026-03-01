@@ -1287,9 +1287,24 @@ export class UIRenderer {
 
     if (!this.state.activeChannelId || !this.state.activeThreadId) return;
 
+    // Find parent message in channel — may be missing if channel was compacted
     const allMsgs = this.messageStore.getMessages(this.state.activeChannelId);
-    const parent = allMsgs.find((m: PlaintextMessage) => m.id === this.state.activeThreadId);
-    if (parent) this.appendMessageToDOM(parent, container);
+    let parent = allMsgs.find((m: PlaintextMessage) => m.id === this.state.activeThreadId);
+
+    // Fallback: use stored thread root snapshot if parent was compacted from channel
+    if (!parent) {
+      parent = this.messageStore.getThreadRoot(this.state.activeThreadId);
+    }
+
+    if (parent) {
+      this.appendMessageToDOM(parent, container);
+
+      // Add a visual separator between thread root and replies
+      const sep = document.createElement('div');
+      sep.className = 'thread-root-separator';
+      sep.innerHTML = '<span>Thread</span>';
+      container.appendChild(sep);
+    }
 
     const replies = this.messageStore.getThread(
       this.state.activeChannelId,

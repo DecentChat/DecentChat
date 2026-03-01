@@ -15,6 +15,9 @@ export class MessageStore {
   private hashChain: HashChain;
   // In-memory store per channel (channelId → messages[])
   private channels = new Map<string, PlaintextMessage[]>();
+  // Thread root snapshots — copies of parent messages that started threads.
+  // Stored separately from the hash chain to preserve thread context after channel compaction.
+  private threadRoots = new Map<string, PlaintextMessage>();
 
   constructor() {
     this.hashChain = new HashChain();
@@ -267,6 +270,32 @@ export class MessageStore {
    */
   clearChannel(channelId: string): void {
     this.channels.delete(channelId);
+  }
+
+
+  /**
+   * Store a thread root snapshot (copy of the parent message that started a thread).
+   * Preserves thread context even if the parent message is compacted from the channel.
+   * Only stores the first snapshot — subsequent calls for the same threadId are no-ops.
+   */
+  setThreadRoot(threadId: string, snapshot: PlaintextMessage): void {
+    if (!this.threadRoots.has(threadId)) {
+      this.threadRoots.set(threadId, snapshot);
+    }
+  }
+
+  /**
+   * Get the stored thread root snapshot for a thread.
+   */
+  getThreadRoot(threadId: string): PlaintextMessage | undefined {
+    return this.threadRoots.get(threadId);
+  }
+
+  /**
+   * Get all stored thread roots (for persistence/restore).
+   */
+  getAllThreadRoots(): Map<string, PlaintextMessage> {
+    return new Map(this.threadRoots);
   }
 
   // === Helpers ===

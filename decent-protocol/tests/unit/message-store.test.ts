@@ -481,3 +481,143 @@ describe('MessageStore - Edge Cases', () => {
     expect(msg1.id).not.toBe(msg2.id)
   })
 })
+
+describe('MessageStore - Thread Roots', () => {
+  let store: MessageStore
+
+  beforeEach(() => {
+    store = new MessageStore()
+  })
+
+  test('setThreadRoot stores a snapshot', () => {
+    const snapshot: PlaintextMessage = {
+      id: 'parent1',
+      channelId: 'channel1',
+      senderId: 'alice',
+      timestamp: Date.now(),
+      content: 'Original message',
+      type: 'text',
+      prevHash: '',
+      status: 'sent',
+    }
+
+    store.setThreadRoot('parent1', snapshot)
+    const retrieved = store.getThreadRoot('parent1')
+
+    expect(retrieved).toBeDefined()
+    expect(retrieved!.content).toBe('Original message')
+    expect(retrieved!.senderId).toBe('alice')
+  })
+
+  test('setThreadRoot is a no-op if root already exists', () => {
+    const snapshot1: PlaintextMessage = {
+      id: 'parent1',
+      channelId: 'channel1',
+      senderId: 'alice',
+      timestamp: Date.now(),
+      content: 'First version',
+      type: 'text',
+      prevHash: '',
+      status: 'sent',
+    }
+
+    const snapshot2: PlaintextMessage = {
+      id: 'parent1',
+      channelId: 'channel1',
+      senderId: 'alice',
+      timestamp: Date.now(),
+      content: 'Second version',
+      type: 'text',
+      prevHash: '',
+      status: 'sent',
+    }
+
+    store.setThreadRoot('parent1', snapshot1)
+    store.setThreadRoot('parent1', snapshot2)
+
+    const retrieved = store.getThreadRoot('parent1')
+    expect(retrieved!.content).toBe('First version')
+  })
+
+  test('getThreadRoot returns undefined for unknown thread', () => {
+    const result = store.getThreadRoot('nonexistent')
+    expect(result).toBeUndefined()
+  })
+
+  test('getAllThreadRoots returns all stored roots', () => {
+    const snap1: PlaintextMessage = {
+      id: 'p1', channelId: 'c1', senderId: 'alice',
+      timestamp: Date.now(), content: 'Msg 1', type: 'text',
+      prevHash: '', status: 'sent',
+    }
+    const snap2: PlaintextMessage = {
+      id: 'p2', channelId: 'c1', senderId: 'bob',
+      timestamp: Date.now(), content: 'Msg 2', type: 'text',
+      prevHash: '', status: 'sent',
+    }
+
+    store.setThreadRoot('p1', snap1)
+    store.setThreadRoot('p2', snap2)
+
+    const all = store.getAllThreadRoots()
+    expect(all.size).toBe(2)
+    expect(all.get('p1')!.content).toBe('Msg 1')
+    expect(all.get('p2')!.content).toBe('Msg 2')
+  })
+
+  test('getAllThreadRoots returns a copy (mutations do not affect store)', () => {
+    const snap: PlaintextMessage = {
+      id: 'p1', channelId: 'c1', senderId: 'alice',
+      timestamp: Date.now(), content: 'Original', type: 'text',
+      prevHash: '', status: 'sent',
+    }
+
+    store.setThreadRoot('p1', snap)
+    const copy = store.getAllThreadRoots()
+    copy.delete('p1')
+
+    // Original store should be unaffected
+    expect(store.getThreadRoot('p1')).toBeDefined()
+    expect(store.getThreadRoot('p1')!.content).toBe('Original')
+  })
+
+  test('thread root is independent of hash chain', async () => {
+    // Add normal messages with valid hash chain
+    const msg1 = await store.createMessage('channel1', 'alice', 'Hello')
+    await store.addMessage(msg1)
+
+    // Store thread root (bypasses hash chain entirely)
+    store.setThreadRoot(msg1.id, {
+      id: msg1.id,
+      channelId: msg1.channelId,
+      senderId: msg1.senderId,
+      timestamp: msg1.timestamp,
+      content: msg1.content,
+      type: msg1.type,
+      prevHash: '',
+      status: 'sent',
+    })
+
+    // Hash chain should still be valid
+    const verification = await store.verifyChannel('channel1')
+    expect(verification.valid).toBe(true)
+
+    // Thread root should be retrievable
+    expect(store.getThreadRoot(msg1.id)!.content).toBe('Hello')
+  })
+
+  test('thread root survives channel clear', () => {
+    const snap: PlaintextMessage = {
+      id: 'p1', channelId: 'channel1', senderId: 'alice',
+      timestamp: Date.now(), content: 'Preserved', type: 'text',
+      prevHash: '', status: 'sent',
+    }
+
+    store.setThreadRoot('p1', snap)
+    store.clearChannel('channel1')
+
+    // Thread root should still exist after channel clear
+    expect(store.getThreadRoot('p1')).toBeDefined()
+    expect(store.getThreadRoot('p1')!.content).toBe('Preserved')
+  })
+})
