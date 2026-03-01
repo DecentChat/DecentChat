@@ -20,7 +20,7 @@ import { FileStore } from './FileStore.js';
 import { NodeMessageProtocol } from './NodeMessageProtocol.js';
 import { SyncProtocol, type SyncEvent } from './SyncProtocol.js';
 import type { ResolvedDecentChatAccount } from '../types.js';
-import { BotHuddleManager } from '../huddle/BotHuddleManager.js';
+import { BotHuddleManager, type BotHuddleConfig } from '../huddle/BotHuddleManager.js';
 
 export interface NodeXenaPeerOptions {
   account: ResolvedDecentChatAccount;
@@ -50,6 +50,7 @@ export interface NodeXenaPeerOptions {
     content: string;
     inReplyToId: string;
   }) => void;
+  onHuddleTranscription?: (text: string, peerId: string, channelId: string, senderName: string) => Promise<string | undefined>;
   log?: { info: (s: string) => void; warn?: (s: string) => void; error?: (s: string) => void };
 }
 
@@ -266,20 +267,34 @@ export class NodeXenaPeer {
     this.opts.log?.info(`[xena-peer] online as ${this.myPeerId}, signaling: ${allServers.join(', ')}`);
     this.startPeerMaintenance();
 
-    // Initialize huddle manager after transport is ready
-    this.botHuddle = new BotHuddleManager(this.myPeerId, {
-      sendSignal: (peerId, data) => this.transport?.send(peerId, data) ?? false,
-      broadcastSignal: (data) => {
-        if (!this.transport) return;
-        for (const peerId of this.transport.getConnectedPeers()) {
-          if (peerId !== this.myPeerId) {
-            this.transport.send(peerId, data);
+    // Initialize huddle manager after transport is ready (if enabled)
+    const huddleConfig = this.opts.account.huddle;
+    if (huddleConfig?.enabled !== false) {
+      this.botHuddle = new BotHuddleManager(this.myPeerId, {
+        sendSignal: (peerId, data) => this.transport?.send(peerId, data) ?? false,
+        broadcastSignal: (data) => {
+          if (!this.transport) return;
+          for (const peerId of this.transport.getConnectedPeers()) {
+            if (peerId !== this.myPeerId) {
+              this.transport.send(peerId, data);
+            }
           }
-        }
-      },
-      getDisplayName: (peerId) => this.resolveSenderName('', peerId),
-      log: this.opts.log,
-    });
+        },
+        getDisplayName: (peerId) => this.resolveSenderName('', peerId),
+        onTranscription: async (text, peerId, channelId) => {
+          const senderName = this.resolveSenderName('', peerId);
+          return this.opts.onHuddleTranscription?.(text, peerId, channelId, senderName);
+        },
+        log: this.opts.log,
+      }, {
+        autoJoin: huddleConfig?.autoJoin,
+        sttEngine: huddleConfig?.sttEngine,
+        whisperModel: huddleConfig?.whisperModel,
+        ttsVoice: huddleConfig?.ttsVoice,
+        vadSilenceMs: huddleConfig?.vadSilenceMs,
+        vadThreshold: huddleConfig?.vadThreshold,
+      });
+    }
 
     for (const inviteUri of this.opts.account.invites ?? []) {
       // Try immediately; if the peer is offline, retry with backoff
@@ -418,6 +433,8 @@ export class NodeXenaPeer {
       clearTimeout(pending.timeout);
     }
     this.pendingMediaRequests.clear();
+    this.botHuddle?.destroy();
+    this.botHuddle = null;
     this.transport?.destroy();
     this.opts.log?.info('[xena-peer] stopped');
   }

@@ -381,6 +381,44 @@ async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
       });
     },
     onReply: () => { void finalizeStream(); },
+    onHuddleTranscription: async (text, peerId, channelId, senderName) => {
+      // Route voice transcription through the standard LLM pipeline,
+      // but capture the response text instead of sending it over the data channel.
+      return new Promise<string | undefined>((resolve) => {
+        let response = '';
+        const syntheticMsg = {
+          messageId: randomUUID(),
+          channelId: channelId || 'huddle',
+          workspaceId: '',
+          senderId: peerId,
+          senderName,
+          content: text,
+          chatType: 'direct' as const,
+          timestamp: Date.now(),
+        };
+
+        processInboundMessage(
+          syntheticMsg,
+          { accountId: ctx.accountId, log: ctx.log },
+          core,
+          {
+            sendReadReceipt: async () => {},
+          },
+          async (replyText) => {
+            response += replyText;
+          },
+          (reason) => {
+            ctx.log?.error?.(`[huddle-llm] error: ${reason}`);
+            resolve(undefined);
+          },
+        ).then(() => {
+          resolve(response.trim() || undefined);
+        }).catch((err) => {
+          ctx.log?.error?.(`[huddle-llm] pipeline error: ${String(err)}`);
+          resolve(undefined);
+        });
+      });
+    },
     log: ctx.log,
   });
 
