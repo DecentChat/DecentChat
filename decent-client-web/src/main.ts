@@ -9,6 +9,62 @@
 import './ui/styles/main.css';
 import './ui/styles/tooltips.css';
 
+// ─── Single-Tab Lock ─────────────────────────────────────────────────────────
+// Prevent multiple tabs from running simultaneously (shared IndexedDB,
+// WebRTC peer ID, and signaling connection would cause race conditions).
+(() => {
+  if (typeof BroadcastChannel === 'undefined') return; // SSR / old browser fallback
+
+  const LOCK_CHANNEL = 'decentchat-tab-lock';
+  const TAB_ID = crypto.randomUUID();
+  const bc = new BroadcastChannel(LOCK_CHANNEL);
+
+  // Announce presence
+  bc.postMessage({ type: 'ping', tabId: TAB_ID });
+
+  bc.onmessage = (e) => {
+    if (e.data?.type === 'ping' && e.data.tabId !== TAB_ID) {
+      // Another tab just opened — tell it we're already here
+      bc.postMessage({ type: 'pong', tabId: TAB_ID });
+    }
+    if (e.data?.type === 'pong' && e.data.tabId !== TAB_ID) {
+      // We received a response — another tab is already running
+      showTabBlocker();
+    }
+  };
+
+  function showTabBlocker() {
+    // Stop all scripts from running further
+    document.addEventListener('DOMContentLoaded', blockApp);
+    if (document.readyState !== 'loading') blockApp();
+
+    function blockApp() {
+      document.body.innerHTML = `
+        <div style="
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          height: 100vh; background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          text-align: center; padding: 20px;
+        ">
+          <div style="font-size: 48px; margin-bottom: 16px;">🔒</div>
+          <h1 style="font-size: 22px; font-weight: 700; margin: 0 0 12px;">DecentChat is already open</h1>
+          <p style="font-size: 14px; color: #999; max-width: 400px; line-height: 1.5; margin: 0 0 24px;">
+            DecentChat can only run in one tab at a time to keep your encrypted connections stable.
+            Please switch to the other tab, or close it and reload this page.
+          </p>
+          <button onclick="location.reload()" style="
+            padding: 10px 24px; border-radius: 8px; border: none;
+            background: #6c5ce7; color: #fff; font-size: 14px; font-weight: 600;
+            cursor: pointer;
+          ">Reload this tab</button>
+        </div>
+      `;
+      // Prevent any further app initialization
+      throw new Error('DecentChat: blocked duplicate tab');
+    }
+  }
+})();
+// ─────────────────────────────────────────────────────────────────────────────
+
 import { initTooltips } from './ui/TooltipManager';
 import { ChatController } from './app/ChatController';
 import { LifecycleReconnectGuard } from './app/LifecycleReconnectGuard';
