@@ -292,10 +292,11 @@ export class NodeXenaPeer {
     }
   }
 
-  async sendMessage(channelId: string, workspaceId: string, content: string, threadId?: string, replyToId?: string): Promise<void> {
+  async sendMessage(channelId: string, workspaceId: string, content: string, threadId?: string, replyToId?: string, messageId?: string): Promise<void> {
     if (!this.transport || !this.messageProtocol || !content.trim()) return;
 
     const msg = await this.messageStore.createMessage(channelId, this.myPeerId, content.trim(), 'text', threadId);
+    if (messageId) msg.id = messageId; // Use provided messageId for dedup with streamed messages
     const added = await this.messageStore.addMessage(msg);
     if (added.success) {
       this.persistMessagesForChannel(channelId);
@@ -950,15 +951,15 @@ export class NodeXenaPeer {
   }
 
   /** Public convenience: resolve workspace by channelId then call sendMessage. */
-  async sendToChannel(channelId: string, content: string, threadId?: string, replyToId?: string): Promise<void> {
+  async sendToChannel(channelId: string, content: string, threadId?: string, replyToId?: string, messageId?: string): Promise<void> {
     const workspaceId = this.findWorkspaceIdForChannel(channelId);
-    return this.sendMessage(channelId, workspaceId, content, threadId, replyToId);
+    return this.sendMessage(channelId, workspaceId, content, threadId, replyToId, messageId);
   }
 
   /** Send a direct (non-workspace) message to a specific peer with isDirect=true. */
-  async sendDirectToPeer(peerId: string, content: string, threadId?: string, replyToId?: string): Promise<void> {
+  async sendDirectToPeer(peerId: string, content: string, threadId?: string, replyToId?: string, messageId?: string): Promise<void> {
     if (!this.transport || !this.messageProtocol || !content.trim()) return;
-    const outboundMessageId = randomUUID();
+    const outboundMessageId = messageId || randomUUID();
     if (!this.transport.getConnectedPeers().includes(peerId)) {
       await this.enqueueOffline(peerId, {
         content: content.trim(),

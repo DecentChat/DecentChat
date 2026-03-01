@@ -73,8 +73,8 @@ type StreamingPeerAdapter = {
   }) => Promise<void>;
   sendDirectStreamDone: (args: { peerId: string; messageId: string }) => Promise<void>;
   sendStreamDone: (args: { channelId: string; workspaceId: string; messageId: string }) => Promise<void>;
-  sendDirectToPeer: (peerId: string, content: string, threadId?: string, replyToId?: string) => Promise<void>;
-  sendToChannel: (channelId: string, content: string, threadId?: string, replyToId?: string) => Promise<void>;
+  sendDirectToPeer: (peerId: string, content: string, threadId?: string, replyToId?: string, messageId?: string) => Promise<void>;
+  sendToChannel: (channelId: string, content: string, threadId?: string, replyToId?: string, messageId?: string) => Promise<void>;
   sendReadReceipt: (peerId: string, channelId: string, messageId: string) => Promise<void>;
   requestFullImage: (peerId: string, attachmentId: string) => Promise<Buffer | null>;
   getThreadHistory?: (args: {
@@ -205,22 +205,19 @@ export async function relayInboundMessageToPeer(params: {
         return;
       }
 
-      // When live streaming is enabled, the streamed message is already persisted by the web client
-      // as it receives deltas. Sending a second "normal" message here causes duplicates.
-      if (streamEnabled) {
-        return;
-      }
-
-      // Fallback persistence for non-stream mode.
+      // Always send the final message as a normal encrypted message for sync resilience.
+      // The client deduplicates by messageId (streamed messages use the same ID).
+      // Pass the stream messageId so the client can match and dedup.
       try {
         const persistThreadId = incoming.chatType === "direct"
           ? incoming.threadId
           : (incoming.threadId ?? incoming.messageId);
+        const finalMessageId = mid || undefined;
 
         if (incoming.chatType === "direct") {
-          await xenaPeer.sendDirectToPeer(incoming.senderId, finalReply, persistThreadId, incoming.messageId);
+          await xenaPeer.sendDirectToPeer(incoming.senderId, finalReply, persistThreadId, incoming.messageId, finalMessageId);
         } else {
-          await xenaPeer.sendToChannel(incoming.channelId, finalReply, persistThreadId, incoming.messageId);
+          await xenaPeer.sendToChannel(incoming.channelId, finalReply, persistThreadId, incoming.messageId, finalMessageId);
         }
         ctx.log?.info?.(`[decentchat] persisted assistant reply (${finalReply.length} chars) in ${incoming.chatType}`);
       } catch (err) {

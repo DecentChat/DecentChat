@@ -1155,6 +1155,17 @@ export class ChatController {
           }
         }
 
+
+        // Streaming dedup: if this messageId was already received via streaming,
+        // update the existing message content, clear streaming flag, persist, and return.
+        const existingStreamMsg = this.findMessageById(msg.id);
+        if (existingStreamMsg) {
+          existingStreamMsg.content = content;
+          (existingStreamMsg as any).streaming = false;
+          await this.persistMessage(existingStreamMsg);
+          this.ui?.updateStreamingMessage?.(msg.id, content);
+          return;
+        }
         // T3.2 Gossip dedup (post-decryption): if we already processed this exact message
         // ID via any path (direct or gossip), skip it now.  This covers the gossip-first
         // ordering where _originalMessageId was added to _gossipSeen before the direct
