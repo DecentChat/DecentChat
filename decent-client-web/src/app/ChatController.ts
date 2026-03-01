@@ -836,8 +836,9 @@ export class ChatController {
               if (incomingAlias && (!incomingLooksLikeId || currentLooksLikeId || !currentAlias)) {
                 member.alias = incomingAlias;
               }
+              if (data.isBot && !member.isBot) member.isBot = true;
             } else {
-              ws.members.push({ peerId, alias: data.alias, publicKey: '', joinedAt: Date.now(), role: 'member' });
+              ws.members.push({ peerId, alias: data.alias, publicKey: '', joinedAt: Date.now(), role: 'member', ...(data.isBot ? { isBot: true } : {}) });
             }
             this.persistWorkspace(ws.id).catch(() => {});
           } else {
@@ -1040,10 +1041,7 @@ export class ChatController {
                 console.warn(`[Security] workspaceId mismatch from ${peerId.slice(0, 8)}: ${data.workspaceId} -> using channel-mapped workspace ${targetWs.id}`);
               }
             }
-            if (!targetWs && allWorkspaces.length === 1 && this.state.readyPeers.has(peerId)) {
-              targetWs = allWorkspaces[0];
-              console.warn(`[Security] workspaceId unknown from ${peerId.slice(0, 8)}; using sole local workspace ${targetWs.id} (ready peer fallback)`);
-            }
+
             if (!targetWs) {
               console.warn(`[Security] Dropping message from ${peerId.slice(0, 8)}: unknown workspaceId ${data.workspaceId}`);
               return;
@@ -1368,13 +1366,34 @@ export class ChatController {
     this.ui?.updateSidebar();
   }
 
-  private sendWorkspaceState(peerId: string): void {
-    if (!this.state.activeWorkspaceId) return;
-    const ws = this.workspaceManager.getWorkspace(this.state.activeWorkspaceId);
-    if (!ws) return;
+  private sendWorkspaceState(peerId: string, workspaceId?: string): void {
+    // Find the workspace to send: explicit ID, peer's workspace, or active workspace
+    let ws: Workspace | undefined;
+    if (workspaceId) {
+      ws = this.workspaceManager.getWorkspace(workspaceId);
+    }
+    // If no explicit workspace, find workspace where this peer is a member
+    if (!ws) {
+      for (const w of this.workspaceManager.getAllWorkspaces()) {
+        if (w.members.some(m => m.peerId === peerId)) {
+          ws = w;
+          break;
+        }
+      }
+    }
+    // Last resort: active workspace
+    if (!ws && this.state.activeWorkspaceId) {
+      ws = this.workspaceManager.getWorkspace(this.state.activeWorkspaceId);
+    }
+    if (!ws) {
+      console.log(`[Sync] No workspace found for peer ${peerId.slice(0, 8)}, skipping state sync`);
+      return;
+    }
 
+    const isPeerMember = ws.members.some(m => m.peerId === peerId);
     console.log(`[Sync] Sending workspace state to ${peerId.slice(0, 8)}:`, {
       name: ws.name, channels: ws.channels.length, members: ws.members.length,
+      isPeerMember, peerInWs: ws.members.filter(m => m.peerId === peerId).map(m => m.alias)
     });
 
     this.sendControlWithRetry(peerId, {
@@ -1808,6 +1827,7 @@ export class ChatController {
             signingPublicKey: remoteMember.signingPublicKey || undefined,
             joinedAt: Date.now(),
             role: safeRole,
+            isBot: remoteMember.isBot || undefined,
           });
         } else {
           // Update alias when it improves quality; avoid overwriting human names
@@ -1841,6 +1861,10 @@ export class ChatController {
           }
           if (Array.isArray(remoteMember.devices) && remoteMember.devices.length > 0) {
             existing.devices = remoteMember.devices;
+          }
+          // Sync bot flag (self-declared by agent peers)
+          if (remoteMember.isBot && !existing.isBot) {
+            existing.isBot = true;
           }
         }
 
@@ -4560,12 +4584,7 @@ export class ChatController {
       }
     }
 
-    if (recipientSet.size > 0) {
-      return Array.from(recipientSet);
-    }
-
-    // Fallback
-    return Array.from(this.state.readyPeers);
+    return Array.from(recipientSet);
   }
 
   private ensurePeerInActiveWorkspace(peerId: string, publicKey = ''): void {

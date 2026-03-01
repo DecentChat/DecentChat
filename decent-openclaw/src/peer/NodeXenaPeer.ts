@@ -365,6 +365,7 @@ export class NodeXenaPeer {
         alias: this.opts.account.alias,
         publicKey: this.myPublicKey,
         role: 'member',
+        isBot: true,
         joinedAt: Date.now(),
       };
 
@@ -615,6 +616,7 @@ export class NodeXenaPeer {
       this.transport.send(peerId, {
         type: 'name-announce',
         alias: this.opts.account.alias,
+        isBot: true,
         ...(workspaceWithPeer ? { workspaceId: workspaceWithPeer.id } : {}),
       });
     } catch (err) {
@@ -674,6 +676,7 @@ export class NodeXenaPeer {
     const savedWorkspaces = this.store.get<Workspace[]>('workspaces', []);
     for (const ws of savedWorkspaces) {
       this.workspaceManager.importWorkspace(ws);
+      this.ensureBotFlag();
     }
 
     const savedPeers = this.store.get<Record<string, string>>('peer-public-keys', {});
@@ -758,11 +761,13 @@ export class NodeXenaPeer {
           alias: this.opts.account.alias,
           publicKey: this.myPublicKey,
           role: 'member',
+          isBot: true,
           joinedAt: Date.now(),
         });
       }
 
       this.workspaceManager.importWorkspace(workspace);
+      this.ensureBotFlag();
       this.opts.log?.info(`[xena-peer] imported workspace ${workspaceId.slice(0, 8)} "${sync.name}" with ${workspace.members.length} members, ${workspace.channels.length} channels`);
     } else {
       // Update existing workspace: sync members and channels
@@ -807,6 +812,7 @@ export class NodeXenaPeer {
     }
 
     this.persistWorkspaces();
+    this.ensureBotFlag();
   }
 
   private persistWorkspaces(): void {
@@ -1261,6 +1267,19 @@ export class NodeXenaPeer {
     if (changed) {
       this.persistWorkspaces();
     }
+  }
+
+  /** Ensure our own member records always have isBot: true */
+  private ensureBotFlag(): void {
+    let changed = false;
+    for (const ws of this.workspaceManager.getAllWorkspaces()) {
+      const me = ws.members.find((m) => m.peerId === this.myPeerId);
+      if (me && !me.isBot) {
+        me.isBot = true;
+        changed = true;
+      }
+    }
+    if (changed) this.persistWorkspaces();
   }
 
   private offlineQueueKey(peerId: string): string {

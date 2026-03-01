@@ -56,7 +56,10 @@ async function startDM(page: Page, name: string, peerId: string): Promise<void> 
     return !!el && el.value === id;
   }, peerId, { timeout: 3000 });
 
-  await page.click('.modal .btn-primary');
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'networkidle', timeout: 10000 }).catch(() => {}),
+    page.click('.modal .btn-primary'),
+  ]);
   await page.waitForSelector('.modal-overlay', { state: 'detached', timeout: 5000 }).catch(() => {});
 
   const convoItem = page.locator('[data-testid="direct-conversation-item"]').filter({ hasText: name }).first();
@@ -124,10 +127,12 @@ test.describe('Workspace Direct Messages Section', () => {
   });
 
   test('Direct Messages section is visible in sidebar', async ({ page }) => {
+    await enterDMView(page);
     await expect(page.locator('.sidebar-section-header', { hasText: 'Direct Messages' })).toBeVisible();
   });
 
   test('+ button for Direct Messages opens Start DM modal', async ({ page }) => {
+    await enterDMView(page);
     await page.click('#start-dm-btn');
     // With no contacts, app shows a toast error instead of modal.
     await expect(page.locator('.toast')).toContainText('Add a contact first');

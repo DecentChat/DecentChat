@@ -454,6 +454,17 @@ body {
   color: #fff;
 }
 
+.role-bot {
+  background: linear-gradient(135deg, #7c3aed, #6d28d9);
+  color: #fff;
+}
+.member-avatar.bot-avatar {
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .you-badge {
   font-size: 11px;
   color: var(--text-muted);
@@ -4018,4 +4029,39 @@ html, body {
 }
 .members-offline .member-row:hover .member-name-text {
   color: var(--sidebar-text-active);
+}
+
+/* Bot member badge & avatar */
+.member-role-tag.bot {
+  background: #7c3aed;
+  color: #fff;
+}
+.member-avatar-sm.bot-avatar {
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Bot badge in message header */
+.msg-bot-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  margin-left: 6px;
+  border-radius: 3px;
+  background: #7c3aed;
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+  line-height: 1.4;
+}
+.message-avatar.bot-avatar {
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }

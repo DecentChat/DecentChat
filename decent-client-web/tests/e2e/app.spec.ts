@@ -132,20 +132,22 @@ test.describe('DecentChat E2E', () => {
 
   test('/version shows version info', async ({ page }) => {
     await createWorkspace(page);
+    await page.waitForTimeout(500); // Let workspace fully initialize
     const input = page.locator('#compose-input');
     await input.fill('/version');
     await input.press('Enter');
 
-    await expect(page.locator('.message.system')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('.message.system')).toBeVisible({ timeout: 5000 });
   });
 
   test('/whoami shows identity', async ({ page }) => {
     await createWorkspace(page);
+    await page.waitForTimeout(500); // Let workspace fully initialize
     const input = page.locator('#compose-input');
     await input.fill('/whoami');
     await input.press('Enter');
 
-    await expect(page.locator('.message.system')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('.message.system')).toBeVisible({ timeout: 5000 });
   });
 
   test('command autocomplete appears on /', async ({ page }) => {

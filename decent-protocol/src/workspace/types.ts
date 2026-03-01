@@ -41,6 +41,8 @@ export interface WorkspaceMember {
   devices?: DeviceInfoSync[];
   joinedAt: number;
   role: 'owner' | 'admin' | 'member';
+  /** Whether this member is an automated agent/bot */
+  isBot?: boolean;
   addedBy?: string;
 }
 

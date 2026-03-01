@@ -545,12 +545,19 @@ async function processInboundMessage(
   const fallbackThreadId = (msg.replyToId ?? "").trim();
   const candidateThreadId = explicitThreadId || fallbackThreadId;
 
+  // When replyToMode=all and this is a channel message with no thread context,
+  // treat each top-level message as its own thread so they get parallel sessions
+  // and each reply appears as a thread reply (Slack-bot style).
+  const autoThreadId = (!explicitThreadId && !fallbackThreadId && msg.chatType !== "direct" && threadingFlags.replyToMode === "all")
+    ? msg.messageId
+    : "";
+
   // Slack-compatible knobs:
   // - replyToMode=off => never route per-thread
   // - thread.historyScope=channel => keep base channel session
   const threadingDisabled = threadingFlags.replyToMode === "off" || threadingFlags.historyScope === "channel";
-  const derivedThreadId = threadingDisabled ? "" : candidateThreadId;
-  const isThreadReply = Boolean(derivedThreadId && derivedThreadId !== msg.messageId);
+  const derivedThreadId = threadingDisabled ? "" : (candidateThreadId || autoThreadId);
+  const isThreadReply = Boolean(derivedThreadId && (derivedThreadId !== msg.messageId || autoThreadId));
 
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,

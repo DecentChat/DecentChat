@@ -838,29 +838,31 @@ export class UIRenderer {
             const isMe = identityPeers.includes(this.state.myPeerId);
             const isOnline = isMe || identityPeers.some(pid => this.peerStatusClass(pid) === 'online');
             const alias = this.getPeerAlias(m.peerId);
-            return { peerId: m.peerId, alias, isOnline, isMe, role: m.role };
+            return { peerId: m.peerId, alias, isOnline, isMe, role: m.role, isBot: m.isBot };
           });
         })()
       : [];
     const onlineMembers = memberData.filter(m => m.isOnline);
     const offlineMembers = memberData.filter(m => !m.isOnline);
 
-    const renderMemberRow = (m: { peerId: string; alias: string; isOnline: boolean; isMe: boolean; role?: string }) => {
+    const renderMemberRow = (m: { peerId: string; alias: string; isOnline: boolean; isMe: boolean; role?: string; isBot?: boolean }) => {
       const initial = m.alias.charAt(0).toUpperCase();
-      const color = this.peerColor(m.peerId);
+      const color = m.isBot ? '#7c3aed' : this.peerColor(m.peerId);
+      const avatarContent = m.isBot ? '🤖' : this.escapeHtml(initial);
       const youTag = m.isMe ? ' <span class="sidebar-item-meta">(you)</span>' : '';
+      const botTag = m.isBot ? ' <span class="member-role-tag bot">BOT</span>' : '';
       const roleTag = m.role === 'owner' ? ' <span class="member-role-tag owner">owner</span>'
         : m.role === 'admin' ? ' <span class="member-role-tag admin">admin</span>' : '';
       return `
         <div class="sidebar-item member-row" data-member-peer-id="${m.peerId}">
-          <div class="member-avatar-sm" style="background: ${color}">
-            ${this.escapeHtml(initial)}
+          <div class="member-avatar-sm${m.isBot ? ' bot-avatar' : ''}" style="background: ${color}">
+            ${avatarContent}
             <span class="member-presence ${m.isOnline ? 'online' : 'offline'}"></span>
           </div>
           <div class="member-name-wrapper">
             <div class="member-name-inline">
               <span class="member-name-text">${this.escapeHtml(m.alias)}${youTag}</span>
-              ${roleTag}
+              ${botTag}${roleTag}
             </div>
           </div>
         </div>`;
@@ -1142,6 +1144,19 @@ export class UIRenderer {
     }
 
     this.upgradeInlineImagePreviews(list);
+    // Scroll to bottom after channel switch. Use rAF to wait for layout,
+    // then also re-scroll after any lazy-loaded images finish rendering.
+    requestAnimationFrame(() => {
+      this.scrollToBottom(list);
+      const images = list.querySelectorAll('img');
+      if (images.length > 0) {
+        let pending = 0;
+        const onLoad = () => { if (--pending <= 0) this.scrollToBottom(list); };
+        images.forEach(img => {
+          if (!img.complete) { pending++; img.addEventListener('load', onLoad, { once: true }); img.addEventListener('error', onLoad, { once: true }); }
+        });
+      }
+    });
     this.ensureScrollListener();
   }
 
@@ -1174,6 +1189,11 @@ export class UIRenderer {
     const senderLabel = senderName;
     const initial = senderName.slice(0, 2).toUpperCase();
     const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    // Check if sender is a bot
+    const senderWs = this.state.activeWorkspaceId ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId) : null;
+    const senderMember = senderWs?.members.find(m => m.peerId === msg.senderId);
+    const isBotSender = senderMember?.isBot === true;
 
     const prevMsg = list.lastElementChild as HTMLElement | null;
     const prevSender = prevMsg?.dataset?.senderId;
@@ -1219,10 +1239,10 @@ export class UIRenderer {
       div.innerHTML = `<div class="message-content">${this.escapeHtml(msg.content)}</div>`;
     } else {
       div.innerHTML = `
-        <div class="message-avatar" style="background: ${this.peerColor(msg.senderId)}">${this.escapeHtml(initial)}</div>
+        <div class="message-avatar${isBotSender ? ' bot-avatar' : ''}" style="background: ${isBotSender ? '#7c3aed' : this.peerColor(msg.senderId)}">${isBotSender ? '🤖' : this.escapeHtml(initial)}</div>
         <div class="message-body">
           <div class="message-header">
-            <span class="message-sender">${this.escapeHtml(senderLabel)}</span>
+            <span class="message-sender">${this.escapeHtml(senderLabel)}</span>${isBotSender ? '<span class="msg-bot-badge">BOT</span>' : ''}
             <span class="message-time">${time}</span>
             ${isMine ? `<span class="msg-delivery-status ${statusClass}" data-message-id="${msg.id}" title="${deliveryTitle}">${statusSymbol}</span>${expectedAcks > 0 ? `<span class="msg-delivery-detail" data-message-id="${msg.id}">${statusClass === 'read' ? readCount : ackedCount}/${expectedAcks}</span>` : ''}` : ''}
           </div>
@@ -2397,10 +2417,11 @@ export class UIRenderer {
       const isYou = peerId === this.state.myPeerId;
       const isOnline = this.state.connectedPeers.has(peerId) || isYou;
 
+      const isBot = !!(member as any).isBot;
       return `
         <div class="member-row">
           <div class="member-info">
-            <div class="member-avatar" style="background:${color}">${this.escapeHtml(initial)}</div>
+            <div class="member-avatar${isBot ? ' bot-avatar' : ''}" style="background:${color}">${isBot ? '🤖' : this.escapeHtml(initial)}</div>
             <div class="member-details">
               <div class="member-name-line">
                 <span class="member-name">${this.escapeHtml(name)}</span>
@@ -2438,17 +2459,18 @@ export class UIRenderer {
     const isOwner = myRole === 'owner' || ws.createdBy === this.state.myPeerId || this.workspaceManager.isOwner(ws.id, this.state.myPeerId);
     const isAdminOrOwner = isOwner || myRole === 'admin' || this.workspaceManager.isAdmin(ws.id, this.state.myPeerId);
 
-    const roleBadge = (role: string) => {
-      if (role === 'owner') return '<span class="role-badge role-owner" title="Owner">Owner</span>';
-      if (role === 'admin') return '<span class="role-badge role-admin" title="Admin">Admin</span>';
-      return '';
+    const roleBadge = (role: string, isBot?: boolean) => {
+      const badge = role === 'owner' ? '<span class="role-badge role-owner" title="Owner">Owner</span>'
+        : role === 'admin' ? '<span class="role-badge role-admin" title="Admin">Admin</span>' : '';
+      const botBadge = isBot ? '<span class="role-badge role-bot" title="Bot">BOT</span>' : '';
+      return botBadge + badge;
     };
 
     const membersHTML = ws.members.map(member => {
-      const { peerId, role } = member;
+      const { peerId, role, isBot } = member;
       const name = this.getPeerAlias(peerId);
       const initial = name.charAt(0).toUpperCase();
-      const color = this.peerColor(peerId);
+      const color = isBot ? '#7c3aed' : this.peerColor(peerId);
       const isYou = peerId === this.state.myPeerId;
       const isOnline = this.state.connectedPeers.has(peerId) || isYou;
       const canRemove = isAdminOrOwner && !isYou && role !== 'owner';
@@ -2463,11 +2485,11 @@ export class UIRenderer {
       return `
         <div class="member-row">
           <div class="member-info">
-            <div class="member-avatar" style="background:${color}">${this.escapeHtml(initial)}</div>
+            <div class="member-avatar${isBot ? ' bot-avatar' : ''}" style="background:${color}">${isBot ? '🤖' : this.escapeHtml(initial)}</div>
             <div class="member-details">
               <div class="member-name-line">
                 <span class="member-name">${this.escapeHtml(name)}</span>
-                ${roleBadge(role)}
+                ${roleBadge(role, isBot)}
                 ${isYou ? '<span class="you-badge">you</span>' : ''}
               </div>
               <span class="member-status ${isOnline ? 'online' : 'offline'}">${isOnline ? 'Online' : 'Offline'}</span>

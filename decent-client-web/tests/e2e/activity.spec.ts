@@ -92,7 +92,7 @@ test('activity shows thread reply and opens thread on click', async ({ page }) =
   await page.waitForSelector('#activity-btn .activity-badge', { timeout: 10000 });
   await page.click('#activity-btn');
   await page.waitForSelector('.activity-row', { timeout: 10000 });
-  await expect(page.locator('.activity-list')).toContainText(replyText);
+  await expect(page.locator('.activity-panel-list')).toContainText(replyText);
 
   await page.locator('.activity-row').first().click();
   await page.waitForSelector('#thread-panel:not(.hidden)', { timeout: 10000 });
