@@ -32,9 +32,12 @@ describe('TextToSpeech', () => {
       expect(pkt[0]).toBe(0x80);
     }
 
-    // Verify payload type is 111 (Opus)
-    for (const pkt of packets) {
-      expect(pkt[1]).toBe(111);
+    // Verify payload type is 111 (Opus), accounting for marker bit on first packet
+    for (let i = 0; i < packets.length; i++) {
+      const pt = packets[i][1] & 0x7f;       // strip marker bit
+      const marker = (packets[i][1] & 0x80) !== 0;
+      expect(pt).toBe(111);
+      if (i === 0) expect(marker).toBe(true);   // first packet = start of talkspurt
     }
 
     // Verify sequence numbers are sequential starting from 0

@@ -22,8 +22,10 @@ export type DecentChatChannelConfig = {
   huddle?: {
     enabled?: boolean;
     autoJoin?: boolean;
-    sttEngine?: 'whisper-cpp' | 'whisper-python';
+    sttEngine?: 'whisper-cpp' | 'whisper-python' | 'openai' | 'groq';
     whisperModel?: string;
+    sttLanguage?: string;
+    sttApiKey?: string;
     ttsVoice?: string;
     vadSilenceMs?: number;
     vadThreshold?: number;
@@ -55,8 +57,10 @@ export type ResolvedDecentChatAccount = {
   huddle?: {
     enabled?: boolean;
     autoJoin?: boolean;
-    sttEngine?: 'whisper-cpp' | 'whisper-python';
+    sttEngine?: 'whisper-cpp' | 'whisper-python' | 'openai' | 'groq';
     whisperModel?: string;
+    sttLanguage?: string;
+    sttApiKey?: string;
     ttsVoice?: string;
     vadSilenceMs?: number;
     vadThreshold?: number;

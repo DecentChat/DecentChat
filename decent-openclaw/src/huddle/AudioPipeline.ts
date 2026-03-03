@@ -6,6 +6,7 @@ export interface AudioPipelineOptions {
   frameDuration?: number;    // 20ms (default)
   vadThreshold?: number;     // 0.02 RMS (default)
   vadSilenceMs?: number;     // 500ms (default)
+  onSpeechStart?: () => void;
   onSpeechEnd?: (pcmBuffer: Buffer) => void;
   log?: { info: (s: string) => void };
 }
@@ -21,6 +22,7 @@ export class AudioPipeline {
   private frameDuration: number;
   private vadThreshold: number;
   private vadSilenceMs: number;
+  private onSpeechStart?: () => void;
   private onSpeechEnd?: (pcmBuffer: Buffer) => void;
   private log?: { info: (s: string) => void };
 
@@ -35,6 +37,7 @@ export class AudioPipeline {
     this.frameDuration = opts.frameDuration ?? 20;
     this.vadThreshold = opts.vadThreshold ?? 0.02;
     this.vadSilenceMs = opts.vadSilenceMs ?? 500;
+    this.onSpeechStart = opts.onSpeechStart;
     this.onSpeechEnd = opts.onSpeechEnd;
     this.log = opts.log;
 
@@ -65,6 +68,7 @@ export class AudioPipeline {
       if (!this.isSpeaking) {
         this.isSpeaking = true;
         this.log?.info(`[AudioPipeline] Speech started (RMS=${rms.toFixed(4)})`);
+        this.onSpeechStart?.();
       }
       this.silenceStart = null;
       this.pcmChunks.push(pcmBuf);
