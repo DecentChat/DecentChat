@@ -19,20 +19,18 @@ const DecentChatConfigSchema = z.object({
   streamEnabled: z.boolean().optional().default(true),
   dmPolicy: z.enum(["open", "pairing", "allowlist", "disabled"]).optional().default("open"),
   replyToMode: z.enum(["off", "first", "all"]).optional().default("all"),
-  replyToModeByChatType: z.object({
-    direct: z.enum(["off", "first", "all"]).optional(),
-    group: z.enum(["off", "first", "all"]).optional(),
-    channel: z.enum(["off", "first", "all"]).optional(),
-  }).optional(),
-  thread: z.object({
-    historyScope: z.enum(["thread", "channel"]).optional().default("thread"),
-    inheritParent: z.boolean().optional().default(false),
-    initialHistoryLimit: z.number().int().min(0).optional().default(20),
-  }).optional(),
-  channels: z.record(z.string(), z.object({
-    requireMention: z.boolean().optional(),
-  }).optional()).optional(),
-});
+  // Flattened from replyToModeByChatType object (Control UI can't render nested objects)
+  replyToModeDirect: z.enum(["off", "first", "all"]).optional(),
+  replyToModeGroup: z.enum(["off", "first", "all"]).optional(),
+  replyToModeChannel: z.enum(["off", "first", "all"]).optional(),
+  // Flattened from thread object
+  threadHistoryScope: z.enum(["thread", "channel"]).optional().default("thread"),
+  threadInheritParent: z.boolean().optional().default(false),
+  threadInitialHistoryLimit: z.number().int().min(0).optional().default(20),
+  // Legacy nested forms still accepted at runtime via passthrough
+  // (resolveDecentChatAccount reads ch.replyToModeByChatType, ch.thread, ch.channels)
+  // but excluded from schema so Control UI can render all fields cleanly.
+}).passthrough();
 
 
 export function normalizeDecentChatMessagingTarget(raw: string): string | undefined {
@@ -84,15 +82,26 @@ function resolveDecentChatAccount(cfg: any, accountId?: string | null): Resolved
     streamEnabled: ch.streamEnabled !== false,
     replyToMode: ch.replyToMode ?? "all",
     replyToModeByChatType: {
-      direct: ch.replyToModeByChatType?.direct,
-      group: ch.replyToModeByChatType?.group,
-      channel: ch.replyToModeByChatType?.channel,
+      direct: ch.replyToModeDirect ?? ch.replyToModeByChatType?.direct,
+      group: ch.replyToModeGroup ?? ch.replyToModeByChatType?.group,
+      channel: ch.replyToModeChannel ?? ch.replyToModeByChatType?.channel,
     },
     thread: {
-      historyScope: ch.thread?.historyScope ?? "thread",
-      inheritParent: ch.thread?.inheritParent ?? false,
-      initialHistoryLimit: ch.thread?.initialHistoryLimit ?? 20,
+      historyScope: ch.threadHistoryScope ?? ch.thread?.historyScope ?? "thread",
+      inheritParent: ch.threadInheritParent ?? ch.thread?.inheritParent ?? false,
+      initialHistoryLimit: ch.threadInitialHistoryLimit ?? ch.thread?.initialHistoryLimit ?? 20,
     },
+    huddle: ch.huddle ? {
+      enabled: ch.huddle.enabled,
+      autoJoin: ch.huddle.autoJoin,
+      sttEngine: ch.huddle.sttEngine,
+      whisperModel: ch.huddle.whisperModel,
+      sttLanguage: ch.huddle.sttLanguage,
+      sttApiKey: ch.huddle.sttApiKey,
+      ttsVoice: ch.huddle.ttsVoice,
+      vadSilenceMs: ch.huddle.vadSilenceMs,
+      vadThreshold: ch.huddle.vadThreshold,
+    } : undefined,
   };
 }
 
@@ -118,9 +127,14 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       dataDir: { label: "Data Directory", advanced: true, help: "Path for persistent peer storage" },
       streamEnabled: { label: "Enable streaming", help: "Stream token deltas to peers in real time" },
       dmPolicy: { label: "DM Policy" },
-      replyToMode: { label: "Reply-to mode", help: "off|first|all (Slack-compatible semantics)" },
-      replyToModeByChatType: { label: "Reply-to mode by chat type", help: "Overrides for direct|group|channel" },
-      thread: { label: "Thread settings", advanced: true },
+      replyToMode: { label: "Reply-to mode", help: "off|first|all — controls thread reply behavior" },
+      replyToModeDirect: { label: "Reply-to mode (DMs)", help: "Override for direct messages" },
+      replyToModeGroup: { label: "Reply-to mode (Groups)", help: "Override for group chats" },
+      replyToModeChannel: { label: "Reply-to mode (Channels)", help: "Override for channels" },
+      threadHistoryScope: { label: "Thread history scope", help: "thread = isolated, channel = shared context", advanced: true },
+      threadInheritParent: { label: "Thread inherit parent", help: "Thread sessions inherit parent channel context", advanced: true },
+      threadInitialHistoryLimit: { label: "Thread initial history limit", help: "Messages to bootstrap in new thread sessions", advanced: true },
+
       invites: { label: "Invite URLs", advanced: true, help: "DecentChat invite URIs for workspaces to join on startup" },
     },
   },

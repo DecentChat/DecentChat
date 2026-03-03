@@ -45,7 +45,11 @@
         "decent-transport-webrtc": "file:../decent-transport-webrtc",
         "node-datachannel": "^0.32.1",
         "openclaw": "file:/Users/claw/.npm-global/lib/node_modules/openclaw",
+        "opusscript": "^0.1.1",
         "zod": "^3.24.1",
+      },
+      "devDependencies": {
+        "playwright": "^1.58.2",
       },
     },
     "decent-protocol": {

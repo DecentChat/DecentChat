@@ -46,7 +46,7 @@ describe('NodeXenaPeer name-announce flow', () => {
     expect(sent[0]?.peerId).toBe('peer-1');
     expect(sent[0]?.msg.type).toBe('handshake');
     expect(sent[1]?.peerId).toBe('peer-1');
-    expect(sent[1]?.msg).toEqual({ type: 'name-announce', alias: 'Xena' });
+    expect(sent[1]?.msg).toEqual({ type: 'name-announce', alias: 'Xena', isBot: true });
   });
 
   test('resolveSenderName prefers cached alias over peer ID', () => {

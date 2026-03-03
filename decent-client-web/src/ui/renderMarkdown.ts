@@ -38,8 +38,9 @@ export function renderMarkdown(content: string): string {
         'p', 'br', 'strong', 'em', 'del', 'code', 'pre',
         'ul', 'ol', 'li', 'blockquote', 'h1', 'h2', 'h3',
         'a', 'hr', 'span',
+        'table', 'thead', 'tbody', 'tr', 'th', 'td',
       ],
-      ALLOWED_ATTR: ['href', 'title', 'target', 'rel', 'class'],
+      ALLOWED_ATTR: ['href', 'title', 'target', 'rel', 'class', 'align'],
       ALLOW_DATA_ATTR: false,
     });
   } catch {

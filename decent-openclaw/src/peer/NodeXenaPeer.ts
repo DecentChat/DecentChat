@@ -12,6 +12,7 @@ import {
   OfflineQueue,
   SeedPhraseManager,
   WorkspaceManager,
+  Negentropy,
 } from 'decent-protocol';
 import type { Workspace, WorkspaceMember, PlaintextMessage } from 'decent-protocol';
 import { PeerTransport } from 'decent-transport-webrtc';
@@ -57,7 +58,7 @@ export interface NodeXenaPeerOptions {
 type MediaChunk = {
   type: 'media-chunk';
   attachmentId: string;
-  chunkIndex: number;
+  index: number;
   total: number;
   data: string;
   chunkHash: string;
@@ -290,6 +291,8 @@ export class NodeXenaPeer {
         autoJoin: huddleConfig?.autoJoin,
         sttEngine: huddleConfig?.sttEngine,
         whisperModel: huddleConfig?.whisperModel,
+        sttLanguage: huddleConfig?.sttLanguage,
+        sttApiKey: huddleConfig?.sttApiKey,
         ttsVoice: huddleConfig?.ttsVoice,
         vadSilenceMs: huddleConfig?.vadSilenceMs,
         vadThreshold: huddleConfig?.vadThreshold,
@@ -545,6 +548,18 @@ export class NodeXenaPeer {
       return;
     }
 
+    // Handle Negentropy sync queries from web client
+    if (msg?.type === 'message-sync-negentropy-query') {
+      await this.handleNegentropyQuery(fromPeerId, msg);
+      return;
+    }
+
+    // Handle fetch requests for specific message IDs (after Negentropy reconciliation)
+    if (msg?.type === 'message-sync-fetch-request') {
+      await this.handleFetchRequest(fromPeerId, msg);
+      return;
+    }
+
     // Handle media requests (unencrypted, similar to web client)
     if (msg?.type === 'media-request') {
       await this.handleMediaRequest(fromPeerId, msg as MediaRequest);
@@ -654,11 +669,82 @@ export class NodeXenaPeer {
     });
   }
 
+  private async handleNegentropyQuery(fromPeerId: string, msg: any): Promise<void> {
+    const wsId = msg.workspaceId as string | undefined;
+    const channelId = msg.channelId as string | undefined;
+    const requestId = msg.requestId as string | undefined;
+    const query = msg.query;
+    if (!wsId || !channelId || !requestId || !query) return;
+
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return;
+    if (!ws.members.some((m: any) => m.peerId === fromPeerId)) return;
+    if (!ws.channels.some((ch: any) => ch.id === channelId)) return;
+
+    const localItems = this.messageStore.getMessages(channelId).map((m) => ({ id: m.id, timestamp: m.timestamp }));
+    const negentropy = new Negentropy();
+    await negentropy.build(localItems);
+    const response = await negentropy.processQuery(query);
+
+    this.transport!.send(fromPeerId, {
+      type: 'message-sync-negentropy-response',
+      requestId,
+      workspaceId: wsId,
+      channelId,
+      response,
+    });
+    this.opts.log?.info?.(`[xena-peer] Negentropy query from ${fromPeerId.slice(0, 8)} for channel ${channelId.slice(0, 8)}: ${localItems.length} local messages`);
+  }
+
+  private async handleFetchRequest(fromPeerId: string, msg: any): Promise<void> {
+    const wsId = msg.workspaceId as string | undefined;
+    if (!wsId) return;
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return;
+    if (!ws.members.some((m: any) => m.peerId === fromPeerId)) return;
+
+    const requested: Record<string, string[]> = msg.messageIdsByChannel || {};
+    const allMessages: any[] = [];
+
+    for (const ch of ws.channels) {
+      const requestedIds = Array.isArray(requested[ch.id]) ? requested[ch.id] : [];
+      if (requestedIds.length === 0) continue;
+      const idSet = new Set(requestedIds.filter((id: unknown) => typeof id === 'string'));
+      if (idSet.size === 0) continue;
+
+      const channelMessages = this.messageStore.getMessages(ch.id)
+        .filter((m) => idSet.has(m.id))
+        .sort((a, b) => a.timestamp - b.timestamp);
+      for (const m of channelMessages) {
+        allMessages.push({
+          id: m.id,
+          channelId: m.channelId,
+          senderId: m.senderId,
+          content: m.content,
+          timestamp: m.timestamp,
+          type: m.type,
+          threadId: m.threadId,
+          prevHash: m.prevHash,
+          vectorClock: (m as any).vectorClock,
+        });
+      }
+    }
+
+    if (allMessages.length > 0) {
+      this.transport!.send(fromPeerId, {
+        type: 'message-sync-response',
+        workspaceId: wsId,
+        messages: allMessages,
+      });
+    }
+    this.opts.log?.info?.(`[xena-peer] Fetch request from ${fromPeerId.slice(0, 8)}: sent ${allMessages.length} messages`);
+  }
+
   private async sendHandshake(peerId: string): Promise<void> {
     if (!this.transport || !this.messageProtocol) return;
     try {
       const handshake = await this.messageProtocol.createHandshake();
-      this.transport.send(peerId, { type: 'handshake', ...handshake });
+      this.transport.send(peerId, { type: 'handshake', ...handshake, capabilities: ['negentropy-sync-v1'] });
       // Announce display name (separate unencrypted message — same pattern as the web client)
       // Include workspaceId so the peer can deterministically add us to the correct workspace
       // (critical when the peer has multiple workspaces — without this, we'd only update
@@ -720,6 +806,8 @@ export class NodeXenaPeer {
         break;
       }
       case 'join-rejected':
+        this.opts.log?.warn?.(`[xena-peer] join REJECTED: ${(event as any).reason || 'unknown reason'}`);
+        break;
       case 'sync-complete':
       default:
         break;
@@ -1208,7 +1296,7 @@ export class NodeXenaPeer {
         const chunk: MediaChunk = {
           type: 'media-chunk',
           attachmentId: request.attachmentId,
-          chunkIndex: i,
+          index: i,
           total: attachment.totalChunks,
           data: chunkData,
           chunkHash: '', // TODO: compute hash
@@ -1238,7 +1326,7 @@ export class NodeXenaPeer {
 
     try {
       const buffer = Buffer.from(chunk.data, 'base64');
-      pending.chunks.set(chunk.chunkIndex, buffer);
+      pending.chunks.set(chunk.index, buffer);
 
       // Check if we have all chunks
       if (pending.chunks.size === chunk.total) {
