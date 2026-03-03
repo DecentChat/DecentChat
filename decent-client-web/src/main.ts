@@ -305,17 +305,27 @@ async function init(): Promise<void> {
     },
   });
 
-  // Clicking a desktop notification switches to that channel
+  // Clicking a desktop notification switches to the correct workspace + channel
   ctrl.notifications.onNotificationClick = (channelId) => {
-    // Find workspace that owns this channel and activate it first
+    // Find which workspace owns this channel
+    let targetWorkspaceId: string | null = null;
     for (const ws of ctrl.workspaceManager.getAllWorkspaces()) {
       if (ws.channels.some((ch: any) => ch.id === channelId)) {
-        state.activeWorkspaceId = ws.id;
+        targetWorkspaceId = ws.id;
         break;
       }
     }
-    ui.switchChannel(channelId);
-    ui.renderApp(); // re-render to reflect workspace change if needed
+
+    if (targetWorkspaceId) {
+      // Workspace channel or DM — switch workspace first if needed
+      if (targetWorkspaceId !== state.activeWorkspaceId) {
+        ui.switchWorkspace(targetWorkspaceId);
+      }
+      ui.switchChannel(channelId);
+    } else {
+      // Standalone direct conversation (not inside a workspace)
+      ui.switchToDirectConversation(channelId);
+    }
   };
 
   // Give the controller a handle to the UI for push updates

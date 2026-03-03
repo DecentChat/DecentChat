@@ -700,12 +700,8 @@ export class ChatController {
           this.state.connectedPeers.add(peerId);
           this.ui?.updateSidebar();
           const ratchetActive = this.messageProtocol!.hasRatchetState(peerId);
-          this.ui?.showToast(
-            ratchetActive
-              ? `🔐 Forward-secret connection with ${peerId.slice(0, 8)}...`
-              : `🔐 Encrypted connection with ${peerId.slice(0, 8)}...`,
-            'success',
-          );
+          // Connection toast removed — too noisy for end users
+          console.debug(`[P2P] ${ratchetActive ? "Forward-secret" : "Encrypted"} connection with ${peerId.slice(0, 8)}`);
 
           await this.flushOfflineQueue(peerId);
           this.requestMessageSync(peerId).catch(err => console.warn('[Sync] Message sync request failed:', err));
@@ -1286,10 +1282,10 @@ export class ChatController {
             }
           }
 
-          // Notify
-          const ws = this.state.activeWorkspaceId
-            ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId) : null;
-          const ch = ws ? this.workspaceManager.getChannel(ws.id, channelId) : null;
+          // Notify — resolve from the workspace that owns this channel, not the active one
+          const notifyWsId = this.resolveWorkspaceIdByChannelId(channelId);
+          const notifyWs = notifyWsId ? this.workspaceManager.getWorkspace(notifyWsId) : null;
+          const ch = notifyWs ? this.workspaceManager.getChannel(notifyWs.id, channelId) : null;
           const notifyName = this.getPeerAliasForChannel(peerId, channelId);
           this.notifications.notify(
             channelId,
@@ -4110,14 +4106,16 @@ export class ChatController {
   // =========================================================================
 
   private async requestMessageSync(peerId: string): Promise<void> {
-    // Always use fast timestamp-based sync first — single round-trip,
-    // sends "give me everything since T" and gets all newer messages back.
-    // This is 28,000x faster than Negentropy for bulk catch-up because it
-    // avoids multiple WebSocket query/response round-trips.
-    //
-    // Negentropy is kept for future incremental diff scenarios where both
-    // peers have large overlapping datasets and need efficient set reconciliation.
-    await this.requestTimestampMessageSync(peerId);
+    // Use Negentropy (set reconciliation) when peer supports it — efficient
+    // for reconnects where both sides have mostly the same data.
+    // Falls back to timestamp sync for peers without Negentropy support.
+    if (this.peerSupportsCapability(peerId, NEGENTROPY_SYNC_CAPABILITY)) {
+      console.log(`[Sync] Using Negentropy sync with ${peerId.slice(0, 8)}`);
+      await this.requestNegentropyMessageSync(peerId);
+    } else {
+      console.log(`[Sync] Peer ${peerId.slice(0, 8)} lacks Negentropy, falling back to timestamp sync`);
+      await this.requestTimestampMessageSync(peerId);
+    }
   }
 
   private peerSupportsCapability(peerId: string, capability: string): boolean {
@@ -4152,42 +4150,11 @@ export class ChatController {
       channelTimestamps,
     }, { label: 'message-sync-request' });
 
-    // Also proactively push ALL our messages to the peer.
-    // This makes sync bidirectional in a single cycle — the peer gets
-    // our messages immediately without needing to ask back.
-    const pushMessages: any[] = [];
-    for (const ch of ws.channels) {
-      for (const m of this.messageStore.getMessages(ch.id)) {
-        pushMessages.push({
-          id: m.id,
-          channelId: m.channelId,
-          senderId: m.senderId,
-          content: m.content,
-          timestamp: m.timestamp,
-          type: m.type,
-          threadId: m.threadId,
-          prevHash: m.prevHash,
-          vectorClock: (m as any).vectorClock,
-        });
-      }
-    }
-    if (pushMessages.length > 0) {
-      // Chunk into batches of 100 to avoid WebSocket frame size limits
-      const CHUNK_SIZE = 100;
-      const totalChunks = Math.ceil(pushMessages.length / CHUNK_SIZE);
-      console.log(`[Sync] Pushing ${pushMessages.length} messages to ${peerId.slice(0, 8)} in ${totalChunks} chunks`);
-      for (let i = 0; i < pushMessages.length; i += CHUNK_SIZE) {
-        const chunk = pushMessages.slice(i, i + CHUNK_SIZE);
-        this.transport.send(peerId, {
-          type: 'message-sync-response',
-          workspaceId: wsId,
-          messages: chunk,
-        });
-      }
-    }
+    // Proactive push removed — Negentropy handles bidirectional sync efficiently.
+    // Timestamp sync is now only a fallback for peers without Negentropy support.
   }
 
-  /** @deprecated — kept for future incremental diff sync. Currently unused; requestMessageSync always uses timestamp sync. */
+  /** Negentropy-based sync — efficient set reconciliation for reconnects. */
   private async requestNegentropyMessageSync(peerId: string): Promise<void> {
     const wsId = this.state.activeWorkspaceId;
     if (!wsId) return;

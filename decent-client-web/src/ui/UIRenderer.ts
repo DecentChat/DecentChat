@@ -2241,7 +2241,14 @@ export class UIRenderer {
           const muteIcon = p.muted ? ' 🔇' : '';
           const speakingClass = p.speaking ? ' speaking' : '';
           const levelStyle = p.speaking && p.audioLevel ? ` --audio-level: ${p.audioLevel}` : '';
-          return `<span class="huddle-avatar${speakingClass}" style="background:${color};${levelStyle}" title="${this.escapeHtml(p.displayName)}${muteIcon}">${this.escapeHtml(initials)}</span>`;
+          const statusIcons: Record<string, string> = {
+            listening: '🎧', hearing: '👂', transcribing: '⏳',
+            thinking: '🤔', speaking: '🗣️', interrupted: '✋',
+          };
+          const botBadge = p.botStatus
+            ? `<span class="huddle-bot-status" data-status="${p.botStatus}">${statusIcons[p.botStatus] || ''}</span>`
+            : '';
+          return `<span class="huddle-avatar${speakingClass}" style="background:${color};${levelStyle}" title="${this.escapeHtml(p.displayName)}${muteIcon}">${this.escapeHtml(initials)}${botBadge}</span>`;
         }).join('');
       }
 

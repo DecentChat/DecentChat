@@ -1117,6 +1117,34 @@ body.debug-mode .msg-delivery-detail {
   margin: 6px 0;
 }
 
+/* GFM Tables */
+.message-content.markdown-body table {
+  border-collapse: collapse;
+  width: auto;
+  margin: 6px 0;
+  font-size: 0.9em;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.message-content.markdown-body thead {
+  border-bottom: 2px solid var(--border);
+}
+.message-content.markdown-body th,
+.message-content.markdown-body td {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+.message-content.markdown-body th {
+  font-weight: 600;
+  background: rgba(128, 128, 128, 0.1);
+}
+.message-content.markdown-body tr:nth-child(even) {
+  background: rgba(128, 128, 128, 0.05);
+}
+
 /* Message actions */
 .message-thread-btn {
   display: none;
@@ -3714,6 +3742,38 @@ body:has(.landing-page) #app {
 .huddle-avatar.speaking {
   box-shadow: 0 0 0 2px #48bb78, 0 0 calc(4px + 8px * var(--audio-level)) rgba(72, 187, 120, 0.5);
   transform: scale(calc(1 + 0.08 * var(--audio-level)));
+}
+
+.huddle-avatar {
+  position: relative;
+}
+
+.huddle-bot-status {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  font-size: 10px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,0.5));
+  animation: huddle-status-pop 0.2s ease-out;
+}
+
+.huddle-bot-status[data-status="thinking"] {
+  animation: huddle-status-pulse 1.2s ease-in-out infinite;
+}
+
+.huddle-bot-status[data-status="transcribing"] {
+  animation: huddle-status-pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes huddle-status-pop {
+  0% { transform: scale(0); }
+  100% { transform: scale(1); }
+}
+
+@keyframes huddle-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .huddle-bar-controls {

@@ -14,12 +14,15 @@
  *   huddle-mute      { type, channelId, peerId, muted }  — mute state change broadcast
  */
 
+export type BotStatus = 'listening' | 'hearing' | 'transcribing' | 'thinking' | 'speaking' | 'interrupted';
+
 export interface HuddleParticipant {
   peerId: string;
   displayName: string;
   muted: boolean;
   speaking?: boolean;
   audioLevel?: number; // 0..1
+  botStatus?: BotStatus; // AI bot pipeline status indicator
 }
 
 export type HuddleState = 'inactive' | 'available' | 'in-call';
@@ -54,6 +57,8 @@ export class HuddleManager {
   private localAnalyser: AnalyserNode | null = null;
   private localAnalyserData: Uint8Array | null = null;
   private speechAnimationFrame: number | null = null;
+  private statsTimer: number | null = null;
+  private statsIntervalMs = 2000; // Send stats every 2 seconds
   private myMuted = false;
   private callbacks: HuddleCallbacks;
 
@@ -99,9 +104,10 @@ export class HuddleManager {
     this.callbacks.onStateChange('in-call', channelId);
     this.callbacks.onParticipantsChange(this.getParticipants());
     this.startSpeechMonitoring();
+    this.startStatsCollection();
 
     this.callbacks.broadcastSignal({
-      type: 'huddle-announce',
+      type: 'huddle-announce' ,
       channelId,
       peerId: this.myPeerId,
     });
@@ -133,9 +139,10 @@ export class HuddleManager {
     this.callbacks.onStateChange('in-call', channelId);
     this.callbacks.onParticipantsChange(this.getParticipants());
     this.startSpeechMonitoring();
+    this.startStatsCollection();
 
     this.callbacks.broadcastSignal({
-      type: 'huddle-join',
+      type: 'huddle-join' ,
       channelId,
       peerId: this.myPeerId,
     });
@@ -149,6 +156,7 @@ export class HuddleManager {
     this.localStream?.getTracks().forEach(t => t.stop());
     this.localStream = null;
     this.stopSpeechMonitoring();
+    this.stopStatsCollection();
 
     for (const [peerId, pc] of this.connections) {
       pc.close();
@@ -226,8 +234,14 @@ export class HuddleManager {
       case 'huddle-ice':
         await this.handleIce(fromPeerId, data);
         break;
+      case 'huddle-stats':
+        console.log('[Huddle] stats from', fromPeerId.slice(0, 8), data.stats);
+        break;
       case 'huddle-mute':
         this.handleMuteChange(fromPeerId, data);
+        break;
+      case 'huddle-status':
+        this.handleStatusChange(fromPeerId, data);
         break;
     }
   }
@@ -330,6 +344,15 @@ export class HuddleManager {
     }
   }
 
+  private handleStatusChange(fromPeerId: string, data: any): void {
+    const participant = this.participants.get(fromPeerId);
+    if (participant) {
+      participant.botStatus = data.status;
+      this.participants.set(fromPeerId, participant);
+      this.callbacks.onParticipantsChange(this.getParticipants());
+    }
+  }
+
   private async initiateConnectionTo(peerId: string): Promise<void> {
     if (!this.localStream) { console.warn('[Huddle] initiateConnectionTo: no localStream!'); return; }
 
@@ -363,7 +386,7 @@ export class HuddleManager {
     }
 
     pc.ontrack = (event) => {
-      console.log('[Huddle] ontrack fired for peer', peerId, '— track kind:', event.track.kind, 'streams:', event.streams.length, 'track.readyState:', event.track.readyState);
+      console.log('[Huddle] ontrack fired for peer', peerId, '— track kind:', event.track.kind, 'streams:', event.streams.length, 'track.readyState:', event.track.readyState, 'muted:', event.track.muted);
       const remoteStream = event.streams[0] ?? new MediaStream([event.track]);
       let audioEl = this.audioElements.get(peerId);
       if (!audioEl) {
@@ -383,6 +406,95 @@ export class HuddleManager {
           const retry = () => { audioEl!.play().catch(() => {}); document.removeEventListener('click', retry); };
           document.addEventListener('click', retry, { once: true });
         });
+
+      // ── Audio diagnostic: capture incoming audio for analysis ──
+      const diagCapture = () => {
+        try {
+          const diagCtx = new AudioContext({ sampleRate: 48000 });
+          const diagSrc = diagCtx.createMediaStreamSource(remoteStream);
+          const diagAnalyser = diagCtx.createAnalyser();
+          diagAnalyser.fftSize = 4096;
+          diagSrc.connect(diagAnalyser);
+          const freqData = new Float32Array(diagAnalyser.frequencyBinCount);
+          const tdData = new Uint8Array(diagAnalyser.frequencyBinCount);
+
+          // Capture PCM for WAV export
+          const capturedChunks: Float32Array[] = [];
+          const processor = diagCtx.createScriptProcessor(4096, 1, 1);
+          processor.onaudioprocess = (e) => {
+            const input = e.inputBuffer.getChannelData(0);
+            capturedChunks.push(new Float32Array(input));
+          };
+          diagSrc.connect(processor);
+          processor.connect(diagCtx.destination);
+
+          let diagCount = 0;
+          const diagInterval = setInterval(() => {
+            diagAnalyser.getFloatFrequencyData(freqData);
+            diagAnalyser.getByteTimeDomainData(tdData);
+
+            // Peak frequency
+            let peakIdx = 0, peakVal = -Infinity;
+            for (let i = 1; i < freqData.length; i++) {
+              if (freqData[i] > peakVal) { peakVal = freqData[i]; peakIdx = i; }
+            }
+            const peakHz = peakIdx * 48000 / diagAnalyser.fftSize;
+
+            // Max amplitude
+            let maxAmp = 0;
+            for (let i = 0; i < tdData.length; i++) {
+              const v = Math.abs(tdData[i] - 128);
+              if (v > maxAmp) maxAmp = v;
+            }
+
+            if (maxAmp > 2 || diagCount < 5) {
+              console.log(`[Huddle-DIAG] peer=${peerId.slice(0,8)} amp=${maxAmp}/128 peak=${Math.round(peakHz)}Hz@${peakVal.toFixed(1)}dB`);
+            }
+            diagCount++;
+          }, 500);
+
+          // Save WAV export function to window for manual triggering
+          (window as any).__huddleDiagExport = () => {
+            clearInterval(diagInterval);
+            const totalSamples = capturedChunks.reduce((s, c) => s + c.length, 0);
+            const merged = new Float32Array(totalSamples);
+            let offset = 0;
+            for (const chunk of capturedChunks) {
+              merged.set(chunk, offset);
+              offset += chunk.length;
+            }
+            // Convert to Int16 WAV blob
+            const int16 = new Int16Array(merged.length);
+            for (let i = 0; i < merged.length; i++) {
+              const s = Math.max(-1, Math.min(1, merged[i]));
+              int16[i] = s < 0 ? s * 32768 : s * 32767;
+            }
+            const wavSize = 44 + int16.length * 2;
+            const wav = new ArrayBuffer(wavSize);
+            const view = new DataView(wav);
+            // RIFF header
+            const writeStr = (o: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(o+i, s.charCodeAt(i)); };
+            writeStr(0, 'RIFF'); view.setUint32(4, 36 + int16.length*2, true); writeStr(8, 'WAVE');
+            writeStr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+            view.setUint16(22, 1, true); view.setUint32(24, 48000, true);
+            view.setUint32(28, 96000, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+            writeStr(36, 'data'); view.setUint32(40, int16.length*2, true);
+            for (let i = 0; i < int16.length; i++) view.setInt16(44+i*2, int16[i], true);
+            const blob = new Blob([wav], { type: 'audio/wav' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'huddle-capture.wav'; a.click();
+            console.log(`[Huddle-DIAG] Exported ${(totalSamples/48000).toFixed(1)}s WAV (${totalSamples} samples)`);
+            return `Exported ${(totalSamples/48000).toFixed(1)}s`;
+          };
+          console.log('[Huddle-DIAG] Audio capture started. Call __huddleDiagExport() in console to save WAV.');
+        } catch (err) {
+          console.warn('[Huddle-DIAG] capture setup failed:', err);
+        }
+      };
+
+      event.track.addEventListener('unmute', diagCapture, { once: true });
+      if (!event.track.muted) diagCapture();
     };
 
     pc.onicecandidate = (event) => {
@@ -391,7 +503,7 @@ export class HuddleManager {
         this.callbacks.sendSignal(peerId, {
           type: 'huddle-ice',
           channelId: this.activeChannelId,
-          candidate: event.candidate,
+          candidate: event.candidate.toJSON(),
           fromPeerId: this.myPeerId,
         });
       } else {
@@ -613,6 +725,77 @@ export class HuddleManager {
 
     if (changed) {
       this.callbacks.onParticipantsChange(this.getParticipants());
+    }
+  }
+
+
+  // ── Diagnostic Stats Collection ────────────────────────────────────
+
+  private startStatsCollection(): void {
+    if (this.statsTimer != null) return;
+    this.statsTimer = window.setInterval(() => {
+      void this.collectAndSendStats();
+    }, this.statsIntervalMs);
+  }
+
+  private stopStatsCollection(): void {
+    if (this.statsTimer != null) {
+      window.clearInterval(this.statsTimer);
+      this.statsTimer = null;
+    }
+  }
+
+  private async collectAndSendStats(): Promise<void> {
+    if (this.state !== 'in-call' || !this.activeChannelId) return;
+
+    const allStats: Record<string, unknown> = {};
+
+    for (const [peerId, pc] of this.connections) {
+      try {
+        const stats = await pc.getStats();
+        const peerStats: Record<string, unknown> = {};
+
+        stats.forEach((report) => {
+          const data: Record<string, unknown> = {};
+
+          if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+            data.packetsReceived = report.packetsReceived;
+            data.packetsLost = report.packetsLost;
+            data.jitter = report.jitter;
+            data.bytesReceived = report.bytesReceived;
+            data.framesDecoded = report.framesDecoded;
+          }
+          if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+            data.packetsSent = report.packetsSent;
+            data.bytesSent = report.bytesSent;
+            data.framesEncoded = report.framesEncoded;
+          }
+          if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+            data.currentRoundTripTime = report.currentRoundTripTime;
+          }
+          if (report.type === 'transport') {
+            data.dtlsState = report.dtlsState;
+          }
+
+          if (Object.keys(data).length > 0) {
+            peerStats[`${report.type}-${report.id.slice(-8)}`] = data;
+          }
+        });
+
+        allStats[peerId.slice(0, 8)] = peerStats;
+      } catch (err) {
+        console.warn('[Huddle] getStats failed for', peerId, err);
+      }
+    }
+
+    if (Object.keys(allStats).length > 0) {
+      this.callbacks.broadcastSignal({
+        type: 'huddle-stats',
+        channelId: this.activeChannelId,
+        peerId: this.myPeerId,
+        timestamp: Date.now(),
+        stats: allStats,
+      });
     }
   }
 }
