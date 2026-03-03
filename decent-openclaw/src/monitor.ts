@@ -88,6 +88,45 @@ type StreamingPeerAdapter = {
 
 const TOOL_CALL_MISMATCH_RE = /^No tool call found for function call output with call_id\b/i;
 
+/**
+ * Thread affinity tracker — remembers the last active thread per sender per channel.
+ *
+ * When a message arrives without threadId (e.g., sent from the main channel input
+ * instead of the thread panel), we check if the sender had recent thread activity
+ * in this channel. If so, we route to that thread instead of creating a new one.
+ *
+ * This prevents session fragmentation when the client loses thread panel state
+ * (page reload, navigation, etc.) while the user intends to continue the same thread.
+ */
+const THREAD_AFFINITY_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+interface ThreadAffinityEntry {
+  threadId: string;
+  updatedAt: number;
+}
+
+const threadAffinityMap = new Map<string, ThreadAffinityEntry>();
+
+function threadAffinityKey(channelId: string, senderId: string): string {
+  return `${channelId}:${senderId}`;
+}
+
+function updateThreadAffinity(channelId: string, senderId: string, threadId: string): void {
+  const key = threadAffinityKey(channelId, senderId);
+  threadAffinityMap.set(key, { threadId, updatedAt: Date.now() });
+}
+
+function getThreadAffinity(channelId: string, senderId: string): string | null {
+  const key = threadAffinityKey(channelId, senderId);
+  const entry = threadAffinityMap.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.updatedAt > THREAD_AFFINITY_TTL_MS) {
+    threadAffinityMap.delete(key);
+    return null;
+  }
+  return entry.threadId;
+}
+
 function formatThreadHistoryContent(content: string, maxChars = 220): string {
   const normalized = content.replace(/\s+/g, " ").trim();
   if (!normalized) return "[empty]";
@@ -173,8 +212,11 @@ export async function relayInboundMessageToPeer(params: {
   let streamChunkCount = 0;
   const streamEnabled = ctx.account.streamEnabled !== false;
   let finalizeInFlight: Promise<void> | null = null;
+  let processingComplete = false; // Guard: prevent idle timer from finalizing mid-response
 
   const finalizeStream = async () => {
+    // Ignore idle-timer finalize calls while LLM is still generating
+    if (!processingComplete && streamMessageId) return;
     if (finalizeInFlight) {
       await finalizeInFlight;
       return;
@@ -348,6 +390,8 @@ export async function relayInboundMessageToPeer(params: {
     { streamEnabled },
   );
 
+  processingComplete = true;
+
   await finalizeStream();
 }
 
@@ -392,7 +436,7 @@ async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
           workspaceId: '',
           senderId: peerId,
           senderName,
-          content: text,
+          content: `[VOICE HUDDLE — reply in 1-2 short sentences max, conversational tone, no markdown/emoji]\n${text}`,
           chatType: 'direct' as const,
           timestamp: Date.now(),
         };
@@ -591,18 +635,44 @@ async function processInboundMessage(
 
   const baseSessionKey = route.sessionKey;
   // Thread-aware session routing (parallelism):
-  // - prefer explicit threadId
-  // - fallback to replyToId for legacy envelopes that omit threadId
+  // - prefer explicit threadId (from thread panel)
+  // - fallback to replyToId ONLY when auto-threading is not active
   const explicitThreadId = (msg.threadId ?? "").trim();
   const fallbackThreadId = (msg.replyToId ?? "").trim();
-  const candidateThreadId = explicitThreadId || fallbackThreadId;
 
-  // When replyToMode=all and this is a channel message with no thread context,
-  // treat each top-level message as its own thread so they get parallel sessions
-  // and each reply appears as a thread reply (Slack-bot style).
-  const autoThreadId = (!explicitThreadId && !fallbackThreadId && msg.chatType !== "direct" && threadingFlags.replyToMode === "all")
-    ? msg.messageId
-    : "";
+  // Auto-thread eligible: channel message without explicit thread context
+  // when replyToMode=all. In this mode each top-level message gets its own
+  // parallel session. replyToId is informational (shows which message is
+  // being replied to) and must NOT be used for session routing — multiple
+  // unrelated channel messages may reply to the same bot message without
+  // being part of the same conversation.
+  const autoThreadEligible = !explicitThreadId && !fallbackThreadId && msg.chatType !== "direct" && threadingFlags.replyToMode === "all";
+
+  // Only use replyToId as thread fallback when NOT in auto-thread mode.
+  // In auto-thread mode, each message gets its own session regardless of replyToId.
+  let candidateThreadId = explicitThreadId || (autoThreadEligible ? "" : fallbackThreadId);
+
+  // Thread affinity: when a message arrives without threadId in a group channel,
+  // check if this sender was recently active in a thread. If so, route to that
+  // thread instead of creating a new auto-thread. This prevents session
+  // fragmentation when the client loses thread panel state (page reload, etc.).
+  //
+  // SKIP affinity for auto-thread-eligible messages: the whole point of
+  // replyToMode=all is that each new top-level message gets its own session.
+  // Affinity would defeat this by routing new messages to old sessions.
+  let affinityApplied = false;
+  if (!candidateThreadId && !autoThreadEligible && msg.chatType !== "direct" && threadingFlags.replyToMode === "all") {
+    const affinityThreadId = getThreadAffinity(msg.channelId, msg.senderId);
+    if (affinityThreadId) {
+      candidateThreadId = affinityThreadId;
+      affinityApplied = true;
+      ctx.log?.info?.(`[decentchat] thread-affinity: sender=${msg.senderId.slice(0, 8)} → thread=${affinityThreadId.slice(0, 8)} (channel=${msg.channelId.slice(0, 8)})`);
+    }
+  }
+
+  // When auto-thread eligible, use the message's own ID as the thread so
+  // it gets a unique parallel session and the reply appears as a thread reply.
+  const autoThreadId = autoThreadEligible ? msg.messageId : "";
 
   // Slack-compatible knobs:
   // - replyToMode=off => never route per-thread
@@ -617,6 +687,14 @@ async function processInboundMessage(
     parentSessionKey: isThreadReply && threadingFlags.inheritParent ? baseSessionKey : undefined,
   });
   const sessionKey = threadKeys.sessionKey;
+
+  // Update thread affinity for this sender so future messages without threadId
+  // can be routed to the same thread (within the TTL window).
+  // Skip for auto-thread messages: affinity is not consulted in auto-thread mode,
+  // so updating it would only pollute the map with per-message thread IDs.
+  if (isThreadReply && !autoThreadEligible && msg.chatType !== "direct" && derivedThreadId) {
+    updateThreadAffinity(msg.channelId, msg.senderId, derivedThreadId);
+  }
 
   const fromLabel = msg.chatType === "direct" ? msg.senderName : `${msg.senderName} in ${msg.channelId}`;
   const storePath = core.channel.session.resolveStorePath(cfg.session?.store, { agentId: route.agentId });
