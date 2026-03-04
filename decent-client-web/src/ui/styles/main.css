@@ -4011,7 +4011,7 @@ html, body {
   position: relative;
 }
 
-.member-presence {
+.member-avatar-sm .dm-status {
   position: absolute;
   bottom: -2px;
   right: -2px;
@@ -4019,12 +4019,16 @@ html, body {
   height: 12px;
   border-radius: 50%;
   border: 2.5px solid var(--sidebar-bg);
-}
-.member-presence.online {
-  background: #23a559;
-}
-.member-presence.offline {
   background: #80848e;
+}
+.member-avatar-sm .dm-status.online {
+  background: #23a559;
+  border-color: #23a559;
+}
+.member-avatar-sm .dm-status.connecting {
+  background: var(--connecting);
+  border-color: var(--connecting);
+  animation: pulse-connecting 1.2s ease-in-out infinite;
 }
 
 .member-name-wrapper {

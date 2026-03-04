@@ -97,10 +97,19 @@ test('simple P2P message exchange', async ({ browser }) => {
     await bob.page.click('.modal .btn-primary');
     await bob.page.waitForSelector('.sidebar-header', { timeout: 15000 });
 
-    await bob.page.waitForFunction(() => {
-      const toasts = document.querySelectorAll('.toast');
-      return Array.from(toasts).some(t => t.textContent?.includes('🔐'));
-    }, { timeout: 30000 });
+    // Wait for both peers to show as online in sidebar
+    await bob.page.waitForFunction(
+      (min) => {
+        const headers = document.querySelectorAll('.member-group-header');
+        for (const h of headers) {
+          const match = h.textContent?.match(/Online\s*—\s*(\d+)/);
+          if (match && parseInt(match[1], 10) >= min) return true;
+        }
+        return false;
+      },
+      2,
+      { timeout: 30000 },
+    );
 
     const input = alice.page.locator('#compose-input');
     const msg = `simple-${Date.now()}`;

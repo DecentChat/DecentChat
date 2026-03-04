@@ -92,16 +92,18 @@ async function createWorkspace(page: Page, name: string, alias: string) {
   await page.waitForSelector('.sidebar-header', { timeout: 5000 });
 }
 
-/** Wait for P2P connection between peers (encrypted connection toast) */
-async function waitForPeerConnection(page: Page, timeoutMs = 30000) {
+/** Wait for peers to appear as online in the sidebar member list */
+async function waitForPeerConnection(page: Page, expectedOnline = 2, timeoutMs = 30000) {
   await page.waitForFunction(
-    () => {
-      const toasts = document.querySelectorAll('.toast');
-      return Array.from(toasts).some(t =>
-        t.textContent?.includes('Encrypted connection') ||
-        t.textContent?.includes('🔐'),
-      );
+    (min: number) => {
+      const headers = document.querySelectorAll('.member-group-header');
+      for (const h of headers) {
+        const match = h.textContent?.match(/Online\s*—\s*(\d+)/);
+        if (match && parseInt(match[1], 10) >= min) return true;
+      }
+      return false;
     },
+    expectedOnline,
     { timeout: timeoutMs },
   );
 }

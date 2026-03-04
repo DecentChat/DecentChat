@@ -111,19 +111,18 @@ export async function joinViaInviteUrl(page: Page, inviteUrl: string, alias: str
   await page.waitForSelector('.sidebar-header', { timeout: 15000 });
 }
 
-export async function waitForPeerConnection(page: Page, timeoutMs = 30000): Promise<void> {
+export async function waitForPeerConnection(page: Page, expectedOnline = 2, timeoutMs = 30000): Promise<void> {
   await page.waitForFunction(
-    () => {
-      const state = (window as any).__state;
-      const connected = state?.connectedPeers && typeof state.connectedPeers.size === 'number' && state.connectedPeers.size > 0;
-      if (connected) return true;
-      const toasts = document.querySelectorAll('.toast');
-      return Array.from(toasts).some(t =>
-        t.textContent?.includes('Encrypted connection') ||
-        t.textContent?.includes('Forward-secret connection') ||
-        t.textContent?.includes('🔐'),
-      );
+    (minOnline) => {
+      // Primary: check "Online — N" in sidebar member list
+      const headers = document.querySelectorAll('.member-group-header');
+      for (const h of headers) {
+        const match = h.textContent?.match(/Online\s*—\s*(\d+)/);
+        if (match && parseInt(match[1], 10) >= minOnline) return true;
+      }
+      return false;
     },
+    expectedOnline,
     { timeout: timeoutMs },
   );
 }

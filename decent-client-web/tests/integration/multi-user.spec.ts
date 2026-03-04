@@ -149,23 +149,19 @@ async function joinViaInviteUrl(page: Page, inviteUrl: string, alias: string): P
 // ─── Connection Helpers ────────────────────────────────────────────────────────
 
 /**
- * Wait for the encrypted connection toast, indicating the P2P handshake completed.
+ * Wait for peers to appear as online in the sidebar member list.
  */
-async function waitForPeerConnection(page: Page, timeoutMs = 30000): Promise<void> {
+async function waitForPeerConnection(page: Page, expectedOnline = 2, timeoutMs = 30000): Promise<void> {
   await page.waitForFunction(
-    () => {
-      const state = (window as any).__state;
-      const connected = state?.connectedPeers && typeof state.connectedPeers.size === 'number' && state.connectedPeers.size > 0;
-      if (connected) return true;
-
-      // Backward-compatible fallback for older builds/tests relying on toasts.
-      const toasts = document.querySelectorAll('.toast');
-      return Array.from(toasts).some(t =>
-        t.textContent?.includes('Encrypted connection') ||
-        t.textContent?.includes('Forward-secret connection') ||
-        t.textContent?.includes('🔐'),
-      );
+    (min: number) => {
+      const headers = document.querySelectorAll('.member-group-header');
+      for (const h of headers) {
+        const match = h.textContent?.match(/Online\s*—\s*(\d+)/);
+        if (match && parseInt(match[1], 10) >= min) return true;
+      }
+      return false;
     },
+    expectedOnline,
     { timeout: timeoutMs },
   );
 }
@@ -421,7 +417,7 @@ test.describe('Multi-User P2P Integration', () => {
       await joinViaInviteUrl(bob.page, inviteUrl, 'Bob');
       
       // Wait for P2P connection to establish
-      await waitForPeerConnection(bob.page, 30000);
+      await waitForPeerConnection(bob.page, 2, 30000);
 
       const msg = `alice-to-bob-${Date.now()}`;
       await sendMessage(alice.page, msg);
@@ -444,7 +440,7 @@ test.describe('Multi-User P2P Integration', () => {
       await createWorkspace(alice.page, 'P2P Bi-Directional', 'Alice');
       const inviteUrl = await getInviteUrl(alice.page);
       await joinViaInviteUrl(bob.page, inviteUrl, 'Bob');
-      await waitForPeerConnection(bob.page, 30000);
+      await waitForPeerConnection(bob.page, 2, 30000);
 
       const chat = [
         { from: alice.page, to: bob.page, text: `A1-${Date.now()}` },
@@ -480,7 +476,7 @@ test.describe('Multi-User P2P Integration', () => {
       await createWorkspace(alice.page, 'P2P Ordering', 'Alice');
       const inviteUrl = await getInviteUrl(alice.page);
       await joinViaInviteUrl(bob.page, inviteUrl, 'Bob');
-      await waitForPeerConnection(bob.page, 30000);
+      await waitForPeerConnection(bob.page, 2, 30000);
 
       const suffix = Date.now();
       const expectedOrder = [
@@ -527,8 +523,8 @@ test.describe('Multi-User P2P Integration', () => {
       await createWorkspace(alice.page, 'P2P Remove Member', 'Alice');
       const inviteUrl = await getInviteUrl(alice.page);
       await joinViaInviteUrl(bob.page, inviteUrl, 'Bob');
-      await waitForPeerConnection(alice.page, 30000);
-      await waitForPeerConnection(bob.page, 30000);
+      await waitForPeerConnection(alice.page, 2, 30000);
+      await waitForPeerConnection(bob.page, 2, 30000);
 
       // Open workspace menu -> members modal
       await alice.page.click('#workspace-menu-trigger');

@@ -29,8 +29,8 @@ test.describe('Remove member from workspace', () => {
       await createWorkspace(alice.page, 'Remove API WS', 'Alice');
       const invite = await getInviteUrl(alice.page);
       await joinViaInviteUrl(bob.page, invite, 'Bob');
-      await waitForPeerConnection(alice.page, 30000);
-      await waitForPeerConnection(bob.page, 30000);
+      await waitForPeerConnection(alice.page, 2, 30000);
+      await waitForPeerConnection(bob.page, 2, 30000);
 
       // Confirm both peers are in workspace
       await alice.page.waitForFunction(() => {
@@ -90,8 +90,8 @@ test.describe('Remove member from workspace', () => {
       await createWorkspace(alice.page, 'Remove Modal WS', 'Alice');
       const invite = await getInviteUrl(alice.page);
       await joinViaInviteUrl(bob.page, invite, 'Bob');
-      await waitForPeerConnection(alice.page, 30000);
-      await waitForPeerConnection(bob.page, 30000);
+      await waitForPeerConnection(alice.page, 2, 30000);
+      await waitForPeerConnection(bob.page, 2, 30000);
 
       await sendMessage(alice.page, 'hello bob');
       await waitForMessageInUI(bob.page, 'hello bob', 20000);
@@ -149,8 +149,8 @@ test.describe('Remove member from workspace', () => {
       await createWorkspace(alice.page, 'Permission WS', 'Alice');
       const invite = await getInviteUrl(alice.page);
       await joinViaInviteUrl(bob.page, invite, 'Bob');
-      await waitForPeerConnection(alice.page, 30000);
-      await waitForPeerConnection(bob.page, 30000);
+      await waitForPeerConnection(alice.page, 2, 30000);
+      await waitForPeerConnection(bob.page, 2, 30000);
 
       await alice.page.waitForFunction(() => {
         const s = (window as any).__state;
@@ -185,9 +185,9 @@ test.describe('Remove member from workspace', () => {
       const invite = await getInviteUrl(alice.page);
       await joinViaInviteUrl(bob.page, invite, 'Bob');
       await joinViaInviteUrl(carol.page, invite, 'Carol');
-      await waitForPeerConnection(alice.page, 30000);
-      await waitForPeerConnection(bob.page, 30000);
-      await waitForPeerConnection(carol.page, 30000);
+      await waitForPeerConnection(alice.page, 2, 30000);
+      await waitForPeerConnection(bob.page, 2, 30000);
+      await waitForPeerConnection(carol.page, 2, 30000);
 
       await alice.page.waitForFunction(() => {
         const s = (window as any).__state;

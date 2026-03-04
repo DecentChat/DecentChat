@@ -90,16 +90,17 @@ async function joinViaInvite(page: Page, inviteUrl: string, alias: string) {
   await page.waitForSelector('.sidebar-header', { timeout: 15000 });
 }
 
-async function waitForPeerConnection(page: Page, timeoutMs = 30000) {
+async function waitForPeerConnection(page: Page, expectedOnline = 2, timeoutMs = 30000) {
   await page.waitForFunction(
-    () => {
-      const toasts = document.querySelectorAll('.toast');
-      return Array.from(toasts).some(t =>
-        t.textContent?.includes('Encrypted connection') ||
-        t.textContent?.includes('Forward-secret connection') ||
-        t.textContent?.includes('🔐'),
-      );
+    (min: number) => {
+      const headers = document.querySelectorAll('.member-group-header');
+      for (const h of headers) {
+        const match = h.textContent?.match(/Online\s*—\s*(\d+)/);
+        if (match && parseInt(match[1], 10) >= min) return true;
+      }
+      return false;
     },
+    expectedOnline,
     { timeout: timeoutMs },
   );
 }
@@ -240,11 +241,11 @@ test.describe('Huddle — 3 Peers Full Mesh Audio', () => {
     // Bob and Charlie join
     console.log('[Test] Bob joining workspace...');
     await joinViaInvite(bob, inviteUrl, 'Bob');
-    await waitForPeerConnection(bob, 30000);
+    await waitForPeerConnection(bob, 2, 30000);
 
     console.log('[Test] Charlie joining workspace...');
     await joinViaInvite(charlie, inviteUrl, 'Charlie');
-    await waitForPeerConnection(charlie, 30000);
+    await waitForPeerConnection(charlie, 2, 30000);
 
     // Wait for all P2P connections to stabilize
     await alice.waitForTimeout(2000);
@@ -330,9 +331,9 @@ test.describe('Huddle — 3 Peers Full Mesh Audio', () => {
     const inviteUrl = await getInviteUrl(alice);
 
     await joinViaInvite(bob, inviteUrl, 'Bob');
-    await waitForPeerConnection(bob, 30000);
+    await waitForPeerConnection(bob, 2, 30000);
     await joinViaInvite(charlie, inviteUrl, 'Charlie');
-    await waitForPeerConnection(charlie, 30000);
+    await waitForPeerConnection(charlie, 2, 30000);
     await alice.waitForTimeout(2000);
 
     // Alice and Bob start huddle first
@@ -390,9 +391,9 @@ test.describe('Huddle — 3 Peers Full Mesh Audio', () => {
     const inviteUrl = await getInviteUrl(alice);
 
     await joinViaInvite(bob, inviteUrl, 'Bob');
-    await waitForPeerConnection(bob, 30000);
+    await waitForPeerConnection(bob, 2, 30000);
     await joinViaInvite(charlie, inviteUrl, 'Charlie');
-    await waitForPeerConnection(charlie, 30000);
+    await waitForPeerConnection(charlie, 2, 30000);
     await alice.waitForTimeout(2000);
 
     // Alice and Bob in huddle

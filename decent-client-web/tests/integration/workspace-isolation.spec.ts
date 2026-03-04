@@ -170,19 +170,17 @@ async function joinViaInviteUrl(page: Page, inviteUrl: string, alias: string): P
 // Connection Helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function waitForPeerConnection(page: Page, timeoutMs = 30000): Promise<void> {
+async function waitForPeerConnection(page: Page, expectedOnline = 2, timeoutMs = 30000): Promise<void> {
   await page.waitForFunction(
-    () => {
-      const state = (window as any).__state;
-      const connected = state?.connectedPeers && typeof state.connectedPeers.size === 'number' && state.connectedPeers.size > 0;
-      if (connected) return true;
-      const toasts = document.querySelectorAll('.toast');
-      return Array.from(toasts).some(t =>
-        t.textContent?.includes('Encrypted connection') ||
-        t.textContent?.includes('Forward-secret connection') ||
-        t.textContent?.includes('🔐'),
-      );
+    (min: number) => {
+      const headers = document.querySelectorAll('.member-group-header');
+      for (const h of headers) {
+        const match = h.textContent?.match(/Online\s*—\s*(\d+)/);
+        if (match && parseInt(match[1], 10) >= min) return true;
+      }
+      return false;
     },
+    expectedOnline,
     { timeout: timeoutMs },
   );
 }
@@ -289,18 +287,18 @@ test.describe('Workspace Isolation — Multi-Workspace Multi-User', () => {
       // ─── Users join their workspaces ───────────────────────────────
       console.log('[Test] Bob joining Engineering...');
       await joinViaInviteUrl(bob.page, invite1, 'Bob');
-      await waitForPeerConnection(bob.page, 30000);
+      await waitForPeerConnection(bob.page, 2, 30000);
       // Wait for workspace channels to sync
       await new Promise(r => setTimeout(r, 1000));
 
       console.log('[Test] Mary joining Design...');
       await joinViaInviteUrl(mary.page, invite2, 'Mary');
-      await waitForPeerConnection(mary.page, 30000);
+      await waitForPeerConnection(mary.page, 2, 30000);
       await new Promise(r => setTimeout(r, 1000));
 
       console.log('[Test] Susan joining Marketing...');
       await joinViaInviteUrl(susan.page, invite3, 'Susan');
-      await waitForPeerConnection(susan.page, 30000);
+      await waitForPeerConnection(susan.page, 2, 30000);
       await new Promise(r => setTimeout(r, 1000));
 
       // ─── Exchange messages in #general ─────────────────────────────
@@ -586,7 +584,7 @@ test.describe('Workspace Isolation — Multi-Workspace Multi-User', () => {
       });
 
       await joinViaInviteUrl(bob.page, invite, 'Bob');
-      await waitForPeerConnection(bob.page, 30000);
+      await waitForPeerConnection(bob.page, 2, 30000);
 
       // Alice creates a new channel in WS-Beta (Bob should NOT see this)
       await switchToWorkspace(alice.page, 'WS-Beta');
@@ -684,9 +682,9 @@ test.describe('Workspace Isolation — Multi-Workspace Multi-User', () => {
       const invite2 = await getInviteUrl(alice.page);
 
       await joinViaInviteUrl(bob.page, invite1, 'Bob');
-      await waitForPeerConnection(bob.page, 30000);
+      await waitForPeerConnection(bob.page, 2, 30000);
       await joinViaInviteUrl(mary.page, invite2, 'Mary');
-      await waitForPeerConnection(mary.page, 30000);
+      await waitForPeerConnection(mary.page, 2, 30000);
 
       const ts = Date.now();
 
@@ -741,7 +739,7 @@ test.describe('Workspace Isolation — Multi-Workspace Multi-User', () => {
 
       // Bob joins WS-Public
       await joinViaInviteUrl(bob.page, publicInvite, 'Bob');
-      await waitForPeerConnection(bob.page, 30000);
+      await waitForPeerConnection(bob.page, 2, 30000);
 
       // Bob should see WS-Public data only
       const bobChannels = await getChannelNames(bob.page);

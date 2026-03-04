@@ -857,7 +857,7 @@ export class UIRenderer {
         <div class="sidebar-item member-row" data-member-peer-id="${m.peerId}">
           <div class="member-avatar-sm${m.isBot ? ' bot-avatar' : ''}" style="background: ${color}">
             ${avatarContent}
-            <span class="member-presence ${m.isOnline ? 'online' : 'offline'}"></span>
+            <span class="dm-status ${this.peerStatusClass(m.peerId)}" title="${this.peerStatusTitle(m.peerId)}"></span>
           </div>
           <div class="member-name-wrapper">
             <div class="member-name-inline">

@@ -103,14 +103,19 @@ async function joinViaInvite(page: Page, inviteUrl: string, alias: string): Prom
   await page.waitForSelector('.sidebar-header', { timeout: 15000 });
 }
 
-async function waitForPeerConnection(page: Page, timeoutMs = 30000): Promise<void> {
-  await page.waitForFunction(() => {
-    const toasts = document.querySelectorAll('.toast');
-    return Array.from(toasts).some(t =>
-      t.textContent?.includes('Encrypted connection') ||
-      t.textContent?.includes('Forward-secret connection') ||
-      t.textContent?.includes('🔐'));
-  }, { timeout: timeoutMs });
+async function waitForPeerConnection(page: Page, expectedOnline = 2, timeoutMs = 30000): Promise<void> {
+  await page.waitForFunction(
+    (min: number) => {
+      const headers = document.querySelectorAll('.member-group-header');
+      for (const h of headers) {
+        const match = h.textContent?.match(/Online\s*—\s*(\d+)/);
+        if (match && parseInt(match[1], 10) >= min) return true;
+      }
+      return false;
+    },
+    expectedOnline,
+    { timeout: timeoutMs },
+  );
 }
 
 async function waitForPeersReady(pageA: Page, pageB: Page, timeoutMs = 30000): Promise<void> {

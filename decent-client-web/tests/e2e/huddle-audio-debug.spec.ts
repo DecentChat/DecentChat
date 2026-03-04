@@ -111,13 +111,19 @@ test.describe('Huddle Audio Debug', () => {
       await bob.page.click('.modal .btn-primary');
       await bob.page.waitForSelector('.sidebar-header', { timeout: 15000 });
 
-      // Wait for P2P connection
-      await alice.page.waitForFunction(() => {
-        const toasts = document.querySelectorAll('.toast');
-        return Array.from(toasts).some(t =>
-          t.textContent?.includes('Encrypted connection') ||
-          t.textContent?.includes('🔐'));
-      }, { timeout: 30000 });
+      // Wait for both peers to show as online in sidebar
+      await alice.page.waitForFunction(
+        (min: number) => {
+          const headers = document.querySelectorAll('.member-group-header');
+          for (const h of headers) {
+            const match = h.textContent?.match(/Online\s*—\s*(\d+)/);
+            if (match && parseInt(match[1], 10) >= min) return true;
+          }
+          return false;
+        },
+        2,
+        { timeout: 30000 },
+      );
 
       console.log('[Test] P2P connected');
 
