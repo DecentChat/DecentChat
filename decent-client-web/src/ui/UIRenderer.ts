@@ -168,6 +168,8 @@ export class UIRenderer {
   /** Pending compose attachments (staged before send) */
   private pendingMainAttachments: Array<{ id: string; file: File; previewUrl?: string }> = [];
   private pendingThreadAttachments: Array<{ id: string; file: File; previewUrl?: string }> = [];
+  private _boundPasteHandler: ((e: Event) => void) | null = null;
+  private _boundDropHandler: ((e: Event) => void) | null = null;
   private lightboxBlobUrl: string | null = null;
   private activityPanelOpen = false;
 
@@ -857,7 +859,7 @@ export class UIRenderer {
         <div class="sidebar-item member-row" data-member-peer-id="${m.peerId}">
           <div class="member-avatar-sm${m.isBot ? ' bot-avatar' : ''}" style="background: ${color}">
             ${avatarContent}
-            <span class="dm-status ${this.peerStatusClass(m.peerId)}" title="${this.peerStatusTitle(m.peerId)}"></span>
+            <span class="dm-status ${m.isMe ? 'online' : this.peerStatusClass(m.peerId)}" title="${m.isMe ? 'Online' : this.peerStatusTitle(m.peerId)}"></span>
           </div>
           <div class="member-name-wrapper">
             <div class="member-name-inline">
@@ -1895,7 +1897,11 @@ export class UIRenderer {
     document.getElementById('thread-close')?.addEventListener('click', () => this.closeThread());
 
     // Paste images from clipboard (staged in compose/thread, removable via X)
-    document.addEventListener('paste', (e) => {
+    // Remove previous listener to prevent duplicates when renderApp() re-binds
+    if (this._boundPasteHandler) {
+      document.removeEventListener('paste', this._boundPasteHandler);
+    }
+    this._boundPasteHandler = (e: Event) => {
       const items = Array.from((e as ClipboardEvent).clipboardData?.items || []);
       const imageItems = items.filter(item => item.type.startsWith('image/'));
       const hasActiveChat = !!(this.state.activeChannelId || this.state.activeDirectConversationId);
@@ -1915,7 +1921,8 @@ export class UIRenderer {
         this.addPendingAttachments(files, target);
         updateSendButtons();
       }
-    });
+    };
+    document.addEventListener('paste', this._boundPasteHandler);
 
     // Drag & drop file support (staged, not immediate send)
     const messagesArea = document.querySelector('.messages-area') as HTMLElement;
