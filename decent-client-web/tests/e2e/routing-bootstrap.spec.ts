@@ -61,6 +61,8 @@ test.describe('routing bootstrap split', () => {
     await page.goto('/');
     await page.waitForSelector('#open-app-btn, #create-ws-btn, .sidebar-header', { timeout: 15000 });
 
-    await expect(page.locator('#open-app-btn')).toBeVisible();
+    // The "Open App" CTA appears in the nav bar (#open-app-btn-nav) and/or
+    // in the hero section (#open-app-btn) depending on async workspace restore.
+    await expect(page.locator('#open-app-btn, #open-app-btn-nav').first()).toBeVisible();
   });
 });

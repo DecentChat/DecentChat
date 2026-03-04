@@ -1015,6 +1015,7 @@ test.describe('Slash Commands', () => {
 
     const input = alice.page.locator('#compose-input');
     await input.fill('/whoami');
+    await input.press('Escape'); // dismiss command autocomplete
     await input.press('Enter');
 
     await alice.page.waitForTimeout(1000);

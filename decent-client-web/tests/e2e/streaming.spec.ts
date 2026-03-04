@@ -193,6 +193,10 @@ test.describe('Streaming Message Flow', () => {
       const list = document.getElementById('messages-list') as HTMLElement | null;
       if (!list) throw new Error('messages-list missing');
 
+      // Wait for renderMessages' rAF(scrollToBottom) to complete before scrolling up,
+      // otherwise the scheduled scrollToBottom will override our scroll position.
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
       // Simulate user scroll-up by setting scrollTop and dispatching scroll event.
       list.scrollTop = 0;
       list.dispatchEvent(new Event('scroll'));
