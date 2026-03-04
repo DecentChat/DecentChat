@@ -146,7 +146,7 @@ async function getAudioDiagnostics(page: Page): Promise<AudioDiagnostics> {
         .filter(t => t.kind === 'audio' && t.readyState === 'live').length;
     }, 0);
 
-    const huddleManager = (window as any).__huddleManager;
+    const huddleManager = (window as any).__ctrl?.huddle ?? (window as any).__huddleManager;
     const participantCount = huddleManager?.getParticipants?.()?.length ?? 0;
     const huddleState = huddleManager?.getState?.() ?? 'unknown';
 

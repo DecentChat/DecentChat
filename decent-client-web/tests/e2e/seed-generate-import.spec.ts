@@ -92,7 +92,7 @@ test.describe('Seed generate & import round-trip', () => {
     const originalPeerId = await extractCurrentPeerId(page);
 
     const spm = new SeedPhraseManager();
-    const { peerId: derivedOriginalPeerId } = await spm.deriveAll(originalSeed);
+    const { peerId: derivedOriginalPeerId } = await spm.deriveDeviceKeys(originalSeed, 0);
     expect(originalPeerId).toBe(derivedOriginalPeerId);
 
     // 3. Nuke everything — simulate fresh device
@@ -113,7 +113,7 @@ test.describe('Seed generate & import round-trip', () => {
     // 6. Verify seed phrase and peer identity restored
     const restoredSeed = await extractSeedPhrase(page);
     const restoredPeerId = await extractCurrentPeerId(page);
-    const { peerId: derivedRestoredPeerId } = await spm.deriveAll(restoredSeed);
+    const { peerId: derivedRestoredPeerId } = await spm.deriveDeviceKeys(restoredSeed, 0);
 
     expect(restoredSeed).toBe(originalSeed);
     expect(restoredPeerId).toBe(derivedRestoredPeerId);
@@ -167,7 +167,7 @@ test.describe('Seed generate & import round-trip', () => {
     const seedPhrase = await extractSeedPhrase(page);
     const originalPeerId = await extractCurrentPeerId(page);
     const spm = new SeedPhraseManager();
-    const { peerId: expectedPeerId } = await spm.deriveAll(seedPhrase);
+    const { peerId: expectedPeerId } = await spm.deriveDeviceKeys(seedPhrase, 0);
     expect(originalPeerId).toBe(expectedPeerId);
 
     // First restore

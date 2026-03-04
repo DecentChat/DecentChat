@@ -135,6 +135,7 @@ test.describe('DecentChat E2E', () => {
     await page.waitForTimeout(500); // Let workspace fully initialize
     const input = page.locator('#compose-input');
     await input.fill('/version');
+    await input.press('Escape'); // dismiss command autocomplete
     await input.press('Enter');
 
     await expect(page.locator('.message.system')).toBeVisible({ timeout: 5000 });
@@ -145,6 +146,7 @@ test.describe('DecentChat E2E', () => {
     await page.waitForTimeout(500); // Let workspace fully initialize
     const input = page.locator('#compose-input');
     await input.fill('/whoami');
+    await input.press('Escape'); // dismiss command autocomplete
     await input.press('Enter');
 
     await expect(page.locator('.message.system')).toBeVisible({ timeout: 5000 });
