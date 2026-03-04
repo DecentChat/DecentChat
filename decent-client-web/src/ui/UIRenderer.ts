@@ -6,13 +6,19 @@
  */
 
 import type { WorkspaceManager, MessageStore } from 'decent-protocol';
-import { EmojiPicker } from './EmojiPicker';
 import { MessageSearch } from './MessageSearch';
 import { SettingsPanel } from './SettingsPanel';
 import { QRCodeManager } from './QRCodeManager';
 import { QUICK_REACTIONS } from './ReactionManager';
 import { ContactURI, InviteURI } from 'decent-protocol';
 import type { PlaintextMessage, Contact, ContactURIData, DirectConversation } from 'decent-protocol';
+import { toast } from '../lib/components/shared/Toast.svelte';
+import { showModal as svelteShowModal } from '../lib/components/shared/Modal.svelte';
+import { showEmojiPicker } from '../lib/components/shared/EmojiPicker.svelte';
+import { mount, unmount } from 'svelte';
+import WorkspaceRail from '../lib/components/layout/WorkspaceRail.svelte';
+import Sidebar from '../lib/components/layout/Sidebar.svelte';
+import ChannelHeader from '../lib/components/layout/ChannelHeader.svelte';
 
 export interface ActivityItem {
   id: string;
@@ -149,10 +155,13 @@ export interface UICallbacks {
 // ---------------------------------------------------------------------------
 
 export class UIRenderer {
-  private emojiPicker = new EmojiPicker();
+  // emojiPicker: migrated to Svelte (src/lib/components/shared/EmojiPicker.svelte)
   private messageSearch: MessageSearch;
   private settingsPanel: SettingsPanel | null = null;
   private qrCodeManager: QRCodeManager;
+  private _workspaceRailComponent: Record<string, any> | null = null;
+  private _sidebarComponent: Record<string, any> | null = null;
+  private _channelHeaderComponent: Record<string, any> | null = null;
 
   /** Cached contacts for synchronous sidebar rendering */
   private cachedContacts: Contact[] = [];
@@ -644,14 +653,10 @@ export class UIRenderer {
     const app = document.getElementById('app')!;
     app.innerHTML = `
       <div class="app-layout">
-        <div class="workspace-rail" id="workspace-rail">
-          ${this.renderWorkspaceRailHTML()}
-        </div>
-        <div class="sidebar" id="sidebar">
-          ${this.renderSidebarHTML()}
-        </div>
+        <div class="workspace-rail" id="workspace-rail"></div>
+        <div class="sidebar" id="sidebar"></div>
         <div class="main-content">
-          ${this.renderChannelHeaderHTML()}
+          <div id="channel-header-mount"></div>
           <div class="huddle-join-banner" id="huddle-join-banner" style="display:none">
             <span class="huddle-join-icon">🟢</span>
             <span class="huddle-join-text">Huddle in progress</span>
@@ -714,6 +719,9 @@ export class UIRenderer {
       </div>
     `;
 
+    this.updateWorkspaceRail();
+    this.mountSidebar(document.getElementById('sidebar')!);
+    this.mountChannelHeader(document.getElementById('channel-header-mount')!);
     this.bindAppEvents();
     this.renderMessages();
   }
@@ -809,8 +817,39 @@ export class UIRenderer {
   updateWorkspaceRail(): void {
     const rail = document.getElementById('workspace-rail');
     if (!rail) return;
-    rail.innerHTML = this.renderWorkspaceRailHTML();
-    this.bindWorkspaceRailEvents();
+    // Unmount previous Svelte component
+    if (this._workspaceRailComponent) {
+      try { unmount(this._workspaceRailComponent); } catch {}
+      this._workspaceRailComponent = null;
+    }
+    rail.innerHTML = '';
+    this._workspaceRailComponent = mount(WorkspaceRail, {
+      target: rail,
+      props: {
+        workspaces: this.callbacks.getAllWorkspaces?.() || [],
+        activeWorkspaceId: this.state.activeWorkspaceId,
+        activityUnread: this.callbacks.getActivityUnreadCount?.() || 0,
+        onSwitchToDMs: () => {
+          this.activityPanelOpen = false;
+          document.getElementById('activity-btn')?.classList.remove('active');
+          this.state.activeWorkspaceId = null;
+          if (!this.state.activeDirectConversationId) {
+            this.state.activeChannelId = null;
+          }
+          this.persistViewState();
+          this.refreshContactsCache().catch(() => {});
+          this.updateSidebar();
+          this.updateWorkspaceRail();
+          this.updateChannelHeader();
+          this.renderMessages();
+        },
+        onSwitchWorkspace: (wsId: string) => {
+          this.switchWorkspace(wsId);
+        },
+        onToggleActivity: () => this.toggleActivityPanel(),
+        onAddWorkspace: () => this.showCreateWorkspaceModal(),
+      },
+    });
   }
 
   // =========================================================================
@@ -1281,7 +1320,7 @@ export class UIRenderer {
         const btn = div.querySelector('.quick-react-add') as HTMLElement | null;
         const msgId = btn?.dataset.msgId;
         if (!btn || !msgId) return;
-        void this.emojiPicker.show(btn, (emoji) => {
+        void showEmojiPicker(btn, (emoji) => {
           this.rememberReaction(emoji);
           this.callbacks.toggleReaction?.(msgId, emoji);
         });
@@ -1749,18 +1788,174 @@ export class UIRenderer {
     this.refreshContactsCache()
       .catch(() => {})
       .finally(() => {
-        sidebar.innerHTML = this.renderSidebarHTML();
-        this.bindSidebarEvents();
+        this.mountSidebar(sidebar);
       });
   }
 
+  private mountSidebar(sidebar: HTMLElement): void {
+    // Unmount previous Svelte component
+    if (this._sidebarComponent) {
+      try { unmount(this._sidebarComponent); } catch {}
+      this._sidebarComponent = null;
+    }
+    sidebar.innerHTML = '';
+
+    const ws = this.state.activeWorkspaceId
+      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+      : null;
+    const channels = ws ? this.workspaceManager.getChannels(ws.id) : [];
+
+    // Build member data with online/offline grouping (same logic as before)
+    const memberData = ws
+      ? (() => {
+          const seen = new Set<string>();
+          return ws.members.filter((m) => {
+            const key = m.identityId || m.peerId;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          }).map((m) => {
+            const identityPeers = m.identityId
+              ? ws.members.filter(other => other.identityId === m.identityId).map(other => other.peerId)
+              : [m.peerId];
+            const isMe = identityPeers.includes(this.state.myPeerId);
+            const isOnline = isMe || identityPeers.some(pid => this.peerStatusClass(pid) === 'online');
+            const alias = this.getPeerAlias(m.peerId);
+            return {
+              peerId: m.peerId, alias, isOnline, isMe,
+              role: m.role, isBot: m.isBot,
+              statusClass: this.peerStatusClass(m.peerId),
+              statusTitle: this.peerStatusTitle(m.peerId),
+            };
+          });
+        })()
+      : [];
+
+    this._sidebarComponent = mount(Sidebar, {
+      target: sidebar,
+      props: {
+        workspaceName: ws?.name ?? null,
+        channels: channels.map(ch => ({ id: ch.id, name: ch.name })),
+        members: memberData,
+        directConversations: this.cachedDirectConversations.map(c => ({
+          id: c.id,
+          contactPeerId: c.contactPeerId,
+          lastMessageAt: c.lastMessageAt,
+        })),
+        activeChannelId: this.state.activeChannelId,
+        activeDirectConversationId: this.state.activeDirectConversationId,
+        getUnreadCount: (id: string) => this.callbacks.getUnreadCount?.(id) || 0,
+        getPeerAlias: (peerId: string) => this.getPeerAlias(peerId),
+        getPeerStatusClass: (peerId: string) => this.peerStatusClass(peerId),
+        getPeerStatusTitle: (peerId: string) => this.peerStatusTitle(peerId),
+        onChannelClick: (channelId: string) => this.switchChannel(channelId),
+        onMemberClick: (peerId: string) => this.startMemberDM(peerId),
+        onDirectConvClick: (convId: string) => this.switchToDirectConversation(convId),
+        myPeerId: this.state.myPeerId,
+        onAddChannel: () => this.showCreateChannelModal(),
+        onStartDM: () => this.showStartDirectMessageModal(),
+        onAddContact: () => this.showAddContactModal(),
+        onConnectPeer: () => this.showConnectPeerModal(),
+        onCopyInvite: () => {
+          if (!this.state.activeWorkspaceId) return;
+          const inviteURL = this.callbacks.generateInviteURL?.(this.state.activeWorkspaceId);
+          if (inviteURL) {
+            navigator.clipboard.writeText(inviteURL);
+            this.showToast('Invite link copied!', 'success');
+          }
+        },
+        onShowQR: () => this.showMyQR(),
+        onCopyPeerId: () => {
+          navigator.clipboard.writeText(this.state.myPeerId);
+          this.showToast('Peer ID copied!');
+        },
+        onWorkspaceSettings: () => this.showWorkspaceSettingsModal(),
+        onWorkspaceMembers: () => this.showWorkspaceMembersModal(),
+        onWorkspaceInvite: () => {
+          if (!this.state.activeWorkspaceId) return;
+          const inviteURL = this.callbacks.generateInviteURL?.(this.state.activeWorkspaceId);
+          if (inviteURL) {
+            navigator.clipboard.writeText(inviteURL);
+            this.showToast('Invite link copied!', 'success');
+          }
+        },
+        onWorkspaceNotifications: () => this.showSettings(),
+      },
+    });
+  }
+
   updateChannelHeader(): void {
-    const header = document.querySelector('.channel-header');
-    if (!header) return;
-    const temp = document.createElement('div');
-    temp.innerHTML = this.renderChannelHeaderHTML();
-    header.replaceWith(temp.firstElementChild!);
-    this.bindChannelHeaderEvents();
+    const headerContainer = document.getElementById('channel-header-mount');
+    if (!headerContainer) return;
+    this.mountChannelHeader(headerContainer);
+  }
+
+  private mountChannelHeader(container: HTMLElement): void {
+    if (this._channelHeaderComponent) {
+      try { unmount(this._channelHeaderComponent); } catch {}
+      this._channelHeaderComponent = null;
+    }
+    container.innerHTML = '';
+
+    const isDirectMessage = !!this.state.activeDirectConversationId;
+    let channelName = 'Select a channel';
+    let memberCount = 0;
+
+    if (isDirectMessage) {
+      const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
+      channelName = conv ? this.getPeerAlias(conv.contactPeerId) : 'Direct Message';
+    } else {
+      const ws = this.state.activeWorkspaceId
+        ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+        : null;
+      const channel = this.state.activeChannelId && ws
+        ? this.workspaceManager.getChannel(ws.id, this.state.activeChannelId)
+        : null;
+      if (channel) {
+        channelName = channel.type === 'dm' ? channel.name : `# ${channel.name}`;
+        memberCount = channel.members.length;
+      }
+    }
+
+    this._channelHeaderComponent = mount(ChannelHeader, {
+      target: container,
+      props: {
+        channelName,
+        memberCount,
+        isDirectMessage,
+        isHuddleActive: this.huddleState === 'in-call' && this.huddleChannelId === this.state.activeChannelId,
+        onHamburger: () => {
+          const sidebar = document.getElementById('sidebar');
+          if (sidebar?.classList.contains('open')) {
+            this.closeMobileSidebar();
+          } else {
+            this.openMobileSidebar();
+          }
+        },
+        onHuddleToggle: async () => {
+          const channelId = this.state.activeChannelId;
+          if (!channelId) return;
+          if (this.huddleState === 'in-call') {
+            await this.callbacks.leaveHuddle?.();
+          } else {
+            await this.callbacks.startHuddle?.(channelId);
+          }
+        },
+        onConnectPeer: () => this.showConnectPeerModal(),
+        onShowQR: () => this.showMyQR(),
+        onSearch: () => this.showSearchPanel(),
+        onInvite: () => {
+          if (!this.state.activeWorkspaceId) return;
+          const inviteURL = this.callbacks.generateInviteURL?.(this.state.activeWorkspaceId);
+          if (inviteURL) {
+            navigator.clipboard.writeText(inviteURL);
+            this.showToast('Invite link copied! Share it with anyone.', 'success');
+          }
+        },
+        onSettings: () => this.showSettings(),
+        onChannelMembers: () => this.showChannelMembersModal(),
+      },
+    });
   }
 
   // =========================================================================
@@ -1845,7 +2040,7 @@ export class UIRenderer {
     // Emoji picker
     const emojiBtn = document.getElementById('emoji-btn');
     emojiBtn?.addEventListener('click', () => {
-      void this.emojiPicker.show(emojiBtn, (emoji) => {
+      void showEmojiPicker(emojiBtn, (emoji) => {
         input.value += emoji;
         input.focus();
         updateSendButtons();
@@ -2024,19 +2219,8 @@ export class UIRenderer {
       }
     });
 
-    document.getElementById('sidebar-nav')?.addEventListener('click', (e) => {
-      const directConvItem = (e.target as HTMLElement).closest('.sidebar-item[data-direct-conv-id]') as HTMLElement;
-      if (directConvItem) {
-        this.switchToDirectConversation(directConvItem.dataset.directConvId!);
-        return;
-      }
-      const item = (e.target as HTMLElement).closest('.sidebar-item[data-channel-id]') as HTMLElement;
-      if (item) this.switchChannel(item.dataset.channelId!);
-    });
-
-    this.bindSidebarActionEvents();
-    this.bindChannelHeaderEvents();
-    this.bindWorkspaceRailEvents();
+    // Sidebar and ChannelHeader events are handled by Svelte components
+    // WorkspaceRail events are handled by the Svelte component
     this.bindHuddleEvents();
   }
 
@@ -2282,13 +2466,16 @@ export class UIRenderer {
     if (!sidebar) return;
 
     if (this.activityPanelOpen) {
+      // Unmount Svelte sidebar before activity panel takes over
+      if (this._sidebarComponent) {
+        try { unmount(this._sidebarComponent); } catch {}
+        this._sidebarComponent = null;
+      }
       sidebar.innerHTML = this.renderActivityPanelHTML();
       this.bindActivityPanelEvents();
-      // Highlight active rail icon
       document.getElementById('activity-btn')?.classList.add('active');
     } else {
-      sidebar.innerHTML = this.renderSidebarHTML();
-      this.bindSidebarEvents();
+      this.mountSidebar(sidebar);
       document.getElementById('activity-btn')?.classList.remove('active');
     }
   }
@@ -2380,8 +2567,7 @@ export class UIRenderer {
         this.activityPanelOpen = false;
         const sidebar = document.getElementById('sidebar');
         if (sidebar) {
-          sidebar.innerHTML = this.renderSidebarHTML();
-          this.bindSidebarEvents();
+          this.mountSidebar(sidebar);
         }
         document.getElementById('activity-btn')?.classList.remove('active');
 
@@ -2690,39 +2876,7 @@ export class UIRenderer {
     bodyHTML: string,
     onSubmit: (form: HTMLFormElement) => boolean | void | Promise<boolean | void>,
   ): HTMLDivElement {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = `
-      <div class="modal">
-        <h2>${title}</h2>
-        <form id="modal-form">
-          ${bodyHTML}
-          <div class="modal-actions">
-            <button type="button" class="btn-secondary" id="modal-cancel">Cancel</button>
-            <button type="submit" class="btn-primary">Confirm</button>
-          </div>
-        </form>
-      </div>
-    `;
-
-    document.body.appendChild(overlay);
-    overlay.querySelector('#modal-cancel')!.addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) overlay.remove();
-    });
-    const escHandler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); }
-    };
-    document.addEventListener('keydown', escHandler);
-    overlay.querySelector('#modal-form')!.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const shouldClose = await onSubmit(e.target as HTMLFormElement);
-      if (shouldClose !== false) {
-        overlay.remove();
-      }
-    });
-    setTimeout(() => (overlay.querySelector('input') as HTMLInputElement)?.focus(), 50);
-    return overlay;
+    return svelteShowModal(title, bodyHTML, onSubmit);
   }
 
   showCreateWorkspaceModal(): void {
@@ -3146,12 +3300,7 @@ export class UIRenderer {
   // =========================================================================
 
   showToast(message: string, type: 'info' | 'error' | 'success' = 'info'): void {
-    document.querySelector('.toast')?.remove();
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 3000);
+    toast(message, type);
   }
 
   // =========================================================================

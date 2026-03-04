@@ -1,0 +1,68 @@
+<!--
+  ChannelHeader.svelte — Replaces renderChannelHeaderHTML() in UIRenderer.
+  Renders the channel header with name, member count, and action buttons.
+-->
+<script lang="ts">
+  interface Props {
+    // Content
+    channelName: string;
+    memberCount: number;
+    isDirectMessage: boolean;
+    isHuddleActive: boolean;
+    // Callbacks
+    onHamburger: () => void;
+    onHuddleToggle: () => void;
+    onConnectPeer: () => void;
+    onShowQR: () => void;
+    onSearch: () => void;
+    onInvite: () => void;
+    onSettings: () => void;
+    onChannelMembers: () => void;
+  }
+
+  let {
+    channelName,
+    memberCount,
+    isDirectMessage,
+    isHuddleActive,
+    onHamburger,
+    onHuddleToggle,
+    onConnectPeer,
+    onShowQR,
+    onSearch,
+    onInvite,
+    onSettings,
+    onChannelMembers,
+  }: Props = $props();
+</script>
+
+<div class="channel-header" data-testid="channel-header">
+  <div class="channel-header-left">
+    <button class="icon-btn hamburger" id="hamburger-btn" onclick={onHamburger}>☰</button>
+    <h2>{channelName}</h2>
+    {#if !isDirectMessage && memberCount > 0}
+      <button class="member-count" id="channel-members-btn" title="View channel members" onclick={onChannelMembers}>
+        👥 {memberCount}
+      </button>
+    {/if}
+  </div>
+  <div class="channel-header-right">
+    {#if !isDirectMessage}
+      <button
+        class="icon-btn{isHuddleActive ? ' huddle-start-btn active' : ''}"
+        id="huddle-start-btn"
+        title="Start Huddle"
+        onclick={onHuddleToggle}
+      >🎧</button>
+    {/if}
+    <button class="icon-btn" id="connect-peer-header-btn" title="Connect to peer" onclick={onConnectPeer}>🔌</button>
+    {#if !isDirectMessage}
+      <button class="icon-btn" id="qr-btn" title="QR Code" onclick={onShowQR}>📱</button>
+    {/if}
+    <button class="icon-btn" id="search-btn" title="Search messages (Ctrl+F)" onclick={onSearch}>🔍</button>
+    {#if !isDirectMessage}
+      <button class="icon-btn" id="invite-btn" title="Invite code" onclick={onInvite}>🔗</button>
+    {/if}
+    <button class="icon-btn" id="settings-btn" title="Settings" onclick={onSettings}>⚙️</button>
+  </div>
+</div>

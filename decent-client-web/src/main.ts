@@ -588,6 +588,25 @@ async function init(): Promise<void> {
       (window as any).__state = state;
     }
 
+    // ── Svelte bridge: mount Svelte components alongside vanilla DOM ──
+    // During migration, Svelte renders into a dedicated container.
+    // Once migration is complete, Svelte takes over the entire DOM.
+    try {
+      const { mount } = await import("svelte");
+      const { default: App } = await import("./lib/components/shared/App.svelte");
+      const { setBridgeController, setBridgeRenderer, syncFromVanilla } = await import("./lib/stores/bridge.svelte");
+      setBridgeController(ctrl);
+      setBridgeRenderer(ui);
+      syncFromVanilla();
+      const svelteRoot = document.createElement("div");
+      svelteRoot.id = "svelte-root";
+      document.body.appendChild(svelteRoot);
+      mount(App, { target: svelteRoot });
+      console.log("[DecentChat] Svelte 5 bridge initialized");
+    } catch (err) {
+      console.warn("[DecentChat] Svelte mount failed (non-fatal):", err);
+    }
+
     if (settings.myPeerId !== myPeerId) {
       settings.myPeerId = myPeerId;
       await ctrl.persistentStore.saveSettings(settings);

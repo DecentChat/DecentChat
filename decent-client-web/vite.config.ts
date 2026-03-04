@@ -1,3 +1,4 @@
+import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import path from 'path';
@@ -19,6 +20,7 @@ export default defineConfig({
     alias: {
       'decent-protocol': path.resolve(__dirname, '../decent-protocol/src/index.ts'),
       'decent-transport-webrtc': path.resolve(__dirname, '../decent-transport-webrtc/src/index.ts'),
+      '$lib': path.resolve(__dirname, 'src/lib'),
     },
   },
   define: {
@@ -29,6 +31,7 @@ export default defineConfig({
   },
   appType: 'spa',  // All routes → index.html
   plugins: [
+    svelte(),
     // Generate version.json in dist
     {
       name: 'version-json',
