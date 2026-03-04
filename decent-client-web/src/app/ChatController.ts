@@ -1305,9 +1305,10 @@ export class ChatController {
     this.transport.onError = (error: Error) => {
       // 'unavailable-id' is a transient race on page reload — PeerTransport retries silently.
       if ((error as any).type === 'unavailable-id' || error.message?.includes('is taken')) return;
-      // Signaling server briefly dropped — PeerTransport auto-reconnects within ~3s.
+      // Signaling server briefly dropped — PeerTransport auto-reconnects with backoff.
       if (error.message?.includes('disconnecting from server') ||
-          error.message?.includes('disconnected from server')) return;
+          error.message?.includes('disconnected from server') ||
+          error.message?.includes('Lost connection to server')) return;
       // Peer is simply offline — expected, no need to disturb the user.
       if (error.message?.includes('Could not connect to peer') ||
           error.message?.includes('Failed to connect to') ||
