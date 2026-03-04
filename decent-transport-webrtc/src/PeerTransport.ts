@@ -149,6 +149,12 @@ export class PeerTransport implements Transport {
   private _reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly _reconnectDelays = [5000, 15000, 30000, 60000, 120000];
 
+  // ── Signaling server reconnect state ────────────────────────────────────
+  private _signalingReconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private _signalingReconnectAttempts = new Map<string, number>();
+  private static readonly SIGNALING_RECONNECT_DELAYS = [3000, 5000, 10000, 30000, 60000];
+  private static readonly SIGNALING_MAX_RETRIES = 50; // ~30 min of retrying
+
   // ── DEP-004: Heartbeat state ────────────────────────────────────────────
   private static readonly PING_INTERVAL_MS = 30_000;
   private static readonly PONG_TIMEOUT_MS = 20_000;
@@ -384,6 +390,11 @@ export class PeerTransport implements Transport {
     this._reconnectTimers.clear();
     this._reconnectAttempts.clear();
     this._manuallyDisconnected.clear();
+
+    // Clean up signaling reconnect timers
+    this._signalingReconnectTimers.forEach(t => clearTimeout(t));
+    this._signalingReconnectTimers.clear();
+    this._signalingReconnectAttempts.clear();
 
     // DEP-004: Clean up heartbeat timers
     this._pingTimers.forEach(t => clearInterval(t));
@@ -887,20 +898,16 @@ export class PeerTransport implements Transport {
     instance.peer.on('open', () => {
       instance.connected = true;
       console.log(`[DecentChat] Connected to signaling: ${instance.label}`);
+      // Reset reconnect backoff on successful connection
+      this._cancelSignalingReconnect(instance);
     });
 
     instance.peer.on('disconnected', () => {
       instance.connected = false;
       console.log(`[DecentChat] Disconnected from signaling: ${instance.label}`);
 
-      // Auto-reconnect
-      if (!instance.peer.destroyed) {
-        this._setManagedTimeout(() => {
-          if (!instance.peer.destroyed) {
-            instance.peer.reconnect();
-          }
-        }, 3000);
-      }
+      // Auto-reconnect with exponential backoff retry loop
+      this._scheduleSignalingReconnect(instance);
     });
 
     instance.peer.on('close', () => {
@@ -923,6 +930,64 @@ export class PeerTransport implements Transport {
         }, 1000);
       }
     });
+  }
+
+  // ── Signaling server auto-reconnect with backoff ──────────────────────────
+
+  private _scheduleSignalingReconnect(instance: SignalingInstance): void {
+    if (instance.peer.destroyed) return;
+
+    // Clear any existing timer for this instance
+    const existingTimer = this._signalingReconnectTimers.get(instance.url);
+    if (existingTimer) clearTimeout(existingTimer);
+
+    const attempt = this._signalingReconnectAttempts.get(instance.url) ?? 0;
+    if (attempt >= PeerTransport.SIGNALING_MAX_RETRIES) {
+      console.warn(`[DecentChat] Signaling reconnect gave up after ${attempt} attempts: ${instance.label}`);
+      this._signalingReconnectAttempts.delete(instance.url);
+      this._signalingReconnectTimers.delete(instance.url);
+      return;
+    }
+
+    const delays = PeerTransport.SIGNALING_RECONNECT_DELAYS;
+    const delay = delays[Math.min(attempt, delays.length - 1)];
+    console.log(`[DecentChat] Scheduling signaling reconnect #${attempt + 1} in ${delay}ms: ${instance.label}`);
+
+    const timer = this._setManagedTimeout(() => {
+      this._signalingReconnectTimers.delete(instance.url);
+      if (instance.peer.destroyed) {
+        this._signalingReconnectAttempts.delete(instance.url);
+        return;
+      }
+
+      if (!instance.peer.disconnected) {
+        // Already reconnected (e.g. by PeerJS internal logic)
+        console.log(`[DecentChat] Signaling already reconnected: ${instance.label}`);
+        this._signalingReconnectAttempts.delete(instance.url);
+        return;
+      }
+
+      this._signalingReconnectAttempts.set(instance.url, attempt + 1);
+      console.log(`[DecentChat] Attempting signaling reconnect #${attempt + 1}: ${instance.label}`);
+      try {
+        instance.peer.reconnect();
+      } catch (err) {
+        console.warn(`[DecentChat] Signaling reconnect threw: ${instance.label}`, err);
+        // Schedule next retry
+        this._scheduleSignalingReconnect(instance);
+      }
+    }, delay);
+
+    this._signalingReconnectTimers.set(instance.url, timer as unknown as ReturnType<typeof setTimeout>);
+  }
+
+  private _cancelSignalingReconnect(instance: SignalingInstance): void {
+    const timer = this._signalingReconnectTimers.get(instance.url);
+    if (timer) {
+      clearTimeout(timer);
+      this._signalingReconnectTimers.delete(instance.url);
+    }
+    this._signalingReconnectAttempts.delete(instance.url);
   }
 
   // ── Internal: peer connection management ──────────────────────────────────
