@@ -34,6 +34,9 @@ import WelcomePage from '../lib/components/layout/WelcomePage.svelte';
 import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
 import type { AppState } from '../main';
 
+// Svelte 5 stores — single source of truth for UI state
+import { huddleUI, lightboxUI, activityUI, cachedData, componentRefs } from '../lib/stores/ui.svelte';
+
 // ---------------------------------------------------------------------------
 // UIRenderer
 // ---------------------------------------------------------------------------
@@ -43,36 +46,15 @@ export class UIRenderer {
   private messageSearch: MessageSearch;
   private settingsPanel: SettingsPanel | null = null;
   private qrCodeManager: QRCodeManager;
-  private _workspaceRailComponent: Record<string, any> | null = null;
-  private _sidebarComponent: Record<string, any> | null = null;
-  private _channelHeaderComponent: Record<string, any> | null = null;
-  private _messageListComponent: Record<string, any> | null = null;
-  private _threadListComponent: Record<string, any> | null = null;
-  private _welcomeComponent: Record<string, any> | null = null;
-  private _composeComponent: Record<string, any> | null = null;
-  private _threadPanelComponent: Record<string, any> | null = null;
-  private _activityPanelComponent: Record<string, any> | null = null;
-  private _huddleBarComponent: Record<string, any> | null = null;
-  private _searchPanelComponent: Record<string, any> | null = null;
-  private _lightboxComponent: Record<string, any> | null = null;
 
-  /** Cached contacts for synchronous sidebar rendering */
-  private cachedContacts: Contact[] = [];
-  /** Cached direct conversations for synchronous sidebar rendering */
-  private cachedDirectConversations: DirectConversation[] = [];
-
-  /** Huddle (voice call) state */
-  private huddleState: HuddleState = 'inactive';
-  private huddleChannelId: string | null = null;
-  private huddleParticipants: HuddleParticipant[] = [];
-  private huddleMuted = false;
+  // Component refs, huddle/lightbox/activity state, and cached data are now
+  // in Svelte 5 stores (src/lib/stores/ui.svelte.ts). Access via the imported
+  // huddleUI, lightboxUI, activityUI, cachedData, componentRefs objects.
 
   /** Pending compose attachments (staged before send) */
   // pendingMainAttachments/pendingThreadAttachments removed — migrated to ComposeArea.svelte
   // _boundPasteHandler removed — paste handling migrated to ComposeArea.svelte
   // _boundDropHandler removed — drag-drop handled in bindAppEvents directly
-  private lightboxBlobUrl: string | null = null;
-  private activityPanelOpen = false;
 
   // _userScrolledAway, _programmaticScroll, _scrollListenerBound — removed (scroll management in Svelte)
   private reactionTracker!: ReactionTracker;
@@ -92,6 +74,12 @@ export class UIRenderer {
     });
     this.refreshContactsCache();
     this.reactionTracker = new ReactionTracker(this.state.myPeerId);
+
+    // Reset lightbox state (clean start)
+    lightboxUI.open = false;
+    lightboxUI.src = '';
+    lightboxUI.name = '';
+    lightboxUI.blobUrl = null;
   }
 
   private tracePrefix(): string {
@@ -115,15 +103,15 @@ export class UIRenderer {
       getFrequentReactions: () => this.getFrequentReactions(),
       getMyDisplayName: () => this.getMyDisplayName(),
       getComposePlaceholder: () => this.getComposePlaceholder(),
-      cachedContacts: this.cachedContacts,
-      cachedDirectConversations: this.cachedDirectConversations,
-      huddleState: this.huddleState,
-      huddleChannelId: this.huddleChannelId,
-      huddleParticipants: this.huddleParticipants,
-      huddleMuted: this.huddleMuted,
-      lightboxOpen: this._lightboxOpen,
-      lightboxSrc: this._lightboxSrc,
-      lightboxName: this._lightboxName,
+      cachedContacts: cachedData.contacts,
+      cachedDirectConversations: cachedData.directConversations,
+      huddleState: huddleUI.state,
+      huddleChannelId: huddleUI.channelId,
+      huddleParticipants: huddleUI.participants,
+      huddleMuted: huddleUI.muted,
+      lightboxOpen: lightboxUI.open,
+      lightboxSrc: lightboxUI.src,
+      lightboxName: lightboxUI.name,
       switchChannel: (id) => this.switchChannel(id),
       switchToDirectConversation: (id) => this.switchToDirectConversation(id),
       switchWorkspace: (id) => this.switchWorkspace(id),
@@ -187,8 +175,8 @@ export class UIRenderer {
       this.callbacks.getContacts?.() || Promise.resolve([]),
       this.callbacks.getDirectConversations?.() || Promise.resolve([]),
     ]);
-    this.cachedContacts = contacts;
-    this.cachedDirectConversations = conversations
+    cachedData.contacts = contacts;
+    cachedData.directConversations = conversations
       .slice()
       .sort((a, b) => b.lastMessageAt - a.lastMessageAt);
   }
@@ -211,13 +199,13 @@ export class UIRenderer {
     const hasWorkspace = (this.callbacks.getAllWorkspaces?.().length || 0) > 0;
 
     // Unmount previous welcome component if any
-    if (this._welcomeComponent) {
-      try { unmount(this._welcomeComponent); } catch {}
-      this._welcomeComponent = null;
+    if (componentRefs.welcome) {
+      try { unmount(componentRefs.welcome); } catch {}
+      componentRefs.welcome = null;
     }
     app.innerHTML = '';
 
-    this._welcomeComponent = mount(WelcomePage, {
+    componentRefs.welcome = mount(WelcomePage, {
       target: app,
       props: {
         myPeerId: this.state.myPeerId,
@@ -272,32 +260,28 @@ export class UIRenderer {
   // ── Svelte component mounts ──
 
   private mountCompose(): void {
-    const ref = { current: this._composeComponent };
+    const ref = { current: componentRefs.compose };
     MH.mountCompose(ref, this.ctx());
-    this._composeComponent = ref.current;
+    componentRefs.compose = ref.current;
   }
 
   private mountThreadPanel(): void {
-    const ref = { current: this._threadPanelComponent };
+    const ref = { current: componentRefs.threadPanel };
     MH.mountThreadPanel(ref, this.ctx());
-    this._threadPanelComponent = ref.current;
+    componentRefs.threadPanel = ref.current;
   }
 
   private mountHuddleBar(): void {
-    const ref = { current: this._huddleBarComponent };
+    const ref = { current: componentRefs.huddleBar };
     MH.mountHuddleBar(ref, this.ctx());
-    this._huddleBarComponent = ref.current;
+    componentRefs.huddleBar = ref.current;
   }
 
   private mountLightbox(): void {
-    const ref = { current: this._lightboxComponent };
+    const ref = { current: componentRefs.lightbox };
     MH.mountLightbox(ref, this.ctx());
-    this._lightboxComponent = ref.current;
+    componentRefs.lightbox = ref.current;
   }
-
-  private _lightboxOpen = false;
-  private _lightboxSrc = '';
-  private _lightboxName = '';
 
   // =========================================================================
   // Workspace rail (left icon strip like Discord/Slack)
@@ -307,7 +291,7 @@ export class UIRenderer {
   // bindWorkspaceRailEvents() — removed (migrated to WorkspaceRail.svelte)
 
   switchWorkspace(workspaceId: string): void {
-    this.activityPanelOpen = false;
+    activityUI.panelOpen = false;
     document.getElementById('activity-btn')?.classList.remove('active');
     const ws = this.workspaceManager.getWorkspace(workspaceId);
     if (!ws) return;
@@ -326,9 +310,9 @@ export class UIRenderer {
   }
 
   updateWorkspaceRail(): void {
-    const ref = { current: this._workspaceRailComponent };
+    const ref = { current: componentRefs.workspaceRail };
     MH.mountWorkspaceRail(ref, this.ctx());
-    this._workspaceRailComponent = ref.current;
+    componentRefs.workspaceRail = ref.current;
   }
 
   // =========================================================================
@@ -372,9 +356,9 @@ export class UIRenderer {
   // ensureScrollListener() — removed (scroll management now in Svelte MessageList)
 
   renderMessages(): void {
-    const ref = { current: this._messageListComponent };
+    const ref = { current: componentRefs.messageList };
     MH.mountMessages(ref, this.ctx());
-    this._messageListComponent = ref.current;
+    componentRefs.messageList = ref.current;
   }
 
   private getMyDisplayName(): string {
@@ -581,9 +565,9 @@ export class UIRenderer {
   }
 
   private mountSidebar(sidebar: HTMLElement): void {
-    const ref = { current: this._sidebarComponent };
+    const ref = { current: componentRefs.sidebar };
     MH.mountSidebar(ref, sidebar, this.ctx());
-    this._sidebarComponent = ref.current;
+    componentRefs.sidebar = ref.current;
   }
 
   updateChannelHeader(): void {
@@ -593,9 +577,9 @@ export class UIRenderer {
   }
 
   private mountChannelHeader(container: HTMLElement): void {
-    const ref = { current: this._channelHeaderComponent };
+    const ref = { current: componentRefs.channelHeader };
     MH.mountChannelHeader(ref, container, this.ctx());
-    this._channelHeaderComponent = ref.current;
+    componentRefs.channelHeader = ref.current;
   }
 
   // =========================================================================
@@ -612,7 +596,7 @@ export class UIRenderer {
    */
   private startMemberDM(peerId: string): void {
     // Check if there's already a direct conversation with this peer
-    const existing = this.cachedDirectConversations.find(c => c.contactPeerId === peerId);
+    const existing = cachedData.directConversations.find(c => c.contactPeerId === peerId);
     if (existing) {
       this.switchToDirectConversation(existing.id);
       return;
@@ -630,14 +614,14 @@ export class UIRenderer {
   // Migrated to: HuddleBar.svelte
 
   onHuddleStateChange(state: HuddleState, channelId: string | null): void {
-    this.huddleState = state;
-    this.huddleChannelId = channelId;
+    huddleUI.state = state;
+    huddleUI.channelId = channelId;
     this.mountHuddleBar();
     this.updateChannelHeader();
   }
 
   onHuddleParticipantsChange(participants: HuddleParticipant[]): void {
-    this.huddleParticipants = participants;
+    huddleUI.participants = participants;
     this.mountHuddleBar();
   }
 
@@ -646,26 +630,26 @@ export class UIRenderer {
   // =========================================================================
 
   toggleActivityPanel(): void {
-    this.activityPanelOpen = !this.activityPanelOpen;
+    activityUI.panelOpen = !activityUI.panelOpen;
     const sidebar = document.getElementById('sidebar');
     if (!sidebar) return;
 
-    if (this.activityPanelOpen) {
-      if (this._sidebarComponent) { try { unmount(this._sidebarComponent); } catch {} this._sidebarComponent = null; }
-      if (this._activityPanelComponent) { try { unmount(this._activityPanelComponent); } catch {} this._activityPanelComponent = null; }
-      const ref = { current: this._activityPanelComponent };
+    if (activityUI.panelOpen) {
+      if (componentRefs.sidebar) { try { unmount(componentRefs.sidebar); } catch {} componentRefs.sidebar = null; }
+      if (componentRefs.activityPanel) { try { unmount(componentRefs.activityPanel); } catch {} componentRefs.activityPanel = null; }
+      const ref = { current: componentRefs.activityPanel };
       MH.mountActivityPanel(ref, sidebar, this.ctx());
-      this._activityPanelComponent = ref.current;
+      componentRefs.activityPanel = ref.current;
       document.getElementById('activity-btn')?.classList.add('active');
     } else {
-      if (this._activityPanelComponent) { try { unmount(this._activityPanelComponent); } catch {} this._activityPanelComponent = null; }
+      if (componentRefs.activityPanel) { try { unmount(componentRefs.activityPanel); } catch {} componentRefs.activityPanel = null; }
       this.mountSidebar(sidebar);
       document.getElementById('activity-btn')?.classList.remove('active');
     }
   }
 
   refreshActivityPanel(): void {
-    if (!this.activityPanelOpen) return;
+    if (!activityUI.panelOpen) return;
     this.toggleActivityPanel();
     this.toggleActivityPanel();
   }
@@ -983,7 +967,7 @@ export class UIRenderer {
   }
 
   showStartDirectMessageModal(): void {
-    if (this.cachedContacts.length === 0) {
+    if (cachedData.contacts.length === 0) {
       this.showToast('Add a contact first to start a DM', 'error');
       return;
     }
@@ -991,7 +975,7 @@ export class UIRenderer {
     showPeerSelectModal({
       title: 'Start Direct Message',
       label: 'Select a contact',
-      peers: this.cachedContacts.map(c => ({
+      peers: cachedData.contacts.map(c => ({
         peerId: c.peerId,
         name: c.displayName,
         statusClass: this.peerStatusClass(c.peerId),
@@ -1023,9 +1007,9 @@ export class UIRenderer {
   // addPendingAttachments() — moved to MountHelpers.ts
 
   showSearchPanel(): void {
-    const ref = { current: this._searchPanelComponent };
+    const ref = { current: componentRefs.searchPanel };
     MH.mountSearchPanel(ref, this.ctx());
-    this._searchPanelComponent = ref.current;
+    componentRefs.searchPanel = ref.current;
   }
 
   /** Show QR code with user's identity */
@@ -1102,7 +1086,7 @@ export class UIRenderer {
   /** Get placeholder text for compose input */
   private getComposePlaceholder(): string {
     if (this.state.activeDirectConversationId) {
-      const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
+      const conv = cachedData.directConversations.find(c => c.id === this.state.activeDirectConversationId);
       return conv ? `Message ${this.getPeerAlias(conv.contactPeerId)}` : 'Message contact';
     }
     if (!this.state.activeChannelId || !this.state.activeWorkspaceId) {
@@ -1118,23 +1102,23 @@ export class UIRenderer {
   // handleCommandAutocomplete() — removed (migrated to ComposeArea.svelte)
 
   private openLightbox(src: string, name: string): void {
-    if (this.lightboxBlobUrl) {
-      URL.revokeObjectURL(this.lightboxBlobUrl);
-      this.lightboxBlobUrl = null;
+    if (lightboxUI.blobUrl) {
+      URL.revokeObjectURL(lightboxUI.blobUrl);
+      lightboxUI.blobUrl = null;
     }
-    this._lightboxOpen = true;
-    this._lightboxSrc = src;
-    this._lightboxName = name;
+    lightboxUI.open = true;
+    lightboxUI.src = src;
+    lightboxUI.name = name;
     this.mountLightbox();
   }
 
   private closeLightbox(): void {
-    this._lightboxOpen = false;
-    this._lightboxSrc = '';
-    this._lightboxName = '';
-    if (this.lightboxBlobUrl) {
-      URL.revokeObjectURL(this.lightboxBlobUrl);
-      this.lightboxBlobUrl = null;
+    lightboxUI.open = false;
+    lightboxUI.src = '';
+    lightboxUI.name = '';
+    if (lightboxUI.blobUrl) {
+      URL.revokeObjectURL(lightboxUI.blobUrl);
+      lightboxUI.blobUrl = null;
     }
     this.mountLightbox();
   }
@@ -1171,7 +1155,7 @@ export class UIRenderer {
     }
 
     // Fallback: cached contacts then active workspace
-    const contact = this.cachedContacts.find(c => c.peerId === peerId);
+    const contact = cachedData.contacts.find(c => c.peerId === peerId);
     if (contact) return contact.displayName;
     if (this.state.activeWorkspaceId) {
       const member = this.workspaceManager.getMember(this.state.activeWorkspaceId, peerId);
