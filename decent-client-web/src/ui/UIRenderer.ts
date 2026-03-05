@@ -12,10 +12,11 @@ import { QRCodeManager } from './QRCodeManager';
 import { ReactionTracker } from './ReactionTracker';
 import { peerColor as peerColorUtil, escapeHtml as escapeHtmlUtil } from '../lib/utils/peer';
 import { ContactURI, InviteURI } from 'decent-protocol';
-import type { PlaintextMessage, Contact, ContactURIData, DirectConversation } from 'decent-protocol';
+import type { PlaintextMessage, Contact, DirectConversation } from 'decent-protocol';
+export type { UICallbacks, ActivityItem } from './types';
+import type { UICallbacks, ActivityItem } from './types';
 import { toast } from '../lib/components/shared/Toast.svelte';
 import { showModal as svelteShowModal } from '../lib/components/shared/Modal.svelte';
-import { showEmojiPicker } from '../lib/components/shared/EmojiPicker.svelte';
 import { showMessageInfoModal } from '../lib/components/modals/MessageInfoModal.svelte';
 import { showChannelMembersModal as svelteShowChannelMembersModal } from '../lib/components/modals/ChannelMembersModal.svelte';
 import { showWorkspaceMembersModal as svelteShowWorkspaceMembersModal } from '../lib/components/modals/WorkspaceMembersModal.svelte';
@@ -26,139 +27,12 @@ import { showAddContactModal as svelteShowAddContactModal } from '../lib/compone
 import { mount, unmount } from 'svelte';
 import * as MH from './MountHelpers';
 import type { MountContext } from './MountHelpers';
-import MessageList from '../lib/components/messages/MessageList.svelte';
 // Most component imports moved to MountHelpers.ts
 import WelcomePage from '../lib/components/layout/WelcomePage.svelte';
 
-export interface ActivityItem {
-  id: string;
-  type: 'thread-reply' | 'mention';
-  workspaceId: string;
-  channelId: string;
-  threadId?: string;
-  messageId: string;
-  actorId: string;
-  snippet: string;
-  timestamp: number;
-  read: boolean;
-}
+// ActivityItem + UICallbacks interfaces moved to ./types.ts
 import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
 import type { AppState } from '../main';
-import { renderMarkdown } from './renderMarkdown';
-
-// ---------------------------------------------------------------------------
-// Callback interfaces
-// ---------------------------------------------------------------------------
-
-export interface UICallbacks {
-  /** Send a chat message (optionally in a thread) */
-  sendMessage: (content: string, threadId?: string) => Promise<void>;
-  /** Send a file attachment with optional text/thread */
-  sendAttachment: (file: File, text?: string, threadId?: string) => Promise<void>;
-  /** Resolve full-quality image URL for an attachment (blob URL), if available */
-  resolveAttachmentImageUrl?: (attachmentId: string) => Promise<string | null>;
-  /** Initiate a WebRTC connection to a peer */
-  connectPeer: (peerId: string) => void;
-  /** Create a new workspace and return it */
-  createWorkspace: (name: string, alias: string) => import('decent-protocol').Workspace;
-  /** Initiate join flow (connect to a peer with invite code) */
-  joinWorkspace: (code: string, alias: string, peerId: string, inviteData?: import('decent-protocol').InviteData) => Promise<void>;
-  /** Create a channel inside the active workspace */
-  createChannel: (name: string) => { success: boolean; channel?: import('decent-protocol').Channel; error?: string };
-  /** Remove a member from the active workspace (owner/admin) */
-  removeWorkspaceMember?: (peerId: string) => Promise<{ success: boolean; error?: string }>;
-  /** Promote a member's role */
-  promoteMember?: (peerId: string, newRole: 'admin') => Promise<{ success: boolean; error?: string }>;
-  /** Demote a member to regular member */
-  demoteMember?: (peerId: string) => Promise<{ success: boolean; error?: string }>;
-  /** Update workspace permissions */
-  updateWorkspacePermissions?: (permissions: Partial<import('decent-protocol').WorkspacePermissions>) => Promise<{ success: boolean; error?: string }>;
-  /** Update workspace name/description */
-  updateWorkspaceInfo?: (updates: { name?: string; description?: string }) => Promise<{ success: boolean; error?: string }>;
-  /** Delete workspace */
-  deleteWorkspace?: (workspaceId: string) => Promise<boolean>;
-  /** Open a DM channel */
-  createDM: (peerId: string) => { success: boolean; channel?: import('decent-protocol').Channel };
-  /** Persist workspace state */
-  persistWorkspace: (wsId: string) => Promise<void>;
-  /** Persist a key-value setting */
-  persistSetting: (key: string, value: unknown) => Promise<void>;
-  /** Get command autocomplete suggestions */
-  getCommandSuggestions?: (prefix: string) => Array<{ name: string; description: string }>;
-  /** Broadcast typing indicator */
-  broadcastTyping?: () => void;
-  /** Broadcast stop typing */
-  broadcastStopTyping?: () => void;
-  /** Toggle reaction on a message */
-  toggleReaction?: (messageId: string, emoji: string) => void;
-  /** WhatsApp-like message info (delivered/read breakdown) */
-  getMessageReceiptInfo?: (messageId: string) => {
-    messageId: string;
-    channelId: string;
-    recipients: Array<{ peerId: string; name: string; at?: number }>;
-    delivered: Array<{ peerId: string; name: string; at?: number }>;
-    read: Array<{ peerId: string; name: string; at?: number }>;
-    pending: Array<{ peerId: string; name: string; at?: number }>;
-  } | null;
-  /** Get settings for settings panel */
-  getSettings?: () => Promise<any>;
-  /** Generate full invite URL for a workspace */
-  generateInviteURL?: (workspaceId: string) => string;
-  /** Settings panel action (e.g. generateSeed) */
-  onSettingsAction?: (action: string) => void | Promise<void>;
-  /** Handle scanned QR contact — add to contacts and optionally connect */
-  onQRContactScanned?: (data: ContactURIData) => void;
-  /** Get user's public key for QR code generation */
-  getMyPublicKey?: () => string;
-  /** Add a contact */
-  addContact?: (contact: Contact) => Promise<void>;
-  /** Remove a contact */
-  removeContact?: (peerId: string) => Promise<void>;
-  /** Get all contacts */
-  getContacts?: () => Promise<Contact[]>;
-  /** Start a standalone DM with a contact */
-  startDirectMessage?: (contactPeerId: string) => Promise<DirectConversation>;
-  /** Get all standalone direct conversations */
-  getDirectConversations?: () => Promise<DirectConversation[]>;
-  /** Get all workspaces for the workspace switcher */
-  getAllWorkspaces?: () => Array<import('decent-protocol').Workspace>;
-  /** Set a per-workspace display name alias */
-  setWorkspaceAlias?: (wsId: string, alias: string) => void;
-  /** Get unread message count for a channel */
-  getUnreadCount?: (channelId: string) => number;
-  /** Activity feed items (thread replies, mentions, etc.) */
-  getActivityItems?: () => ActivityItem[];
-  /** Count unread activity items */
-  getActivityUnreadCount?: () => number;
-  /** Mark one activity item as read */
-  markActivityRead?: (id: string) => void;
-  /** Mark all activity as read */
-  markAllActivityRead?: () => void;
-  /** Mark activity entries for a specific thread as read */
-  markThreadActivityRead?: (channelId: string, threadId: string) => void;
-  /** Notify the notification system which channel is currently active */
-  setFocusedChannel?: (channelId: string | null) => void;
-  /** Mark a channel as fully read */
-  markChannelRead?: (channelId: string) => void;
-  /** Late-read receipt scan when opening a channel/conversation */
-  onChannelViewed?: (channelId: string) => void | Promise<void>;
-  /** Resolve best display name for a peer — checks contacts, workspace members, fallback */
-  getDisplayNameForPeer?: (peerId: string) => string;
-  /** Get current seed phrase (for transfer QR) */
-  getCurrentSeed?: () => Promise<string | null>;
-  /** Validate a seed phrase — returns error string or null if valid */
-  validateSeed?: (mnemonic: string) => string | null;
-  /** Called when user restores identity from seed phrase */
-  onSeedRestored?: (mnemonic: string) => Promise<void>;
-  /** Start a voice huddle in a channel */
-  startHuddle?: (channelId: string) => Promise<void>;
-  /** Join an existing voice huddle */
-  joinHuddle?: (channelId: string) => Promise<void>;
-  /** Leave the current voice huddle */
-  leaveHuddle?: () => Promise<void>;
-  /** Toggle mute in the current huddle */
-  toggleHuddleMute?: () => boolean;
-}
 
 // ---------------------------------------------------------------------------
 // UIRenderer

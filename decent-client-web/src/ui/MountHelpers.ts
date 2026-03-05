@@ -9,7 +9,7 @@ import { InviteURI } from 'decent-protocol';
 import { MessageSearch } from './MessageSearch';
 import { showJoinWorkspaceModal } from '../lib/components/modals/JoinWorkspaceModal.svelte';
 import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
-import type { UICallbacks, ActivityItem } from './UIRenderer';
+import type { UICallbacks, ActivityItem } from './types';
 import type { AppState } from '../main';
 import type { WorkspaceManager, MessageStore } from 'decent-protocol';
 
