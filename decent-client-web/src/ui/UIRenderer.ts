@@ -10,6 +10,7 @@ import { MessageSearch } from './MessageSearch';
 import { SettingsPanel } from './SettingsPanel';
 import { QRCodeManager } from './QRCodeManager';
 import { ReactionTracker } from './ReactionTracker';
+import { peerColor as peerColorUtil, escapeHtml as escapeHtmlUtil } from '../lib/utils/peer';
 import { ContactURI, InviteURI } from 'decent-protocol';
 import type { PlaintextMessage, Contact, ContactURIData, DirectConversation } from 'decent-protocol';
 import { toast } from '../lib/components/shared/Toast.svelte';
@@ -21,6 +22,7 @@ import { showWorkspaceMembersModal as svelteShowWorkspaceMembersModal } from '..
 import { showWorkspaceSettingsModal as svelteShowWorkspaceSettingsModal } from '../lib/components/modals/WorkspaceSettingsModal.svelte';
 import { showJoinWorkspaceModal as svelteShowJoinWorkspaceModal } from '../lib/components/modals/JoinWorkspaceModal.svelte';
 import { showPeerSelectModal } from '../lib/components/modals/PeerSelectModal.svelte';
+import { showAddContactModal as svelteShowAddContactModal } from '../lib/components/modals/AddContactModal.svelte';
 import { mount, unmount } from 'svelte';
 import WorkspaceRail from '../lib/components/layout/WorkspaceRail.svelte';
 import Sidebar from '../lib/components/layout/Sidebar.svelte';
@@ -200,18 +202,11 @@ export class UIRenderer {
   /** Pending compose attachments (staged before send) */
   // pendingMainAttachments/pendingThreadAttachments removed — migrated to ComposeArea.svelte
   // _boundPasteHandler removed — paste handling migrated to ComposeArea.svelte
-  private _boundDropHandler: ((e: Event) => void) | null = null;
+  // _boundDropHandler removed — drag-drop handled in bindAppEvents directly
   private lightboxBlobUrl: string | null = null;
   private activityPanelOpen = false;
 
-  /**
-   * Scroll-lock state for streaming messages.
-   * When user intentionally scrolls up during an active stream, we stop
-   * auto-scrolling until they scroll back to bottom or the stream ends.
-   */
-  private _userScrolledAway = false;
-  private _programmaticScroll = false;
-  private _scrollListenerBound = false;
+  // _userScrolledAway, _programmaticScroll, _scrollListenerBound — removed (scroll management in Svelte)
   private reactionTracker!: ReactionTracker;
 
   constructor(
@@ -582,21 +577,7 @@ export class UIRenderer {
   // Messages
   // =========================================================================
 
-  /**
-   * Return true when a scroll container is at (or near) the bottom.
-   */
-  private isNearBottom(container: HTMLElement, thresholdPx = 80): boolean {
-    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    return distanceFromBottom <= thresholdPx;
-  }
-
-  /** Programmatic scroll that won't trigger the user-scroll-away detector. */
-  private scrollToBottom(container: HTMLElement): void {
-    this._programmaticScroll = true;
-    container.scrollTop = container.scrollHeight;
-    // Clear flag after the scroll event fires (microtask timing).
-    requestAnimationFrame(() => { this._programmaticScroll = false; });
-  }
+  // isNearBottom() / scrollToBottom() — removed (scroll management now in Svelte components)
 
   /**
    * Scroll to a specific message by ID and highlight it with a fade-out animation.
@@ -622,25 +603,7 @@ export class UIRenderer {
     });
   }
 
-  /**
-   * Bind a one-time scroll listener on the messages container that detects
-   * when the user intentionally scrolls away from the bottom during streaming.
-   * Re-entering the bottom zone clears the flag so auto-scroll resumes.
-   */
-  private ensureScrollListener(): void {
-    if (this._scrollListenerBound) return;
-    const list = document.getElementById('messages-list');
-    if (!list) return;
-    this._scrollListenerBound = true;
-    list.addEventListener('scroll', () => {
-      if (this._programmaticScroll) return; // ignore our own scrolls
-      if (this.isNearBottom(list, 80)) {
-        this._userScrolledAway = false;
-      } else {
-        this._userScrolledAway = true;
-      }
-    }, { passive: true });
-  }
+  // ensureScrollListener() — removed (scroll management now in Svelte MessageList)
 
   renderMessages(): void {
     const listContainer = document.getElementById('messages-list')!;
@@ -733,48 +696,16 @@ export class UIRenderer {
   }
 
   /**
-   * DEP-005: Update the delivery status tick on a sent message without re-rendering everything.
-   * Called when an ACK arrives from the recipient.
+   * DEP-005: Update the delivery status tick on a sent message.
+   * Re-renders the message list to reflect updated status from the message store.
    */
   updateMessageStatus(
-    messageId: string,
-    status: 'pending' | 'sent' | 'delivered' | 'read',
-    detail?: { acked?: number; total?: number; read?: number },
+    _messageId: string,
+    _status: 'pending' | 'sent' | 'delivered' | 'read',
+    _detail?: { acked?: number; total?: number; read?: number },
   ): void {
-    const el = document.querySelector(`.msg-delivery-status[data-message-id="${messageId}"]`) as HTMLElement | null;
-    if (!el) return;
-    el.className = `msg-delivery-status ${status}`;
-
-    const acked = detail?.acked;
-    const read = detail?.read;
-    const total = detail?.total;
-    const hasCounts = typeof total === 'number' && total > 0;
-
-    el.title = status === 'read'
-      ? (hasCounts ? `Read (${read ?? 0}/${total})` : 'Read')
-      : status === 'delivered'
-        ? (hasCounts ? `Delivered (${acked ?? 0}/${total})` : 'Delivered')
-        : status === 'sent'
-          ? (hasCounts ? `Sent (${acked ?? 0}/${total} delivered)` : 'Sent')
-          : 'Sending…';
-
-    el.textContent = status === 'read' ? '✓✓' : status === 'delivered' ? '✓✓' : status === 'sent' ? '✓' : '⏳';
-
-    const detailEl = document.querySelector(`.msg-delivery-detail[data-message-id="${messageId}"]`) as HTMLElement | null;
-    if (hasCounts) {
-      const value = status === 'read' ? (read ?? 0) : (acked ?? 0);
-      if (detailEl) {
-        detailEl.textContent = `${value}/${total}`;
-      } else if (el.parentElement) {
-        const span = document.createElement('span');
-        span.className = 'msg-delivery-detail';
-        span.dataset.messageId = messageId;
-        span.textContent = `${value}/${total}`;
-        el.insertAdjacentElement('afterend', span);
-      }
-    } else if (detailEl) {
-      detailEl.remove();
-    }
+    // MessageItem.svelte renders status from message props — re-render to pick up changes.
+    this.renderMessages();
   }
 
   private showMessageInfo(messageId: string): void {
@@ -786,53 +717,15 @@ export class UIRenderer {
     showMessageInfoModal(info);
   }
 
-  updateStreamingMessage(messageId: string, content: string): void {
-    const msgEl = document.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
-    if (!msgEl) return;
-
-    this.ensureScrollListener();
-
-    const contentEl = msgEl.querySelector('.message-content') as HTMLElement | null;
-    if (!contentEl) return;
-    contentEl.innerHTML = renderMarkdown(content + ' ▋');
-    msgEl.classList.add('streaming');
-
-    // Only auto-scroll if user hasn't intentionally scrolled away
-    // AND we're actually near the bottom (double-guard against missed events).
-    if (!this._userScrolledAway) {
-      const container = msgEl.closest('.message-list, #thread-messages, #messages-list') as HTMLElement | null;
-      if (container && this.isNearBottom(container)) this.scrollToBottom(container);
-    }
+  updateStreamingMessage(_messageId: string, _content: string): void {
+    // Re-render the message list to pick up content updates.
+    // The Svelte MessageList handles scroll management internally.
+    this.renderMessages();
   }
 
-  finalizeStreamingMessage(messageId: string): void {
-    const msgEl = document.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
-    if (!msgEl) return;
-    const contentEl = msgEl.querySelector('.message-content') as HTMLElement | null;
-    if (!contentEl) return;
-    // Get the raw text from the stored message (not from DOM which has HTML)
-    const activeChannelId = this.state.activeChannelId;
-    let finalText = '';
-    if (activeChannelId) {
-      const msg = this.messageStore.getMessages(activeChannelId).find((m: PlaintextMessage) => m.id === messageId);
-      finalText = msg?.content ?? '';
-    }
-    if (!finalText) {
-      finalText = (contentEl.textContent ?? '').replace(/ ▋$/, '');
-    }
-    contentEl.innerHTML = renderMarkdown(finalText);
-
-    if (activeChannelId) {
-      const msg = this.messageStore.getMessages(activeChannelId).find((m: PlaintextMessage) => m.id === messageId);
-      if (msg) {
-        msg.content = finalText;
-        (msg as any).streaming = false;
-      }
-    }
-
-    msgEl.classList.remove('streaming');
-    // Reset scroll-lock so next message/stream auto-scrolls normally.
-    this._userScrolledAway = false;
+  finalizeStreamingMessage(_messageId: string): void {
+    // Re-render to finalize display (remove cursor, streaming class).
+    this.renderMessages();
   }
 
   // =========================================================================
@@ -1661,45 +1554,14 @@ export class UIRenderer {
   // =========================================================================
 
   showAddContactModal(): void {
-    this.showModal(
-      'Add Contact',
-      `
-      <div class="form-group">
-        <label>Contact URI</label>
-        <textarea name="contactUri" id="contact-uri-input" placeholder="Paste decent://contact?... URI" rows="4" required></textarea>
-      </div>
-      <div class="form-group">
-        <label>Display Name Override (optional)</label>
-        <input type="text" name="displayNameOverride" placeholder="Override contact name" />
-      </div>
-    `,
-      async (form) => {
-        const uri = (form.elements.namedItem('contactUri') as HTMLTextAreaElement).value.trim();
-        const displayNameOverride = (form.elements.namedItem('displayNameOverride') as HTMLInputElement).value.trim();
-
-        if (!ContactURI.isValid(uri)) {
-          this.showToast('Invalid Contact URI', 'error');
-          return false;
-        }
-
-        const parsed = ContactURI.decode(uri);
-
-        const contact: Contact = {
-          peerId: parsed.peerId || `contact-${Date.now()}`,
-          publicKey: parsed.publicKey,
-          displayName: displayNameOverride || parsed.displayName,
-          signalingServers: parsed.signalingServers || [],
-          addedAt: Date.now(),
-          lastSeen: 0,
-        };
-
+    svelteShowAddContactModal({
+      onAdd: async (contact) => {
         await this.callbacks.addContact?.(contact);
         await this.refreshContactsCache();
         this.updateSidebar();
-        this.showToast(`Added ${contact.displayName} to contacts`, 'success');
-        return true;
       },
-    );
+      onToast: (msg: string, type?: string) => this.showToast(msg, type as any),
+    });
   }
 
   showStartDirectMessageModal(): void {
@@ -1738,40 +1600,7 @@ export class UIRenderer {
   // Utility helpers
   // =========================================================================
 
-  private upgradeInlineImagePreviews(container?: HTMLElement): void {
-    const root = container || document.getElementById('messages-list');
-    if (!root) return;
-
-    // Respect optional low-quality mode.
-    this.callbacks.getSettings?.().then(settings => {
-      if (settings?.lowQualityPreviews) return;
-
-      const imgs = root.querySelectorAll<HTMLImageElement>('img.attachment-thumbnail[data-attachment-id]');
-      for (const img of imgs) {
-        if (img.getAttribute('data-inline-upgrade') === 'done') continue;
-        const attachmentId = img.getAttribute('data-attachment-id');
-        if (!attachmentId) continue;
-
-        const tryResolve = (attempt = 1) => {
-          this.callbacks.resolveAttachmentImageUrl?.(attachmentId).then((fullUrl) => {
-            if (fullUrl) {
-              img.src = fullUrl;
-              img.setAttribute('data-inline-upgrade', 'done');
-              return;
-            }
-            if (attempt < 3) {
-              setTimeout(() => tryResolve(attempt + 1), 2500);
-            }
-          }).catch(() => {
-            if (attempt < 3) setTimeout(() => tryResolve(attempt + 1), 2500);
-          });
-        };
-
-        img.setAttribute('data-inline-upgrade', 'loading');
-        tryResolve(1);
-      }
-    }).catch(() => {});
-  }
+  // upgradeInlineImagePreviews() — removed (dead code, image upgrade handled in MessageItem)
 
   /** Bridge for drag-drop: dispatch files to the Svelte ComposeArea */
   private addPendingAttachments(files: File[], target: 'main' | 'thread'): void {
@@ -1942,26 +1771,11 @@ export class UIRenderer {
   // formatFileSize() — removed (migrated to $lib/utils/format.ts)
 
   peerColor(peerId: string): string {
-    const colors = [
-      '#e01e5a',
-      '#2eb67d',
-      '#ecb22e',
-      '#36c5f0',
-      '#611f69',
-      '#1264a3',
-      '#e57373',
-      '#4fc3f7',
-    ];
-    let hash = 0;
-    for (let i = 0; i < peerId.length; i++)
-      hash = peerId.charCodeAt(i) + ((hash << 5) - hash);
-    return colors[Math.abs(hash) % colors.length];
+    return peerColorUtil(peerId);
   }
 
   escapeHtml(text: string): string {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return escapeHtmlUtil(text);
   }
 
   /** 3-state presence CSS class: 'online' | 'connecting' | '' */
