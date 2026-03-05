@@ -135,6 +135,6 @@ test.describe('Workspace Direct Messages Section', () => {
     await enterDMView(page);
     await page.click('#start-dm-btn');
     // With no contacts, app shows a toast error instead of modal.
-    await expect(page.locator('.toast')).toContainText('Add a contact first');
+    await expect(page.locator('.toast.error')).toContainText('Add a contact first');
   });
 });

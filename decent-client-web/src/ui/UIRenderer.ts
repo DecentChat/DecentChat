@@ -20,6 +20,13 @@ import WorkspaceRail from '../lib/components/layout/WorkspaceRail.svelte';
 import Sidebar from '../lib/components/layout/Sidebar.svelte';
 import ChannelHeader from '../lib/components/layout/ChannelHeader.svelte';
 import MessageList from '../lib/components/messages/MessageList.svelte';
+import WelcomePage from '../lib/components/layout/WelcomePage.svelte';
+import ComposeArea from '../lib/components/compose/ComposeArea.svelte';
+import ThreadPanel from '../lib/components/layout/ThreadPanel.svelte';
+import ActivityPanel from '../lib/components/layout/ActivityPanel.svelte';
+import HuddleBar from '../lib/components/layout/HuddleBar.svelte';
+import SearchPanel from '../lib/components/layout/SearchPanel.svelte';
+import Lightbox from '../lib/components/shared/Lightbox.svelte';
 
 export interface ActivityItem {
   id: string;
@@ -165,6 +172,13 @@ export class UIRenderer {
   private _channelHeaderComponent: Record<string, any> | null = null;
   private _messageListComponent: Record<string, any> | null = null;
   private _threadListComponent: Record<string, any> | null = null;
+  private _welcomeComponent: Record<string, any> | null = null;
+  private _composeComponent: Record<string, any> | null = null;
+  private _threadPanelComponent: Record<string, any> | null = null;
+  private _activityPanelComponent: Record<string, any> | null = null;
+  private _huddleBarComponent: Record<string, any> | null = null;
+  private _searchPanelComponent: Record<string, any> | null = null;
+  private _lightboxComponent: Record<string, any> | null = null;
 
   /** Cached contacts for synchronous sidebar rendering */
   private cachedContacts: Contact[] = [];
@@ -178,9 +192,8 @@ export class UIRenderer {
   private huddleMuted = false;
 
   /** Pending compose attachments (staged before send) */
-  private pendingMainAttachments: Array<{ id: string; file: File; previewUrl?: string }> = [];
-  private pendingThreadAttachments: Array<{ id: string; file: File; previewUrl?: string }> = [];
-  private _boundPasteHandler: ((e: Event) => void) | null = null;
+  // pendingMainAttachments/pendingThreadAttachments removed — migrated to ComposeArea.svelte
+  // _boundPasteHandler removed — paste handling migrated to ComposeArea.svelte
   private _boundDropHandler: ((e: Event) => void) | null = null;
   private lightboxBlobUrl: string | null = null;
   private activityPanelOpen = false;
@@ -375,275 +388,23 @@ export class UIRenderer {
     this.hideLoading();
     const app = document.getElementById('app')!;
     const hasWorkspace = (this.callbacks.getAllWorkspaces?.().length || 0) > 0;
-    app.innerHTML = `
-      <div class="landing-page">
 
-        <!-- ── Sticky Nav ── -->
-        <nav class="landing-nav">
-          <div class="landing-nav-inner">
-            <div class="landing-nav-brand">
-              <img src="/icons/logo-v2-light.png" alt="Deci" class="landing-nav-logo" />
-              <span class="landing-nav-name">DecentChat</span>
-            </div>
-            <div class="landing-nav-actions">
-              <button class="btn-secondary btn-sm" id="join-ws-btn-nav">Join workspace</button>
-              <button class="btn-primary btn-sm" id="open-app-btn-nav">Open App</button>
-              ${!hasWorkspace ? '<button class="btn-secondary btn-sm" id="create-ws-btn-nav">Create workspace</button>' : ''}
-            </div>
-          </div>
-        </nav>
+    // Unmount previous welcome component if any
+    if (this._welcomeComponent) {
+      try { unmount(this._welcomeComponent); } catch {}
+      this._welcomeComponent = null;
+    }
+    app.innerHTML = '';
 
-        <!-- ── Hero ── -->
-        <section class="lp-hero">
-          <div class="lp-hero-inner">
-            <div class="lp-hero-badge">🔒 100% private · No servers · No accounts</div>
-            <h1 class="lp-hero-title">Chat that belongs<br>to <em>you</em>.</h1>
-            <p class="lp-hero-sub">
-              WhatsApp stores your data. Telegram stores your data. Slack stores your data.
-              <strong>DecentChat stores nothing.</strong> Messages go directly between people — encrypted, peer-to-peer, serverless.
-            </p>
-            <div class="lp-hero-actions">
-              ${hasWorkspace
-                ? '<button class="btn-primary btn-lg" id="open-app-btn">Open App →</button>'
-                : '<button class="btn-primary btn-lg" id="create-ws-btn">Start Chatting Free →</button>'}
-              <button class="btn-secondary btn-lg" id="join-ws-btn">Join with Invite Code</button>
-            </div>
-            <p class="lp-hero-note">No signup · No phone number · Works in your browser</p>
-          </div>
-          <div class="lp-hero-mascot">
-            <img src="/icons/logo-v2-light.png" alt="Deci the DecentChat mascot" class="hero-deci" />
-          </div>
-        </section>
-
-        <!-- ── Problem banner ── -->
-        <section class="lp-problem">
-          <div class="lp-container">
-            <div class="lp-problem-grid">
-              <div class="lp-problem-item">
-                <span class="lp-problem-icon">📡</span>
-                <strong>WhatsApp</strong> — owned by Meta, messages on their servers
-              </div>
-              <div class="lp-problem-item">
-                <span class="lp-problem-icon">🕵️</span>
-                <strong>Telegram</strong> — not E2E by default, cloud stored
-              </div>
-              <div class="lp-problem-item">
-                <span class="lp-problem-item-highlight">✅</span>
-                <strong>DecentChat</strong> — zero servers, zero data collected
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- ── How it works ── -->
-        <section class="lp-how">
-          <div class="lp-container">
-            <h2 class="lp-section-title">How it works</h2>
-            <p class="lp-section-sub">Two steps. No servers involved.</p>
-            <div class="lp-steps">
-              <div class="lp-step">
-                <div class="lp-step-num">1</div>
-                <div class="lp-step-content">
-                  <h3>Create your workspace or join one</h3>
-                  <p>Start your own workspace in one click, or paste an invite to join an existing one. Your secure seed identity is generated automatically in your browser.</p>
-                </div>
-              </div>
-              <div class="lp-step-arrow">→</div>
-              <div class="lp-step">
-                <div class="lp-step-num">2</div>
-                <div class="lp-step-content">
-                  <h3>Chat with total privacy</h3>
-                  <p>Messages are encrypted before leaving your device using Signal's Double Ratchet. Even the signaling server — the only server that exists — never sees your content.</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- ── Features ── -->
-        <section class="lp-features">
-          <div class="lp-container">
-            <h2 class="lp-section-title">Everything you need.<br>Nothing you don't.</h2>
-            <div class="lp-features-grid">
-              <div class="lp-feature-card">
-                <div class="lp-feature-icon">🔒</div>
-                <h3>Double Ratchet E2E</h3>
-                <p>Same encryption protocol as Signal. Keys rotate with every single message — past messages stay private forever, even if keys are compromised.</p>
-              </div>
-              <div class="lp-feature-card">
-                <div class="lp-feature-icon">🌐</div>
-                <h3>True P2P — No Server</h3>
-                <p>WebRTC peer-to-peer data channels. A tiny signaling server helps peers find each other, then disappears. Like BitTorrent, but for private chat.</p>
-              </div>
-              <div class="lp-feature-card">
-                <div class="lp-feature-icon">🔑</div>
-                <h3>Seed Phrase Identity</h3>
-                <p>12 words = your permanent identity. Works on any device. Back it up on paper. No company, no cloud, no way to lock you out of your own account.</p>
-              </div>
-              <div class="lp-feature-card">
-                <div class="lp-feature-icon">💬</div>
-                <h3>Full-Featured Chat</h3>
-                <p>Workspaces, channels, DMs, threads, reactions, file sharing, search, slash commands — everything Slack has, with none of the surveillance.</p>
-              </div>
-              <div class="lp-feature-card">
-                <div class="lp-feature-icon">📱</div>
-                <h3>Install Anywhere</h3>
-                <p>Progressive Web App — install from any browser on any device. iOS, Android, desktop. No app store, no permissions you didn't ask for.</p>
-              </div>
-              <div class="lp-feature-card">
-                <div class="lp-feature-icon">⚡</div>
-                <h3>Offline-First Sync</h3>
-                <p>Messages queue when offline and sync when peers reconnect using CRDTs and Negentropy set reconciliation. No message ever gets lost.</p>
-              </div>
-              <div class="lp-feature-card lp-feature-card--highlight">
-                <div class="lp-feature-icon">🪪</div>
-                <h3>No ID. No Face Scan. Ever.</h3>
-                <p>While Discord now requires a government ID or face scan to access their platform, DecentChat requires nothing. No email, no phone, no identity checks — just 12 words that only you control.</p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- ── Comparison ── -->
-        <section class="lp-compare">
-          <div class="lp-container">
-            <h2 class="lp-section-title">The honest comparison</h2>
-            <div class="lp-compare-table">
-              <div class="lp-compare-header">
-                <span>Feature</span>
-                <span>Discord / WhatsApp / Telegram</span>
-                <span class="lp-compare-us">DecentChat 🐙</span>
-              </div>
-              <div class="lp-compare-row">
-                <span>Messages stored on servers</span>
-                <span class="bad">✓ Yes</span>
-                <span class="good">✗ Never</span>
-              </div>
-              <div class="lp-compare-row">
-                <span>Requires phone / email</span>
-                <span class="bad">✓ Required</span>
-                <span class="good">✗ None needed</span>
-              </div>
-              <div class="lp-compare-row">
-                <span>ID or face scan to access</span>
-                <span class="bad">✓ Discord requires it now</span>
-                <span class="good">✗ Never</span>
-              </div>
-              <div class="lp-compare-row">
-                <span>End-to-end encrypted by default</span>
-                <span class="mid">⚠️ Partial</span>
-                <span class="good">✓ Always</span>
-              </div>
-              <div class="lp-compare-row">
-                <span>Can be legally subpoenaed</span>
-                <span class="bad">✓ Yes</span>
-                <span class="good">Nothing to hand over</span>
-              </div>
-              <div class="lp-compare-row">
-                <span>Survives company going bust</span>
-                <span class="bad">✗ App dies too</span>
-                <span class="good">✓ Protocol lives forever</span>
-              </div>
-              <div class="lp-compare-row">
-                <span>Forward secrecy</span>
-                <span class="mid">⚠️ Sometimes</span>
-                <span class="good">✓ Every message</span>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- ── Tech stack ── -->
-        <section class="lp-tech">
-          <div class="lp-container">
-            <h2 class="lp-section-title">Built on proven technology</h2>
-            <div class="lp-tech-pills">
-              <span class="lp-tech-pill">Signal's Double Ratchet</span>
-              <span class="lp-tech-pill">WebRTC P2P</span>
-              <span class="lp-tech-pill">BIP39 Seed Phrases</span>
-              <span class="lp-tech-pill">AES-GCM-256</span>
-              <span class="lp-tech-pill">ECDH P-256</span>
-              <span class="lp-tech-pill">CRDTs + Vector Clocks</span>
-              <span class="lp-tech-pill">Negentropy Set Sync</span>
-              <span class="lp-tech-pill">IndexedDB Persistence</span>
-              <span class="lp-tech-pill">Service Worker PWA</span>
-            </div>
-          </div>
-        </section>
-
-        <!-- ── Final CTA ── -->
-        <section class="lp-final-cta">
-          <div class="lp-container">
-            <img src="/icons/logo-v2-light.png" alt="Deci" class="lp-cta-mascot" />
-            <h2>Your conversations.<br>Your keys. Your rules.</h2>
-            <p>Start in 10 seconds. No signup. No credit card. No catch.</p>
-            <div class="lp-hero-actions" style="justify-content:center; margin-top: 24px;">
-              ${hasWorkspace
-                ? '<button class="btn-primary btn-lg" id="open-app-btn-2">Open App →</button>'
-                : '<button class="btn-primary btn-lg" id="create-ws-btn-2">Start Chatting Free →</button>'}
-              <button class="btn-secondary btn-lg" id="join-ws-btn-2">Join with Invite Code</button>
-            </div>
-            <p class="lp-restore-hint">
-              Already have an account?
-              <button class="restore-link-btn" id="restore-identity-btn">Restore from seed phrase →</button>
-            </p>
-          </div>
-        </section>
-
-        <!-- ── Footer ── -->
-        <footer class="lp-footer">
-          <div class="lp-container">
-            <div class="lp-footer-inner">
-              <div class="lp-footer-brand">
-                <img src="/icons/logo-v2-light.png" alt="Deci" style="width:24px;height:24px;margin-right:8px;" />
-                <strong>DecentChat</strong>
-              </div>
-              <p class="lp-footer-note">Open protocol · No tracking · No ads · Built with ❤️ and WebRTC</p>
-              <p class="lp-footer-peer">Your anonymous ID: <code id="welcome-peer-id" title="Click to copy">${this.state.myPeerId.slice(0, 20)}…</code></p>
-            </div>
-          </div>
-        </footer>
-
-      </div>
-    `;
-
-    const isAppLikeRoute = window.location.pathname === '/app' || window.location.pathname.startsWith('/app/');
-    const bootstrapAction = (action: 'create' | 'join') => {
-      sessionStorage.setItem('decent:welcomeAction', action);
-      window.location.assign('/app');
-    };
-
-    const onCreateClick = () => {
-      if (!isAppLikeRoute) {
-        bootstrapAction('create');
-        return;
-      }
-      this.showCreateWorkspaceModal();
-    };
-
-    const onJoinClick = () => {
-      if (!isAppLikeRoute) {
-        bootstrapAction('join');
-        return;
-      }
-      this.showJoinWorkspaceModal();
-    };
-
-    document.getElementById('create-ws-btn')?.addEventListener('click', onCreateClick);
-    document.getElementById('create-ws-btn-2')?.addEventListener('click', onCreateClick);
-    document.getElementById('create-ws-btn-nav')?.addEventListener('click', onCreateClick);
-    document.getElementById('open-app-btn')?.addEventListener('click', () => window.location.assign('/app'));
-    document.getElementById('open-app-btn-2')?.addEventListener('click', () => window.location.assign('/app'));
-    document.getElementById('open-app-btn-nav')?.addEventListener('click', () => window.location.assign('/app'));
-    document.getElementById('join-ws-btn')?.addEventListener('click', onJoinClick);
-    document.getElementById('join-ws-btn-2')?.addEventListener('click', onJoinClick);
-    document.getElementById('join-ws-btn-nav')?.addEventListener('click', onJoinClick);
-    document.getElementById('welcome-peer-id')!.addEventListener('click', () => {
-      navigator.clipboard.writeText(this.state.myPeerId);
-      this.showToast('Peer ID copied!');
-    });
-    document.getElementById('restore-identity-btn')!.addEventListener('click', () => {
-      this.qrCodeManager.showRestoreSeed();
+    this._welcomeComponent = mount(WelcomePage, {
+      target: app,
+      props: {
+        myPeerId: this.state.myPeerId,
+        hasWorkspace,
+        onCreateWorkspace: () => this.showCreateWorkspaceModal(),
+        onJoinWorkspace: () => this.showJoinWorkspaceModal(),
+        onRestoreSeed: () => this.qrCodeManager.showRestoreSeed(),
+      },
     });
   }
 
@@ -660,74 +421,197 @@ export class UIRenderer {
         <div class="sidebar" id="sidebar"></div>
         <div class="main-content">
           <div id="channel-header-mount"></div>
-          <div class="huddle-join-banner" id="huddle-join-banner" style="display:none">
-            <span class="huddle-join-icon">🟢</span>
-            <span class="huddle-join-text">Huddle in progress</span>
-            <button class="huddle-join-btn" id="huddle-join-btn">Join</button>
-          </div>
+          <div id="search-mount"></div>
+          <div id="huddle-mount"></div>
           <div class="messages-area">
             <div class="messages-pane">
               <div class="messages-list" id="messages-list"></div>
               <div class="typing-indicator" id="typing-indicator"></div>
-              <div class="huddle-bar" id="huddle-bar" style="display:none">
-                <div class="huddle-bar-info">
-                  <span class="huddle-icon">🟢</span>
-                  <span class="huddle-label">Huddle</span>
-                  <div class="huddle-participants" id="huddle-participants"></div>
-                </div>
-                <div class="huddle-bar-controls">
-                  <button class="huddle-mute-btn" id="huddle-mute-btn" title="Mute/Unmute">🎤</button>
-                  <button class="huddle-leave-btn" id="huddle-leave-btn" title="Leave Huddle">📵</button>
-                </div>
-              </div>
-              <div class="compose-box">
-                <div class="compose-pending" id="compose-pending"></div>
-                <div class="compose-inner">
-                  <input type="file" id="file-input" style="display:none" multiple />
-                  <button class="compose-attach" id="attach-btn" title="Attach file">📎</button>
-                  <textarea class="compose-input" id="compose-input" placeholder="${this.getComposePlaceholder()}" rows="1"></textarea>
-                  <button class="compose-emoji" id="emoji-btn" title="Emoji">😊</button>
-                  <button class="compose-send" id="send-btn" title="Send">⬆</button>
-                </div>
-              </div>
+              <div id="huddle-bar-mount"></div>
+              <div id="compose-mount"></div>
             </div>
-            <div class="thread-panel hidden" id="thread-panel">
-              <div class="thread-resize-handle" id="thread-resize-handle" title="Drag to resize"></div>
-              <div class="thread-header">
-                <div class="thread-header-info">
-                  <h3>💬 Thread</h3>
-                  <div class="thread-header-preview" style="font-size:12px; opacity:0.6; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
-                </div>
-                <button class="thread-close icon-btn" id="thread-close">✕</button>
-              </div>
-              <div class="thread-messages" id="thread-messages"></div>
-              <div class="thread-compose">
-                <div class="compose-pending" id="thread-pending"></div>
-                <div class="compose-inner">
-                  <input type="file" id="thread-file-input" style="display:none" multiple />
-                  <button class="compose-attach" id="thread-attach-btn" title="Attach file">📎</button>
-                  <textarea class="compose-input" id="thread-input" placeholder="Reply in thread…" rows="1"></textarea>
-                  <button class="compose-send" id="thread-send-btn">⬆</button>
-                </div>
-              </div>
-            </div>
+            <div id="thread-mount"></div>
           </div>
         </div>
-        <div class="lightbox" id="lightbox" style="display:none">
-          <div class="lightbox-backdrop" id="lightbox-backdrop"></div>
-          <button class="lightbox-close" id="lightbox-close">✕</button>
-          <img class="lightbox-img" id="lightbox-img" src="" alt="" />
-          <div class="lightbox-name" id="lightbox-name"></div>
-        </div>
+        <div id="lightbox-mount"></div>
       </div>
     `;
 
     this.updateWorkspaceRail();
     this.mountSidebar(document.getElementById('sidebar')!);
     this.mountChannelHeader(document.getElementById('channel-header-mount')!);
+    this.mountCompose();
+    this.mountThreadPanel();
+    this.mountHuddleBar();
+    this.mountLightbox();
     this.bindAppEvents();
     this.renderMessages();
   }
+
+  // ── Svelte component mounts ──
+
+  private mountCompose(): void {
+    if (this._composeComponent) {
+      try { unmount(this._composeComponent); } catch {}
+      this._composeComponent = null;
+    }
+    const container = document.getElementById('compose-mount');
+    if (!container) return;
+    container.innerHTML = '';
+
+    this._composeComponent = mount(ComposeArea, {
+      target: container,
+      props: {
+        placeholder: this.getComposePlaceholder(),
+        target: 'main',
+        onSend: async (text: string, files: File[]) => {
+          if (files.length > 0) {
+            for (let i = 0; i < files.length; i++) {
+              await this.callbacks.sendAttachment(files[i], i === 0 ? (text || undefined) : undefined, undefined);
+            }
+          } else if (text) {
+            await this.callbacks.sendMessage(text, undefined);
+          }
+        },
+        onTyping: () => this.callbacks.broadcastTyping?.(),
+        onStopTyping: () => this.callbacks.broadcastStopTyping?.(),
+        getCommandSuggestions: this.callbacks.getCommandSuggestions
+          ? (prefix: string) => this.callbacks.getCommandSuggestions!(prefix)
+          : undefined,
+        getMembers: () => {
+          const ws = this.state.activeWorkspaceId
+            ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+            : null;
+          if (!ws) return [];
+          return ws.members
+            .filter((m: any) => m.peerId !== this.state.myPeerId)
+            .map((m: any) => ({ peerId: m.peerId, name: this.getPeerAlias(m.peerId) }));
+        },
+      },
+    });
+  }
+
+  private mountThreadPanel(): void {
+    if (this._threadPanelComponent) {
+      try { unmount(this._threadPanelComponent); } catch {}
+      this._threadPanelComponent = null;
+    }
+    const container = document.getElementById('thread-mount');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const getThreadData = () => {
+      if (!this.state.activeChannelId || !this.state.activeThreadId) {
+        return { parent: null, replies: [] as PlaintextMessage[] };
+      }
+      const allMsgs = this.messageStore.getMessages(this.state.activeChannelId);
+      let parent = allMsgs.find((m: PlaintextMessage) => m.id === this.state.activeThreadId);
+      if (!parent) parent = this.messageStore.getThreadRoot(this.state.activeThreadId);
+      const replies = this.messageStore.getThread(this.state.activeChannelId, this.state.activeThreadId!);
+      return { parent: parent || null, replies };
+    };
+
+    const data = getThreadData();
+
+    this._threadPanelComponent = mount(ThreadPanel, {
+      target: container,
+      props: {
+        open: this.state.threadOpen,
+        threadId: this.state.activeThreadId,
+        channelId: this.state.activeChannelId,
+        parentMessage: data.parent,
+        replies: data.replies,
+        myPeerId: this.state.myPeerId,
+        myDisplayName: this.getMyDisplayName(),
+        frequentReactions: this.getFrequentReactions(),
+        getThread: (channelId: string, messageId: string) => this.messageStore.getThread(channelId, messageId),
+        getPeerAlias: (peerId: string) => this.getPeerAlias(peerId),
+        isBot: (senderId: string) => {
+          const ws = this.state.activeWorkspaceId ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId) : null;
+          return ws?.members.find((m: any) => m.peerId === senderId)?.isBot === true;
+        },
+        onOpenThread: (messageId: string) => this.openThread(messageId),
+        onToggleReaction: (messageId: string, emoji: string) => this.callbacks.toggleReaction?.(messageId, emoji),
+        onRememberReaction: (emoji: string) => this.rememberReaction(emoji),
+        onShowMessageInfo: (messageId: string) => this.showMessageInfo(messageId),
+        onClose: () => this.closeThread(),
+        onSend: async (text: string, files: File[]) => {
+          const threadId = this.state.activeThreadId || undefined;
+          if (files.length > 0) {
+            for (let i = 0; i < files.length; i++) {
+              await this.callbacks.sendAttachment(files[i], i === 0 ? (text || undefined) : undefined, threadId);
+            }
+          } else if (text) {
+            await this.callbacks.sendMessage(text, threadId);
+          }
+        },
+        getMembers: () => {
+          const ws = this.state.activeWorkspaceId
+            ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+            : null;
+          if (!ws) return [];
+          return ws.members
+            .filter((m: any) => m.peerId !== this.state.myPeerId)
+            .map((m: any) => ({ peerId: m.peerId, name: this.getPeerAlias(m.peerId) }));
+        },
+      },
+    });
+  }
+
+  private mountHuddleBar(): void {
+    if (this._huddleBarComponent) {
+      try { unmount(this._huddleBarComponent); } catch {}
+      this._huddleBarComponent = null;
+    }
+    const container = document.getElementById('huddle-mount');
+    if (!container) return;
+    container.innerHTML = '';
+
+    this._huddleBarComponent = mount(HuddleBar, {
+      target: container,
+      props: {
+        state: this.huddleState,
+        muted: this.huddleMuted,
+        participants: this.huddleParticipants,
+        onToggleMute: () => {
+          const muted = this.callbacks.toggleHuddleMute?.() ?? false;
+          this.huddleMuted = muted;
+          this.mountHuddleBar();
+        },
+        onLeave: async () => {
+          await this.callbacks.leaveHuddle?.();
+        },
+        onJoin: async () => {
+          const channelId = this.huddleChannelId || this.state.activeChannelId;
+          if (channelId) await this.callbacks.joinHuddle?.(channelId);
+        },
+      },
+    });
+  }
+
+  private mountLightbox(): void {
+    if (this._lightboxComponent) {
+      try { unmount(this._lightboxComponent); } catch {}
+      this._lightboxComponent = null;
+    }
+    const container = document.getElementById('lightbox-mount');
+    if (!container) return;
+    container.innerHTML = '';
+
+    this._lightboxComponent = mount(Lightbox, {
+      target: container,
+      props: {
+        open: this._lightboxOpen ?? false,
+        src: this._lightboxSrc ?? '',
+        name: this._lightboxName ?? '',
+        onClose: () => this.closeLightbox(),
+      },
+    });
+  }
+
+  private _lightboxOpen = false;
+  private _lightboxSrc = '';
+  private _lightboxName = '';
 
   // =========================================================================
   // Workspace rail (left icon strip like Discord/Slack)
@@ -951,36 +835,8 @@ export class UIRenderer {
   }
 
   renderThreadMessages(): void {
-    const container = document.getElementById('thread-messages')!;
-
-    if (!this.state.activeChannelId || !this.state.activeThreadId) {
-      container.innerHTML = '';
-      return;
-    }
-
-    // Find parent message
-    const allMsgs = this.messageStore.getMessages(this.state.activeChannelId);
-    let parent = allMsgs.find((m: PlaintextMessage) => m.id === this.state.activeThreadId);
-    if (!parent) {
-      parent = this.messageStore.getThreadRoot(this.state.activeThreadId);
-    }
-
-    const replies = this.messageStore.getThread(
-      this.state.activeChannelId,
-      this.state.activeThreadId,
-    );
-
-    // Unmount previous thread list
-    if (this._threadListComponent) {
-      try { unmount(this._threadListComponent); } catch {}
-      this._threadListComponent = null;
-    }
-    container.innerHTML = '';
-
-    this._threadListComponent = mount(MessageList, {
-      target: container,
-      props: this.getMessageListProps(replies, '', true, parent),
-    });
+    // Re-mount the thread panel with updated data
+    this.mountThreadPanel();
   }
 
   /**
@@ -1143,28 +999,10 @@ export class UIRenderer {
   openThread(messageId: string): void {
     this.state.activeThreadId = messageId;
     this.state.threadOpen = true;
-    const panel = document.getElementById('thread-panel')!;
-    panel.classList.remove('hidden');
-    panel.classList.add('open'); // needed for mobile slide-in
 
-    // Update thread header with parent message preview
-    const parentEl = panel.querySelector('.thread-header h3');
-    if (parentEl && this.state.activeChannelId) {
-      const parent = this.messageStore.getMessages(this.state.activeChannelId)
-        .find((m: PlaintextMessage) => m.id === messageId);
-      if (parent) {
-        const preview = parent.content.length > 60
-          ? parent.content.slice(0, 60) + '…'
-          : parent.content;
-        parentEl.textContent = `💬 Thread`;
-        const sub = panel.querySelector('.thread-header-preview') as HTMLElement | null;
-        if (sub) {
-          sub.textContent = preview;
-        }
-      }
-    }
+    // Re-mount thread panel with updated state
+    this.mountThreadPanel();
 
-    this.renderThreadMessages();
     this.persistViewState();
     if (this.state.activeChannelId) {
       this.callbacks.markThreadActivityRead?.(this.state.activeChannelId, messageId);
@@ -1178,54 +1016,13 @@ export class UIRenderer {
   }
 
   closeThread(): void {
-    this.clearPendingAttachments('thread');
     this.state.activeThreadId = null;
     this.state.threadOpen = false;
     this.persistViewState();
-    const panel = document.getElementById('thread-panel');
-    panel?.classList.add('hidden');
-    panel?.classList.remove('open'); // remove mobile slide-in class
+    this.mountThreadPanel();
   }
 
-  /** Wire up the left-edge drag handle for resizing the thread panel (Slack-style). */
-  private setupThreadResize(): void {
-    const handle = document.getElementById('thread-resize-handle');
-    const panel  = document.getElementById('thread-panel');
-    if (!handle || !panel) return;
-
-    // Restore saved width
-    const saved = localStorage.getItem('decentchat:threadWidth');
-    if (saved) panel.style.width = saved;
-
-    let startX = 0;
-    let startWidth = 0;
-
-    const onMove = (e: MouseEvent) => {
-      const delta = startX - e.clientX; // dragging left = wider
-      const newWidth = Math.min(Math.max(startWidth + delta, 280), window.innerWidth * 0.6);
-      panel.style.width = `${newWidth}px`;
-    };
-
-    const onUp = () => {
-      handle.classList.remove('dragging');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      localStorage.setItem('decentchat:threadWidth', panel.style.width);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-
-    handle.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      startX = e.clientX;
-      startWidth = panel.offsetWidth;
-      handle.classList.add('dragging');
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    });
-  }
+  // setupThreadResize() — removed (migrated to ThreadPanel.svelte)
 
   // =========================================================================
   // Mobile sidebar helpers
@@ -1363,28 +1160,8 @@ export class UIRenderer {
   }
 
   private updateComposePlaceholder(): void {
-    const input = document.getElementById('compose-input') as HTMLTextAreaElement;
-    if (!input) return;
-
-    // Standalone direct conversation
-    if (this.state.activeDirectConversationId) {
-      const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
-      input.placeholder = conv ? `Message ${this.getPeerAlias(conv.contactPeerId)}` : 'Message contact';
-      return;
-    }
-
-    const ws = this.state.activeWorkspaceId
-      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-      : null;
-    const channel =
-      this.state.activeChannelId && ws
-        ? this.workspaceManager.getChannel(ws.id, this.state.activeChannelId)
-        : null;
-
-    if (channel) {
-      input.placeholder =
-        channel.type === 'dm' ? `Message ${channel.name}` : `Message #${channel.name}`;
-    }
+    // Re-mount compose area to update placeholder
+    this.mountCompose();
   }
 
   // =========================================================================
@@ -1572,163 +1349,39 @@ export class UIRenderer {
   // =========================================================================
 
   private bindAppEvents(): void {
-    const input = document.getElementById('compose-input') as HTMLTextAreaElement;
-    const sendBtn = document.getElementById('send-btn')!;
-    const threadInput = document.getElementById('thread-input') as HTMLTextAreaElement;
-    const threadSendBtn = document.getElementById('thread-send-btn')!;
+    // ── Compose, thread, emoji, file attach — now handled by ComposeArea.svelte ──
+    // ── Thread open/close — now handled by ThreadPanel.svelte ──
+    // ── Huddle events — now handled by HuddleBar.svelte ──
+    // ── Lightbox events — now handled by Lightbox.svelte ──
 
-    // ── Typing indicator state (hoisted so all handlers can reference it) ──
-    let typingTimeout: any;
-    const stopTypingNow = () => {
-      clearTimeout(typingTimeout);
-      this.callbacks.broadcastStopTyping?.();
-    };
+    // Thumbnail click -> open lightbox (event delegation on message lists)
+    const handleThumbnailClick = async (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (target.classList.contains('attachment-thumbnail')) {
+        const img = target as HTMLImageElement;
+        const name = img.getAttribute('data-attachment-name') || '';
+        const attachmentId = img.getAttribute('data-attachment-id') || '';
 
-    const updateSendButtons = () => {
-      sendBtn.classList.toggle('active', input.value.trim().length > 0 || this.pendingMainAttachments.length > 0);
-      if (threadSendBtn) {
-        threadSendBtn.classList.toggle('active', (threadInput?.value.trim().length || 0) > 0 || this.pendingThreadAttachments.length > 0);
-      }
-    };
+        this.openLightbox(img.src, name);
 
-    const sendComposed = async (target: 'main' | 'thread') => {
-      const isThread = target === 'thread';
-      const targetInput = isThread ? threadInput : input;
-      if (!targetInput) return;
-
-      const pending = isThread ? this.pendingThreadAttachments : this.pendingMainAttachments;
-      const text = targetInput.value.trim();
-      const threadId = isThread ? (this.state.activeThreadId || undefined) : undefined;
-
-      if (pending.length === 0 && !text) return;
-
-      if (pending.length > 0) {
-        for (let i = 0; i < pending.length; i++) {
-          const item = pending[i];
-          await this.callbacks.sendAttachment(item.file, i === 0 ? (text || undefined) : undefined, threadId);
+        if (attachmentId && this.callbacks.resolveAttachmentImageUrl) {
+          const fullSrc = await this.callbacks.resolveAttachmentImageUrl(attachmentId);
+          if (fullSrc) {
+            if (this._lightboxOpen) {
+              if (this.lightboxBlobUrl) URL.revokeObjectURL(this.lightboxBlobUrl);
+              this.lightboxBlobUrl = fullSrc;
+              this._lightboxSrc = fullSrc;
+              this.mountLightbox();
+            }
+          }
         }
-        this.clearPendingAttachments(target);
-      } else {
-        await this.callbacks.sendMessage(text, threadId);
-      }
-
-      targetInput.value = '';
-      this.autoResizeTextarea(targetInput);
-      if (!isThread) stopTypingNow();
-      updateSendButtons();
-    };
-
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        // Don't send if mention or command autocomplete is open — let the autocomplete handler pick it up
-        const autocompleteOpen = document.getElementById('mention-autocomplete') || document.getElementById('command-autocomplete');
-        if (autocompleteOpen) return;
-        e.preventDefault();
-        void sendComposed('main');
-      }
-    });
-
-    input.addEventListener('input', () => {
-      this.autoResizeTextarea(input);
-      updateSendButtons();
-      this.handleCommandAutocomplete(input);
-      this.handleMentionAutocomplete(input);
-      // Typing indicator: broadcast and reset auto-stop timer
-      this.callbacks.broadcastTyping?.();
-      clearTimeout(typingTimeout);
-      typingTimeout = setTimeout(stopTypingNow, 1500);
-    });
-
-    sendBtn.addEventListener('click', () => {
-      void sendComposed('main');
-    });
-
-    // Stop typing when input loses focus
-    input.addEventListener('blur', stopTypingNow);
-
-    // Emoji picker
-    const emojiBtn = document.getElementById('emoji-btn');
-    emojiBtn?.addEventListener('click', () => {
-      void showEmojiPicker(emojiBtn, (emoji) => {
-        input.value += emoji;
-        input.focus();
-        updateSendButtons();
-      });
-    });
-
-    // File attachment (staged, not sent immediately)
-    const attachBtn = document.getElementById('attach-btn');
-    const fileInput = document.getElementById('file-input') as HTMLInputElement;
-    attachBtn?.addEventListener('click', () => fileInput?.click());
-    fileInput?.addEventListener('change', () => {
-      if (fileInput.files) {
-        this.addPendingAttachments(Array.from(fileInput.files), 'main');
-        fileInput.value = '';
-        updateSendButtons();
-      }
-    });
-
-    const threadAttachBtn = document.getElementById('thread-attach-btn');
-    const threadFileInput = document.getElementById('thread-file-input') as HTMLInputElement;
-    threadAttachBtn?.addEventListener('click', () => threadFileInput?.click());
-    threadFileInput?.addEventListener('change', () => {
-      if (threadFileInput.files) {
-        this.addPendingAttachments(Array.from(threadFileInput.files), 'thread');
-        threadFileInput.value = '';
-        updateSendButtons();
-      }
-    });
-
-    threadInput?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        const autocompleteOpen = document.getElementById('mention-autocomplete') || document.getElementById('command-autocomplete');
-        if (autocompleteOpen) return;
-        e.preventDefault();
-        void sendComposed('thread');
-      }
-    });
-
-    threadInput?.addEventListener('input', () => {
-      this.autoResizeTextarea(threadInput);
-      updateSendButtons();
-      if (threadInput) this.handleMentionAutocomplete(threadInput);
-    });
-
-    threadSendBtn?.addEventListener('click', () => {
-      void sendComposed('thread');
-    });
-
-    document.getElementById('thread-close')?.addEventListener('click', () => this.closeThread());
-
-    // Paste images from clipboard (staged in compose/thread, removable via X)
-    // Remove previous listener to prevent duplicates when renderApp() re-binds
-    if (this._boundPasteHandler) {
-      document.removeEventListener('paste', this._boundPasteHandler);
-    }
-    this._boundPasteHandler = (e: Event) => {
-      const items = Array.from((e as ClipboardEvent).clipboardData?.items || []);
-      const imageItems = items.filter(item => item.type.startsWith('image/'));
-      const hasActiveChat = !!(this.state.activeChannelId || this.state.activeDirectConversationId);
-      if (imageItems.length > 0 && hasActiveChat) {
-        e.preventDefault();
-
-        const pasteTarget = e.target as HTMLElement | null;
-        const isThreadInputFocused = document.activeElement === threadInput;
-        const isThreadTarget = !!pasteTarget?.closest?.('#thread-panel');
-        const target: 'main' | 'thread' = (isThreadInputFocused || isThreadTarget) ? 'thread' : 'main';
-
-        const files: File[] = [];
-        for (const item of imageItems) {
-          const file = item.getAsFile();
-          if (file) files.push(file);
-        }
-        this.addPendingAttachments(files, target);
-        updateSendButtons();
       }
     };
-    document.addEventListener('paste', this._boundPasteHandler);
 
-    // Drag & drop file support (staged, not immediate send)
+    const messagesList = document.getElementById('messages-list');
+    messagesList?.addEventListener('click', handleThumbnailClick);
+
+    // Drag & drop file support
     const messagesArea = document.querySelector('.messages-area') as HTMLElement;
     if (messagesArea) {
       messagesArea.addEventListener('dragover', (e) => {
@@ -1745,57 +1398,18 @@ export class UIRenderer {
         messagesArea.classList.remove('drag-active');
         const files = Array.from(e.dataTransfer?.files || []);
         if (this.state.activeChannelId || this.state.activeDirectConversationId) {
+          // TODO: Use ComposeArea.addExternalFiles when Svelte component refs are wired
           const dropTarget = e.target as HTMLElement | null;
           const target: 'main' | 'thread' = dropTarget?.closest?.('#thread-panel') ? 'thread' : 'main';
           this.addPendingAttachments(files, target);
-          updateSendButtons();
         }
       });
     }
 
-    // Lightbox close events
-    document.getElementById('lightbox-close')?.addEventListener('click', () => this.closeLightbox());
-    document.getElementById('lightbox-backdrop')?.addEventListener('click', () => this.closeLightbox());
-
-    // Thumbnail click -> open lightbox (event delegation)
-    const messagesList = document.getElementById('messages-list');
-    const threadMessages = document.getElementById('thread-messages');
-
-    const handleThumbnailClick = async (e: Event) => {
-      const target = e.target as HTMLElement;
-      if (target.classList.contains('attachment-thumbnail')) {
-        const img = target as HTMLImageElement;
-        const name = img.getAttribute('data-attachment-name') || '';
-        const attachmentId = img.getAttribute('data-attachment-id') || '';
-
-        // Open immediately with thumbnail, then upgrade to full-quality when available.
-        this.openLightbox(img.src, name);
-
-        if (attachmentId && this.callbacks.resolveAttachmentImageUrl) {
-          const fullSrc = await this.callbacks.resolveAttachmentImageUrl(attachmentId);
-          if (fullSrc) {
-            const lb = document.getElementById('lightbox');
-            const lbImg = document.getElementById('lightbox-img') as HTMLImageElement | null;
-            if (lb?.style.display !== 'none' && lbImg) {
-              if (this.lightboxBlobUrl) URL.revokeObjectURL(this.lightboxBlobUrl);
-              this.lightboxBlobUrl = fullSrc;
-              lbImg.src = fullSrc;
-            }
-          }
-        }
-      }
-    };
-
-    messagesList?.addEventListener('click', handleThumbnailClick);
-    threadMessages?.addEventListener('click', handleThumbnailClick);
-
-    this.setupThreadResize();
-
     // Global keyboard shortcuts
     document.addEventListener('keydown', (e) => {
-      // Escape: close lightbox, thread panel, modals, autocomplete
       if (e.key === 'Escape') {
-        if (document.getElementById('lightbox')?.style.display !== 'none') { this.closeLightbox(); return; }
+        if (this._lightboxOpen) { this.closeLightbox(); return; }
         const autocomplete = document.getElementById('command-autocomplete') || document.getElementById('mention-autocomplete');
         if (autocomplete) { autocomplete.remove(); return; }
         const modal = document.querySelector('.modal-overlay');
@@ -1803,14 +1417,13 @@ export class UIRenderer {
         if (this.state.threadOpen) { this.closeThread(); return; }
       }
 
-      // Ctrl/Cmd + K: focus compose and type /
+      // Ctrl/Cmd + K: focus compose
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
         const composeInput = document.getElementById('compose-input') as HTMLTextAreaElement;
         if (composeInput) {
           composeInput.focus();
           if (!composeInput.value) composeInput.value = '/';
-          this.handleCommandAutocomplete(composeInput);
         }
       }
 
@@ -1827,10 +1440,6 @@ export class UIRenderer {
         sidebar?.classList.contains('open') ? this.closeMobileSidebar() : this.openMobileSidebar();
       }
     });
-
-    // Sidebar and ChannelHeader events are handled by Svelte components
-    // WorkspaceRail events are handled by the Svelte component
-    this.bindHuddleEvents();
   }
 
   /**
@@ -1853,81 +1462,19 @@ export class UIRenderer {
 
   // Dead code removed: bindSidebarEvents(), bindSidebarActionEvents(), bindChannelHeaderEvents()
   // Migrated to: Sidebar.svelte, ChannelHeader.svelte
-
-  // =========================================================================
-  // Huddle (voice calling) UI
-  // =========================================================================
-
-  private bindHuddleEvents(): void {
-    document.getElementById('huddle-mute-btn')?.addEventListener('click', () => {
-      const muted = this.callbacks.toggleHuddleMute?.() ?? false;
-      this.huddleMuted = muted;
-      const btn = document.getElementById('huddle-mute-btn');
-      if (btn) btn.textContent = muted ? '🔇' : '🎤';
-    });
-
-    document.getElementById('huddle-leave-btn')?.addEventListener('click', async () => {
-      await this.callbacks.leaveHuddle?.();
-    });
-
-    document.getElementById('huddle-join-btn')?.addEventListener('click', async () => {
-      const channelId = this.huddleChannelId || this.state.activeChannelId;
-      if (channelId) await this.callbacks.joinHuddle?.(channelId);
-    });
-  }
+  // Dead code removed: bindHuddleEvents()
+  // Migrated to: HuddleBar.svelte
 
   onHuddleStateChange(state: HuddleState, channelId: string | null): void {
     this.huddleState = state;
     this.huddleChannelId = channelId;
-    this.updateHuddleUI();
+    this.mountHuddleBar();
     this.updateChannelHeader();
   }
 
   onHuddleParticipantsChange(participants: HuddleParticipant[]): void {
     this.huddleParticipants = participants;
-    this.updateHuddleUI();
-  }
-
-  private updateHuddleUI(): void {
-    const bar = document.getElementById('huddle-bar');
-    const joinBanner = document.getElementById('huddle-join-banner');
-    const participantsEl = document.getElementById('huddle-participants');
-
-    if (!bar || !joinBanner) return;
-
-    if (this.huddleState === 'in-call') {
-      bar.style.display = 'flex';
-      joinBanner.style.display = 'none';
-
-      if (participantsEl) {
-        participantsEl.innerHTML = this.huddleParticipants.map(p => {
-          const initials = p.displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-          const color = this.peerColor(p.peerId);
-          const muteIcon = p.muted ? ' 🔇' : '';
-          const speakingClass = p.speaking ? ' speaking' : '';
-          const levelStyle = p.speaking && p.audioLevel ? ` --audio-level: ${p.audioLevel}` : '';
-          const statusIcons: Record<string, string> = {
-            listening: '🎧', hearing: '👂', transcribing: '⏳',
-            thinking: '🤔', speaking: '🗣️', interrupted: '✋',
-          };
-          const botBadge = p.botStatus
-            ? `<span class="huddle-bot-status" data-status="${p.botStatus}">${statusIcons[p.botStatus] || ''}</span>`
-            : '';
-          return `<span class="huddle-avatar${speakingClass}" style="background:${color};${levelStyle}" title="${this.escapeHtml(p.displayName)}${muteIcon}">${this.escapeHtml(initials)}${botBadge}</span>`;
-        }).join('');
-      }
-
-      const muteBtn = document.getElementById('huddle-mute-btn');
-      if (muteBtn) muteBtn.textContent = this.huddleMuted ? '🔇' : '🎤';
-
-    } else if (this.huddleState === 'available') {
-      bar.style.display = 'none';
-      joinBanner.style.display = 'flex';
-
-    } else {
-      bar.style.display = 'none';
-      joinBanner.style.display = 'none';
-    }
+    this.mountHuddleBar();
   }
 
   // =========================================================================
@@ -1945,10 +1492,60 @@ export class UIRenderer {
         try { unmount(this._sidebarComponent); } catch {}
         this._sidebarComponent = null;
       }
-      sidebar.innerHTML = this.renderActivityPanelHTML();
-      this.bindActivityPanelEvents();
+      if (this._activityPanelComponent) {
+        try { unmount(this._activityPanelComponent); } catch {}
+        this._activityPanelComponent = null;
+      }
+      sidebar.innerHTML = '';
+
+      this._activityPanelComponent = mount(ActivityPanel, {
+        target: sidebar,
+        props: {
+          items: this.callbacks.getActivityItems?.() || [],
+          getPeerAlias: (peerId: string) => this.getPeerAlias(peerId),
+          onClose: () => this.toggleActivityPanel(),
+          onMarkAllRead: () => {
+            this.callbacks.markAllActivityRead?.();
+            this.refreshActivityPanel();
+            this.updateWorkspaceRail();
+          },
+          onMarkRead: (id: string) => this.callbacks.markActivityRead?.(id),
+          onNavigate: (item: any) => {
+            // Close activity panel and restore sidebar
+            this.activityPanelOpen = false;
+            this.mountSidebar(sidebar);
+            document.getElementById('activity-btn')?.classList.remove('active');
+
+            const needsChannelSwitch = item.channelId && item.channelId !== this.state.activeChannelId;
+            const needsThreadOpen = !!(item.threadId && item.threadId.trim());
+            const needsThreadSwitch = needsThreadOpen && (!this.state.threadOpen || this.state.activeThreadId !== item.threadId);
+
+            if (needsChannelSwitch) this.switchChannel(item.channelId);
+
+            if (needsThreadOpen && needsThreadSwitch) {
+              const openDelay = needsChannelSwitch ? 50 : 0;
+              setTimeout(() => {
+                this.openThread(item.threadId!);
+                if (item.messageId) setTimeout(() => this.scrollToMessageAndHighlight(item.messageId, 'thread-messages'), 100);
+              }, openDelay);
+            } else if (needsThreadOpen && !needsThreadSwitch) {
+              if (item.messageId) this.scrollToMessageAndHighlight(item.messageId, 'thread-messages');
+            } else if (item.messageId) {
+              const scrollDelay = needsChannelSwitch ? 100 : 0;
+              setTimeout(() => this.scrollToMessageAndHighlight(item.messageId, 'messages-list'), scrollDelay);
+            }
+
+            this.updateChannelHeader();
+            this.updateWorkspaceRail();
+          },
+        },
+      });
       document.getElementById('activity-btn')?.classList.add('active');
     } else {
+      if (this._activityPanelComponent) {
+        try { unmount(this._activityPanelComponent); } catch {}
+        this._activityPanelComponent = null;
+      }
       this.mountSidebar(sidebar);
       document.getElementById('activity-btn')?.classList.remove('active');
     }
@@ -1957,123 +1554,9 @@ export class UIRenderer {
   /** Refresh activity panel content if open */
   refreshActivityPanel(): void {
     if (!this.activityPanelOpen) return;
-    const sidebar = document.getElementById('sidebar');
-    if (!sidebar) return;
-    sidebar.innerHTML = this.renderActivityPanelHTML();
-    this.bindActivityPanelEvents();
-  }
-
-  private renderActivityPanelHTML(): string {
-    const items = (this.callbacks.getActivityItems?.() || []).sort((a, b) => b.timestamp - a.timestamp);
-    const unreadCount = items.filter(i => !i.read).length;
-
-    const header = `
-      <div class="activity-panel-header">
-        <h3 class="activity-panel-title">🔔 Activity</h3>
-        <div class="activity-panel-actions">
-          ${unreadCount > 0 ? '<button class="activity-mark-all-btn" id="activity-mark-all">Mark all read</button>' : ''}
-          <button class="activity-close-btn" id="activity-close" title="Close">✕</button>
-        </div>
-      </div>
-    `;
-
-    if (items.length === 0) {
-      return header + `
-        <div class="activity-panel-empty">
-          <div class="emoji">🔔</div>
-          <p>No activity yet</p>
-          <p class="text-muted">Thread replies and mentions will appear here.</p>
-        </div>
-      `;
-    }
-
-    const renderRow = (item: ActivityItem) => {
-      const actorName = this.getPeerAlias(item.actorId);
-      const isUnread = !item.read;
-      const time = this.relativeTime(item.timestamp);
-      const icon = item.type === 'mention' ? '📣' : '💬';
-      return `
-        <button class="activity-row ${isUnread ? 'unread' : ''}" data-activity-id="${item.id}" data-channel-id="${item.channelId}" data-thread-id="${item.threadId || ''}" data-message-id="${item.messageId}">
-          <div class="activity-row-top">
-            <span class="activity-row-icon">${icon}</span>
-            <span class="activity-actor">${this.escapeHtml(actorName)}</span>
-            <span class="activity-time">${time}</span>
-          </div>
-          <div class="activity-snippet">${this.escapeHtml(item.snippet || 'New activity')}</div>
-        </button>
-      `;
-    };
-
-    const unreadItems = items.filter(i => !i.read);
-    const readItems = items.filter(i => i.read);
-
-    let html = '';
-    if (unreadItems.length > 0) {
-      html += `<div class="activity-section-label">New</div>`;
-      html += unreadItems.map(renderRow).join('');
-    }
-    if (readItems.length > 0) {
-      html += `<div class="activity-section-label">Earlier</div>`;
-      html += readItems.map(renderRow).join('');
-    }
-
-    return header + `<div class="activity-panel-list">${html}</div>`;
-  }
-
-  private bindActivityPanelEvents(): void {
-    document.getElementById('activity-close')?.addEventListener('click', () => this.toggleActivityPanel());
-
-    document.getElementById('activity-mark-all')?.addEventListener('click', () => {
-      this.callbacks.markAllActivityRead?.();
-      this.refreshActivityPanel();
-      this.updateWorkspaceRail();
-    });
-
-    document.querySelectorAll('.activity-row').forEach(el => {
-      el.addEventListener('click', () => {
-        const activityId = (el as HTMLElement).getAttribute('data-activity-id');
-        const channelId = (el as HTMLElement).getAttribute('data-channel-id');
-        const threadId = (el as HTMLElement).getAttribute('data-thread-id');
-        const messageId = (el as HTMLElement).getAttribute('data-message-id');
-        if (activityId) this.callbacks.markActivityRead?.(activityId);
-
-        // Close activity panel and restore sidebar
-        this.activityPanelOpen = false;
-        const sidebar = document.getElementById('sidebar');
-        if (sidebar) {
-          this.mountSidebar(sidebar);
-        }
-        document.getElementById('activity-btn')?.classList.remove('active');
-
-        const needsChannelSwitch = channelId && channelId !== this.state.activeChannelId;
-        const needsThreadOpen = !!(threadId && threadId.trim());
-        const needsThreadSwitch = needsThreadOpen && (!this.state.threadOpen || this.state.activeThreadId !== threadId);
-
-        if (needsChannelSwitch) {
-          this.switchChannel(channelId!);
-        }
-
-        if (needsThreadOpen && needsThreadSwitch) {
-          const openDelay = needsChannelSwitch ? 50 : 0;
-          setTimeout(() => {
-            this.openThread(threadId!);
-            if (messageId) {
-              setTimeout(() => this.scrollToMessageAndHighlight(messageId, 'thread-messages'), 100);
-            }
-          }, openDelay);
-        } else if (needsThreadOpen && !needsThreadSwitch) {
-          if (messageId) {
-            this.scrollToMessageAndHighlight(messageId, 'thread-messages');
-          }
-        } else if (messageId) {
-          const scrollDelay = needsChannelSwitch ? 100 : 0;
-          setTimeout(() => this.scrollToMessageAndHighlight(messageId, 'messages-list'), scrollDelay);
-        }
-
-        this.updateChannelHeader();
-        this.updateWorkspaceRail();
-      });
-    });
+    // Re-mount the Svelte activity panel with fresh data
+    this.toggleActivityPanel(); // close
+    this.toggleActivityPanel(); // re-open with fresh data
   }
 
   private showChannelMembersModal(): void {
@@ -2816,142 +2299,58 @@ export class UIRenderer {
     }).catch(() => {});
   }
 
+  /** Bridge for drag-drop: dispatch files to the Svelte ComposeArea */
   private addPendingAttachments(files: File[], target: 'main' | 'thread'): void {
-    const list = target === 'thread' ? this.pendingThreadAttachments : this.pendingMainAttachments;
-    for (const file of files) {
-      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-      const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined;
-      list.push({ id, file, previewUrl });
+    // Dispatch files into the Svelte ComposeArea by synthesizing a paste event on the target input
+    const inputId = target === 'thread' ? 'thread-input' : 'compose-input';
+    const inputEl = document.getElementById(inputId) as HTMLTextAreaElement | null;
+    if (!inputEl) return;
+
+    // Use internal method: set up files via the file input
+    const fileInputId = target === 'thread' ? 'thread-file-input' : 'file-input';
+    const fileInput = document.getElementById(fileInputId) as HTMLInputElement | null;
+    if (fileInput) {
+      const dt = new DataTransfer();
+      for (const file of files) dt.items.add(file);
+      fileInput.files = dt.files;
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
     }
-    this.renderPendingAttachments(target);
-  }
-
-  private clearPendingAttachments(target: 'main' | 'thread'): void {
-    const list = target === 'thread' ? this.pendingThreadAttachments : this.pendingMainAttachments;
-    for (const item of list) {
-      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
-    }
-    if (target === 'thread') this.pendingThreadAttachments = [];
-    else this.pendingMainAttachments = [];
-    this.renderPendingAttachments(target);
-  }
-
-  private removePendingAttachment(target: 'main' | 'thread', id: string): void {
-    const list = target === 'thread' ? this.pendingThreadAttachments : this.pendingMainAttachments;
-    const idx = list.findIndex(item => item.id === id);
-    if (idx >= 0) {
-      const [removed] = list.splice(idx, 1);
-      if (removed.previewUrl) URL.revokeObjectURL(removed.previewUrl);
-      this.renderPendingAttachments(target);
-    }
-  }
-
-  private renderPendingAttachments(target: 'main' | 'thread'): void {
-    const containerId = target === 'thread' ? 'thread-pending' : 'compose-pending';
-    const container = document.getElementById(containerId);
-    if (!container) return;
-
-    const list = target === 'thread' ? this.pendingThreadAttachments : this.pendingMainAttachments;
-    if (list.length === 0) {
-      container.innerHTML = '';
-      container.classList.remove('has-items');
-      return;
-    }
-
-    container.classList.add('has-items');
-    container.innerHTML = list.map(item => `
-      <div class="pending-attachment" data-pending-id="${item.id}">
-        ${item.previewUrl
-          ? `<img class="pending-attachment-thumb" src="${item.previewUrl}" alt="${this.escapeHtml(item.file.name)}" />`
-          : `<span class="pending-attachment-file">📎 ${this.escapeHtml(item.file.name)}</span>`}
-        <button class="pending-attachment-remove" title="Remove attachment" data-remove-id="${item.id}">✕</button>
-      </div>
-    `).join('');
-
-    container.querySelectorAll('.pending-attachment-remove').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const id = (e.currentTarget as HTMLElement).getAttribute('data-remove-id');
-        if (id) this.removePendingAttachment(target, id);
-      });
-    });
-
-    const mainInput = document.getElementById('compose-input') as HTMLTextAreaElement | null;
-    const threadInput = document.getElementById('thread-input') as HTMLTextAreaElement | null;
-    (document.getElementById('send-btn') as HTMLElement | null)
-      ?.classList.toggle('active', (mainInput?.value.trim().length || 0) > 0 || this.pendingMainAttachments.length > 0);
-    (document.getElementById('thread-send-btn') as HTMLElement | null)
-      ?.classList.toggle('active', (threadInput?.value.trim().length || 0) > 0 || this.pendingThreadAttachments.length > 0);
-  }
-
-  autoResizeTextarea(el: HTMLTextAreaElement): void {
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   }
 
   /** Show search panel */
   showSearchPanel(): void {
-    const existing = document.getElementById('search-overlay');
-    if (existing) { existing.remove(); return; }
+    const container = document.getElementById('search-mount');
+    if (!container) return;
 
-    const overlay = document.createElement('div');
-    overlay.id = 'search-overlay';
-    overlay.className = 'search-panel';
-    overlay.innerHTML = `
-      <div class="search-input-row">
-        <input type="text" id="search-input" placeholder="Search messages..." class="search-field" autofocus />
-        <button class="icon-btn" id="search-close">✕</button>
-      </div>
-      <div class="search-results" id="search-results"></div>
-    `;
+    // Toggle: if already open, close it
+    if (this._searchPanelComponent) {
+      try { unmount(this._searchPanelComponent); } catch {}
+      this._searchPanelComponent = null;
+      container.innerHTML = '';
+      return;
+    }
 
-    const header = document.querySelector('.channel-header');
-    header?.parentElement?.insertBefore(overlay, header.nextSibling);
-
-    const input = overlay.querySelector('#search-input') as HTMLInputElement;
-    const resultsEl = overlay.querySelector('#search-results')!;
-
-    input.focus();
-    input.addEventListener('input', () => {
-      const query = input.value.trim();
-      if (query.length < 2) {
-        resultsEl.innerHTML = '<div class="search-hint">Type at least 2 characters...</div>';
-        return;
-      }
-
-      const results = this.messageSearch.search(query, {
-        channelId: this.state.activeChannelId || undefined,
-        limit: 20,
-      });
-
-      if (results.length === 0) {
-        resultsEl.innerHTML = '<div class="search-hint">No results found</div>';
-        return;
-      }
-
-      resultsEl.innerHTML = results.map(r => {
-        const time = new Date(r.message.timestamp).toLocaleString();
-        const sender = r.message.senderId === this.state.myPeerId
-          ? (this.state.myAlias || 'You')
-          : r.message.senderId.slice(0, 8);
-        return `
-          <div class="search-result" data-msg-id="${r.message.id}">
-            <div class="search-result-header">
-              <span class="search-result-sender">${this.escapeHtml(sender)}</span>
-              <span class="search-result-time">${time}</span>
-            </div>
-            <div class="search-result-text">${this.escapeHtml(r.highlight)}</div>
-          </div>`;
-      }).join('');
-
-      resultsEl.querySelectorAll('.search-result').forEach(el => {
-        el.addEventListener('click', () => {
-          const msgId = (el as HTMLElement).dataset.msgId;
-          if (msgId) this.scrollToMessageAndHighlight(msgId);
-        });
-      });
+    this._searchPanelComponent = mount(SearchPanel, {
+      target: container,
+      props: {
+        myPeerId: this.state.myPeerId,
+        myAlias: this.state.myAlias || 'You',
+        onSearch: (query: string) => {
+          return this.messageSearch.search(query, {
+            channelId: this.state.activeChannelId || undefined,
+            limit: 20,
+          });
+        },
+        onScrollToMessage: (messageId: string) => this.scrollToMessageAndHighlight(messageId),
+        onClose: () => {
+          if (this._searchPanelComponent) {
+            try { unmount(this._searchPanelComponent); } catch {}
+            this._searchPanelComponent = null;
+          }
+          container.innerHTML = '';
+        },
+      },
     });
-
-    overlay.querySelector('#search-close')?.addEventListener('click', () => overlay.remove());
   }
 
   /** Show QR code with user's identity */
@@ -3040,247 +2439,29 @@ export class UIRenderer {
     return `Message #${channel?.name || 'general'}`;
   }
 
-  /** Handle @mention autocomplete popup */
-  private handleMentionAutocomplete(input: HTMLTextAreaElement): void {
-    let popup = document.getElementById('mention-autocomplete');
-    const value = input.value;
-    const cursorPos = input.selectionStart || value.length;
-
-    // Find the @mention being typed at cursor position
-    const textBeforeCursor = value.slice(0, cursorPos);
-    const mentionMatch = textBeforeCursor.match(/(^|\s)@(\S*)$/);
-
-    if (!mentionMatch) {
-      popup?.remove();
-      return;
-    }
-
-    const query = mentionMatch[2].toLowerCase();
-    const atStart = mentionMatch.index! + mentionMatch[1].length; // position of @
-
-    // Get workspace members
-    const ws = this.state.activeWorkspaceId
-      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-      : null;
-    if (!ws) { popup?.remove(); return; }
-
-    const members = ws.members
-      .filter(m => m.peerId !== this.state.myPeerId) // exclude self
-      .map(m => ({
-        peerId: m.peerId,
-        name: this.getPeerAlias(m.peerId),
-      }))
-      .filter(m => !query || m.name.toLowerCase().includes(query) || m.peerId.toLowerCase().startsWith(query))
-      .slice(0, 8);
-
-    if (members.length === 0) {
-      popup?.remove();
-      return;
-    }
-
-    if (!popup) {
-      popup = document.createElement('div');
-      popup.id = 'mention-autocomplete';
-      popup.className = 'mention-autocomplete';
-      input.parentElement?.appendChild(popup);
-    }
-
-    popup.innerHTML = members.map((m, i) =>
-      `<div class="mention-option${i === 0 ? ' selected' : ''}" data-peer-id="${m.peerId}" data-name="${this.escapeHtml(m.name)}">
-        <span class="mention-option-name">${this.escapeHtml(m.name)}</span>
-        <span class="mention-option-id">${m.peerId.slice(0, 8)}</span>
-      </div>`
-    ).join('');
-
-    // Helper: insert selected mention into input using CURRENT input state (not stale closure)
-    const insertMention = (name: string) => {
-      const currentValue = input.value;
-      const currentCursor = input.selectionStart || currentValue.length;
-      const currentBefore = currentValue.slice(0, currentCursor);
-      const currentMatch = currentBefore.match(/(^|\s)@(\S*)$/);
-      const currentAtStart = currentMatch
-        ? currentMatch.index! + currentMatch[1].length
-        : atStart;
-      const replacement = '@' + name.replace(/\s+/g, '-') + ' ';
-      input.value = currentValue.slice(0, currentAtStart) + replacement + currentValue.slice(currentCursor);
-      input.selectionStart = input.selectionEnd = currentAtStart + replacement.length;
-    };
-
-    // Click to select
-    popup.querySelectorAll('.mention-option').forEach(el => {
-      el.addEventListener('mousedown', (e) => {
-        e.preventDefault(); // prevent blur
-        const name = (el as HTMLElement).dataset.name || '';
-        insertMention(name);
-        popup?.remove();
-        input.focus();
-      });
-    });
-
-    // Keyboard navigation — only attach once per popup lifecycle
-    const existingHandler = (input as any).__mentionKeyHandler;
-    if (existingHandler) input.removeEventListener('keydown', existingHandler);
-
-    const keyHandler = (e: KeyboardEvent) => {
-      const currentPopup = document.getElementById('mention-autocomplete');
-      if (!currentPopup) {
-        input.removeEventListener('keydown', keyHandler);
-        (input as any).__mentionKeyHandler = null;
-        return;
-      }
-
-      const options = currentPopup.querySelectorAll('.mention-option');
-      let selectedIdx = Array.from(options).findIndex(o => o.classList.contains('selected'));
-
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        options[selectedIdx]?.classList.remove('selected');
-        selectedIdx = (selectedIdx + 1) % options.length;
-        options[selectedIdx]?.classList.add('selected');
-        // Scroll selected option into view
-        (options[selectedIdx] as HTMLElement)?.scrollIntoView({ block: 'nearest' });
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        options[selectedIdx]?.classList.remove('selected');
-        selectedIdx = (selectedIdx - 1 + options.length) % options.length;
-        options[selectedIdx]?.classList.add('selected');
-        (options[selectedIdx] as HTMLElement)?.scrollIntoView({ block: 'nearest' });
-      } else if (e.key === 'Enter' || e.key === 'Tab') {
-        const selected = currentPopup.querySelector('.mention-option.selected') as HTMLElement;
-        if (selected) {
-          e.preventDefault();
-          e.stopPropagation(); // prevent Enter from sending the message
-          const name = selected.dataset.name || '';
-          insertMention(name);
-          currentPopup.remove();
-          input.removeEventListener('keydown', keyHandler);
-          (input as any).__mentionKeyHandler = null;
-        }
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        currentPopup.remove();
-        input.removeEventListener('keydown', keyHandler);
-        (input as any).__mentionKeyHandler = null;
-      }
-    };
-
-    (input as any).__mentionKeyHandler = keyHandler;
-    input.addEventListener('keydown', keyHandler);
-  }
-
-    private handleCommandAutocomplete(input: HTMLTextAreaElement): void {
-    let popup = document.getElementById('command-autocomplete');
-
-    const value = input.value.trim();
-    if (!value.startsWith('/') || value.includes(' ') || !this.callbacks.getCommandSuggestions) {
-      popup?.remove();
-      return;
-    }
-
-    const prefix = value.slice(1).toLowerCase();
-    const suggestions = this.callbacks.getCommandSuggestions(prefix);
-
-    if (suggestions.length === 0) {
-      popup?.remove();
-      return;
-    }
-
-    if (!popup) {
-      popup = document.createElement('div');
-      popup.id = 'command-autocomplete';
-      popup.className = 'command-autocomplete';
-      input.parentElement!.appendChild(popup);
-    }
-
-    popup.innerHTML = suggestions.slice(0, 8).map((s, i) =>
-      `<div class="command-suggestion${i === 0 ? ' selected' : ''}" data-cmd="/${s.name}">
-        <span class="cmd-name">/${s.name}</span>
-        <span class="cmd-desc">${s.description}</span>
-      </div>`
-    ).join('');
-
-    // Click to select
-    popup.querySelectorAll('.command-suggestion').forEach(el => {
-      el.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        input.value = (el as HTMLElement).dataset.cmd + ' ';
-        input.focus();
-        popup?.remove();
-      });
-    });
-
-    // Keyboard navigation
-    const existingHandler = (input as any).__cmdKeyHandler;
-    if (existingHandler) input.removeEventListener('keydown', existingHandler);
-
-    const keyHandler = (e: KeyboardEvent) => {
-      const currentPopup = document.getElementById('command-autocomplete');
-      if (!currentPopup) {
-        input.removeEventListener('keydown', keyHandler);
-        (input as any).__cmdKeyHandler = null;
-        return;
-      }
-
-      const options = currentPopup.querySelectorAll('.command-suggestion');
-      let selectedIdx = Array.from(options).findIndex(o => o.classList.contains('selected'));
-
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        options[selectedIdx]?.classList.remove('selected');
-        selectedIdx = (selectedIdx + 1) % options.length;
-        options[selectedIdx]?.classList.add('selected');
-        (options[selectedIdx] as HTMLElement)?.scrollIntoView({ block: 'nearest' });
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        options[selectedIdx]?.classList.remove('selected');
-        selectedIdx = (selectedIdx - 1 + options.length) % options.length;
-        options[selectedIdx]?.classList.add('selected');
-        (options[selectedIdx] as HTMLElement)?.scrollIntoView({ block: 'nearest' });
-      } else if (e.key === 'Enter' || e.key === 'Tab') {
-        const selected = currentPopup.querySelector('.command-suggestion.selected') as HTMLElement;
-        if (selected) {
-          e.preventDefault();
-          e.stopPropagation();
-          input.value = selected.dataset.cmd + ' ';
-          input.selectionStart = input.selectionEnd = input.value.length;
-          currentPopup.remove();
-          input.removeEventListener('keydown', keyHandler);
-          (input as any).__cmdKeyHandler = null;
-        }
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        currentPopup.remove();
-        input.removeEventListener('keydown', keyHandler);
-        (input as any).__cmdKeyHandler = null;
-      }
-    };
-
-    (input as any).__cmdKeyHandler = keyHandler;
-    input.addEventListener('keydown', keyHandler);
-  }
+  // handleMentionAutocomplete() — removed (migrated to ComposeArea.svelte)
+  // handleCommandAutocomplete() — removed (migrated to ComposeArea.svelte)
 
   private openLightbox(src: string, name: string): void {
     if (this.lightboxBlobUrl) {
       URL.revokeObjectURL(this.lightboxBlobUrl);
       this.lightboxBlobUrl = null;
     }
-    const lb = document.getElementById('lightbox')!;
-    const img = document.getElementById('lightbox-img') as HTMLImageElement;
-    const nameEl = document.getElementById('lightbox-name')!;
-    img.src = src;
-    nameEl.textContent = name;
-    lb.style.display = 'flex';
-    document.body.style.overflow = 'hidden';
+    this._lightboxOpen = true;
+    this._lightboxSrc = src;
+    this._lightboxName = name;
+    this.mountLightbox();
   }
 
   private closeLightbox(): void {
-    const lb = document.getElementById('lightbox')!;
-    lb.style.display = 'none';
-    document.body.style.overflow = '';
+    this._lightboxOpen = false;
+    this._lightboxSrc = '';
+    this._lightboxName = '';
     if (this.lightboxBlobUrl) {
       URL.revokeObjectURL(this.lightboxBlobUrl);
       this.lightboxBlobUrl = null;
     }
+    this.mountLightbox();
   }
 
   /** Render attachment previews for a message */
