@@ -637,6 +637,9 @@ async function init(): Promise<void> {
     // Restore contacts and direct conversations
     await ctrl.restoreContacts();
 
+    // Register this peer in all known workspaces for signaling-server discovery
+    ctrl.registerAllWorkspaces();
+
     // Pre-mark all known workspace members as "connecting" so the sidebar's
     // amber pulsing dot is visible from the very first render (not a grey→green jump).
     // The dots will transition to green when WebRTC handshakes complete.

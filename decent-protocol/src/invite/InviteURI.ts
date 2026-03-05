@@ -34,6 +34,8 @@ export interface InviteData {
   turnServers: string[];
   /** Inviter's peer ID (for direct connection) */
   peerId?: string;
+  /** Additional workspace member peer IDs for multi-peer join resilience */
+  peers?: string[];
   /** Inviter's public key (for verification before connecting) */
   publicKey?: string;
   /** Canonical workspace ID (recommended; avoids provisional-ID join races) */
@@ -80,6 +82,14 @@ export class InviteURI {
       }
     }
 
+    // Append additional peer IDs for multi-peer join resilience
+    if (data.peers && data.peers.length > 0) {
+      for (const p of data.peers) {
+        // Don't duplicate the primary peer
+        if (p !== peerId) params.append('peer', p);
+      }
+    }
+
     return `https://${webDomain}/join/${inviteCode}?${params.toString()}`;
   }
 
@@ -114,6 +124,13 @@ export class InviteURI {
     if (data.workspaceId) params.set('ws', data.workspaceId);
     if (secure) params.set('secure', '1');
     if (data.path && data.path !== '/peerjs') params.set('path', data.path);
+
+    // Append additional peer IDs for multi-peer join resilience
+    if (data.peers && data.peers.length > 0) {
+      for (const p of data.peers) {
+        if (p !== data.peerId) params.append('peer', p);
+      }
+    }
 
     const queryStr = params.toString();
     return queryStr ? `${uri}?${queryStr}` : uri;
@@ -159,6 +176,11 @@ export class InviteURI {
     const secure = params.get('secure') === '1' || port === 443;
     const peerPath = params.get('path') || '/peerjs';
 
+    // Read all peer params — first is primary, rest are additional
+    const allPeers = params.getAll('peer');
+    const primaryPeer = allPeers[0] || undefined;
+    const additionalPeers = allPeers.length > 1 ? allPeers.slice(1) : undefined;
+
     return {
       host,
       port,
@@ -167,7 +189,8 @@ export class InviteURI {
       path: peerPath,
       fallbackServers,
       turnServers,
-      peerId: params.get('peer') || undefined,
+      peerId: primaryPeer,
+      peers: additionalPeers,
       publicKey: params.get('pk') || undefined,
       workspaceName: params.get('name') || undefined,
       workspaceId: params.get('ws') || undefined,
@@ -202,6 +225,11 @@ export class InviteURI {
       secure = parsed.searchParams.get('secure') === '1' || sPort === 443;
     }
 
+    // Read all peer params — first is primary, rest are additional
+    const allPeers = parsed.searchParams.getAll('peer');
+    const primaryPeer = allPeers[0] || undefined;
+    const additionalPeers = allPeers.length > 1 ? allPeers.slice(1) : undefined;
+
     return {
       host,
       port,
@@ -210,7 +238,8 @@ export class InviteURI {
       path: parsed.searchParams.get('path') || '/peerjs',
       fallbackServers: parsed.searchParams.getAll('fallback'),
       turnServers: parsed.searchParams.getAll('turn'),
-      peerId: parsed.searchParams.get('peer') || undefined,
+      peerId: primaryPeer,
+      peers: additionalPeers,
       publicKey: parsed.searchParams.get('pk') || undefined,
       workspaceName: parsed.searchParams.get('name') || undefined,
       workspaceId: parsed.searchParams.get('ws') || undefined,

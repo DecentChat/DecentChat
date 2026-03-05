@@ -2255,6 +2255,69 @@ export class ChatController {
     }, FIVE_MIN);
   }
 
+  // =========================================================================
+  // Workspace Peer Registry (signaling server discovery)
+  // =========================================================================
+
+  /**
+   * Build the HTTP base URL of the signaling server for workspace registry API.
+   * Converts ws:// → http:// and wss:// → https://.
+   */
+  private getSignalingHttpBase(): string {
+    const wsUrl = getDefaultSignalingServer();
+    const httpUrl = wsUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
+    // Strip trailing /peerjs path and trailing slashes
+    return httpUrl.replace(/\/peerjs\/?$/, '').replace(/\/+$/, '');
+  }
+
+  /**
+   * Register this peer in the signaling server's workspace registry.
+   * Called after transport init and workspace restore.
+   * @param workspaceId - workspace to register in
+   */
+  async registerWorkspacePeer(workspaceId: string): Promise<void> {
+    if (!this.state.myPeerId) return;
+    const base = this.getSignalingHttpBase();
+    try {
+      await fetch(`${base}/workspace/${encodeURIComponent(workspaceId)}/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ peerId: this.state.myPeerId }),
+      });
+    } catch (err) {
+      // Best-effort — signaling server may not support registry yet
+      console.warn(`[Registry] Failed to register in workspace ${workspaceId.slice(0, 8)}:`, (err as Error)?.message);
+    }
+  }
+
+  /**
+   * Register this peer in all known workspaces.
+   * Called once after transport init + workspace restore.
+   */
+  registerAllWorkspaces(): void {
+    for (const ws of this.workspaceManager.getAllWorkspaces()) {
+      void this.registerWorkspacePeer(ws.id);
+    }
+  }
+
+  /**
+   * Discover online peers for a workspace from the signaling server registry.
+   * @param workspaceId - workspace to query
+   * @returns Array of online peer IDs (may be empty if server doesn't support registry)
+   */
+  async discoverWorkspacePeers(workspaceId: string): Promise<string[]> {
+    const base = this.getSignalingHttpBase();
+    try {
+      const res = await fetch(`${base}/workspace/${encodeURIComponent(workspaceId)}/peers`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data?.peers) ? data.peers : [];
+    } catch {
+      // Signaling server may not support registry — fail silently
+      return [];
+    }
+  }
+
   /**
    * Proactive peer maintenance sweep — attempts to connect to any workspace
    * member we're not currently connected to.
@@ -2861,10 +2924,59 @@ export class ChatController {
     // Render the app UI
     this.ui?.renderApp();
 
-    // Connect to the peer who invited us.
-    // Use retry wrapper to absorb startup/join races where transport isn't
-    // fully ready at the exact moment the user submits the join modal.
-    void this.connectPeerWithRetry(peerId, 'join-workspace');
+    // Register in the workspace registry for discovery
+    void this.registerWorkspacePeer(ws.id);
+
+    // Multi-peer join: try connecting to all candidate peers in parallel.
+    // Collect: inviter peerId + invite peers + signaling-discovered peers.
+    void this.connectToMultiplePeers(peerId, inviteData, ws.id);
+  }
+
+  /**
+   * Connect to multiple candidate peers in parallel for resilient workspace join.
+   * Collects peers from invite data and signaling server discovery, deduplicates,
+   * and attempts all connections simultaneously.
+   */
+  private async connectToMultiplePeers(
+    primaryPeerId: string,
+    inviteData: InviteData | undefined,
+    workspaceId: string,
+  ): Promise<void> {
+    // Collect all candidate peer IDs (deduplicated)
+    const candidates = new Set<string>();
+    candidates.add(primaryPeerId);
+
+    // Add peers from invite data
+    if (inviteData?.peers) {
+      for (const p of inviteData.peers) {
+        if (p && p !== this.state.myPeerId) candidates.add(p);
+      }
+    }
+
+    // Discover additional peers from signaling server registry
+    if (workspaceId) {
+      try {
+        const discovered = await this.discoverWorkspacePeers(workspaceId);
+        for (const p of discovered) {
+          if (p && p !== this.state.myPeerId) candidates.add(p);
+        }
+      } catch {
+        // Best-effort — continue with invite peers only
+      }
+    }
+
+    console.log(`[Join] Attempting parallel connect to ${candidates.size} candidate peer(s):`,
+      Array.from(candidates).map(p => p.slice(0, 8)));
+
+    // Connect to ALL candidates in parallel — first one that responds and
+    // completes handshake wins. Workspace-state sync from any member is valid.
+    const results = await Promise.allSettled(
+      Array.from(candidates).map(p => this.connectPeerWithRetry(p, 'join-workspace'))
+    );
+
+    const connected = results.filter(r => r.status === 'fulfilled').length;
+    const failed = results.filter(r => r.status === 'rejected').length;
+    console.log(`[Join] Parallel connect results: ${connected} succeeded, ${failed} failed`);
   }
 
   connectPeer(peerId: string): void {
@@ -3611,6 +3723,31 @@ export class ChatController {
     const defaultServer = getDefaultSignalingServer();
     const { host, port, secure, path } = this.parseSignalingURL(defaultServer);
 
+    // Collect up to 3 online workspace member peer IDs for multi-peer join resilience.
+    // Priority: connected peers first, then known members (excluding self).
+    const connectedSet = new Set(this.transport.getConnectedPeers());
+    const additionalPeers: string[] = [];
+    const MAX_PEERS = 3;
+
+    // First pass: connected peers
+    for (const member of ws.members) {
+      if (additionalPeers.length >= MAX_PEERS) break;
+      if (member.peerId === this.state.myPeerId) continue;
+      if (connectedSet.has(member.peerId)) {
+        additionalPeers.push(member.peerId);
+      }
+    }
+
+    // Second pass: offline members (as fallback — they may come online by join time)
+    if (additionalPeers.length < MAX_PEERS) {
+      for (const member of ws.members) {
+        if (additionalPeers.length >= MAX_PEERS) break;
+        if (member.peerId === this.state.myPeerId) continue;
+        if (additionalPeers.includes(member.peerId)) continue;
+        additionalPeers.push(member.peerId);
+      }
+    }
+
     // Build InviteData
     const inviteData: InviteData = {
       host,
@@ -3621,6 +3758,7 @@ export class ChatController {
       fallbackServers: [],
       turnServers: [],
       peerId: this.state.myPeerId,
+      peers: additionalPeers.length > 0 ? additionalPeers : undefined,
       publicKey: this.myPublicKey || undefined,
       workspaceName: ws.name || undefined,
       workspaceId: ws.id,

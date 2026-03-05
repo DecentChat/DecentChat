@@ -262,6 +262,122 @@ describe('InviteURI - Backward Compatibility', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Multi-peer discovery (peers[] in InviteData)
+// ---------------------------------------------------------------------------
+
+describe('InviteURI - Multi-Peer Discovery', () => {
+  test('encode includes additional peers as separate &peer= params', () => {
+    const uri = InviteURI.encode({
+      host: '192.168.1.50',
+      port: 9000,
+      inviteCode: 'MULTI001',
+      secure: false,
+      path: '/peerjs',
+      fallbackServers: [],
+      turnServers: [],
+      peerId: 'alice',
+      peers: ['bob', 'carol'],
+    });
+
+    const decoded = decodeURIComponent(uri);
+    // Primary peer is first, additional peers follow
+    expect(decoded).toContain('peer=alice');
+    expect(decoded).toContain('peer=bob');
+    expect(decoded).toContain('peer=carol');
+  });
+
+  test('decode reads all peer params — first as peerId, rest as peers[]', () => {
+    const uri = 'https://decentchat.app/join/CODE1?signal=10.0.0.1:9000&peer=alice&peer=bob&peer=carol';
+    const data = InviteURI.decode(uri);
+
+    expect(data.peerId).toBe('alice');
+    expect(data.peers).toEqual(['bob', 'carol']);
+  });
+
+  test('decode with single peer has no peers array', () => {
+    const uri = 'https://decentchat.app/join/CODE2?signal=10.0.0.1:9000&peer=alice';
+    const data = InviteURI.decode(uri);
+
+    expect(data.peerId).toBe('alice');
+    expect(data.peers).toBeUndefined();
+  });
+
+  test('encode → decode roundtrip preserves peers', () => {
+    const original = InviteURI.encode({
+      host: '10.0.0.5',
+      port: 8080,
+      inviteCode: 'ROUND002',
+      secure: false,
+      path: '/peerjs',
+      fallbackServers: [],
+      turnServers: [],
+      peerId: 'alice',
+      peers: ['bob', 'carol'],
+    });
+
+    const decoded = InviteURI.decode(original);
+    expect(decoded.peerId).toBe('alice');
+    expect(decoded.peers).toEqual(['bob', 'carol']);
+  });
+
+  test('encodeNative → decode roundtrip preserves peers', () => {
+    const original = InviteURI.encodeNative({
+      host: '10.0.0.5',
+      port: 8080,
+      inviteCode: 'ROUND003',
+      secure: false,
+      path: '/peerjs',
+      fallbackServers: [],
+      turnServers: [],
+      peerId: 'alice',
+      peers: ['bob', 'carol'],
+    });
+
+    const decoded = InviteURI.decode(original);
+    expect(decoded.peerId).toBe('alice');
+    expect(decoded.peers).toEqual(['bob', 'carol']);
+  });
+
+  test('does not duplicate primary peer in peers list', () => {
+    const uri = InviteURI.encode({
+      host: '10.0.0.1',
+      port: 9000,
+      inviteCode: 'DEDUP01',
+      secure: false,
+      path: '/peerjs',
+      fallbackServers: [],
+      turnServers: [],
+      peerId: 'alice',
+      peers: ['alice', 'bob'], // alice duplicated
+    });
+
+    const decoded = decodeURIComponent(uri);
+    // Should only have alice once (as primary), bob as additional
+    const peerMatches = decoded.match(/peer=alice/g);
+    expect(peerMatches).toHaveLength(1);
+    expect(decoded).toContain('peer=bob');
+  });
+
+  test('old links without peers still decode correctly', () => {
+    // Backward compat: single peer param
+    const uri = 'https://decentchat.app/join/OLD001?signal=10.0.0.1:9000&peer=alice&pk=key123';
+    const data = InviteURI.decode(uri);
+
+    expect(data.peerId).toBe('alice');
+    expect(data.peers).toBeUndefined();
+    expect(data.publicKey).toBe('key123');
+  });
+
+  test('old links without any peer decode correctly', () => {
+    const uri = 'https://decentchat.app/join/OLD002?signal=10.0.0.1:9000';
+    const data = InviteURI.decode(uri);
+
+    expect(data.peerId).toBeUndefined();
+    expect(data.peers).toBeUndefined();
+  });
+});
+
 describe('InviteURI - Share Text', () => {
   test('generates shareable text with web URL', () => {
     const text = InviteURI.toShareText({
