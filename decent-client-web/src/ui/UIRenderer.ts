@@ -19,6 +19,7 @@ import { mount, unmount } from 'svelte';
 import WorkspaceRail from '../lib/components/layout/WorkspaceRail.svelte';
 import Sidebar from '../lib/components/layout/Sidebar.svelte';
 import ChannelHeader from '../lib/components/layout/ChannelHeader.svelte';
+import MessageList from '../lib/components/messages/MessageList.svelte';
 
 export interface ActivityItem {
   id: string;
@@ -162,6 +163,8 @@ export class UIRenderer {
   private _workspaceRailComponent: Record<string, any> | null = null;
   private _sidebarComponent: Record<string, any> | null = null;
   private _channelHeaderComponent: Record<string, any> | null = null;
+  private _messageListComponent: Record<string, any> | null = null;
+  private _threadListComponent: Record<string, any> | null = null;
 
   /** Cached contacts for synchronous sidebar rendering */
   private cachedContacts: Contact[] = [];
@@ -1138,67 +1141,71 @@ export class UIRenderer {
   }
 
   renderMessages(): void {
-    const list = document.getElementById('messages-list')!;
-    list.innerHTML = '';
-    this._scrollListenerBound = false; // re-bind after DOM clear
+    const listContainer = document.getElementById('messages-list')!;
+    this._scrollListenerBound = false;
     this._userScrolledAway = false;
 
-    if (!this.state.activeChannelId) {
-      list.innerHTML = `
-        <div class="empty-state">
-          <div class="emoji">💬</div>
-          <h3>No channel selected</h3>
-          <p>Pick a channel from the sidebar</p>
-        </div>`;
-      return;
+    // Unmount previous Svelte component
+    if (this._messageListComponent) {
+      try { unmount(this._messageListComponent); } catch {}
+      this._messageListComponent = null;
     }
 
-    const messages = this.messageStore.getMessages(this.state.activeChannelId);
+    const channelName = this.getActiveChannelName();
+    const messages = this.state.activeChannelId
+      ? this.messageStore.getMessages(this.state.activeChannelId).filter((m: PlaintextMessage) => !m.threadId)
+      : [];
 
-    if (messages.length === 0) {
-      let channelName = 'the channel';
-      if (this.state.activeDirectConversationId) {
-        const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
-        channelName = conv ? this.getPeerAlias(conv.contactPeerId) : 'this conversation';
-      } else {
-        const ws = this.state.activeWorkspaceId
-          ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-          : null;
-        const channel = ws
-          ? this.workspaceManager.getChannel(ws.id, this.state.activeChannelId!)
-          : null;
-        channelName = channel ? (channel.type === 'dm' ? channel.name : '#' + channel.name) : 'the channel';
-      }
-      list.innerHTML = `
-        <div class="empty-state">
-          <div class="emoji">✨</div>
-          <h3>Welcome to ${channelName}!</h3>
-          <p>This is the very beginning of the conversation.<br>Messages are end-to-end encrypted and stored locally.</p>
-          <p style="margin-top:8px; font-size:12px; color:var(--text-light)">Type <code>/help</code> for commands · <code>Ctrl+K</code> for quick commands</p>
-        </div>`;
-      return;
-    }
-
-    const mainMessages = messages.filter((m: PlaintextMessage) => !m.threadId);
-    for (const msg of mainMessages) {
-      this.appendMessageToDOM(msg);
-    }
-
-    this.upgradeInlineImagePreviews(list);
-    // Scroll to bottom after channel switch. Use rAF to wait for layout,
-    // then also re-scroll after any lazy-loaded images finish rendering.
-    requestAnimationFrame(() => {
-      this.scrollToBottom(list);
-      const images = list.querySelectorAll('img');
-      if (images.length > 0) {
-        let pending = 0;
-        const onLoad = () => { if (--pending <= 0) this.scrollToBottom(list); };
-        images.forEach(img => {
-          if (!img.complete) { pending++; img.addEventListener('load', onLoad, { once: true }); img.addEventListener('error', onLoad, { once: true }); }
-        });
-      }
+    // Mount Svelte MessageList in place of the messages-list div
+    listContainer.innerHTML = '';
+    this._messageListComponent = mount(MessageList, {
+      target: listContainer,
+      props: this.getMessageListProps(messages, channelName, false),
     });
-    this.ensureScrollListener();
+  }
+
+  private getMessageListProps(messages: PlaintextMessage[], channelName: string, inThreadView: boolean, threadRoot?: PlaintextMessage | null) {
+    return {
+      messages,
+      channelName,
+      activeChannelId: this.state.activeChannelId,
+      myPeerId: this.state.myPeerId,
+      myDisplayName: this.getMyDisplayName(),
+      inThreadView,
+      threadRoot: threadRoot || null,
+      frequentReactions: this.getFrequentReactions(),
+      getThread: (channelId: string, messageId: string) =>
+        this.messageStore.getThread(channelId, messageId),
+      getPeerAlias: (peerId: string) => this.getPeerAlias(peerId),
+      isBot: (senderId: string) => {
+        const ws = this.state.activeWorkspaceId ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId) : null;
+        return ws?.members.find((m: any) => m.peerId === senderId)?.isBot === true;
+      },
+      onOpenThread: (messageId: string) => this.openThread(messageId),
+      onToggleReaction: (messageId: string, emoji: string) =>
+        this.callbacks.toggleReaction?.(messageId, emoji),
+      onRememberReaction: (emoji: string) => this.rememberReaction(emoji),
+      onShowMessageInfo: (messageId: string) => this.showMessageInfo(messageId),
+    };
+  }
+
+  private getActiveChannelName(): string {
+    if (this.state.activeDirectConversationId) {
+      const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
+      return conv ? this.getPeerAlias(conv.contactPeerId) : 'this conversation';
+    }
+    const ws = this.state.activeWorkspaceId
+      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+      : null;
+    const channel = ws && this.state.activeChannelId
+      ? this.workspaceManager.getChannel(ws.id, this.state.activeChannelId)
+      : null;
+    return channel ? (channel.type === 'dm' ? channel.name : '#' + channel.name) : 'the channel';
+  }
+
+  private getMyDisplayName(): string {
+    return (this.state.activeWorkspaceId && this.state.workspaceAliases?.[this.state.activeWorkspaceId])
+      || this.state.myAlias || 'You';
   }
 
   appendMessageToDOM(msg: PlaintextMessage, container?: HTMLElement, animate = false): void {
@@ -1207,6 +1214,18 @@ export class UIRenderer {
       content: msg.content,
       channelId: msg.channelId,
     });
+
+    // With Svelte MessageList, re-render the entire list to pick up the new message.
+    // The Svelte component handles scroll management internally.
+    const isThreadContainer = container?.id === 'thread-messages';
+    if (isThreadContainer) {
+      this.renderThreadMessages();
+    } else {
+      this.renderMessages();
+    }
+    return;
+
+    // --- Legacy code below (kept for reference during migration) ---
     const list = container || document.getElementById('messages-list');
     if (!list) {
       console.error('[DecentChat] messages-list element not found! Cannot render message:', msg.id);
@@ -1344,34 +1363,35 @@ export class UIRenderer {
 
   renderThreadMessages(): void {
     const container = document.getElementById('thread-messages')!;
-    container.innerHTML = '';
 
-    if (!this.state.activeChannelId || !this.state.activeThreadId) return;
-
-    // Find parent message in channel — may be missing if channel was compacted
-    const allMsgs = this.messageStore.getMessages(this.state.activeChannelId);
-    let parent = allMsgs.find((m: PlaintextMessage) => m.id === this.state.activeThreadId);
-
-    // Fallback: use stored thread root snapshot if parent was compacted from channel
-    if (!parent) {
-      parent = this.messageStore.getThreadRoot(this.state.activeThreadId);
+    if (!this.state.activeChannelId || !this.state.activeThreadId) {
+      container.innerHTML = '';
+      return;
     }
 
-    if (parent) {
-      this.appendMessageToDOM(parent, container);
-
-      // Add a visual separator between thread root and replies
-      const sep = document.createElement('div');
-      sep.className = 'thread-root-separator';
-      sep.innerHTML = '<span>Thread</span>';
-      container.appendChild(sep);
+    // Find parent message
+    const allMsgs = this.messageStore.getMessages(this.state.activeChannelId);
+    let parent = allMsgs.find((m: PlaintextMessage) => m.id === this.state.activeThreadId);
+    if (!parent) {
+      parent = this.messageStore.getThreadRoot(this.state.activeThreadId);
     }
 
     const replies = this.messageStore.getThread(
       this.state.activeChannelId,
       this.state.activeThreadId,
     );
-    for (const reply of replies) this.appendMessageToDOM(reply, container);
+
+    // Unmount previous thread list
+    if (this._threadListComponent) {
+      try { unmount(this._threadListComponent); } catch {}
+      this._threadListComponent = null;
+    }
+    container.innerHTML = '';
+
+    this._threadListComponent = mount(MessageList, {
+      target: container,
+      props: this.getMessageListProps(replies, '', true, parent),
+    });
   }
 
   /**
