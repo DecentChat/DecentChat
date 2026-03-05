@@ -2669,6 +2669,15 @@ export class ChatController {
     let attemptedDispatch = false;
     for (const peerId of recipientPeerIds) {
       try {
+        // If peer is offline and ratchet state is not loaded (e.g. after page refresh),
+        // restore it from persistence so we can encrypt and queue the message.
+        if (!this.state.readyPeers.has(peerId)) {
+          const hasRatchet = this.messageProtocol!.hasRatchetState(peerId);
+          if (!hasRatchet) {
+            await this.messageProtocol!.restoreRatchetState(peerId);
+          }
+        }
+
         const envelope = await this.messageProtocol!.encryptMessage(peerId, content.trim(), 'text');
         (envelope as any).channelId = this.state.activeChannelId;
         (envelope as any).workspaceId = this.state.activeWorkspaceId;
@@ -2703,6 +2712,23 @@ export class ChatController {
         attemptedDispatch = true;
       } catch (err) {
         console.error('Send to', peerId, 'failed:', err);
+        // Encryption failed (no ratchet state or shared secret — peer never connected
+        // in this session). Queue a deferred plaintext message; flushOfflineQueue will
+        // re-encrypt once the handshake completes on reconnect.
+        try {
+          await this.offlineQueue.enqueue(peerId, {
+            _deferred: true,
+            channelId: this.state.activeChannelId,
+            workspaceId: this.state.activeWorkspaceId,
+            threadId: threadId,
+            content: content.trim(),
+            messageId: msg.id,
+            vectorClock: (msg as any).vectorClock,
+          });
+          attemptedDispatch = true;
+        } catch (queueErr) {
+          console.error("Failed to queue deferred message for", peerId, queueErr);
+        }
       }
     }
 
@@ -4518,7 +4544,43 @@ export class ChatController {
     let hitBackpressure = false;
 
     for (const item of queued as any[]) {
-      const envelope = item?.data ?? item;
+      let envelope = item?.data ?? item;
+
+      // Handle deferred plaintext messages: encrypt now that the handshake is complete
+      if (envelope?._deferred) {
+        try {
+          const encrypted = await this.messageProtocol!.encryptMessage(peerId, envelope.content, 'text');
+          (encrypted as any).channelId = envelope.channelId;
+          (encrypted as any).workspaceId = envelope.workspaceId;
+          (encrypted as any).threadId = envelope.threadId;
+          (encrypted as any).vectorClock = envelope.vectorClock;
+          (encrypted as any).messageId = envelope.messageId;
+
+          // Include thread root snapshot for thread messages
+          if (envelope.threadId) {
+            const threadRoot = this.messageStore.getThreadRoot(envelope.threadId);
+            if (threadRoot) {
+              (encrypted as any).threadRootSnapshot = {
+                senderId: threadRoot.senderId,
+                senderIdentityId: (threadRoot as any).senderIdentityId,
+                content: threadRoot.content,
+                timestamp: threadRoot.timestamp,
+                attachments: (threadRoot as any).attachments,
+              };
+            }
+          }
+
+          envelope = encrypted;
+        } catch (encryptErr) {
+          console.error('[OfflineQueue] deferred encrypt failed for', peerId, encryptErr);
+          failed += 1;
+          if (typeof item?.id === 'number') {
+            await this.offlineQueue.markAttempt(peerId, item.id);
+          }
+          continue;
+        }
+      }
+
       // Mark replayed outbox traffic so receiver can route it through trusted
       // replay lane instead of normal chat throttling.
       (envelope as any)._offlineReplay = 1;
@@ -4535,6 +4597,12 @@ export class ChatController {
           await this.offlineQueue.remove(peerId, item.id);
         }
         delivered += 1;
+
+        // Update message status from pending → sent for deferred messages
+        const msgId = envelope?.messageId ?? (item?.data ?? item)?.messageId;
+        if (msgId) {
+          this.ui?.updateMessageStatus?.(msgId, 'sent', undefined);
+        }
       } catch (err) {
         failed += 1;
         if (typeof item?.id === 'number') {

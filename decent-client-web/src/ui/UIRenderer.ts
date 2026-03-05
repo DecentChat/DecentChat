@@ -9,12 +9,18 @@ import type { WorkspaceManager, MessageStore } from 'decent-protocol';
 import { MessageSearch } from './MessageSearch';
 import { SettingsPanel } from './SettingsPanel';
 import { QRCodeManager } from './QRCodeManager';
-import { QUICK_REACTIONS } from './ReactionManager';
+import { ReactionTracker } from './ReactionTracker';
 import { ContactURI, InviteURI } from 'decent-protocol';
 import type { PlaintextMessage, Contact, ContactURIData, DirectConversation } from 'decent-protocol';
 import { toast } from '../lib/components/shared/Toast.svelte';
 import { showModal as svelteShowModal } from '../lib/components/shared/Modal.svelte';
 import { showEmojiPicker } from '../lib/components/shared/EmojiPicker.svelte';
+import { showMessageInfoModal } from '../lib/components/modals/MessageInfoModal.svelte';
+import { showChannelMembersModal as svelteShowChannelMembersModal } from '../lib/components/modals/ChannelMembersModal.svelte';
+import { showWorkspaceMembersModal as svelteShowWorkspaceMembersModal } from '../lib/components/modals/WorkspaceMembersModal.svelte';
+import { showWorkspaceSettingsModal as svelteShowWorkspaceSettingsModal } from '../lib/components/modals/WorkspaceSettingsModal.svelte';
+import { showJoinWorkspaceModal as svelteShowJoinWorkspaceModal } from '../lib/components/modals/JoinWorkspaceModal.svelte';
+import { showPeerSelectModal } from '../lib/components/modals/PeerSelectModal.svelte';
 import { mount, unmount } from 'svelte';
 import WorkspaceRail from '../lib/components/layout/WorkspaceRail.svelte';
 import Sidebar from '../lib/components/layout/Sidebar.svelte';
@@ -206,8 +212,7 @@ export class UIRenderer {
   private _userScrolledAway = false;
   private _programmaticScroll = false;
   private _scrollListenerBound = false;
-  private frequentReactions: string[] = [];
-  private reactionUsage: Record<string, number> = {};
+  private reactionTracker!: ReactionTracker;
 
   constructor(
     private state: AppState,
@@ -223,8 +228,7 @@ export class UIRenderer {
       showToast: (msg, type) => this.showToast(msg, type),
     });
     this.refreshContactsCache();
-    this.reactionUsage = this.loadReactionUsage();
-    this.frequentReactions = this.loadFrequentReactions();
+    this.reactionTracker = new ReactionTracker(this.state.myPeerId);
   }
 
   private tracePrefix(): string {
@@ -234,130 +238,19 @@ export class UIRenderer {
     return `[TRACE ${alias || this.state.myPeerId.slice(0, 8)}]`;
   }
 
-  private frequentReactionsKey(): string {
-    return `decentchat:frequentReactions:${this.state.myPeerId || 'anon'}`;
-  }
-
-  private reactionUsageKey(): string {
-    return `decentchat:reactionUsage:${this.state.myPeerId || 'anon'}`;
-  }
-
   /** Reload reaction usage from localStorage (call after myPeerId is set) */
   reloadReactionUsage(): void {
-    this.reactionUsage = this.loadReactionUsage();
-    this.frequentReactions = this.loadFrequentReactions();
-  }
-
-  private loadReactionUsage(): Record<string, number> {
-    try {
-      const raw = localStorage.getItem(this.reactionUsageKey());
-      if (raw) {
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        const normalized: Record<string, number> = {};
-        for (const [emoji, count] of Object.entries(parsed || {})) {
-          if (typeof emoji === 'string' && emoji.length > 0 && typeof count === 'number' && count > 0) {
-            normalized[emoji] = Math.floor(count);
-          }
-        }
-        return normalized;
-      }
-    } catch {}
-    return {};
-  }
-
-  private saveReactionUsage(): void {
-    try {
-      localStorage.setItem(this.reactionUsageKey(), JSON.stringify(this.reactionUsage));
-    } catch {}
-  }
-
-  private loadFrequentReactions(): string[] {
-    // Primary: derive from usage counts (true "frequently used").
-    const fromUsage = Object.entries(this.reactionUsage)
-      .sort((a, b) => b[1] - a[1])
-      .map(([emoji]) => emoji);
-    if (fromUsage.length > 0) {
-      for (const fallback of QUICK_REACTIONS) {
-        if (!fromUsage.includes(fallback)) fromUsage.push(fallback);
-        if (fromUsage.length >= 3) break;
-      }
-      return fromUsage.slice(0, 3);
-    }
-
-    // Backward compatibility: old list-only storage.
-    try {
-      const raw = localStorage.getItem(this.frequentReactionsKey());
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          const normalized = parsed.filter((e) => typeof e === 'string' && e.length > 0);
-          if (normalized.length > 0) {
-            return normalized.slice(0, 3);
-          }
-        }
-      }
-    } catch {}
-
-    return QUICK_REACTIONS.slice(0, 3);
-  }
-
-  private saveFrequentReactions(): void {
-    try {
-      localStorage.setItem(this.frequentReactionsKey(), JSON.stringify(this.frequentReactions.slice(0, 3)));
-    } catch {}
+    this.reactionTracker.reload(this.state.myPeerId);
   }
 
   private rememberReaction(emoji: string): void {
-    if (!emoji) return;
-
-    this.reactionUsage[emoji] = (this.reactionUsage[emoji] || 0) + 1;
-    this.saveReactionUsage();
-
-    const ranked = Object.entries(this.reactionUsage)
-      .sort((a, b) => b[1] - a[1])
-      .map(([e]) => e);
-
-    for (const fallback of [...this.frequentReactions, ...QUICK_REACTIONS]) {
-      if (!ranked.includes(fallback)) ranked.push(fallback);
-      if (ranked.length >= 3) break;
-    }
-
-    this.frequentReactions = ranked.slice(0, 3);
-
-    this.saveFrequentReactions();
-    this.refreshQuickReactionButtons();
-  }
-
-  private refreshQuickReactionButtons(): void {
-    const frequent = this.getFrequentReactions();
-    document.querySelectorAll('.message-actions-bar').forEach((barEl) => {
-      const bar = barEl as HTMLElement;
-      const addBtn = bar.querySelector('.quick-react-add') as HTMLElement | null;
-      const msgId = addBtn?.dataset.msgId;
-      if (!addBtn || !msgId) return;
-
-      bar.querySelectorAll('.quick-react').forEach((btn) => btn.remove());
-
-      for (const emoji of frequent) {
-        const btn = document.createElement('button');
-        btn.className = 'quick-react';
-        btn.dataset.msgId = msgId;
-        btn.dataset.emoji = emoji;
-        btn.textContent = emoji;
-        btn.addEventListener('click', () => {
-          this.rememberReaction(emoji);
-          this.callbacks.toggleReaction?.(msgId, emoji);
-        });
-        bar.insertBefore(btn, addBtn);
-      }
-    });
+    this.reactionTracker.rememberReaction(emoji);
+    // Re-render messages to pick up new frequent reactions
+    this.renderMessages();
   }
 
   private getFrequentReactions(): string[] {
-    if (!this.frequentReactions.length) {
-      this.frequentReactions = this.loadFrequentReactions();
-    }
-    return this.frequentReactions.slice(0, 3);
+    return this.reactionTracker.getFrequentReactions();
   }
 
   /** Refresh the cached contacts/conversations from the async stores */
@@ -890,44 +783,7 @@ export class UIRenderer {
       this.showToast('Message info unavailable', 'error');
       return;
     }
-
-    const fmt = (ts?: number) => ts ? new Date(ts).toLocaleString([], { hour12: false }) : '—';
-    const renderList = (title: string, items: Array<{ peerId: string; name: string; at?: number }>) => `
-      <div class="message-info-section">
-        <div class="message-info-title">${title} <span class="message-info-count">(${items.length})</span></div>
-        ${items.length > 0
-          ? `<ul class="message-info-list">${items.map((u) => `<li><span class="name">${this.escapeHtml(u.name)}</span> <span class="peer">${this.escapeHtml(u.peerId.slice(0, 8))}</span> <span class="at">${this.escapeHtml(fmt(u.at))}</span></li>`).join('')}</ul>`
-          : '<div class="message-info-empty">—</div>'}
-      </div>
-    `;
-
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay message-info-overlay';
-    overlay.innerHTML = `
-      <div class="modal message-info-modal">
-        <h3>Message Info</h3>
-        ${renderList('Read by', info.read)}
-        ${renderList('Delivered to', info.delivered)}
-        ${renderList('Pending', info.pending)}
-        <div class="message-info-actions">
-          <button id="message-info-close" class="btn-secondary">Close</button>
-        </div>
-      </div>
-    `;
-
-    const close = () => {
-      overlay.remove();
-      document.removeEventListener('keydown', onEsc);
-    };
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
-    };
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close();
-    });
-    overlay.querySelector('#message-info-close')?.addEventListener('click', close);
-    document.addEventListener('keydown', onEsc);
-    document.body.appendChild(overlay);
+    showMessageInfoModal(info);
   }
 
   updateStreamingMessage(messageId: string, content: string): void {
@@ -1057,71 +913,15 @@ export class UIRenderer {
   /**
    * Update the thread reply indicator on the parent message in the main list.
    * Called when a new thread reply arrives from a peer.
+   * Now re-renders the message list since MessageItem.svelte handles thread indicators.
    */
-  updateThreadIndicator(parentMessageId: string, channelId: string): void {
-    const parentDiv = document.querySelector(`[data-message-id="${parentMessageId}"]`);
-    if (!parentDiv) return;
-
-    const replies = this.messageStore.getThread(channelId, parentMessageId);
-    const indicator = parentDiv.querySelector('.message-thread-indicator') as HTMLElement | null;
-
-    if (indicator) {
-      if (replies.length > 0) {
-        indicator.classList.add('has-replies');
-        indicator.innerHTML = this.renderThreadIndicatorContent(replies);
-      } else {
-        indicator.classList.remove('has-replies');
-        indicator.innerHTML = '';
-      }
-    }
+  updateThreadIndicator(_parentMessageId: string, _channelId: string): void {
+    this.renderMessages();
   }
 
-  /**
-   * Render the Slack-style thread indicator content (avatars + reply count + last reply time).
-   */
-  private renderThreadIndicatorContent(replies: import('decent-protocol').PlaintextMessage[]): string {
-    const count = replies.length;
-    if (count === 0) return '';
+  // renderThreadIndicatorContent() — removed (migrated to MessageItem.svelte)
 
-    // Unique senders (up to 4 avatars)
-    const seen = new Set<string>();
-    const uniqueSenders: string[] = [];
-    for (const r of replies) {
-      if (!seen.has(r.senderId)) {
-        seen.add(r.senderId);
-        uniqueSenders.push(r.senderId);
-        if (uniqueSenders.length >= 4) break;
-      }
-    }
-
-    const avatarsHTML = uniqueSenders.map(peerId => {
-      const name = this.getPeerAlias(peerId);
-      const initials = name.slice(0, 2).toUpperCase();
-      const color = this.peerColor(peerId);
-      return `<span class="thread-indicator-avatar" style="background:${color}" title="${this.escapeHtml(name)}">${this.escapeHtml(initials)}</span>`;
-    }).join('');
-
-    // Last reply relative time
-    const lastReply = replies[replies.length - 1];
-    const relTime = this.relativeTime(lastReply.timestamp);
-
-    return `
-      <span class="thread-indicator-avatars">${avatarsHTML}</span>
-      <span class="thread-indicator-count">${count} ${count === 1 ? 'reply' : 'replies'}</span>
-      <span class="thread-indicator-time">${relTime}</span>
-    `;
-  }
-
-  /** Format a timestamp as a short relative time string */
-  private relativeTime(ts: number): string {
-    const diffMs = Date.now() - ts;
-    const diffMin = Math.floor(diffMs / 60000);
-    if (diffMin < 1) return 'just now';
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffH = Math.floor(diffMin / 60);
-    if (diffH < 24) return `${diffH}h ago`;
-    return `${Math.floor(diffH / 24)}d ago`;
-  }
+  // relativeTime() — removed (migrated to $lib/utils/format.ts)
 
   // =========================================================================
   // Channel switching
@@ -1567,44 +1367,17 @@ export class UIRenderer {
     if (!ws || !channel) return;
 
     const channelMembers = ws.members.filter(m => channel.members.includes(m.peerId));
-
-    const membersHTML = channelMembers.map(member => {
-      const { peerId } = member;
-      const name = this.getPeerAlias(peerId);
-      const initial = name.charAt(0).toUpperCase();
-      const color = this.peerColor(peerId);
-      const isYou = peerId === this.state.myPeerId;
-      const isOnline = this.state.connectedPeers.has(peerId) || isYou;
-
-      const isBot = !!(member as any).isBot;
-      return `
-        <div class="member-row">
-          <div class="member-info">
-            <div class="member-avatar${isBot ? ' bot-avatar' : ''}" style="background:${color}">${isBot ? '🤖' : this.escapeHtml(initial)}</div>
-            <div class="member-details">
-              <div class="member-name-line">
-                <span class="member-name">${this.escapeHtml(name)}</span>
-                ${isYou ? '<span class="you-badge">you</span>' : ''}
-              </div>
-              <span class="member-status ${isOnline ? 'online' : 'offline'}">${isOnline ? 'Online' : 'Offline'}</span>
-            </div>
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    this.showModal(
-      `Channel Members · #${this.escapeHtml(channel.name)}`,
-      `
-      <div class="form-group" style="margin-bottom: 8px;">
-        <div style="font-size: 13px; color: var(--text-muted);">${channelMembers.length} member${channelMembers.length === 1 ? '' : 's'}</div>
-      </div>
-      <div class="members-list">
-        ${membersHTML}
-      </div>
-    `,
-      () => true,
-    );
+    svelteShowChannelMembersModal({
+      channelName: channel.name,
+      members: channelMembers.map(member => ({
+        peerId: member.peerId,
+        name: this.getPeerAlias(member.peerId),
+        isOnline: this.state.connectedPeers.has(member.peerId) || member.peerId === this.state.myPeerId,
+        isYou: member.peerId === this.state.myPeerId,
+        isBot: !!(member as any).isBot,
+        color: this.peerColor(member.peerId),
+      })),
+    });
   }
 
   private showWorkspaceMembersModal(): void {
@@ -1618,107 +1391,32 @@ export class UIRenderer {
     const isOwner = myRole === 'owner' || ws.createdBy === this.state.myPeerId || this.workspaceManager.isOwner(ws.id, this.state.myPeerId);
     const isAdminOrOwner = isOwner || myRole === 'admin' || this.workspaceManager.isAdmin(ws.id, this.state.myPeerId);
 
-    const roleBadge = (role: string, isBot?: boolean) => {
-      const badge = role === 'owner' ? '<span class="role-badge role-owner" title="Owner">Owner</span>'
-        : role === 'admin' ? '<span class="role-badge role-admin" title="Admin">Admin</span>' : '';
-      const botBadge = isBot ? '<span class="role-badge role-bot" title="Bot">BOT</span>' : '';
-      return botBadge + badge;
-    };
-
-    const membersHTML = ws.members.map(member => {
-      const { peerId, role, isBot } = member;
-      const name = this.getPeerAlias(peerId);
-      const initial = name.charAt(0).toUpperCase();
-      const color = isBot ? '#7c3aed' : this.peerColor(peerId);
-      const isYou = peerId === this.state.myPeerId;
-      const isOnline = this.state.connectedPeers.has(peerId) || isYou;
-      const canRemove = isAdminOrOwner && !isYou && role !== 'owner';
-      const canPromote = isOwner && !isYou && role === 'member';
-      const canDemote = isOwner && !isYou && role === 'admin';
-
-      let actionButtons = '';
-      if (canPromote) actionButtons += `<button type="button" class="btn-action promote-btn" data-peer-id="${peerId}" title="Promote to Admin">Promote</button>`;
-      if (canDemote) actionButtons += `<button type="button" class="btn-action demote-btn" data-peer-id="${peerId}" title="Demote to Member">Demote</button>`;
-      if (canRemove) actionButtons += `<button type="button" class="btn-action btn-danger remove-member-btn" data-remove-peer-id="${peerId}" title="Remove from workspace">Remove</button>`;
-
-      return `
-        <div class="member-row">
-          <div class="member-info">
-            <div class="member-avatar${isBot ? ' bot-avatar' : ''}" style="background:${color}">${isBot ? '🤖' : this.escapeHtml(initial)}</div>
-            <div class="member-details">
-              <div class="member-name-line">
-                <span class="member-name">${this.escapeHtml(name)}</span>
-                ${roleBadge(role, isBot)}
-                ${isYou ? '<span class="you-badge">you</span>' : ''}
-              </div>
-              <span class="member-status ${isOnline ? 'online' : 'offline'}">${isOnline ? 'Online' : 'Offline'}</span>
-            </div>
-          </div>
-          <div class="member-actions">${actionButtons}</div>
-        </div>
-      `;
-    }).join('');
-
-    this.showModal(
-      `Workspace Members`,
-      `
-      <div class="form-group" style="margin-bottom: 8px;">
-        <div id="members-count-label" style="font-size: 13px; color: var(--text-muted);">${ws.members.length} member${ws.members.length === 1 ? '' : 's'}</div>
-      </div>
-      <div class="members-list">${membersHTML}</div>
-    `,
-      () => true,
-    );
-
-    const overlay = document.querySelector('.modal-overlay:last-of-type') as HTMLElement | null;
-
-    overlay?.querySelectorAll('.remove-member-btn').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        const peerId = (e.currentTarget as HTMLElement).getAttribute('data-remove-peer-id');
-        if (!peerId || !this.callbacks.removeWorkspaceMember) return;
-        if (!confirm(`Remove ${this.getPeerAlias(peerId)} from workspace?`)) return;
-
-        const res = await this.callbacks.removeWorkspaceMember(peerId);
-        if (!res.success) return this.showToast(res.error || 'Failed to remove member', 'error');
-
-        // Keep dialog experience open by immediately re-rendering members modal.
-        overlay.remove();
-        this.showWorkspaceMembersModal();
-
-        this.showToast('Member removed', 'success');
-        this.updateSidebar();
-        this.updateChannelHeader();
-      });
-    });
-
-    overlay?.querySelectorAll('.promote-btn').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        const peerId = (e.currentTarget as HTMLElement).getAttribute('data-peer-id');
-        if (!peerId || !this.callbacks.promoteMember) return;
-
-        const res = await this.callbacks.promoteMember(peerId, 'admin');
-        if (!res.success) return this.showToast(res.error || 'Failed to promote member', 'error');
-
-        overlay.remove();
-        this.showToast(`${this.getPeerAlias(peerId)} promoted to Admin`, 'success');
-        this.updateSidebar();
-        this.updateChannelHeader();
-      });
-    });
-
-    overlay?.querySelectorAll('.demote-btn').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        const peerId = (e.currentTarget as HTMLElement).getAttribute('data-peer-id');
-        if (!peerId || !this.callbacks.demoteMember) return;
-
-        const res = await this.callbacks.demoteMember(peerId);
-        if (!res.success) return this.showToast(res.error || 'Failed to demote member', 'error');
-
-        overlay.remove();
-        this.showToast(`${this.getPeerAlias(peerId)} demoted to Member`, 'success');
-        this.updateSidebar();
-        this.updateChannelHeader();
-      });
+    svelteShowWorkspaceMembersModal({
+      members: ws.members.map(member => ({
+        peerId: member.peerId,
+        name: this.getPeerAlias(member.peerId),
+        role: member.role,
+        isBot: !!member.isBot,
+        isOnline: this.state.connectedPeers.has(member.peerId) || member.peerId === this.state.myPeerId,
+        isYou: member.peerId === this.state.myPeerId,
+        color: member.isBot ? '#7c3aed' : this.peerColor(member.peerId),
+      })),
+      isOwner,
+      isAdminOrOwner,
+      onRemove: async (peerId: string) => {
+        if (!this.callbacks.removeWorkspaceMember) return { success: false, error: 'Not available' };
+        return this.callbacks.removeWorkspaceMember(peerId);
+      },
+      onPromote: async (peerId: string) => {
+        if (!this.callbacks.promoteMember) return { success: false, error: 'Not available' };
+        return this.callbacks.promoteMember(peerId, 'admin');
+      },
+      onDemote: async (peerId: string) => {
+        if (!this.callbacks.demoteMember) return { success: false, error: 'Not available' };
+        return this.callbacks.demoteMember(peerId);
+      },
+      onToast: (msg: string, type?: string) => this.showToast(msg, type as any),
+      onRefresh: () => { this.updateSidebar(); this.updateChannelHeader(); },
     });
   }
 
@@ -1731,92 +1429,35 @@ export class UIRenderer {
     const isOwner = this.workspaceManager.isOwner(ws.id, this.state.myPeerId);
     const perms = ws.permissions ?? { whoCanCreateChannels: 'everyone', whoCanInviteMembers: 'everyone' };
 
-    const deleteSection = isOwner ? `
-      <div class="form-group" style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border);">
-        <button type="button" class="btn-danger" id="delete-workspace-btn" style="width:100%;">Delete Workspace</button>
-      </div>
-    ` : '';
-
-    this.showModal(
-      'Workspace Settings',
-      `
-      <div class="form-group">
-        <label>Workspace Name</label>
-        <input type="text" name="ws-name" value="${this.escapeHtml(ws.name)}" required />
-      </div>
-      <div class="form-group">
-        <label>Description</label>
-        <textarea name="ws-description" rows="2" placeholder="What's this workspace about?">${this.escapeHtml(ws.description || '')}</textarea>
-      </div>
-      <div class="form-group">
-        <label>Who can create channels?</label>
-        <select name="ws-create-channels" class="modal-select">
-          <option value="everyone" ${perms.whoCanCreateChannels === 'everyone' ? 'selected' : ''}>Everyone</option>
-          <option value="admins" ${perms.whoCanCreateChannels === 'admins' ? 'selected' : ''}>Admins only</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Who can invite members?</label>
-        <select name="ws-invite-members" class="modal-select">
-          <option value="everyone" ${perms.whoCanInviteMembers === 'everyone' ? 'selected' : ''}>Everyone</option>
-          <option value="admins" ${perms.whoCanInviteMembers === 'admins' ? 'selected' : ''}>Admins only</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <button type="button" class="btn-secondary" id="manage-members-btn" style="width:100%;">Manage Members</button>
-      </div>
-      ${deleteSection}
-    `,
-      async (form) => {
-        const name = (form.elements.namedItem('ws-name') as HTMLInputElement).value.trim();
-        const description = (form.elements.namedItem('ws-description') as HTMLTextAreaElement).value.trim();
-        const whoCanCreateChannels = (form.elements.namedItem('ws-create-channels') as HTMLSelectElement).value as 'everyone' | 'admins';
-        const whoCanInviteMembers = (form.elements.namedItem('ws-invite-members') as HTMLSelectElement).value as 'everyone' | 'admins';
-
-        if (!name) return false;
-
-        // Update workspace info
-        if (name !== ws.name || description !== (ws.description || '')) {
-          const infoRes = await this.callbacks.updateWorkspaceInfo?.({ name, description });
+    svelteShowWorkspaceSettingsModal({
+      name: ws.name,
+      description: ws.description || '',
+      isOwner,
+      permissions: { whoCanCreateChannels: perms.whoCanCreateChannels, whoCanInviteMembers: perms.whoCanInviteMembers },
+      onSave: async (data: { name: string; description: string; whoCanCreateChannels: string; whoCanInviteMembers: string }) => {
+        if (data.name !== ws.name || data.description !== (ws.description || '')) {
+          const infoRes = await this.callbacks.updateWorkspaceInfo?.({ name: data.name, description: data.description });
           if (infoRes && !infoRes.success) {
             this.showToast(infoRes.error || 'Failed to update workspace info', 'error');
             return false;
           }
         }
-
-        // Update permissions
-        if (whoCanCreateChannels !== perms.whoCanCreateChannels || whoCanInviteMembers !== perms.whoCanInviteMembers) {
-          const permRes = await this.callbacks.updateWorkspacePermissions?.({ whoCanCreateChannels, whoCanInviteMembers });
+        if (data.whoCanCreateChannels !== perms.whoCanCreateChannels || data.whoCanInviteMembers !== perms.whoCanInviteMembers) {
+          const permRes = await this.callbacks.updateWorkspacePermissions?.({ whoCanCreateChannels: data.whoCanCreateChannels, whoCanInviteMembers: data.whoCanInviteMembers });
           if (permRes && !permRes.success) {
             this.showToast(permRes.error || 'Failed to update permissions', 'error');
             return false;
           }
         }
-
         this.showToast('Workspace settings saved', 'success');
         this.updateSidebar();
         this.updateChannelHeader();
         return true;
       },
-    );
-
-    const overlay = document.querySelector('.modal-overlay:last-of-type') as HTMLElement | null;
-    overlay?.querySelector('#manage-members-btn')?.addEventListener('click', () => {
-      overlay.remove();
-      this.showWorkspaceMembersModal();
-    });
-
-    // Bind delete workspace button
-    if (isOwner) {
-      overlay?.querySelector('#delete-workspace-btn')?.addEventListener('click', async () => {
-        const confirmed = confirm(`Delete "${ws.name}"? This cannot be undone.`);
-        if (!confirmed) return;
-        const secondConfirm = confirm(`Are you sure? All channels and messages will be lost.`);
-        if (!secondConfirm) return;
-
+      onManageMembers: () => this.showWorkspaceMembersModal(),
+      onDelete: async () => {
         const result = await this.callbacks.deleteWorkspace?.(ws.id);
         if (result) {
-          overlay?.remove();
           this.showToast('Workspace deleted', 'success');
           this.state.activeWorkspaceId = null;
           this.state.activeChannelId = null;
@@ -1824,8 +1465,9 @@ export class UIRenderer {
         } else {
           this.showToast('Failed to delete workspace', 'error');
         }
-      });
-    }
+      },
+      onToast: (msg: string, type?: string) => this.showToast(msg, type as any),
+    });
   }
 
   showModal(
@@ -1917,134 +1559,19 @@ export class UIRenderer {
     return { code: invite.toUpperCase() };
   }
 
-  private updateWorkspacePreview(overlay: HTMLDivElement): void {
-    const inviteInput = overlay.querySelector('input[name="invite"]') as HTMLInputElement | null;
-    const previewGroup = overlay.querySelector('[data-workspace-preview]') as HTMLElement | null;
-    const previewInput = overlay.querySelector('input[name="workspacePreview"]') as HTMLInputElement | null;
-
-    if (!inviteInput || !previewGroup || !previewInput) return;
-
-    const parsed = this.parseJoinInviteInput(inviteInput.value.trim());
-    const workspaceName = parsed.inviteData?.workspaceName?.trim();
-
-    if (workspaceName) {
-      const wasVisible = previewGroup.classList.contains('workspace-preview-visible');
-      previewInput.value = workspaceName;
-      previewGroup.style.display = 'block';
-      previewGroup.classList.add('workspace-preview-visible');
-      if (!wasVisible) {
-        previewInput.classList.remove('workspace-preview-pop');
-        requestAnimationFrame(() => previewInput.classList.add('workspace-preview-pop'));
-      }
-    } else {
-      previewInput.value = '';
-      previewGroup.style.display = 'none';
-      previewGroup.classList.remove('workspace-preview-visible');
-      previewInput.classList.remove('workspace-preview-pop');
-    }
-  }
+  // updateWorkspacePreview() — removed (migrated to JoinWorkspaceModal.svelte)
 
   showJoinWorkspaceModal(): void {
-    const overlay = this.showModal(
-      'Join Workspace',
-      `
-      <div class="form-group">
-        <label>Invite Link or Code</label>
-        <input type="text" name="invite" class="invite-input" placeholder="https://decentchat.app/join/... or paste invite link" required />
-        <small style="color: var(--text-muted); margin-top: 4px; display: block;">
-          Paste the full invite link you received
-        </small>
-        <small class="invite-autofill-hint" data-invite-autofill-hint style="display: none;">
-          ✅ We found an invite in your clipboard and pasted it here for you.
-        </small>
-      </div>
-      <div class="form-group" data-workspace-preview style="display: none;">
-        <label>Workspace</label>
-        <input type="text" name="workspacePreview" readonly />
-      </div>
-      <div class="form-group">
-        <label>Your Display Name</label>
-        <input type="text" name="alias" class="join-alias-input" placeholder="Your name" required />
-      </div>
-    `,
-      (form) => {
-        const invite = (form.elements.namedItem('invite') as HTMLInputElement).value.trim();
-        const alias = (form.elements.namedItem('alias') as HTMLInputElement).value.trim();
-        if (!invite || !alias) return;
-
-        const parsed = this.parseJoinInviteInput(invite);
-        if (parsed.error) {
-          this.showToast(parsed.error, 'error');
-          return;
-        }
-
-        let peerId = parsed.peerId;
-        if (!peerId) {
-          const peerInput = prompt('Enter the Peer ID of someone in the workspace:');
-          if (!peerInput) return;
-          peerId = peerInput.trim();
-        }
-
-        if (!peerId) {
-          this.showToast('Invite link missing peer info — ask the inviter for an updated link', 'error');
-          return;
-        }
-
+    svelteShowJoinWorkspaceModal({
+      parseInvite: (invite: string) => this.parseJoinInviteInput(invite),
+      onJoin: (wsName: string, alias: string, peerId: string, inviteData?: any) => {
         this.state.myAlias = alias;
         this.callbacks.persistSetting('myAlias', alias);
-        const wsName = parsed.inviteData?.workspaceName || parsed.code;
-        this.callbacks.joinWorkspace(wsName, alias, peerId, parsed.inviteData);
+        this.callbacks.joinWorkspace(wsName, alias, peerId, inviteData);
         this.showToast(`Joining workspace... connecting to ${peerId.slice(0, 8)}`);
       },
-    );
-
-    const inviteInput = overlay.querySelector('input[name="invite"]') as HTMLInputElement | null;
-    const aliasInput = overlay.querySelector('input[name="alias"]') as HTMLInputElement | null;
-    const autofillHint = overlay.querySelector('[data-invite-autofill-hint]') as HTMLElement | null;
-
-    if (inviteInput) {
-      inviteInput.addEventListener('input', () => {
-        this.updateWorkspacePreview(overlay);
-        inviteInput.classList.remove('invite-autofilled');
-        if (autofillHint) {
-          autofillHint.style.display = 'none';
-          autofillHint.classList.remove('invite-autofill-hint-visible');
-        }
-      });
-    }
-
-    // Clipboard auto-detect (requires user gesture: opening modal)
-    if (navigator.clipboard?.readText) {
-      navigator.clipboard.readText()
-        .then((text) => {
-          const clipboardText = text.trim();
-          if (!clipboardText || !inviteInput || inviteInput.value.trim()) return;
-
-          const parsed = this.parseJoinInviteInput(clipboardText);
-          if (parsed.error || !parsed.inviteData) return;
-
-          inviteInput.value = clipboardText;
-          inviteInput.classList.remove('invite-autofilled');
-          requestAnimationFrame(() => inviteInput.classList.add('invite-autofilled'));
-          this.updateWorkspacePreview(overlay);
-
-          if (autofillHint) {
-            autofillHint.style.display = 'block';
-            autofillHint.classList.remove('invite-autofill-hint-visible');
-            requestAnimationFrame(() => autofillHint.classList.add('invite-autofill-hint-visible'));
-          }
-
-          // Move user directly to the next step.
-          // Delay slightly so it wins over modal's initial autofocus on first input.
-          setTimeout(() => {
-            aliasInput?.focus();
-            aliasInput?.select();
-          }, 90);
-        })
-        .catch(() => {
-          // Clipboard read can fail due to browser permissions; ignore silently.
-        });
-    }
+      onToast: (msg: string, type?: string) => this.showToast(msg, type as any),
+    });
   }
 
   showConnectPeerModal(): void {
@@ -2110,50 +1637,23 @@ export class UIRenderer {
       return;
     }
 
-    const memberOptions = otherMembers
-      .map(
-        (m: import('decent-protocol').WorkspaceMember) =>
-          `<div class="sidebar-item" data-peer-id="${m.peerId}" style="background: var(--surface); margin: 4px 0; border-radius: 6px; color: var(--text); padding: 10px 12px; cursor: pointer;">
-        <span class="dm-status ${this.peerStatusClass(m.peerId)}" title="${this.peerStatusTitle(m.peerId)}"></span>
-        ${this.escapeHtml(m.alias)} (${m.peerId.slice(0, 8)})
-      </div>`,
-      )
-      .join('');
-
-    this.showModal(
-      'New Direct Message',
-      `
-      <div class="form-group">
-        <label>Select a member</label>
-        <div id="member-list">${memberOptions}</div>
-        <input type="hidden" name="peerId" id="dm-peer-select" />
-      </div>
-    `,
-      (form) => {
-        const peerId = (form.elements.namedItem('peerId') as HTMLInputElement).value;
-        if (!peerId) return;
-
+    showPeerSelectModal({
+      title: 'New Direct Message',
+      label: 'Select a member',
+      peers: otherMembers.map(m => ({
+        peerId: m.peerId,
+        name: m.alias,
+        statusClass: this.peerStatusClass(m.peerId),
+        statusTitle: this.peerStatusTitle(m.peerId),
+      })),
+      onSelect: (peerId: string) => {
         const result = this.callbacks.createDM(peerId);
         if (result.success && result.channel) {
           this.switchChannel(result.channel.id);
           this.updateSidebar();
         }
       },
-    );
-
-    setTimeout(() => {
-      document.getElementById('member-list')?.addEventListener('click', (e) => {
-        const item = (e.target as HTMLElement).closest('[data-peer-id]') as HTMLElement;
-        if (item) {
-          (document.getElementById('dm-peer-select') as HTMLInputElement).value =
-            item.dataset.peerId!;
-          document
-            .querySelectorAll('#member-list .sidebar-item')
-            .forEach((el) => ((el as HTMLElement).style.border = 'none'));
-          item.style.border = '2px solid var(--accent)';
-        }
-      });
-    }, 50);
+    });
   }
 
   // =========================================================================
@@ -2208,48 +1708,22 @@ export class UIRenderer {
       return;
     }
 
-    const contactOptions = this.cachedContacts
-      .map(c => {
-        return `<div class="sidebar-item" data-peer-id="${c.peerId}" style="background: var(--surface); margin: 4px 0; border-radius: 6px; color: var(--text); padding: 10px 12px; cursor: pointer;">
-          <span class="dm-status ${this.peerStatusClass(c.peerId)}" title="${this.peerStatusTitle(c.peerId)}"></span>
-          ${this.escapeHtml(c.displayName)} (${c.peerId.slice(0, 8)})
-        </div>`;
-      })
-      .join('');
-
-    this.showModal(
-      'Start Direct Message',
-      `
-      <div class="form-group">
-        <label>Select a contact</label>
-        <div id="contact-list">${contactOptions}</div>
-        <input type="hidden" name="peerId" id="dm-contact-select" />
-      </div>
-    `,
-      (form) => {
-        const peerId = (form.elements.namedItem('peerId') as HTMLInputElement).value;
-        if (!peerId) return;
-
+    showPeerSelectModal({
+      title: 'Start Direct Message',
+      label: 'Select a contact',
+      peers: this.cachedContacts.map(c => ({
+        peerId: c.peerId,
+        name: c.displayName,
+        statusClass: this.peerStatusClass(c.peerId),
+        statusTitle: this.peerStatusTitle(c.peerId),
+      })),
+      onSelect: (peerId: string) => {
         this.callbacks.startDirectMessage?.(peerId).then(async (conv) => {
           await this.refreshContactsCache();
           this.switchToDirectConversation(conv.id);
         });
       },
-    );
-
-    setTimeout(() => {
-      document.getElementById('contact-list')?.addEventListener('click', (e) => {
-        const item = (e.target as HTMLElement).closest('[data-peer-id]') as HTMLElement;
-        if (item) {
-          (document.getElementById('dm-contact-select') as HTMLInputElement).value =
-            item.dataset.peerId!;
-          document
-            .querySelectorAll('#contact-list .sidebar-item')
-            .forEach((el) => ((el as HTMLElement).style.border = 'none'));
-          item.style.border = '2px solid var(--accent)';
-        }
-      });
-    }, 50);
+    });
   }
 
   // =========================================================================
@@ -2464,66 +1938,8 @@ export class UIRenderer {
     this.mountLightbox();
   }
 
-  /** Render attachment previews for a message */
-  private renderAttachments(attachments?: any[]): string {
-    if (!attachments || attachments.length === 0) return '';
-
-    return attachments.map((att: any) => {
-      const sizeStr = this.formatFileSize(att.size);
-
-      if (att.type === 'image' && att.thumbnail) {
-        return `
-          <div class="attachment attachment-image" data-attachment-id="${att.id}">
-            <img src="data:image/jpeg;base64,${att.thumbnail}" alt="${this.escapeHtml(att.name)}" class="attachment-thumbnail" data-attachment-name="${this.escapeHtml(att.name)}" data-attachment-id="${att.id}" />
-            <div class="attachment-info">
-              <span class="attachment-name">${this.escapeHtml(att.name)}</span>
-              <span class="attachment-size">${sizeStr}</span>
-            </div>
-          </div>`;
-      }
-
-      if (att.type === 'image' && !att.thumbnail) {
-        return `
-          <div class="attachment attachment-image attachment-no-preview" data-attachment-id="${att.id}">
-            <span class="attachment-icon">🖼️</span>
-            <div class="attachment-info">
-              <span class="attachment-name">${this.escapeHtml(att.name)}</span>
-              <span class="attachment-size">${sizeStr}</span>
-              <span class="attachment-hint">Image — preview unavailable</span>
-            </div>
-          </div>`;
-      }
-
-      if (att.type === 'voice' || att.type === 'audio') {
-        return `
-          <div class="attachment attachment-audio" data-attachment-id="${att.id}">
-            <span class="attachment-icon">🎵</span>
-            <div class="attachment-info">
-              <span class="attachment-name">${this.escapeHtml(att.name)}</span>
-              <span class="attachment-size">${sizeStr}${att.durationSec ? ` · ${Math.round(att.durationSec)}s` : ''}</span>
-            </div>
-          </div>`;
-      }
-
-      // Generic file
-      const icon = att.type === 'video' ? '🎬' : '📎';
-      return `
-        <div class="attachment attachment-file" data-attachment-id="${att.id}">
-          <span class="attachment-icon">${icon}</span>
-          <div class="attachment-info">
-            <span class="attachment-name">${this.escapeHtml(att.name)}</span>
-            <span class="attachment-size">${sizeStr}</span>
-          </div>
-        </div>`;
-    }).join('');
-  }
-
-  private formatFileSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-  }
+  // renderAttachments() — removed (migrated to MessageItem.svelte)
+  // formatFileSize() — removed (migrated to $lib/utils/format.ts)
 
   peerColor(peerId: string): string {
     const colors = [
