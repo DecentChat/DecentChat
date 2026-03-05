@@ -24,17 +24,11 @@ import { showJoinWorkspaceModal as svelteShowJoinWorkspaceModal } from '../lib/c
 import { showPeerSelectModal } from '../lib/components/modals/PeerSelectModal.svelte';
 import { showAddContactModal as svelteShowAddContactModal } from '../lib/components/modals/AddContactModal.svelte';
 import { mount, unmount } from 'svelte';
-import WorkspaceRail from '../lib/components/layout/WorkspaceRail.svelte';
-import Sidebar from '../lib/components/layout/Sidebar.svelte';
-import ChannelHeader from '../lib/components/layout/ChannelHeader.svelte';
+import * as MH from './MountHelpers';
+import type { MountContext } from './MountHelpers';
 import MessageList from '../lib/components/messages/MessageList.svelte';
+// Most component imports moved to MountHelpers.ts
 import WelcomePage from '../lib/components/layout/WelcomePage.svelte';
-import ComposeArea from '../lib/components/compose/ComposeArea.svelte';
-import ThreadPanel from '../lib/components/layout/ThreadPanel.svelte';
-import ActivityPanel from '../lib/components/layout/ActivityPanel.svelte';
-import HuddleBar from '../lib/components/layout/HuddleBar.svelte';
-import SearchPanel from '../lib/components/layout/SearchPanel.svelte';
-import Lightbox from '../lib/components/shared/Lightbox.svelte';
 
 export interface ActivityItem {
   id: string;
@@ -233,6 +227,71 @@ export class UIRenderer {
     return `[TRACE ${alias || this.state.myPeerId.slice(0, 8)}]`;
   }
 
+  /** Build MountContext for delegation to MountHelpers */
+  private ctx(): MountContext {
+    return {
+      state: this.state,
+      workspaceManager: this.workspaceManager,
+      messageStore: this.messageStore,
+      callbacks: this.callbacks,
+      getPeerAlias: (id) => this.getPeerAlias(id),
+      peerColor: (id) => this.peerColor(id),
+      peerStatusClass: (id) => this.peerStatusClass(id),
+      peerStatusTitle: (id) => this.peerStatusTitle(id),
+      getFrequentReactions: () => this.getFrequentReactions(),
+      getMyDisplayName: () => this.getMyDisplayName(),
+      getComposePlaceholder: () => this.getComposePlaceholder(),
+      cachedContacts: this.cachedContacts,
+      cachedDirectConversations: this.cachedDirectConversations,
+      huddleState: this.huddleState,
+      huddleChannelId: this.huddleChannelId,
+      huddleParticipants: this.huddleParticipants,
+      huddleMuted: this.huddleMuted,
+      lightboxOpen: this._lightboxOpen,
+      lightboxSrc: this._lightboxSrc,
+      lightboxName: this._lightboxName,
+      switchChannel: (id) => this.switchChannel(id),
+      switchToDirectConversation: (id) => this.switchToDirectConversation(id),
+      switchWorkspace: (id) => this.switchWorkspace(id),
+      openThread: (id) => this.openThread(id),
+      closeThread: () => this.closeThread(),
+      showChannelMembersModal: () => this.showChannelMembersModal(),
+      showWorkspaceSettingsModal: () => this.showWorkspaceSettingsModal(),
+      showWorkspaceMembersModal: () => this.showWorkspaceMembersModal(),
+      showCreateChannelModal: () => this.showCreateChannelModal(),
+      showConnectPeerModal: () => this.showConnectPeerModal(),
+      showCreateWorkspaceModal: () => this.showCreateWorkspaceModal(),
+      showStartDirectMessageModal: () => this.showStartDirectMessageModal(),
+      showAddContactModal: () => this.showAddContactModal(),
+      showMyQR: () => this.showMyQR(),
+      showScanQR: () => this.showScanQR(),
+      showSearchPanel: () => this.showSearchPanel(),
+      showSettings: () => this.showSettings(),
+      showToast: (msg, type) => this.showToast(msg, type),
+      showMessageInfo: (id) => this.showMessageInfo(id),
+      openMobileSidebar: () => this.openMobileSidebar(),
+      closeMobileSidebar: () => this.closeMobileSidebar(),
+      closeLightbox: () => this.closeLightbox(),
+      openLightbox: (src, name) => this.openLightbox(src, name),
+      rememberReaction: (emoji) => this.rememberReaction(emoji),
+      startMemberDM: (id) => this.startMemberDM(id),
+      toggleActivityPanel: () => this.toggleActivityPanel(),
+      scrollToMessageAndHighlight: (id, cid) => this.scrollToMessageAndHighlight(id, cid),
+      persistViewState: () => this.persistViewState(),
+      refreshContactsCache: () => this.refreshContactsCache(),
+      updateSidebar: () => this.updateSidebar(),
+      updateChannelHeader: () => this.updateChannelHeader(),
+      updateWorkspaceRail: () => this.updateWorkspaceRail(),
+      renderMessages: () => this.renderMessages(),
+      updateComposePlaceholder: () => this.updateComposePlaceholder(),
+      mountCompose: () => this.mountCompose(),
+      mountHuddleBar: () => this.mountHuddleBar(),
+      mountLightbox: () => this.mountLightbox(),
+      mountSidebar: (el) => this.mountSidebar(el),
+      mountThreadPanel: () => this.mountThreadPanel(),
+    };
+  }
+
   /** Reload reaction usage from localStorage (call after myPeerId is set) */
   reloadReactionUsage(): void {
     this.reactionTracker.reload(this.state.myPeerId);
@@ -339,162 +398,27 @@ export class UIRenderer {
   // ── Svelte component mounts ──
 
   private mountCompose(): void {
-    if (this._composeComponent) {
-      try { unmount(this._composeComponent); } catch {}
-      this._composeComponent = null;
-    }
-    const container = document.getElementById('compose-mount');
-    if (!container) return;
-    container.innerHTML = '';
-
-    this._composeComponent = mount(ComposeArea, {
-      target: container,
-      props: {
-        placeholder: this.getComposePlaceholder(),
-        target: 'main',
-        onSend: async (text: string, files: File[]) => {
-          if (files.length > 0) {
-            for (let i = 0; i < files.length; i++) {
-              await this.callbacks.sendAttachment(files[i], i === 0 ? (text || undefined) : undefined, undefined);
-            }
-          } else if (text) {
-            await this.callbacks.sendMessage(text, undefined);
-          }
-        },
-        onTyping: () => this.callbacks.broadcastTyping?.(),
-        onStopTyping: () => this.callbacks.broadcastStopTyping?.(),
-        getCommandSuggestions: this.callbacks.getCommandSuggestions
-          ? (prefix: string) => this.callbacks.getCommandSuggestions!(prefix)
-          : undefined,
-        getMembers: () => {
-          const ws = this.state.activeWorkspaceId
-            ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-            : null;
-          if (!ws) return [];
-          return ws.members
-            .filter((m: any) => m.peerId !== this.state.myPeerId)
-            .map((m: any) => ({ peerId: m.peerId, name: this.getPeerAlias(m.peerId) }));
-        },
-      },
-    });
+    const ref = { current: this._composeComponent };
+    MH.mountCompose(ref, this.ctx());
+    this._composeComponent = ref.current;
   }
 
   private mountThreadPanel(): void {
-    if (this._threadPanelComponent) {
-      try { unmount(this._threadPanelComponent); } catch {}
-      this._threadPanelComponent = null;
-    }
-    const container = document.getElementById('thread-mount');
-    if (!container) return;
-    container.innerHTML = '';
-
-    const getThreadData = () => {
-      if (!this.state.activeChannelId || !this.state.activeThreadId) {
-        return { parent: null, replies: [] as PlaintextMessage[] };
-      }
-      const allMsgs = this.messageStore.getMessages(this.state.activeChannelId);
-      let parent = allMsgs.find((m: PlaintextMessage) => m.id === this.state.activeThreadId);
-      if (!parent) parent = this.messageStore.getThreadRoot(this.state.activeThreadId);
-      const replies = this.messageStore.getThread(this.state.activeChannelId, this.state.activeThreadId!);
-      return { parent: parent || null, replies };
-    };
-
-    const data = getThreadData();
-
-    this._threadPanelComponent = mount(ThreadPanel, {
-      target: container,
-      props: {
-        open: this.state.threadOpen,
-        threadId: this.state.activeThreadId,
-        channelId: this.state.activeChannelId,
-        parentMessage: data.parent,
-        replies: data.replies,
-        myPeerId: this.state.myPeerId,
-        myDisplayName: this.getMyDisplayName(),
-        frequentReactions: this.getFrequentReactions(),
-        getThread: (channelId: string, messageId: string) => this.messageStore.getThread(channelId, messageId),
-        getPeerAlias: (peerId: string) => this.getPeerAlias(peerId),
-        isBot: (senderId: string) => {
-          const ws = this.state.activeWorkspaceId ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId) : null;
-          return ws?.members.find((m: any) => m.peerId === senderId)?.isBot === true;
-        },
-        onOpenThread: (messageId: string) => this.openThread(messageId),
-        onToggleReaction: (messageId: string, emoji: string) => this.callbacks.toggleReaction?.(messageId, emoji),
-        onRememberReaction: (emoji: string) => this.rememberReaction(emoji),
-        onShowMessageInfo: (messageId: string) => this.showMessageInfo(messageId),
-        onClose: () => this.closeThread(),
-        onSend: async (text: string, files: File[]) => {
-          const threadId = this.state.activeThreadId || undefined;
-          if (files.length > 0) {
-            for (let i = 0; i < files.length; i++) {
-              await this.callbacks.sendAttachment(files[i], i === 0 ? (text || undefined) : undefined, threadId);
-            }
-          } else if (text) {
-            await this.callbacks.sendMessage(text, threadId);
-          }
-        },
-        getMembers: () => {
-          const ws = this.state.activeWorkspaceId
-            ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-            : null;
-          if (!ws) return [];
-          return ws.members
-            .filter((m: any) => m.peerId !== this.state.myPeerId)
-            .map((m: any) => ({ peerId: m.peerId, name: this.getPeerAlias(m.peerId) }));
-        },
-      },
-    });
+    const ref = { current: this._threadPanelComponent };
+    MH.mountThreadPanel(ref, this.ctx());
+    this._threadPanelComponent = ref.current;
   }
 
   private mountHuddleBar(): void {
-    if (this._huddleBarComponent) {
-      try { unmount(this._huddleBarComponent); } catch {}
-      this._huddleBarComponent = null;
-    }
-    const container = document.getElementById('huddle-mount');
-    if (!container) return;
-    container.innerHTML = '';
-
-    this._huddleBarComponent = mount(HuddleBar, {
-      target: container,
-      props: {
-        state: this.huddleState,
-        muted: this.huddleMuted,
-        participants: this.huddleParticipants,
-        onToggleMute: () => {
-          const muted = this.callbacks.toggleHuddleMute?.() ?? false;
-          this.huddleMuted = muted;
-          this.mountHuddleBar();
-        },
-        onLeave: async () => {
-          await this.callbacks.leaveHuddle?.();
-        },
-        onJoin: async () => {
-          const channelId = this.huddleChannelId || this.state.activeChannelId;
-          if (channelId) await this.callbacks.joinHuddle?.(channelId);
-        },
-      },
-    });
+    const ref = { current: this._huddleBarComponent };
+    MH.mountHuddleBar(ref, this.ctx());
+    this._huddleBarComponent = ref.current;
   }
 
   private mountLightbox(): void {
-    if (this._lightboxComponent) {
-      try { unmount(this._lightboxComponent); } catch {}
-      this._lightboxComponent = null;
-    }
-    const container = document.getElementById('lightbox-mount');
-    if (!container) return;
-    container.innerHTML = '';
-
-    this._lightboxComponent = mount(Lightbox, {
-      target: container,
-      props: {
-        open: this._lightboxOpen ?? false,
-        src: this._lightboxSrc ?? '',
-        name: this._lightboxName ?? '',
-        onClose: () => this.closeLightbox(),
-      },
-    });
+    const ref = { current: this._lightboxComponent };
+    MH.mountLightbox(ref, this.ctx());
+    this._lightboxComponent = ref.current;
   }
 
   private _lightboxOpen = false;
@@ -528,41 +452,9 @@ export class UIRenderer {
   }
 
   updateWorkspaceRail(): void {
-    const rail = document.getElementById('workspace-rail');
-    if (!rail) return;
-    // Unmount previous Svelte component
-    if (this._workspaceRailComponent) {
-      try { unmount(this._workspaceRailComponent); } catch {}
-      this._workspaceRailComponent = null;
-    }
-    rail.innerHTML = '';
-    this._workspaceRailComponent = mount(WorkspaceRail, {
-      target: rail,
-      props: {
-        workspaces: this.callbacks.getAllWorkspaces?.() || [],
-        activeWorkspaceId: this.state.activeWorkspaceId,
-        activityUnread: this.callbacks.getActivityUnreadCount?.() || 0,
-        onSwitchToDMs: () => {
-          this.activityPanelOpen = false;
-          document.getElementById('activity-btn')?.classList.remove('active');
-          this.state.activeWorkspaceId = null;
-          if (!this.state.activeDirectConversationId) {
-            this.state.activeChannelId = null;
-          }
-          this.persistViewState();
-          this.refreshContactsCache().catch(() => {});
-          this.updateSidebar();
-          this.updateWorkspaceRail();
-          this.updateChannelHeader();
-          this.renderMessages();
-        },
-        onSwitchWorkspace: (wsId: string) => {
-          this.switchWorkspace(wsId);
-        },
-        onToggleActivity: () => this.toggleActivityPanel(),
-        onAddWorkspace: () => this.showCreateWorkspaceModal(),
-      },
-    });
+    const ref = { current: this._workspaceRailComponent };
+    MH.mountWorkspaceRail(ref, this.ctx());
+    this._workspaceRailComponent = ref.current;
   }
 
   // =========================================================================
@@ -606,66 +498,9 @@ export class UIRenderer {
   // ensureScrollListener() — removed (scroll management now in Svelte MessageList)
 
   renderMessages(): void {
-    const listContainer = document.getElementById('messages-list')!;
-    this._scrollListenerBound = false;
-    this._userScrolledAway = false;
-
-    // Unmount previous Svelte component
-    if (this._messageListComponent) {
-      try { unmount(this._messageListComponent); } catch {}
-      this._messageListComponent = null;
-    }
-
-    const channelName = this.getActiveChannelName();
-    const messages = this.state.activeChannelId
-      ? this.messageStore.getMessages(this.state.activeChannelId).filter((m: PlaintextMessage) => !m.threadId)
-      : [];
-
-    // Mount Svelte MessageList in place of the messages-list div
-    listContainer.innerHTML = '';
-    this._messageListComponent = mount(MessageList, {
-      target: listContainer,
-      props: this.getMessageListProps(messages, channelName, false),
-    });
-  }
-
-  private getMessageListProps(messages: PlaintextMessage[], channelName: string, inThreadView: boolean, threadRoot?: PlaintextMessage | null) {
-    return {
-      messages,
-      channelName,
-      activeChannelId: this.state.activeChannelId,
-      myPeerId: this.state.myPeerId,
-      myDisplayName: this.getMyDisplayName(),
-      inThreadView,
-      threadRoot: threadRoot || null,
-      frequentReactions: this.getFrequentReactions(),
-      getThread: (channelId: string, messageId: string) =>
-        this.messageStore.getThread(channelId, messageId),
-      getPeerAlias: (peerId: string) => this.getPeerAlias(peerId),
-      isBot: (senderId: string) => {
-        const ws = this.state.activeWorkspaceId ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId) : null;
-        return ws?.members.find((m: any) => m.peerId === senderId)?.isBot === true;
-      },
-      onOpenThread: (messageId: string) => this.openThread(messageId),
-      onToggleReaction: (messageId: string, emoji: string) =>
-        this.callbacks.toggleReaction?.(messageId, emoji),
-      onRememberReaction: (emoji: string) => this.rememberReaction(emoji),
-      onShowMessageInfo: (messageId: string) => this.showMessageInfo(messageId),
-    };
-  }
-
-  private getActiveChannelName(): string {
-    if (this.state.activeDirectConversationId) {
-      const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
-      return conv ? this.getPeerAlias(conv.contactPeerId) : 'this conversation';
-    }
-    const ws = this.state.activeWorkspaceId
-      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-      : null;
-    const channel = ws && this.state.activeChannelId
-      ? this.workspaceManager.getChannel(ws.id, this.state.activeChannelId)
-      : null;
-    return channel ? (channel.type === 'dm' ? channel.name : '#' + channel.name) : 'the channel';
+    const ref = { current: this._messageListComponent };
+    MH.mountMessages(ref, this.ctx());
+    this._messageListComponent = ref.current;
   }
 
   private getMyDisplayName(): string {
@@ -872,95 +707,9 @@ export class UIRenderer {
   }
 
   private mountSidebar(sidebar: HTMLElement): void {
-    // Unmount previous Svelte component
-    if (this._sidebarComponent) {
-      try { unmount(this._sidebarComponent); } catch {}
-      this._sidebarComponent = null;
-    }
-    sidebar.innerHTML = '';
-
-    const ws = this.state.activeWorkspaceId
-      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-      : null;
-    const channels = ws ? this.workspaceManager.getChannels(ws.id) : [];
-
-    // Build member data with online/offline grouping (same logic as before)
-    const memberData = ws
-      ? (() => {
-          const seen = new Set<string>();
-          return ws.members.filter((m) => {
-            const key = m.identityId || m.peerId;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          }).map((m) => {
-            const identityPeers = m.identityId
-              ? ws.members.filter(other => other.identityId === m.identityId).map(other => other.peerId)
-              : [m.peerId];
-            const isMe = identityPeers.includes(this.state.myPeerId);
-            const isOnline = isMe || identityPeers.some(pid => this.peerStatusClass(pid) === 'online');
-            const alias = this.getPeerAlias(m.peerId);
-            return {
-              peerId: m.peerId, alias, isOnline, isMe,
-              role: m.role, isBot: m.isBot,
-              statusClass: this.peerStatusClass(m.peerId),
-              statusTitle: this.peerStatusTitle(m.peerId),
-            };
-          });
-        })()
-      : [];
-
-    this._sidebarComponent = mount(Sidebar, {
-      target: sidebar,
-      props: {
-        workspaceName: ws?.name ?? null,
-        channels: channels.map(ch => ({ id: ch.id, name: ch.name })),
-        members: memberData,
-        directConversations: this.cachedDirectConversations.map(c => ({
-          id: c.id,
-          contactPeerId: c.contactPeerId,
-          lastMessageAt: c.lastMessageAt,
-        })),
-        activeChannelId: this.state.activeChannelId,
-        activeDirectConversationId: this.state.activeDirectConversationId,
-        getUnreadCount: (id: string) => this.callbacks.getUnreadCount?.(id) || 0,
-        getPeerAlias: (peerId: string) => this.getPeerAlias(peerId),
-        getPeerStatusClass: (peerId: string) => this.peerStatusClass(peerId),
-        getPeerStatusTitle: (peerId: string) => this.peerStatusTitle(peerId),
-        onChannelClick: (channelId: string) => this.switchChannel(channelId),
-        onMemberClick: (peerId: string) => this.startMemberDM(peerId),
-        onDirectConvClick: (convId: string) => this.switchToDirectConversation(convId),
-        myPeerId: this.state.myPeerId,
-        onAddChannel: () => this.showCreateChannelModal(),
-        onStartDM: () => this.showStartDirectMessageModal(),
-        onAddContact: () => this.showAddContactModal(),
-        onConnectPeer: () => this.showConnectPeerModal(),
-        onCopyInvite: () => {
-          if (!this.state.activeWorkspaceId) return;
-          const inviteURL = this.callbacks.generateInviteURL?.(this.state.activeWorkspaceId);
-          if (inviteURL) {
-            navigator.clipboard.writeText(inviteURL);
-            this.showToast('Invite link copied!', 'success');
-          }
-        },
-        onShowQR: () => this.showMyQR(),
-        onCopyPeerId: () => {
-          navigator.clipboard.writeText(this.state.myPeerId);
-          this.showToast('Peer ID copied!');
-        },
-        onWorkspaceSettings: () => this.showWorkspaceSettingsModal(),
-        onWorkspaceMembers: () => this.showWorkspaceMembersModal(),
-        onWorkspaceInvite: () => {
-          if (!this.state.activeWorkspaceId) return;
-          const inviteURL = this.callbacks.generateInviteURL?.(this.state.activeWorkspaceId);
-          if (inviteURL) {
-            navigator.clipboard.writeText(inviteURL);
-            this.showToast('Invite link copied!', 'success');
-          }
-        },
-        onWorkspaceNotifications: () => this.showSettings(),
-      },
-    });
+    const ref = { current: this._sidebarComponent };
+    MH.mountSidebar(ref, sidebar, this.ctx());
+    this._sidebarComponent = ref.current;
   }
 
   updateChannelHeader(): void {
@@ -970,71 +719,9 @@ export class UIRenderer {
   }
 
   private mountChannelHeader(container: HTMLElement): void {
-    if (this._channelHeaderComponent) {
-      try { unmount(this._channelHeaderComponent); } catch {}
-      this._channelHeaderComponent = null;
-    }
-    container.innerHTML = '';
-
-    const isDirectMessage = !!this.state.activeDirectConversationId;
-    let channelName = 'Select a channel';
-    let memberCount = 0;
-
-    if (isDirectMessage) {
-      const conv = this.cachedDirectConversations.find(c => c.id === this.state.activeDirectConversationId);
-      channelName = conv ? this.getPeerAlias(conv.contactPeerId) : 'Direct Message';
-    } else {
-      const ws = this.state.activeWorkspaceId
-        ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
-        : null;
-      const channel = this.state.activeChannelId && ws
-        ? this.workspaceManager.getChannel(ws.id, this.state.activeChannelId)
-        : null;
-      if (channel) {
-        channelName = channel.type === 'dm' ? channel.name : `# ${channel.name}`;
-        memberCount = channel.members.length;
-      }
-    }
-
-    this._channelHeaderComponent = mount(ChannelHeader, {
-      target: container,
-      props: {
-        channelName,
-        memberCount,
-        isDirectMessage,
-        isHuddleActive: this.huddleState === 'in-call' && this.huddleChannelId === this.state.activeChannelId,
-        onHamburger: () => {
-          const sidebar = document.getElementById('sidebar');
-          if (sidebar?.classList.contains('open')) {
-            this.closeMobileSidebar();
-          } else {
-            this.openMobileSidebar();
-          }
-        },
-        onHuddleToggle: async () => {
-          const channelId = this.state.activeChannelId;
-          if (!channelId) return;
-          if (this.huddleState === 'in-call') {
-            await this.callbacks.leaveHuddle?.();
-          } else {
-            await this.callbacks.startHuddle?.(channelId);
-          }
-        },
-        onConnectPeer: () => this.showConnectPeerModal(),
-        onShowQR: () => this.showMyQR(),
-        onSearch: () => this.showSearchPanel(),
-        onInvite: () => {
-          if (!this.state.activeWorkspaceId) return;
-          const inviteURL = this.callbacks.generateInviteURL?.(this.state.activeWorkspaceId);
-          if (inviteURL) {
-            navigator.clipboard.writeText(inviteURL);
-            this.showToast('Invite link copied! Share it with anyone.', 'success');
-          }
-        },
-        onSettings: () => this.showSettings(),
-        onChannelMembers: () => this.showChannelMembersModal(),
-      },
-    });
+    const ref = { current: this._channelHeaderComponent };
+    MH.mountChannelHeader(ref, container, this.ctx());
+    this._channelHeaderComponent = ref.current;
   }
 
   // =========================================================================
@@ -1042,97 +729,7 @@ export class UIRenderer {
   // =========================================================================
 
   private bindAppEvents(): void {
-    // ── Compose, thread, emoji, file attach — now handled by ComposeArea.svelte ──
-    // ── Thread open/close — now handled by ThreadPanel.svelte ──
-    // ── Huddle events — now handled by HuddleBar.svelte ──
-    // ── Lightbox events — now handled by Lightbox.svelte ──
-
-    // Thumbnail click -> open lightbox (event delegation on message lists)
-    const handleThumbnailClick = async (e: Event) => {
-      const target = e.target as HTMLElement;
-      if (target.classList.contains('attachment-thumbnail')) {
-        const img = target as HTMLImageElement;
-        const name = img.getAttribute('data-attachment-name') || '';
-        const attachmentId = img.getAttribute('data-attachment-id') || '';
-
-        this.openLightbox(img.src, name);
-
-        if (attachmentId && this.callbacks.resolveAttachmentImageUrl) {
-          const fullSrc = await this.callbacks.resolveAttachmentImageUrl(attachmentId);
-          if (fullSrc) {
-            if (this._lightboxOpen) {
-              if (this.lightboxBlobUrl) URL.revokeObjectURL(this.lightboxBlobUrl);
-              this.lightboxBlobUrl = fullSrc;
-              this._lightboxSrc = fullSrc;
-              this.mountLightbox();
-            }
-          }
-        }
-      }
-    };
-
-    const messagesList = document.getElementById('messages-list');
-    messagesList?.addEventListener('click', handleThumbnailClick);
-
-    // Drag & drop file support
-    const messagesArea = document.querySelector('.messages-area') as HTMLElement;
-    if (messagesArea) {
-      messagesArea.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        messagesArea.classList.add('drag-active');
-      });
-      messagesArea.addEventListener('dragleave', (e) => {
-        if (!messagesArea.contains(e.relatedTarget as Node)) {
-          messagesArea.classList.remove('drag-active');
-        }
-      });
-      messagesArea.addEventListener('drop', (e) => {
-        e.preventDefault();
-        messagesArea.classList.remove('drag-active');
-        const files = Array.from(e.dataTransfer?.files || []);
-        if (this.state.activeChannelId || this.state.activeDirectConversationId) {
-          // TODO: Use ComposeArea.addExternalFiles when Svelte component refs are wired
-          const dropTarget = e.target as HTMLElement | null;
-          const target: 'main' | 'thread' = dropTarget?.closest?.('#thread-panel') ? 'thread' : 'main';
-          this.addPendingAttachments(files, target);
-        }
-      });
-    }
-
-    // Global keyboard shortcuts
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        if (this._lightboxOpen) { this.closeLightbox(); return; }
-        const autocomplete = document.getElementById('command-autocomplete') || document.getElementById('mention-autocomplete');
-        if (autocomplete) { autocomplete.remove(); return; }
-        const modal = document.querySelector('.modal-overlay');
-        if (modal) { modal.remove(); return; }
-        if (this.state.threadOpen) { this.closeThread(); return; }
-      }
-
-      // Ctrl/Cmd + K: focus compose
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        const composeInput = document.getElementById('compose-input') as HTMLTextAreaElement;
-        if (composeInput) {
-          composeInput.focus();
-          if (!composeInput.value) composeInput.value = '/';
-        }
-      }
-
-      // Ctrl/Cmd + F: search messages
-      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-        e.preventDefault();
-        this.showSearchPanel();
-      }
-
-      // Ctrl/Cmd + Shift + M: toggle sidebar on mobile
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'M') {
-        e.preventDefault();
-        const sidebar = document.getElementById('sidebar');
-        sidebar?.classList.contains('open') ? this.closeMobileSidebar() : this.openMobileSidebar();
-      }
-    });
+    MH.bindAppEvents(this.ctx());
   }
 
   /**
@@ -1180,76 +777,23 @@ export class UIRenderer {
     if (!sidebar) return;
 
     if (this.activityPanelOpen) {
-      // Unmount Svelte sidebar before activity panel takes over
-      if (this._sidebarComponent) {
-        try { unmount(this._sidebarComponent); } catch {}
-        this._sidebarComponent = null;
-      }
-      if (this._activityPanelComponent) {
-        try { unmount(this._activityPanelComponent); } catch {}
-        this._activityPanelComponent = null;
-      }
-      sidebar.innerHTML = '';
-
-      this._activityPanelComponent = mount(ActivityPanel, {
-        target: sidebar,
-        props: {
-          items: this.callbacks.getActivityItems?.() || [],
-          getPeerAlias: (peerId: string) => this.getPeerAlias(peerId),
-          onClose: () => this.toggleActivityPanel(),
-          onMarkAllRead: () => {
-            this.callbacks.markAllActivityRead?.();
-            this.refreshActivityPanel();
-            this.updateWorkspaceRail();
-          },
-          onMarkRead: (id: string) => this.callbacks.markActivityRead?.(id),
-          onNavigate: (item: any) => {
-            // Close activity panel and restore sidebar
-            this.activityPanelOpen = false;
-            this.mountSidebar(sidebar);
-            document.getElementById('activity-btn')?.classList.remove('active');
-
-            const needsChannelSwitch = item.channelId && item.channelId !== this.state.activeChannelId;
-            const needsThreadOpen = !!(item.threadId && item.threadId.trim());
-            const needsThreadSwitch = needsThreadOpen && (!this.state.threadOpen || this.state.activeThreadId !== item.threadId);
-
-            if (needsChannelSwitch) this.switchChannel(item.channelId);
-
-            if (needsThreadOpen && needsThreadSwitch) {
-              const openDelay = needsChannelSwitch ? 50 : 0;
-              setTimeout(() => {
-                this.openThread(item.threadId!);
-                if (item.messageId) setTimeout(() => this.scrollToMessageAndHighlight(item.messageId, 'thread-messages'), 100);
-              }, openDelay);
-            } else if (needsThreadOpen && !needsThreadSwitch) {
-              if (item.messageId) this.scrollToMessageAndHighlight(item.messageId, 'thread-messages');
-            } else if (item.messageId) {
-              const scrollDelay = needsChannelSwitch ? 100 : 0;
-              setTimeout(() => this.scrollToMessageAndHighlight(item.messageId, 'messages-list'), scrollDelay);
-            }
-
-            this.updateChannelHeader();
-            this.updateWorkspaceRail();
-          },
-        },
-      });
+      if (this._sidebarComponent) { try { unmount(this._sidebarComponent); } catch {} this._sidebarComponent = null; }
+      if (this._activityPanelComponent) { try { unmount(this._activityPanelComponent); } catch {} this._activityPanelComponent = null; }
+      const ref = { current: this._activityPanelComponent };
+      MH.mountActivityPanel(ref, sidebar, this.ctx());
+      this._activityPanelComponent = ref.current;
       document.getElementById('activity-btn')?.classList.add('active');
     } else {
-      if (this._activityPanelComponent) {
-        try { unmount(this._activityPanelComponent); } catch {}
-        this._activityPanelComponent = null;
-      }
+      if (this._activityPanelComponent) { try { unmount(this._activityPanelComponent); } catch {} this._activityPanelComponent = null; }
       this.mountSidebar(sidebar);
       document.getElementById('activity-btn')?.classList.remove('active');
     }
   }
 
-  /** Refresh activity panel content if open */
   refreshActivityPanel(): void {
     if (!this.activityPanelOpen) return;
-    // Re-mount the Svelte activity panel with fresh data
-    this.toggleActivityPanel(); // close
-    this.toggleActivityPanel(); // re-open with fresh data
+    this.toggleActivityPanel();
+    this.toggleActivityPanel();
   }
 
   private showChannelMembersModal(): void {
@@ -1602,58 +1146,12 @@ export class UIRenderer {
 
   // upgradeInlineImagePreviews() — removed (dead code, image upgrade handled in MessageItem)
 
-  /** Bridge for drag-drop: dispatch files to the Svelte ComposeArea */
-  private addPendingAttachments(files: File[], target: 'main' | 'thread'): void {
-    // Dispatch files into the Svelte ComposeArea by synthesizing a paste event on the target input
-    const inputId = target === 'thread' ? 'thread-input' : 'compose-input';
-    const inputEl = document.getElementById(inputId) as HTMLTextAreaElement | null;
-    if (!inputEl) return;
+  // addPendingAttachments() — moved to MountHelpers.ts
 
-    // Use internal method: set up files via the file input
-    const fileInputId = target === 'thread' ? 'thread-file-input' : 'file-input';
-    const fileInput = document.getElementById(fileInputId) as HTMLInputElement | null;
-    if (fileInput) {
-      const dt = new DataTransfer();
-      for (const file of files) dt.items.add(file);
-      fileInput.files = dt.files;
-      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-  }
-
-  /** Show search panel */
   showSearchPanel(): void {
-    const container = document.getElementById('search-mount');
-    if (!container) return;
-
-    // Toggle: if already open, close it
-    if (this._searchPanelComponent) {
-      try { unmount(this._searchPanelComponent); } catch {}
-      this._searchPanelComponent = null;
-      container.innerHTML = '';
-      return;
-    }
-
-    this._searchPanelComponent = mount(SearchPanel, {
-      target: container,
-      props: {
-        myPeerId: this.state.myPeerId,
-        myAlias: this.state.myAlias || 'You',
-        onSearch: (query: string) => {
-          return this.messageSearch.search(query, {
-            channelId: this.state.activeChannelId || undefined,
-            limit: 20,
-          });
-        },
-        onScrollToMessage: (messageId: string) => this.scrollToMessageAndHighlight(messageId),
-        onClose: () => {
-          if (this._searchPanelComponent) {
-            try { unmount(this._searchPanelComponent); } catch {}
-            this._searchPanelComponent = null;
-          }
-          container.innerHTML = '';
-        },
-      },
-    });
+    const ref = { current: this._searchPanelComponent };
+    MH.mountSearchPanel(ref, this.ctx());
+    this._searchPanelComponent = ref.current;
   }
 
   /** Show QR code with user's identity */
