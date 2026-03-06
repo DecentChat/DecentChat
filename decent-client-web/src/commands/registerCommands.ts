@@ -114,6 +114,9 @@ export function registerCommands(parser: CommandParser, ctrl: ChatController, st
 
       const code = ws.inviteCode || 'NONE';
       const uri = await ctrl.generateInviteURL(state.activeWorkspaceId, { permanent });
+      if (!uri) {
+        return { handled: true, error: 'Could not generate invite link (insufficient permissions or missing workspace)' };
+      }
 
       return {
         handled: true,

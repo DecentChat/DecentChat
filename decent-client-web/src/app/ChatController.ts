@@ -42,6 +42,17 @@ import type {
   NegentropyQuery, NegentropyResponse,
   Contact, DirectConversation,
 } from 'decent-protocol';
+import {
+  buildWorkspaceInviteLists,
+  markInviteRevokedInRegistry,
+  normalizeWorkspaceInviteRegistry,
+  recordGeneratedInvite,
+} from './inviteRegistry';
+import type {
+  WorkspaceInviteLists,
+  WorkspaceInviteRegistry,
+  WorkspaceInviteView,
+} from './inviteRegistry';
 
 import { PeerTransport, ICE_SERVERS_WITH_TURN } from 'decent-transport-webrtc';
 import { KeyStore } from '../crypto/KeyStore';
@@ -171,6 +182,7 @@ export class ChatController {
   private pendingAuthChallenges = new Map<string, { nonce: string; timestamp: number }>();
   /** Auth timeout: fall back to TOFU if peer doesn't respond to challenge */
   private static readonly AUTH_TIMEOUT_MS = 5000;
+  private static readonly WORKSPACE_INVITES_SETTING_KEY = 'workspaceInvites';
   /** Cleanup interval for the seen-set (every 5 min) */
   private _gossipCleanupInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -210,6 +222,7 @@ export class ChatController {
   private reactionsPersistTimer: ReturnType<typeof setTimeout> | null = null;
   private channelViewInFlight = new Map<string, Promise<void>>();
   private pendingReadReceiptKeys = new Set<string>();
+  private workspaceInviteRegistry: WorkspaceInviteRegistry = {};
 
   constructor(private state: AppState) {
     this.cryptoManager = new CryptoManager();
@@ -2519,6 +2532,9 @@ export class ChatController {
       try { this.state.workspaceAliases = JSON.parse(savedWsAliases); } catch {}
     }
 
+    const rawInviteRegistry = await this.persistentStore.getSetting(ChatController.WORKSPACE_INVITES_SETTING_KEY);
+    this.workspaceInviteRegistry = normalizeWorkspaceInviteRegistry(rawInviteRegistry);
+
     const workspaces = await this.persistentStore.getAllWorkspaces();
     console.log('[DecentChat] restoreFromStorage: found', workspaces.length, 'workspaces');
     for (const ws of workspaces) {
@@ -2639,6 +2655,29 @@ export class ChatController {
 
   async getSettings(): Promise<any> {
     return this.persistentStore.getSettings<any>({});
+  }
+
+  private async persistWorkspaceInviteRegistry(): Promise<void> {
+    await this.persistSetting(ChatController.WORKSPACE_INVITES_SETTING_KEY, this.workspaceInviteRegistry);
+  }
+
+  listWorkspaceInvites(workspaceId?: string): WorkspaceInviteLists {
+    const wsId = workspaceId || this.state.activeWorkspaceId;
+    if (!wsId) return { active: [], revoked: [] };
+
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    const revokedInviteIds = ws?.permissions?.revokedInviteIds || [];
+    return buildWorkspaceInviteLists(this.workspaceInviteRegistry, wsId, revokedInviteIds);
+  }
+
+  getWorkspaceInviteById(workspaceId: string, inviteId: string): WorkspaceInviteView | null {
+    const { active, revoked } = this.listWorkspaceInvites(workspaceId);
+    const all = [...active, ...revoked];
+    return all.find((invite) => invite.inviteId === inviteId) || null;
+  }
+
+  async revokeInviteById(inviteId: string): Promise<{ success: boolean; error?: string; inviteId?: string; alreadyRevoked?: boolean }> {
+    return this.revokeInviteLink(inviteId);
   }
 
   // =========================================================================
@@ -3605,6 +3644,8 @@ export class ChatController {
 
     const existingRevoked = this.workspaceManager.getPermissions(ws.id).revokedInviteIds || [];
     if (existingRevoked.includes(inviteId)) {
+      this.workspaceInviteRegistry = markInviteRevokedInRegistry(this.workspaceInviteRegistry, ws.id, inviteId);
+      await this.persistWorkspaceInviteRegistry();
       return { success: true, inviteId, alreadyRevoked: true };
     }
 
@@ -3612,6 +3653,9 @@ export class ChatController {
       revokedInviteIds: [...existingRevoked, inviteId],
     });
     if (!result.success) return result;
+
+    this.workspaceInviteRegistry = markInviteRevokedInRegistry(this.workspaceInviteRegistry, ws.id, inviteId);
+    await this.persistWorkspaceInviteRegistry();
 
     return { success: true, inviteId };
   }
@@ -3911,6 +3955,11 @@ export class ChatController {
     const ws = this.workspaceManager.getWorkspace(workspaceId);
     if (!ws) return '';
 
+    if (!this.workspaceManager.canInviteMembers(workspaceId, this.state.myPeerId)) {
+      this.ui?.showToast('You do not have permission to create invites in this workspace', 'error');
+      return '';
+    }
+
     const permanent = opts?.permanent === true;
 
     // Parse primary signaling server
@@ -3977,7 +4026,17 @@ export class ChatController {
     const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
     const webDomain = isLocal ? `${window.location.hostname}:${window.location.port}` : 'decentchat.app';
     const url = InviteURI.encode(inviteData, webDomain);
-    return isLocal ? url.replace('https://', 'http://') : url;
+    const finalUrl = isLocal ? url.replace('https://', 'http://') : url;
+
+    this.workspaceInviteRegistry = recordGeneratedInvite(
+      this.workspaceInviteRegistry,
+      workspaceId,
+      inviteData,
+      finalUrl,
+    );
+    await this.persistWorkspaceInviteRegistry();
+
+    return finalUrl;
   }
 
   private createInviteId(): string {

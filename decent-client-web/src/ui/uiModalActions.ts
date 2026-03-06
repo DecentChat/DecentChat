@@ -1,7 +1,7 @@
 import type { WorkspaceManager, InviteData, Contact, WorkspacePermissions } from 'decent-protocol';
 import { InviteURI } from 'decent-protocol';
 import type { AppState } from '../main';
-import type { UICallbacks } from './types';
+import type { UICallbacks, WorkspaceInviteItem, WorkspaceInviteLists } from './types';
 import { cachedData } from '../lib/stores/ui.svelte';
 import { shellData } from '../lib/stores/shell.svelte';
 import { showModal as svelteShowModal } from '../lib/components/shared/Modal.svelte';
@@ -315,8 +315,34 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     if (!state.activeWorkspaceId) return;
     const ws = workspaceManager.getWorkspace(state.activeWorkspaceId);
     if (!ws) return;
+
     const isOwner = workspaceManager.isOwner(ws.id, state.myPeerId);
+    const isAdminOrOwner = workspaceManager.isAdmin(ws.id, state.myPeerId);
+    const canCreateInvites = workspaceManager.canInviteMembers(ws.id, state.myPeerId);
     const perms = ws.permissions ?? { whoCanCreateChannels: 'everyone', whoCanInviteMembers: 'everyone' };
+
+    type InviteListViewItem = WorkspaceInviteItem & { inviterLabel?: string };
+    type InviteListView = { active: InviteListViewItem[]; revoked: InviteListViewItem[] };
+
+    const formatInviter = (inviterId?: string): string | undefined => {
+      if (!inviterId) return undefined;
+      const member = ws.members.find((m) => m.peerId === inviterId);
+      if (member?.alias) return member.alias;
+      const alias = getPeerAlias(inviterId);
+      return alias || inviterId.slice(0, 8);
+    };
+
+    const buildInviteView = (): InviteListView => {
+      const raw: WorkspaceInviteLists = callbacks.listWorkspaceInvites?.(ws.id) || { active: [], revoked: [] };
+      const mapItem = (invite: WorkspaceInviteItem): InviteListViewItem => ({
+        ...invite,
+        inviterLabel: formatInviter(invite.inviterId),
+      });
+      return {
+        active: raw.active.map(mapItem),
+        revoked: raw.revoked.map(mapItem),
+      };
+    };
 
     svelteShowWorkspaceSettingsModal({
       name: ws.name,
@@ -324,6 +350,68 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
       isOwner,
       canLeave: !isOwner,
       permissions: { whoCanCreateChannels: perms.whoCanCreateChannels, whoCanInviteMembers: perms.whoCanInviteMembers },
+      inviteLists: buildInviteView(),
+      canCreateInvites,
+      canRevokeInvites: isAdminOrOwner,
+      onRefreshInvites: async () => buildInviteView(),
+      onCreateInvite: async (permanent: boolean) => {
+        if (!canCreateInvites) {
+          showToast('You do not have permission to create invites in this workspace', 'error');
+          return buildInviteView();
+        }
+
+        const url = await callbacks.generateInviteURL?.(ws.id, { permanent });
+        if (!url) {
+          showToast('Failed to generate invite link', 'error');
+          return buildInviteView();
+        }
+
+        try {
+          await navigator.clipboard.writeText(url);
+          showToast(permanent ? 'Permanent invite created and copied!' : 'Invite link created and copied!', 'success');
+        } catch {
+          showToast('Invite created. Copy failed — check browser clipboard permission.', 'info');
+        }
+
+        return buildInviteView();
+      },
+      onCopyInvite: async (inviteId: string) => {
+        const raw = callbacks.listWorkspaceInvites?.(ws.id) || { active: [], revoked: [] };
+        const invite = [...raw.active, ...raw.revoked].find((entry) => entry.inviteId === inviteId);
+        if (!invite?.url) {
+          showToast('Invite URL unavailable for this entry (legacy invite)', 'error');
+          return false;
+        }
+
+        await navigator.clipboard.writeText(invite.url);
+        showToast('Invite link copied!', 'success');
+        return true;
+      },
+      onRevokeInvite: async (inviteId: string) => {
+        if (!isAdminOrOwner) {
+          showToast('Only admins and owners can revoke invites', 'error');
+          return buildInviteView();
+        }
+
+        const result = await callbacks.revokeWorkspaceInvite?.(inviteId);
+        if (!result) {
+          showToast('Invite revocation is not available in this client build', 'error');
+          return buildInviteView();
+        }
+
+        if (!result.success) {
+          showToast(result.error || 'Failed to revoke invite', 'error');
+          return buildInviteView();
+        }
+
+        if (result.alreadyRevoked) {
+          showToast(`Invite ${result.inviteId || inviteId} is already revoked`, 'info');
+        } else {
+          showToast(`Invite ${result.inviteId || inviteId} revoked`, 'success');
+        }
+
+        return buildInviteView();
+      },
       onSave: async (data: { name: string; description: string; whoCanCreateChannels: string; whoCanInviteMembers: string }) => {
         if (data.name !== ws.name || data.description !== (ws.description || '')) {
           const infoRes = await callbacks.updateWorkspaceInfo?.({ name: data.name, description: data.description });

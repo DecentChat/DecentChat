@@ -17,6 +17,23 @@ export interface ActivityItem {
   read: boolean;
 }
 
+export interface WorkspaceInviteItem {
+  inviteId: string;
+  inviteCode?: string;
+  url?: string;
+  createdAt?: number;
+  expiresAt?: number;
+  inviterId?: string;
+  permanent: boolean | null;
+  revoked: boolean;
+  revokedAt?: number;
+}
+
+export interface WorkspaceInviteLists {
+  active: WorkspaceInviteItem[];
+  revoked: WorkspaceInviteItem[];
+}
+
 export interface UICallbacks {
   sendMessage: (content: string, threadId?: string) => Promise<void>;
   sendAttachment: (file: File, text?: string, threadId?: string) => Promise<void>;
@@ -48,7 +65,9 @@ export interface UICallbacks {
     pending: Array<{ peerId: string; name: string; at?: number }>;
   } | null;
   getSettings?: () => Promise<any>;
-  generateInviteURL?: (workspaceId: string) => string | Promise<string>;
+  generateInviteURL?: (workspaceId: string, opts?: { permanent?: boolean }) => string | Promise<string>;
+  listWorkspaceInvites?: (workspaceId: string) => WorkspaceInviteLists;
+  revokeWorkspaceInvite?: (inviteId: string) => Promise<{ success: boolean; error?: string; inviteId?: string; alreadyRevoked?: boolean }>;
   onSettingsAction?: (action: string) => void | Promise<void>;
   onQRContactScanned?: (data: ContactURIData) => void;
   getMyPublicKey?: () => string;

@@ -234,7 +234,9 @@ async function init(): Promise<void> {
     broadcastStopTyping: () => ctrl.broadcastStopTyping(),
     toggleReaction: (msgId, emoji) => ctrl.toggleReaction(msgId, emoji),
     getSettings: async () => ctrl.persistentStore.getSettings({}),
-    generateInviteURL: (wsId) => ctrl.generateInviteURL(wsId), // returns Promise<string> now
+    generateInviteURL: (wsId, opts) => ctrl.generateInviteURL(wsId, opts), // returns Promise<string> now
+    listWorkspaceInvites: (wsId) => ctrl.listWorkspaceInvites(wsId),
+    revokeWorkspaceInvite: (inviteId) => ctrl.revokeInviteById(inviteId),
     addContact: (contact) => ctrl.addContact(contact),
     removeContact: (peerId) => ctrl.removeContact(peerId),
     getContacts: () => ctrl.getContacts(),

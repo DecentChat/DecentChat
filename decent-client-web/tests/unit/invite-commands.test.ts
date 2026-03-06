@@ -83,6 +83,17 @@ describe('invite commands', () => {
     expect(result.error).toContain('Usage: /invite [permanent|--permanent]');
   });
 
+  test('/invite reports error when controller cannot generate invite URL', async () => {
+    const { parser } = setupHarness({
+      generateInviteURL: async () => '',
+    });
+
+    const result = await parser.execute('/invite');
+
+    expect(result.handled).toBe(true);
+    expect(result.error).toContain('Could not generate invite link');
+  });
+
   test('/invite-revoke passes raw input to ChatController and reports success', async () => {
     const { parser, revokeCalls } = setupHarness();
 
