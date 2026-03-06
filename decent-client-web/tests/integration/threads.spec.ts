@@ -825,4 +825,25 @@ test.describe('Thread P2P Sync', () => {
       await closeUser(bob);
     }
   });
+
+  // ── 11. Escape must never close thread panel ─────────────────────────────
+  test('Escape key does not close an open thread panel', async ({ browser }) => {
+    const [alice, bob] = await setupConnectedPair(browser, 'Thread Escape Test');
+    try {
+      await sendMessage(alice.page, 'Escape thread root');
+      await waitForMessage(bob.page, 'Escape thread root');
+
+      await openThreadFor(alice.page, 'Escape thread root');
+      await alice.page.waitForFunction(() => (window as any).__state?.threadOpen === true, { timeout: 5000 });
+
+      await alice.page.keyboard.press('Escape');
+
+      // Esc should close overlays/autocomplete/modals, but never thread panel itself.
+      await alice.page.waitForFunction(() => (window as any).__state?.threadOpen === true, { timeout: 5000 });
+      await expect(alice.page.locator('#thread-panel.open, #thread-panel:not(.hidden)')).toBeVisible();
+    } finally {
+      await closeUser(alice);
+      await closeUser(bob);
+    }
+  });
 });

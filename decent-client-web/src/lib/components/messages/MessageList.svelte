@@ -53,17 +53,66 @@
     mounted = true;
   });
 
-  // After messages change, scroll the parent container to bottom
+  // After messages change, scroll the parent container:
+  // - Channel view: scroll to bottom (newest messages)
+  // - Thread view: scroll to bottom (latest reply)
+  // Only scrolls when message count actually changes (not on re-renders).
+  // Scroll to bottom on channel switch or new messages.
+  // Track message count + channel + thread root to catch thread switches.
+  let prevScrollKey = '';
+
+  function scrollToEnd(container: HTMLElement): void {
+    container.style.scrollBehavior = 'auto';
+    container.scrollTop = container.scrollHeight;
+    requestAnimationFrame(() => { container.style.scrollBehavior = ''; });
+  }
+
   $effect(() => {
     if (!mounted) return;
-    const _len = messages.length; // track dependency
+    const len = messages.length;
+    const chId = activeChannelId ?? '';
+    const threadKey = inThreadView ? (threadRoot?.id ?? '') : '';
+    const scope = inThreadView ? 'thread' : 'channel';
+    const scrollKey = `${scope}:${chId}:${threadKey}:${len}`;
+    if (scrollKey === prevScrollKey) return;
+    prevScrollKey = scrollKey;
+
     requestAnimationFrame(() => {
-      // The parent scroll container is the messages-list or thread-messages div
-      const container = document.getElementById(inThreadView ? 'thread-messages' : 'messages-list');
-      if (container) {
-        container.scrollTop = container.scrollHeight;
+      const containerId = inThreadView ? 'thread-messages' : 'messages-list';
+      const container = document.getElementById(containerId);
+      if (!container) return;
+
+      scrollToEnd(container);
+    });
+  });
+
+  // ResizeObserver: re-scroll when the container resizes (e.g., thread panel
+  // opens/closes causing width change → text reflows → height changes).
+  // Also handles image loads that change content height.
+  $effect(() => {
+    if (!mounted || inThreadView) return;
+    const container = document.getElementById('messages-list');
+    if (!container) return;
+
+    let wasAtBottom = true;
+    const ro = new ResizeObserver(() => {
+      // Only auto-scroll if user was already near the bottom
+      if (wasAtBottom) {
+        scrollToEnd(container);
       }
     });
+    ro.observe(container);
+
+    // Track if user is near bottom (within 50px) on scroll
+    const onScroll = () => {
+      wasAtBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 50;
+    };
+    container.addEventListener('scroll', onScroll);
+
+    return () => {
+      ro.disconnect();
+      container.removeEventListener('scroll', onScroll);
+    };
   });
 
   function getSenderName(msg: PlaintextMessage): string {

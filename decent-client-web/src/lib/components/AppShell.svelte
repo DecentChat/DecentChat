@@ -97,7 +97,6 @@
         if (autocomplete) { autocomplete.remove(); return; }
         const modal = document.querySelector('.modal-overlay');
         if (modal) { modal.remove(); return; }
-        if (shellData.thread.open) { cb?.onCloseThread(); return; }
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
@@ -244,6 +243,7 @@
 
       <div class="messages-area">
         <div class="messages-pane">
+          <div class="messages-list-wrapper">
           <div class="messages-list" id="messages-list">
             {#if cb}
               <MessageList
@@ -264,6 +264,7 @@
               />
             {/if}
           </div>
+          </div><!-- /.messages-list-wrapper -->
           <div class="typing-indicator" id="typing-indicator" class:visible={!!shellData.typingText}>
             {shellData.typingText}
           </div>
