@@ -21,6 +21,15 @@ export const DEFAULT_WORKSPACE_PERMISSIONS: WorkspacePermissions = {
   revokedInviteIds: [],
 };
 
+export interface WorkspaceBan {
+  peerId: string;
+  bannedBy: string;
+  bannedAt: number;
+  /** Optional expiry timestamp (epoch ms). Undefined = permanent ban. */
+  expiresAt?: number;
+  reason?: string;
+}
+
 export interface Workspace {
   id: string;
   name: string;
@@ -31,6 +40,8 @@ export interface Workspace {
   channels: Channel[];
   permissions?: WorkspacePermissions;
   description?: string;
+  /** Access revocation list for workspace-level bans */
+  bans?: WorkspaceBan[];
 }
 
 export interface WorkspaceMember {
@@ -86,7 +97,7 @@ export type SyncMessage =
   | { type: 'join-rejected'; reason: string }
   | { type: 'member-joined'; member: WorkspaceMember }
   | { type: 'member-left'; peerId: string }
-  | { type: 'member-removed'; peerId: string; removedBy: string }
+  | { type: 'member-removed'; peerId: string; removedBy: string; reason?: 'kicked' | 'banned'; banExpiresAt?: number }
   | { type: 'role-changed'; peerId: string; newRole: WorkspaceMember['role']; changedBy: string; timestamp: number }
   | { type: 'workspace-settings-updated'; settings: WorkspacePermissions; changedBy: string; timestamp: number }
   | { type: 'channel-created'; channel: Channel }

@@ -5,7 +5,7 @@
  * No server involved.
  */
 
-import type { Workspace, WorkspaceMember, Channel, WorkspacePermissions } from './types';
+import type { Workspace, WorkspaceMember, Channel, WorkspacePermissions, WorkspaceBan } from './types';
 import { DEFAULT_WORKSPACE_PERMISSIONS } from './types';
 
 export class WorkspaceManager {
@@ -39,6 +39,7 @@ export class WorkspaceManager {
       ],
       channels: [],
       permissions: { ...DEFAULT_WORKSPACE_PERMISSIONS },
+      bans: [],
     };
 
     // Auto-create #general channel
@@ -281,6 +282,10 @@ export class WorkspaceManager {
       return { success: false, error: 'Member already exists' };
     }
 
+    if (this.isBanned(workspaceId, member.peerId)) {
+      return { success: false, error: 'Peer is banned from this workspace' };
+    }
+
     const normalizedMember: WorkspaceMember = {
       ...member,
       allowWorkspaceDMs: member.allowWorkspaceDMs !== false,
@@ -316,6 +321,76 @@ export class WorkspaceManager {
     }
 
     return { success: true };
+  }
+
+  banMember(
+    workspaceId: string,
+    targetPeerId: string,
+    requesterId: string,
+    opts?: { durationMs?: number; reason?: string },
+  ): { success: boolean; error?: string; ban?: WorkspaceBan } {
+    const workspace = this.workspaces.get(workspaceId);
+    if (!workspace) return { success: false, error: 'Workspace not found' };
+
+    if (!this.canRemoveMember(workspaceId, requesterId, targetPeerId)) {
+      const target = workspace.members.find(m => m.peerId === targetPeerId);
+      if (target?.role === 'owner') return { success: false, error: 'Cannot ban owner' };
+      return { success: false, error: 'Only owner or admin can ban members' };
+    }
+
+    workspace.bans = workspace.bans || [];
+    // Replace existing ban if present.
+    workspace.bans = workspace.bans.filter((b) => b.peerId !== targetPeerId);
+
+    const now = Date.now();
+    const durationMs = opts?.durationMs;
+    const ban: WorkspaceBan = {
+      peerId: targetPeerId,
+      bannedBy: requesterId,
+      bannedAt: now,
+      ...(Number.isFinite(durationMs) && durationMs! > 0 ? { expiresAt: now + durationMs! } : {}),
+      ...(opts?.reason ? { reason: opts.reason } : {}),
+    };
+    workspace.bans.push(ban);
+
+    // Also remove from active membership/channel lists.
+    workspace.members = workspace.members.filter(m => m.peerId !== targetPeerId);
+    for (const channel of workspace.channels) {
+      channel.members = channel.members.filter(id => id !== targetPeerId);
+    }
+
+    return { success: true, ban };
+  }
+
+  unbanMember(workspaceId: string, targetPeerId: string, requesterId: string): { success: boolean; error?: string } {
+    const workspace = this.workspaces.get(workspaceId);
+    if (!workspace) return { success: false, error: 'Workspace not found' };
+
+    if (!this.isAdmin(workspaceId, requesterId)) {
+      return { success: false, error: 'Only owner or admin can unban members' };
+    }
+
+    workspace.bans = (workspace.bans || []).filter((b) => b.peerId !== targetPeerId);
+    return { success: true };
+  }
+
+  isBanned(workspaceId: string, peerId: string): boolean {
+    const workspace = this.workspaces.get(workspaceId);
+    if (!workspace) return false;
+
+    const bans = workspace.bans || [];
+    const now = Date.now();
+    let hasActiveBan = false;
+
+    // prune expired bans lazily
+    workspace.bans = bans.filter((ban) => {
+      const expired = Number.isFinite(ban.expiresAt) && (ban.expiresAt as number) <= now;
+      if (expired) return false;
+      if (ban.peerId === peerId) hasActiveBan = true;
+      return true;
+    });
+
+    return hasActiveBan;
   }
 
   getMember(workspaceId: string, peerId: string): WorkspaceMember | undefined {
@@ -478,6 +553,12 @@ export class WorkspaceManager {
         member.allowWorkspaceDMs = true;
       }
     }
+
+    // Backward compat: ensure ban list exists and drop obviously invalid entries.
+    workspace.bans = Array.isArray(workspace.bans)
+      ? workspace.bans.filter((ban: any) => !!ban && typeof ban.peerId === 'string' && typeof ban.bannedBy === 'string' && typeof ban.bannedAt === 'number')
+      : [];
+
     this.workspaces.set(workspace.id, workspace);
   }
 

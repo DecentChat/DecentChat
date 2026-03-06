@@ -20,6 +20,7 @@
     isOwner: boolean;
     isAdminOrOwner: boolean;
     onRemove: (peerId: string) => Promise<{ success: boolean; error?: string }>;
+    onBan: (peerId: string) => Promise<{ success: boolean; error?: string }>;
     onPromote: (peerId: string) => Promise<{ success: boolean; error?: string }>;
     onDemote: (peerId: string) => Promise<{ success: boolean; error?: string }>;
     onToast: (message: string, type?: string) => void;
@@ -51,6 +52,7 @@
     isOwner: boolean;
     isAdminOrOwner: boolean;
     onRemove: (peerId: string) => Promise<{ success: boolean; error?: string }>;
+    onBan: (peerId: string) => Promise<{ success: boolean; error?: string }>;
     onPromote: (peerId: string) => Promise<{ success: boolean; error?: string }>;
     onDemote: (peerId: string) => Promise<{ success: boolean; error?: string }>;
     onToast: (message: string, type?: string) => void;
@@ -58,7 +60,7 @@
     onClose: () => void;
   }
 
-  let { members: initialMembers, isOwner, isAdminOrOwner, onRemove, onPromote, onDemote, onToast, onRefresh, onClose }: Props = $props();
+  let { members: initialMembers, isOwner, isAdminOrOwner, onRemove, onBan, onPromote, onDemote, onToast, onRefresh, onClose }: Props = $props();
 
   let members = $state(initialMembers);
 
@@ -86,6 +88,15 @@
     if (!res.success) { onToast(res.error || 'Failed to remove member', 'error'); return; }
     members = members.filter(m => m.peerId !== peerId);
     onToast('Member removed', 'success');
+    onRefresh();
+  }
+
+  async function handleBan(peerId: string, name: string) {
+    if (!confirm(`Ban ${name} from this workspace for 24h?`)) return;
+    const res = await onBan(peerId);
+    if (!res.success) { onToast(res.error || 'Failed to ban member', 'error'); return; }
+    members = members.filter(m => m.peerId !== peerId);
+    onToast(`${name} banned for 24h`, 'success');
     onRefresh();
   }
 
@@ -118,6 +129,7 @@
       <div class="members-list">
         {#each members as member (member.peerId)}
           {@const canRemove = isAdminOrOwner && !member.isYou && member.role !== 'owner'}
+          {@const canBan = isAdminOrOwner && !member.isYou && member.role !== 'owner'}
           {@const canPromote = isOwner && !member.isYou && member.role === 'member'}
           {@const canDemote = isOwner && !member.isYou && member.role === 'admin'}
           <div class="member-row">
@@ -144,6 +156,9 @@
               {/if}
               {#if canDemote}
                 <button type="button" class="btn-action demote-btn" onclick={() => handleDemote(member.peerId, member.name)} title="Demote to Member">Demote</button>
+              {/if}
+              {#if canBan}
+                <button type="button" class="btn-action btn-danger ban-member-btn" onclick={() => handleBan(member.peerId, member.name)} title="Ban from workspace">Ban</button>
               {/if}
               {#if canRemove}
                 <button type="button" class="btn-action btn-danger remove-member-btn" onclick={() => handleRemove(member.peerId, member.name)} title="Remove from workspace">Remove</button>

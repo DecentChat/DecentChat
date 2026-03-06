@@ -141,6 +141,69 @@ describe('WorkspaceManager', () => {
     }
   });
 
+  test('owner can ban member and member is removed from workspace', () => {
+    const ws = wm.createWorkspace('Team', 'alice', 'Alice', 'key');
+    wm.addMember(ws.id, {
+      peerId: 'bob', alias: 'Bob', publicKey: 'key',
+      joinedAt: Date.now(), role: 'member',
+    });
+
+    const result = wm.banMember(ws.id, 'bob', 'alice', { reason: 'abuse' });
+    expect(result.success).toBe(true);
+    expect(wm.isBanned(ws.id, 'bob')).toBe(true);
+    expect(wm.getWorkspace(ws.id)!.members.some(m => m.peerId === 'bob')).toBe(false);
+  });
+
+  test('banned member cannot be re-added while ban is active', () => {
+    const ws = wm.createWorkspace('Team', 'alice', 'Alice', 'key');
+    wm.addMember(ws.id, {
+      peerId: 'bob', alias: 'Bob', publicKey: 'key',
+      joinedAt: Date.now(), role: 'member',
+    });
+
+    wm.banMember(ws.id, 'bob', 'alice', { reason: 'abuse' });
+    const readd = wm.addMember(ws.id, {
+      peerId: 'bob', alias: 'Bob2', publicKey: 'key-2',
+      joinedAt: Date.now(), role: 'member',
+    });
+
+    expect(readd.success).toBe(false);
+    expect(readd.error).toContain('banned');
+  });
+
+  test('temporary bans expire automatically', async () => {
+    const ws = wm.createWorkspace('Team', 'alice', 'Alice', 'key');
+    wm.addMember(ws.id, {
+      peerId: 'bob', alias: 'Bob', publicKey: 'key',
+      joinedAt: Date.now(), role: 'member',
+    });
+
+    wm.banMember(ws.id, 'bob', 'alice', { durationMs: 10 });
+    expect(wm.isBanned(ws.id, 'bob')).toBe(true);
+
+    await new Promise(resolve => setTimeout(resolve, 15));
+    expect(wm.isBanned(ws.id, 'bob')).toBe(false);
+  });
+
+  test('admin can unban member', () => {
+    const ws = wm.createWorkspace('Team', 'alice', 'Alice', 'key');
+    wm.addMember(ws.id, {
+      peerId: 'admin', alias: 'Admin', publicKey: 'admin-key',
+      joinedAt: Date.now(), role: 'admin',
+    });
+    wm.addMember(ws.id, {
+      peerId: 'bob', alias: 'Bob', publicKey: 'key',
+      joinedAt: Date.now(), role: 'member',
+    });
+
+    wm.banMember(ws.id, 'bob', 'alice');
+    expect(wm.isBanned(ws.id, 'bob')).toBe(true);
+
+    const unban = wm.unbanMember(ws.id, 'bob', 'admin');
+    expect(unban.success).toBe(true);
+    expect(wm.isBanned(ws.id, 'bob')).toBe(false);
+  });
+
   // === Channel Management ===
 
   test('creates channel in workspace', () => {

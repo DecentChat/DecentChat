@@ -218,6 +218,7 @@ async function init(): Promise<void> {
     createChannel: (name) => ctrl.createChannel(name),
     createDM: (peerId) => ctrl.createDM(peerId),
     removeWorkspaceMember: (peerId) => ctrl.removeWorkspaceMember(peerId),
+    banWorkspaceMember: (peerId, opts) => ctrl.banWorkspaceMember(peerId, opts),
     promoteMember: (peerId, newRole) => ctrl.promoteMember(peerId, newRole),
     demoteMember: (peerId) => ctrl.demoteMember(peerId),
     updateWorkspacePermissions: (permissions) => ctrl.updateWorkspacePermissions(permissions),

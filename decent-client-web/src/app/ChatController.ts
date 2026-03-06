@@ -905,15 +905,19 @@ export class ChatController {
               if (data.isBot && !member.isBot) member.isBot = true;
               if (typeof data.allowWorkspaceDMs === 'boolean') member.allowWorkspaceDMs = data.allowWorkspaceDMs;
             } else {
-              ws.members.push({
-                peerId,
-                alias: data.alias,
-                publicKey: '',
-                joinedAt: Date.now(),
-                role: 'member',
-                allowWorkspaceDMs: typeof data.allowWorkspaceDMs === 'boolean' ? data.allowWorkspaceDMs : true,
-                ...(data.isBot ? { isBot: true } : {}),
-              });
+              if (this.workspaceManager.isBanned(ws.id, peerId)) {
+                console.warn(`[Security] Ignoring name-announce from banned peer ${peerId.slice(0, 8)} in workspace ${ws.id.slice(0, 8)}`);
+              } else {
+                ws.members.push({
+                  peerId,
+                  alias: data.alias,
+                  publicKey: '',
+                  joinedAt: Date.now(),
+                  role: 'member',
+                  allowWorkspaceDMs: typeof data.allowWorkspaceDMs === 'boolean' ? data.allowWorkspaceDMs : true,
+                  ...(data.isBot ? { isBot: true } : {}),
+                });
+              }
             }
             this.persistWorkspace(ws.id).catch(() => {});
           } else {
@@ -1491,30 +1495,54 @@ export class ChatController {
   }
 
   private sendWorkspaceState(peerId: string, workspaceId?: string): void {
-    // Find the workspace to send: explicit ID, peer's workspace, or active workspace
+    // Find workspace to sync:
+    // - explicit ID if provided
+    // - otherwise first workspace where peer is currently a member
     let ws: Workspace | undefined;
     if (workspaceId) {
       ws = this.workspaceManager.getWorkspace(workspaceId);
     }
-    // If no explicit workspace, find workspace where this peer is a member
     if (!ws) {
-      for (const w of this.workspaceManager.getAllWorkspaces()) {
-        if (w.members.some(m => m.peerId === peerId)) {
-          ws = w;
-          break;
-        }
+      ws = this.workspaceManager.getAllWorkspaces().find((w) => w.members.some(m => m.peerId === peerId));
+    }
+
+    if (!ws) {
+      // If peer is banned from any known workspace, send explicit rejection.
+      const bannedWs = this.workspaceManager.getAllWorkspaces().find((w) => this.workspaceManager.isBanned(w.id, peerId));
+      if (bannedWs) {
+        this.sendControlWithRetry(peerId, {
+          type: 'workspace-sync',
+          workspaceId: bannedWs.id,
+          sync: {
+            type: 'join-rejected',
+            reason: 'Join rejected: you are banned from this workspace',
+          },
+        }, { label: 'workspace-sync' });
+      } else {
+        console.log(`[Sync] No eligible workspace for peer ${peerId.slice(0, 8)}, skipping state sync`);
       }
+      return;
     }
-    // Last resort: active workspace
-    if (!ws && this.state.activeWorkspaceId) {
-      ws = this.workspaceManager.getWorkspace(this.state.activeWorkspaceId);
-    }
-    if (!ws) {
-      console.log(`[Sync] No workspace found for peer ${peerId.slice(0, 8)}, skipping state sync`);
+
+    // Never send workspace state to banned peers.
+    if (this.workspaceManager.isBanned(ws.id, peerId)) {
+      this.sendControlWithRetry(peerId, {
+        type: 'workspace-sync',
+        workspaceId: ws.id,
+        sync: {
+          type: 'join-rejected',
+          reason: 'Join rejected: you are banned from this workspace',
+        },
+      }, { label: 'workspace-sync' });
       return;
     }
 
     const isPeerMember = ws.members.some(m => m.peerId === peerId);
+    if (!isPeerMember) {
+      console.log(`[Sync] Peer ${peerId.slice(0, 8)} is not a member of workspace ${ws.id.slice(0, 8)}, skipping state sync`);
+      return;
+    }
+
     console.log(`[Sync] Sending workspace state to ${peerId.slice(0, 8)}:`, {
       name: ws.name, channels: ws.channels.length, members: ws.members.length,
       isPeerMember, peerInWs: ws.members.filter(m => m.peerId === peerId).map(m => m.alias)
@@ -1537,6 +1565,7 @@ export class ChatController {
           devices: m.devices,
           role: m.role,
           allowWorkspaceDMs: m.allowWorkspaceDMs !== false,
+          isBot: (m as any).isBot,
         })),
         inviteCode: ws.inviteCode,
         permissions: ws.permissions,
@@ -1551,6 +1580,17 @@ export class ChatController {
         'ws:', msg.sync?.name, 
         'channels:', msg.sync?.channels?.map((c:any) => c.name));
       await this.handleWorkspaceStateSync(peerId, msg.workspaceId, msg.sync);
+      return;
+    }
+
+    // Handle join rejection (e.g. banned peer trying to rejoin)
+    if (msg.sync?.type === 'join-rejected') {
+      const wsId = msg.workspaceId || this.state.activeWorkspaceId;
+      if (wsId) {
+        await this.handleSelfWorkspaceRevocation(wsId, 'banned', peerId);
+      } else {
+        this.ui?.showToast(msg.sync.reason || 'Join rejected', 'error');
+      }
       return;
     }
 
@@ -1783,7 +1823,8 @@ export class ChatController {
         }
 
         if (removedPeerId === this.state.myPeerId) {
-          await this.handleSelfWorkspaceRevocation(msg.workspaceId, 'kicked', removedBy);
+          const reason: 'kicked' | 'banned' = msg.sync.reason === 'banned' ? 'banned' : 'kicked';
+          await this.handleSelfWorkspaceRevocation(msg.workspaceId, reason, removedBy);
           return;
         } else {
           this.persistWorkspace(ws.id).catch(() => {});
@@ -3837,7 +3878,7 @@ export class ChatController {
       this.transport.send(connectedPeerId, {
         type: 'workspace-sync',
         workspaceId: wsId,
-        sync: { type: 'member-removed', peerId, removedBy: this.state.myPeerId, timestamp, signature },
+        sync: { type: 'member-removed', peerId, removedBy: this.state.myPeerId, reason: 'kicked', timestamp, signature },
       });
 
       // Do not send fresh workspace-state to the removed peer.
@@ -3850,6 +3891,67 @@ export class ChatController {
     this.ui?.updateSidebar();
     this.ui?.updateChannelHeader();
     this.ui?.renderMessages();
+
+    return { success: true };
+  }
+
+  async banWorkspaceMember(
+    peerId: string,
+    opts?: { durationMs?: number; reason?: string },
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
+
+    const wsId = this.state.activeWorkspaceId;
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return { success: false, error: 'Workspace not found' };
+
+    const target = ws.members.find((m: any) => m.peerId === peerId);
+    if (!target) return { success: false, error: 'Member not found' };
+    if (target.role === 'owner') return { success: false, error: 'Cannot ban owner' };
+
+    const managerOwner = this.workspaceManager.isOwner(wsId, this.state.myPeerId);
+    const managerAdmin = this.workspaceManager.isAdmin(wsId, this.state.myPeerId);
+    if (!managerOwner && !managerAdmin) {
+      return { success: false, error: 'Only owner or admin can ban members' };
+    }
+
+    const result = this.workspaceManager.banMember(wsId, peerId, this.state.myPeerId, {
+      durationMs: opts?.durationMs,
+      reason: opts?.reason,
+    });
+    if (!result.success) return { success: false, error: result.error || 'Failed to ban member' };
+
+    await this.persistWorkspace(wsId);
+
+    // Also ban at transport guard level on this device for immediate hardening.
+    const durationMs = opts?.durationMs && opts.durationMs > 0 ? opts.durationMs : 365 * 24 * 60 * 60 * 1000;
+    this.messageGuard.ban(peerId, durationMs);
+
+    const timestamp = Date.now();
+    for (const connectedPeerId of this.state.connectedPeers) {
+      this.transport.send(connectedPeerId, {
+        type: 'workspace-sync',
+        workspaceId: wsId,
+        sync: {
+          type: 'member-removed',
+          peerId,
+          removedBy: this.state.myPeerId,
+          reason: 'banned',
+          ...(result.ban?.expiresAt ? { banExpiresAt: result.ban.expiresAt } : {}),
+          timestamp,
+        },
+      });
+
+      if (connectedPeerId !== peerId) {
+        this.sendWorkspaceState(connectedPeerId, wsId);
+      }
+    }
+
+    this.ui?.updateWorkspaceRail?.();
+    this.ui?.updateSidebar();
+    this.ui?.updateChannelHeader();
+    this.ui?.renderMessages();
+    this.ui?.updateComposePlaceholder?.();
 
     return { success: true };
   }
@@ -5462,6 +5564,11 @@ export class ChatController {
     if (all.length !== 1) return;
 
     const ws = all[0];
+    if (this.workspaceManager.isBanned(ws.id, peerId)) {
+      console.warn(`[Security] Not auto-adding banned peer ${peerId.slice(0, 8)} to workspace ${ws.id.slice(0, 8)}`);
+      return;
+    }
+
     this.workspaceManager.addMember(ws.id, {
       peerId,
       alias: peerId.slice(0, 8),

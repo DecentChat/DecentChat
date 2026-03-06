@@ -191,13 +191,20 @@ export function registerCommands(parser: CommandParser, ctrl: ChatController, st
 
   parser.register({
     name: 'ban',
-    description: 'Ban a peer (disconnect + rate limit)',
+    description: 'Ban a peer from active workspace',
     usage: '/ban <peerId> [minutes]',
     category: 'workspace',
-    execute: (args) => {
+    execute: async (args) => {
       if (!args[0]) return { handled: true, error: 'Usage: /ban <peerId> [minutes]' };
+      if (!state.activeWorkspaceId) return { handled: true, error: 'No active workspace' };
+
       const minutes = parseInt(args[1]) || 60;
-      ctrl.messageGuard.ban(args[0], minutes * 60 * 1000);
+      const res = await ctrl.banWorkspaceMember(args[0], {
+        durationMs: minutes * 60 * 1000,
+        reason: 'Banned via /ban command',
+      });
+      if (!res.success) return { handled: true, error: res.error || 'Failed to ban member' };
+
       return { handled: true, output: `🚫 Banned ${args[0].slice(0, 8)} for ${minutes} minutes.` };
     },
   });

@@ -49,6 +49,7 @@ export interface UICallbacks {
   ) => Promise<void>;
   createChannel: (name: string) => { success: boolean; channel?: import('decent-protocol').Channel; error?: string };
   removeWorkspaceMember?: (peerId: string) => Promise<{ success: boolean; error?: string }>;
+  banWorkspaceMember?: (peerId: string, opts?: { durationMs?: number; reason?: string }) => Promise<{ success: boolean; error?: string }>;
   promoteMember?: (peerId: string, newRole: 'admin') => Promise<{ success: boolean; error?: string }>;
   demoteMember?: (peerId: string) => Promise<{ success: boolean; error?: string }>;
   updateWorkspacePermissions?: (permissions: Partial<import('decent-protocol').WorkspacePermissions>) => Promise<{ success: boolean; error?: string }>;

@@ -306,6 +306,11 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
         if (!callbacks.removeWorkspaceMember) return { success: false, error: 'Not available' };
         return callbacks.removeWorkspaceMember(peerId);
       },
+      onBan: async (peerId: string) => {
+        if (!callbacks.banWorkspaceMember) return { success: false, error: 'Not available' };
+        // Default temporary ban for 24h in v1 UX.
+        return callbacks.banWorkspaceMember(peerId, { durationMs: 24 * 60 * 60 * 1000, reason: 'Removed by admin' });
+      },
       onPromote: async (peerId: string) => {
         if (!callbacks.promoteMember) return { success: false, error: 'Not available' };
         return callbacks.promoteMember(peerId, 'admin');
