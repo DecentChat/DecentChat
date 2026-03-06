@@ -1783,19 +1783,13 @@ export class ChatController {
         }
 
         if (removedPeerId === this.state.myPeerId) {
-          const ok = await this.cleanupWorkspaceLocalState(ws.id, ws);
-          if (ok) {
-            this.workspaceManager.removeWorkspace(ws.id);
-            this.ui?.showToast('You have been removed from this workspace', 'error');
-            this.ui?.updateWorkspaceRail?.();
-            this.ui?.updateSidebar();
-            this.ui?.updateChannelHeader();
-            this.ui?.renderMessages();
-            this.ui?.updateComposePlaceholder?.();
-          }
+          await this.handleSelfWorkspaceRevocation(msg.workspaceId, 'kicked', removedBy);
+          return;
         } else {
           this.persistWorkspace(ws.id).catch(() => {});
-          this.ui?.renderApp();
+          this.ui?.updateSidebar();
+          this.ui?.updateChannelHeader();
+          this.ui?.renderMessages();
         }
       }
       return;
@@ -2072,6 +2066,22 @@ export class ChatController {
             this.deviceRegistry.addDevice(remoteMember.identityId, device);
           }
         }
+      }
+    }
+
+    // Defensive revocation fallback:
+    // If owner-sent workspace-state no longer includes us, treat this as access revoked.
+    // This covers cases where a member-removed event was dropped/raced.
+    if (sync.members && Array.isArray(sync.members) && this.workspaceManager.isOwner(localWs.id, peerId)) {
+      const remoteMemberIds = new Set(sync.members
+        .map((m: any) => m?.peerId)
+        .filter((id: any): id is string => typeof id === 'string'));
+      const iAmLocallyMember = localWs.members.some((m: any) => m.peerId === this.state.myPeerId);
+      const iAmMissingFromOwnerState = !remoteMemberIds.has(this.state.myPeerId);
+
+      if (iAmLocallyMember && iAmMissingFromOwnerState) {
+        await this.handleSelfWorkspaceRevocation(localWs.id, 'kicked', peerId);
+        return;
       }
     }
 
@@ -3630,6 +3640,44 @@ export class ChatController {
     );
   }
 
+  private async handleSelfWorkspaceRevocation(
+    wsId: string,
+    reason: 'kicked' | 'banned',
+    _byPeerId: string,
+  ): Promise<void> {
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return;
+
+    const workspaceName = ws.name || 'workspace';
+    const cleanupOk = await this.cleanupWorkspaceLocalState(wsId, ws);
+
+    // Even when purge fails, hide workspace from UI immediately (best-effort UX).
+    this.workspaceManager.removeWorkspace(wsId);
+
+    if (!this.state.activeWorkspaceId) {
+      const fallback = this.workspaceManager.getAllWorkspaces()[0];
+      if (fallback) {
+        this.state.activeWorkspaceId = fallback.id;
+        const fallbackChannel = fallback.channels.find((ch: any) => ch.type === 'channel') || fallback.channels[0] || null;
+        this.state.activeChannelId = fallbackChannel?.id || null;
+      }
+    }
+
+    if (!cleanupOk) {
+      this.ui?.showToast(`Removed from ${workspaceName}. Some local data cleanup may have failed.`, 'error');
+    } else if (reason === 'banned') {
+      this.ui?.showToast(`You were banned from ${workspaceName}`, 'error');
+    } else {
+      this.ui?.showToast(`You were removed from ${workspaceName}`, 'error');
+    }
+
+    this.ui?.updateWorkspaceRail?.();
+    this.ui?.updateSidebar();
+    this.ui?.updateChannelHeader();
+    this.ui?.renderMessages();
+    this.ui?.updateComposePlaceholder?.();
+  }
+
   private async cleanupWorkspaceLocalState(wsId: string, workspaceSnapshot?: Workspace | null): Promise<boolean> {
     const ws = workspaceSnapshot || this.workspaceManager.getWorkspace(wsId);
     if (!ws) return false;
@@ -3791,7 +3839,12 @@ export class ChatController {
         workspaceId: wsId,
         sync: { type: 'member-removed', peerId, removedBy: this.state.myPeerId, timestamp, signature },
       });
-      this.sendWorkspaceState(connectedPeerId);
+
+      // Do not send fresh workspace-state to the removed peer.
+      // They should receive the removal event and lose access instead.
+      if (connectedPeerId !== peerId) {
+        this.sendWorkspaceState(connectedPeerId);
+      }
     }
 
     this.ui?.updateSidebar();

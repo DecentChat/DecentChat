@@ -176,17 +176,15 @@ export function registerCommands(parser: CommandParser, ctrl: ChatController, st
     description: 'Remove a peer from workspace',
     usage: '/kick <peerId>',
     category: 'workspace',
-    execute: (args) => {
+    execute: async (args) => {
       if (!args[0]) return { handled: true, error: 'Usage: /kick <peerId>' };
       if (!state.activeWorkspaceId) return { handled: true, error: 'No active workspace' };
 
-      const result = ctrl.workspaceManager.removeMember(
-        state.activeWorkspaceId, args[0], state.myPeerId,
-      );
-
-      if (result?.success === false) {
+      const result = await ctrl.removeWorkspaceMember(args[0]);
+      if (!result.success) {
         return { handled: true, error: result.error || 'Failed to kick member' };
       }
+
       return { handled: true, output: `👢 Kicked ${args[0].slice(0, 8)} from workspace.` };
     },
   });

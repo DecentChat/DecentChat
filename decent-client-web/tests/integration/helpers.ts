@@ -141,3 +141,24 @@ export async function waitForPeerConnection(page: Page, expectedOnline = 2, time
     { timeout: timeoutMs },
   );
 }
+
+export async function getWorkspaceSnapshot(page: Page): Promise<{
+  activeWorkspaceId: string | null;
+  workspaceIds: string[];
+  workspaceNames: string[];
+  persistedWorkspaceIds: string[];
+}> {
+  return page.evaluate(async () => {
+    const state = (window as any).__state;
+    const ctrl = (window as any).__ctrl;
+    const workspaces = ctrl.workspaceManager.getAllWorkspaces();
+    const persisted = await ctrl.persistentStore.getAllWorkspaces();
+
+    return {
+      activeWorkspaceId: state.activeWorkspaceId,
+      workspaceIds: workspaces.map((w: any) => w.id),
+      workspaceNames: workspaces.map((w: any) => w.name),
+      persistedWorkspaceIds: persisted.map((w: any) => w.id),
+    };
+  });
+}
