@@ -214,7 +214,7 @@ async function init(): Promise<void> {
     resolveAttachmentImageUrl: (attachmentId) => ctrl.resolveAttachmentImageUrl(attachmentId),
     connectPeer: (peerId) => ctrl.connectPeer(peerId),
     createWorkspace: (name, alias) => ctrl.createWorkspace(name, alias),
-    joinWorkspace: (code, alias, peerId, inviteData) => ctrl.joinWorkspace(code, alias, peerId, inviteData),
+    joinWorkspace: (code, alias, peerId, inviteData, options) => ctrl.joinWorkspace(code, alias, peerId, inviteData, options),
     createChannel: (name) => ctrl.createChannel(name),
     createDM: (peerId) => ctrl.createDM(peerId),
     removeWorkspaceMember: (peerId) => ctrl.removeWorkspaceMember(peerId),

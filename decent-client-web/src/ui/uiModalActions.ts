@@ -116,13 +116,15 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
       `Join ${workspaceName || 'Workspace'}`,
       `<input type="hidden" name="peerId" value="${peerId}" />
        ${workspaceName ? `<p style="color: var(--text-muted); margin-bottom: 16px; font-size: 15px;">You've been invited to <strong>${escapeHtml(workspaceName)}</strong></p>` : ''}
-       <div class="form-group"><label>Your Display Name</label><input type="text" name="alias" placeholder="Enter your name" required autofocus /></div>`,
+       <div class="form-group"><label>Your Display Name</label><input type="text" name="alias" placeholder="Enter your name" required autofocus /></div>
+       <div class="form-group"><label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" name="allowWorkspaceDMs" checked /> <span>Allow direct messages from workspace members</span></label></div>`,
       (form) => {
         const alias = (form.elements.namedItem('alias') as HTMLInputElement).value.trim();
+        const allowWorkspaceDMs = (form.elements.namedItem('allowWorkspaceDMs') as HTMLInputElement | null)?.checked ?? true;
         if (!alias) return;
         state.myAlias = alias;
         callbacks.persistSetting('myAlias', alias);
-        callbacks.joinWorkspace(workspaceName || inviteCode, alias, peerId, inviteData);
+        callbacks.joinWorkspace(workspaceName || inviteCode, alias, peerId, inviteData, { allowWorkspaceDMs });
         showToast(`Joining ${workspaceName || 'workspace'}...`);
       },
     );
@@ -146,10 +148,16 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
   function showJoinWorkspaceModal(): void {
     svelteShowJoinWorkspaceModal({
       parseInvite: (invite: string) => parseJoinInviteInput(invite),
-      onJoin: (wsName: string, alias: string, peerId: string, inviteDataParam?: any) => {
+      onJoin: (
+        wsName: string,
+        alias: string,
+        peerId: string,
+        inviteDataParam?: any,
+        options?: { allowWorkspaceDMs?: boolean },
+      ) => {
         state.myAlias = alias;
         callbacks.persistSetting('myAlias', alias);
-        callbacks.joinWorkspace(wsName, alias, peerId, inviteDataParam);
+        callbacks.joinWorkspace(wsName, alias, peerId, inviteDataParam, options);
         showToast(`Joining workspace... connecting to ${peerId.slice(0, 8)}`);
       },
       onToast: (msg: string, type?: string) => showToast(msg, type as any),

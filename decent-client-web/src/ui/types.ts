@@ -40,7 +40,13 @@ export interface UICallbacks {
   resolveAttachmentImageUrl?: (attachmentId: string) => Promise<string | null>;
   connectPeer: (peerId: string) => void;
   createWorkspace: (name: string, alias: string) => import('decent-protocol').Workspace;
-  joinWorkspace: (code: string, alias: string, peerId: string, inviteData?: import('decent-protocol').InviteData) => Promise<void>;
+  joinWorkspace: (
+    code: string,
+    alias: string,
+    peerId: string,
+    inviteData?: import('decent-protocol').InviteData,
+    options?: { allowWorkspaceDMs?: boolean },
+  ) => Promise<void>;
   createChannel: (name: string) => { success: boolean; channel?: import('decent-protocol').Channel; error?: string };
   removeWorkspaceMember?: (peerId: string) => Promise<{ success: boolean; error?: string }>;
   promoteMember?: (peerId: string, newRole: 'admin') => Promise<{ success: boolean; error?: string }>;

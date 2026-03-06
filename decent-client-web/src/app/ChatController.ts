@@ -729,6 +729,11 @@ export class ChatController {
               type: 'name-announce',
               workspaceId: this.state.activeWorkspaceId,
               alias: this.getMyAliasForWorkspace(this.state.activeWorkspaceId),
+              allowWorkspaceDMs: (
+                this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+                  ?.members.find((m: any) => m.peerId === this.state.myPeerId)
+                  ?.allowWorkspaceDMs
+              ) !== false,
             }, { label: 'name-announce' });
           }
 
@@ -866,8 +871,17 @@ export class ChatController {
                 member.alias = incomingAlias;
               }
               if (data.isBot && !member.isBot) member.isBot = true;
+              if (typeof data.allowWorkspaceDMs === 'boolean') member.allowWorkspaceDMs = data.allowWorkspaceDMs;
             } else {
-              ws.members.push({ peerId, alias: data.alias, publicKey: '', joinedAt: Date.now(), role: 'member', ...(data.isBot ? { isBot: true } : {}) });
+              ws.members.push({
+                peerId,
+                alias: data.alias,
+                publicKey: '',
+                joinedAt: Date.now(),
+                role: 'member',
+                allowWorkspaceDMs: typeof data.allowWorkspaceDMs === 'boolean' ? data.allowWorkspaceDMs : true,
+                ...(data.isBot ? { isBot: true } : {}),
+              });
             }
             this.persistWorkspace(ws.id).catch(() => {});
           } else {
@@ -876,6 +890,7 @@ export class ChatController {
               const member = workspace.members.find((m: any) => m.peerId === peerId);
               if (member) {
                 member.alias = data.alias;
+                if (typeof data.allowWorkspaceDMs === 'boolean') member.allowWorkspaceDMs = data.allowWorkspaceDMs;
                 this.persistWorkspace(workspace.id).catch(() => {});
               }
             }
@@ -1445,7 +1460,16 @@ export class ChatController {
         name: ws.name,
         description: ws.description,
         channels: ws.channels.map(ch => ({ id: ch.id, name: ch.name, type: ch.type })),
-        members: ws.members.map(m => ({ peerId: m.peerId, alias: m.alias, publicKey: m.publicKey, signingPublicKey: m.signingPublicKey, identityId: m.identityId, devices: m.devices, role: m.role })),
+        members: ws.members.map(m => ({
+          peerId: m.peerId,
+          alias: m.alias,
+          publicKey: m.publicKey,
+          signingPublicKey: m.signingPublicKey,
+          identityId: m.identityId,
+          devices: m.devices,
+          role: m.role,
+          allowWorkspaceDMs: m.allowWorkspaceDMs !== false,
+        })),
         inviteCode: ws.inviteCode,
         permissions: ws.permissions,
       },
@@ -1929,6 +1953,7 @@ export class ChatController {
             joinedAt: Date.now(),
             role: safeRole,
             isBot: remoteMember.isBot || undefined,
+            allowWorkspaceDMs: remoteMember.allowWorkspaceDMs !== false,
           });
         } else {
           // Update alias when it improves quality; avoid overwriting human names
@@ -1966,6 +1991,10 @@ export class ChatController {
           // Sync bot flag (self-declared by agent peers)
           if (remoteMember.isBot && !existing.isBot) {
             existing.isBot = true;
+          }
+          // Sync DM privacy flag (missing in legacy payload => keep current/default-allow behavior)
+          if (typeof remoteMember.allowWorkspaceDMs === 'boolean') {
+            existing.allowWorkspaceDMs = remoteMember.allowWorkspaceDMs;
           }
         }
 
@@ -2641,7 +2670,16 @@ export class ChatController {
         const targets = this.getWorkspaceRecipientPeerIds();
         for (const peerId of targets) {
           if (this.state.readyPeers.has(peerId)) {
-            this.sendControlWithRetry(peerId, { type: 'name-announce', workspaceId: wsId, alias }, { label: 'name-announce' });
+            this.sendControlWithRetry(peerId, {
+              type: 'name-announce',
+              workspaceId: wsId,
+              alias,
+              allowWorkspaceDMs: (
+                this.workspaceManager.getWorkspace(wsId)
+                  ?.members.find((m: any) => m.peerId === this.state.myPeerId)
+                  ?.allowWorkspaceDMs
+              ) !== false,
+            }, { label: 'name-announce' });
           }
         }
       }
@@ -2948,7 +2986,13 @@ export class ChatController {
     }
   }
 
-  async joinWorkspace(code: string, alias: string, peerId: string, inviteData?: InviteData): Promise<void> {
+  async joinWorkspace(
+    code: string,
+    alias: string,
+    peerId: string,
+    inviteData?: InviteData,
+    options?: { allowWorkspaceDMs?: boolean },
+  ): Promise<void> {
     console.log('[DecentChat] joinWorkspace called:', { code, alias, peerId, hasUI: !!this.ui });
 
     // ── Invite security validation ──────────────────────────────────────
@@ -3047,7 +3091,10 @@ export class ChatController {
     // Reassign ownership semantics so sync/permissions match canonical host workspace.
     ws.createdBy = peerId;
     const me = ws.members.find((m: any) => m.peerId === this.state.myPeerId);
-    if (me) me.role = 'member';
+    if (me) {
+      me.role = 'member';
+      me.allowWorkspaceDMs = options?.allowWorkspaceDMs !== false;
+    }
 
     // Bootstrap inviter as owner so incoming workspace-state from inviter is trusted.
     this.workspaceManager.addMember(ws.id, {
@@ -5307,7 +5354,16 @@ export class ChatController {
     const targets = this.getWorkspaceRecipientPeerIds();
     for (const peerId of targets) {
       if (this.state.readyPeers.has(peerId)) {
-        this.sendControlWithRetry(peerId, { type: 'name-announce', workspaceId: wsId, alias }, { label: 'name-announce' });
+        this.sendControlWithRetry(peerId, {
+          type: 'name-announce',
+          workspaceId: wsId,
+          alias,
+          allowWorkspaceDMs: (
+            this.workspaceManager.getWorkspace(wsId)
+              ?.members.find((m: any) => m.peerId === this.state.myPeerId)
+              ?.allowWorkspaceDMs
+          ) !== false,
+        }, { label: 'name-announce' });
       }
     }
   }

@@ -24,6 +24,7 @@ describe('WorkspaceManager', () => {
     expect(ws.members).toHaveLength(1);
     expect(ws.members[0].peerId).toBe('alice');
     expect(ws.members[0].role).toBe('owner');
+    expect(ws.members[0].allowWorkspaceDMs).toBe(true);
     expect(ws.channels).toHaveLength(1);
     expect(ws.channels[0].name).toBe('general');
     expect(ws.inviteCode.length).toBe(8);
@@ -65,6 +66,8 @@ describe('WorkspaceManager', () => {
 
     expect(result.success).toBe(true);
     expect(wm.getWorkspace(ws.id)!.members).toHaveLength(2);
+    const bob = wm.getWorkspace(ws.id)!.members.find(m => m.peerId === 'bob');
+    expect(bob?.allowWorkspaceDMs).toBe(true);
   });
 
   test('new member is added to all public channels', () => {
@@ -260,6 +263,7 @@ describe('WorkspaceManager', () => {
     wm.addMember(ws.id, {
       peerId: 'bob', alias: 'Bob', publicKey: 'key',
       joinedAt: Date.now(), role: 'member',
+      allowWorkspaceDMs: false,
     });
     wm.createChannel(ws.id, 'random', 'alice');
 
@@ -275,6 +279,11 @@ describe('WorkspaceManager', () => {
     expect(imported!.name).toBe('Team');
     expect(imported!.members).toHaveLength(2);
     expect(imported!.channels).toHaveLength(2); // general + random
+
+    const alice = imported!.members.find(m => m.peerId === 'alice');
+    const bob = imported!.members.find(m => m.peerId === 'bob');
+    expect(alice?.allowWorkspaceDMs).toBe(true);
+    expect(bob?.allowWorkspaceDMs).toBe(false);
   });
 });
 

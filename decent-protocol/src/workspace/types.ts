@@ -46,6 +46,8 @@ export interface WorkspaceMember {
   role: 'owner' | 'admin' | 'member';
   /** Whether this member is an automated agent/bot */
   isBot?: boolean;
+  /** Privacy preference for workspace-origin DMs (missing/undefined = allow). */
+  allowWorkspaceDMs?: boolean;
   addedBy?: string;
 }
 

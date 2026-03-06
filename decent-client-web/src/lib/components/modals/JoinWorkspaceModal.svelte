@@ -7,7 +7,13 @@
 
   interface JoinWorkspaceConfig {
     parseInvite: (invite: string) => { code: string; peerId?: string; inviteData?: any; error?: string };
-    onJoin: (invite: string, alias: string, peerId: string, inviteData?: any) => void;
+    onJoin: (
+      invite: string,
+      alias: string,
+      peerId: string,
+      inviteData?: any,
+      options?: { allowWorkspaceDMs?: boolean },
+    ) => void;
     onToast: (message: string, type?: string) => void;
   }
 
@@ -33,7 +39,13 @@
 <script lang="ts">
   interface Props {
     parseInvite: (invite: string) => { code: string; peerId?: string; inviteData?: any; error?: string };
-    onJoin: (invite: string, alias: string, peerId: string, inviteData?: any) => void;
+    onJoin: (
+      invite: string,
+      alias: string,
+      peerId: string,
+      inviteData?: any,
+      options?: { allowWorkspaceDMs?: boolean },
+    ) => void;
     onToast: (message: string, type?: string) => void;
     onClose: () => void;
   }
@@ -46,6 +58,7 @@
   let showPreview = $state(false);
   let autofillHint = $state(false);
   let autofilled = $state(false);
+  let allowWorkspaceDMs = $state(true);
 
   let overlayEl: HTMLDivElement | undefined = $state();
   let aliasInput: HTMLInputElement | undefined = $state();
@@ -138,7 +151,7 @@
     }
 
     const wsName = parsed.inviteData?.workspaceName || parsed.code;
-    onJoin(wsName, alias.trim(), peerId, parsed.inviteData);
+    onJoin(wsName, alias.trim(), peerId, parsed.inviteData, { allowWorkspaceDMs });
     onClose();
   }
 </script>
@@ -188,6 +201,12 @@
           bind:this={aliasInput}
           bind:value={alias}
         />
+      </div>
+      <div class="form-group">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+          <input type="checkbox" name="allowWorkspaceDMs" bind:checked={allowWorkspaceDMs} />
+          <span>Allow direct messages from workspace members</span>
+        </label>
       </div>
       <div class="modal-actions">
         <button type="button" class="btn-secondary" onclick={onClose}>Cancel</button>

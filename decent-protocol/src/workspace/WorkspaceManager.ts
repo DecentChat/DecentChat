@@ -34,6 +34,7 @@ export class WorkspaceManager {
           publicKey: myPublicKey,
           joinedAt: Date.now(),
           role: 'owner',
+          allowWorkspaceDMs: true,
         },
       ],
       channels: [],
@@ -280,12 +281,17 @@ export class WorkspaceManager {
       return { success: false, error: 'Member already exists' };
     }
 
-    workspace.members.push(member);
+    const normalizedMember: WorkspaceMember = {
+      ...member,
+      allowWorkspaceDMs: member.allowWorkspaceDMs !== false,
+    };
+
+    workspace.members.push(normalizedMember);
 
     // Add member to all public channels
     for (const channel of workspace.channels) {
-      if (channel.type === 'channel' && !channel.members.includes(member.peerId)) {
-        channel.members.push(member.peerId);
+      if (channel.type === 'channel' && !channel.members.includes(normalizedMember.peerId)) {
+        channel.members.push(normalizedMember.peerId);
       }
     }
 
@@ -466,6 +472,10 @@ export class WorkspaceManager {
     for (const member of workspace.members) {
       if (member.role !== 'owner' && member.role !== 'admin' && member.role !== 'member') {
         member.role = 'member';
+      }
+      // Backward compatibility: missing preference means allowed.
+      if (typeof member.allowWorkspaceDMs !== 'boolean') {
+        member.allowWorkspaceDMs = true;
       }
     }
     this.workspaces.set(workspace.id, workspace);

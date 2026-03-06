@@ -89,6 +89,7 @@ describe('Edge Case: Concurrent join requests', () => {
     const bobMember: WorkspaceMember = {
       peerId: 'bob', alias: 'Bob', publicKey: 'bob-key',
       joinedAt: Date.now(), role: 'member',
+      allowWorkspaceDMs: false,
     };
     const charlieMember: WorkspaceMember = {
       peerId: 'charlie', alias: 'Charlie', publicKey: 'charlie-key',
@@ -109,6 +110,8 @@ describe('Edge Case: Concurrent join requests', () => {
 
     // Alice's workspace should now have 3 members (owner + Bob + Charlie)
     expect(alice.wm.getWorkspace(ws.id)!.members).toHaveLength(3);
+    const bobInAliceWorkspace = alice.wm.getWorkspace(ws.id)!.members.find((m) => m.peerId === 'bob');
+    expect(bobInAliceWorkspace?.allowWorkspaceDMs).toBe(false);
 
     // Both Bob and Charlie get their acceptance
     await deliver(alice, bob);
