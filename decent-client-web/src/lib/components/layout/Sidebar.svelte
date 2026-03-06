@@ -6,6 +6,7 @@
 <script lang="ts">
   import { peerColor, escapeHtml } from '$lib/utils/peer';
   import MemberRow from '../members/MemberRow.svelte';
+  import MobileWorkspaceTray from './MobileWorkspaceTray.svelte';
 
   interface ChannelInfo {
     id: string;
@@ -37,8 +38,16 @@
     detail?: string;
   }
 
+  interface WorkspaceInfo {
+    id: string;
+    name: string;
+  }
+  }
+
   interface Props {
     workspaceName: string | null;
+    workspaces: WorkspaceInfo[];
+    activeWorkspaceId: string | null;
     channels: ChannelInfo[];
     members: MemberData[];
     directConversations: DirectConversation[];
@@ -50,6 +59,9 @@
     getPeerAlias: (peerId: string) => string;
     getPeerStatusClass: (peerId: string) => string;
     getPeerStatusTitle: (peerId: string) => string;
+    onSwitchToDMs: () => void;
+    onSwitchWorkspace: (wsId: string) => void;
+    onAddWorkspace: () => void;
     onChannelClick: (channelId: string) => void;
     onMemberClick: (peerId: string) => void;
     onDirectConvClick: (convId: string) => void;
@@ -69,6 +81,8 @@
 
   let {
     workspaceName,
+    workspaces,
+    activeWorkspaceId,
     channels,
     members,
     directConversations,
@@ -80,6 +94,9 @@
     getPeerAlias,
     getPeerStatusClass,
     getPeerStatusTitle,
+    onSwitchToDMs,
+    onSwitchWorkspace,
+    onAddWorkspace,
     onChannelClick,
     onMemberClick,
     onDirectConvClick,
@@ -171,6 +188,14 @@
       onclick={() => { workspaceMenuOpen = false; onWorkspaceNotifications(); }}>Notification prefs</button>
   </div>
 {/if}
+
+<MobileWorkspaceTray
+  workspaces={workspaces}
+  activeWorkspaceId={activeWorkspaceId}
+  onSwitchToDMs={onSwitchToDMs}
+  onSwitchWorkspace={onSwitchWorkspace}
+  onAddWorkspace={onAddWorkspace}
+/>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->

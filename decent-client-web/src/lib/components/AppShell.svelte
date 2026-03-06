@@ -160,6 +160,8 @@
       {#if cb && !shellData.activity.panelOpen}
         <Sidebar
           workspaceName={shellData.sidebar.workspaceName}
+          workspaces={shellData.rail.workspaces}
+          activeWorkspaceId={shellData.rail.activeWorkspaceId}
           channels={shellData.sidebar.channels}
           members={shellData.sidebar.members}
           directConversations={shellData.sidebar.directConversations}
@@ -171,6 +173,9 @@
           getPeerAlias={cb.getPeerAlias}
           getPeerStatusClass={cb.getPeerStatusClass}
           getPeerStatusTitle={cb.getPeerStatusTitle}
+          onSwitchToDMs={cb.onSwitchToDMs}
+          onSwitchWorkspace={cb.onSwitchWorkspace}
+          onAddWorkspace={cb.onAddWorkspace}
           onChannelClick={cb.onChannelClick}
           onMemberClick={cb.onMemberClick}
           onDirectConvClick={cb.onDirectConvClick}
