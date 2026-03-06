@@ -1,0 +1,235 @@
+/**
+ * Shell Store — Reactive props for AppShell child components.
+ *
+ * UIRenderer writes computed prop data here. AppShell reads and passes
+ * to child Svelte components declaratively. This replaces the
+ * mount/unmount pattern where MountHelpers destroyed and recreated
+ * components on every update.
+ *
+ * Split into data (changes often) and callbacks (set once at init).
+ */
+
+import type { PlaintextMessage, Contact, DirectConversation } from 'decent-protocol';
+import type { HuddleState, HuddleParticipant } from '../../huddle/HuddleManager';
+import type { ActivityItem } from '../../ui/types';
+import { MessageSearch } from '../../ui/MessageSearch';
+
+// ── Types ──
+
+export interface ShellMemberData {
+  peerId: string;
+  alias: string;
+  isOnline: boolean;
+  isMe: boolean;
+  role: string;
+  isBot: boolean;
+  statusClass: string;
+  statusTitle: string;
+}
+
+export interface ShellChannelData {
+  id: string;
+  name: string;
+}
+
+export interface ShellDirectConvData {
+  id: string;
+  contactPeerId: string;
+  lastMessageAt: number;
+}
+
+export interface ShellWorkspaceData {
+  id: string;
+  name: string;
+}
+
+// ── Reactive data store (UIRenderer writes, AppShell reads) ──
+
+export const shellData = $state({
+  // Current view: 'hidden' (loading), 'welcome' (no workspaces), or 'app' (main chat)
+  view: 'hidden' as 'hidden' | 'welcome' | 'app',
+
+  // Welcome screen props
+  welcome: {
+    myPeerId: '',
+    hasWorkspace: false,
+  },
+
+  // Workspace rail
+  rail: {
+    workspaces: [] as ShellWorkspaceData[],
+    activeWorkspaceId: null as string | null,
+    activityUnread: 0,
+  },
+
+  // Sidebar
+  sidebar: {
+    workspaceName: null as string | null,
+    channels: [] as ShellChannelData[],
+    members: [] as ShellMemberData[],
+    directConversations: [] as ShellDirectConvData[],
+    activeChannelId: null as string | null,
+    activeDirectConversationId: null as string | null,
+    myPeerId: '',
+  },
+
+  // Channel header
+  header: {
+    channelName: 'Select a channel',
+    memberCount: 0,
+    isDirectMessage: false,
+    isHuddleActive: false,
+  },
+
+  // Message list
+  messages: {
+    messages: [] as PlaintextMessage[],
+    channelName: '',
+    activeChannelId: null as string | null,
+    myPeerId: '',
+    myDisplayName: '',
+    frequentReactions: [] as string[],
+  },
+
+  // Compose area
+  compose: {
+    placeholder: 'Message...',
+  },
+
+  // Thread panel
+  thread: {
+    open: false,
+    threadId: null as string | null,
+    channelId: null as string | null,
+    parentMessage: null as PlaintextMessage | null,
+    replies: [] as PlaintextMessage[],
+    myPeerId: '',
+    myDisplayName: '',
+    frequentReactions: [] as string[],
+  },
+
+  // Huddle bar
+  huddle: {
+    state: 'inactive' as HuddleState,
+    muted: false,
+    participants: [] as HuddleParticipant[],
+  },
+
+  // Lightbox
+  lightbox: {
+    open: false,
+    src: '',
+    name: '',
+  },
+
+  // Search panel
+  search: {
+    open: false,
+    myPeerId: '',
+    myAlias: '',
+  },
+
+  // Activity panel
+  activity: {
+    panelOpen: false,
+    items: [] as ActivityItem[],
+  },
+
+  // Typing indicator
+  typingText: '',
+});
+
+// ── Callback store (set once by UIRenderer, never changes) ──
+
+export interface ShellCallbacks {
+  // Welcome screen
+  onCreateWorkspace: () => void;
+  onJoinWorkspace: () => void;
+  onRestoreSeed: () => void;
+
+  // Workspace rail
+  onSwitchToDMs: () => void;
+  onSwitchWorkspace: (wsId: string) => void;
+  onToggleActivity: () => void;
+  onAddWorkspace: () => void;
+
+  // Sidebar
+  onChannelClick: (channelId: string) => void;
+  onMemberClick: (peerId: string) => void;
+  onDirectConvClick: (convId: string) => void;
+  onAddChannel: () => void;
+  onStartDM: () => void;
+  onAddContact: () => void;
+  onConnectPeer: () => void;
+  onCopyInvite: () => void;
+  onShowQR: () => void;
+  onCopyPeerId: () => void;
+  onWorkspaceSettings: () => void;
+  onWorkspaceMembers: () => void;
+  onWorkspaceInvite: () => void;
+  onWorkspaceNotifications: () => void;
+  getUnreadCount: (id: string) => number;
+  getPeerAlias: (peerId: string) => string;
+  getPeerStatusClass: (peerId: string) => string;
+  getPeerStatusTitle: (peerId: string) => string;
+
+  // Channel header
+  onHamburger: () => void;
+  onHuddleToggle: () => void;
+  onHeaderConnectPeer: () => void;
+  onHeaderShowQR: () => void;
+  onSearch: () => void;
+  onInvite: () => void;
+  onSettings: () => void;
+  onChannelMembers: () => void;
+
+  // Messages
+  getThread: (channelId: string, messageId: string) => PlaintextMessage[];
+  isBot: (senderId: string) => boolean;
+  onOpenThread: (messageId: string) => void;
+  onToggleReaction: (messageId: string, emoji: string) => void;
+  onRememberReaction: (emoji: string) => void;
+  onShowMessageInfo: (messageId: string) => void;
+  onImageClick: (name: string, src: string) => void;
+
+  // Compose
+  onSend: (text: string, files: File[]) => Promise<void>;
+  onTyping: () => void;
+  onStopTyping: () => void;
+  getCommandSuggestions?: (prefix: string) => any[];
+  getMembers: () => Array<{ peerId: string; name: string }>;
+
+  // Thread
+  onCloseThread: () => void;
+  onThreadSend: (text: string, files: File[]) => Promise<void>;
+
+  // Huddle
+  onToggleMute: () => void;
+  onLeaveHuddle: () => void;
+  onJoinHuddle: () => void;
+
+  // Lightbox
+  onCloseLightbox: () => void;
+
+  // Search
+  onSearchQuery: (query: string) => any[];
+  onScrollToMessage: (messageId: string) => void;
+  onCloseSearch: () => void;
+
+  // Activity
+  onCloseActivity: () => void;
+  onMarkAllRead: () => void;
+  onMarkRead: (id: string) => void;
+  onNavigateActivity: (item: ActivityItem) => void;
+  getActivityPeerAlias: (peerId: string) => string;
+}
+
+let _callbacks: ShellCallbacks | null = null;
+
+export function setShellCallbacks(callbacks: ShellCallbacks): void {
+  _callbacks = callbacks;
+}
+
+export function getShellCallbacks(): ShellCallbacks | null {
+  return _callbacks;
+}
