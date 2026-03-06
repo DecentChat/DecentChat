@@ -413,6 +413,21 @@ async function init(): Promise<void> {
         ? myAlias
         : (state.myPeerId ? state.myPeerId.slice(0, 8) : '');
 
+      // Mount AppShell for landing page (it handles welcome view too)
+      try {
+        const { mount: svelteMount } = await import("svelte");
+        const { default: AppShell } = await import("./lib/components/AppShell.svelte");
+        const { default: App } = await import("./lib/components/shared/App.svelte");
+        const appEl = document.getElementById('app')!;
+        svelteMount(AppShell, { target: appEl });
+        const svelteRoot = document.createElement("div");
+        svelteRoot.id = "svelte-root";
+        document.body.appendChild(svelteRoot);
+        svelteMount(App, { target: svelteRoot });
+      } catch (err) {
+        console.warn("[DecentChat] Svelte mount failed on landing:", err);
+      }
+
       ui.renderWelcome();
       (window as any).__appInitialized = true;
       return;
@@ -589,20 +604,26 @@ async function init(): Promise<void> {
     }
 
     // ── Svelte bridge: mount Svelte components alongside vanilla DOM ──
-    // During migration, Svelte renders into a dedicated container.
-    // Once migration is complete, Svelte takes over the entire DOM.
+    // AppShell.svelte owns the main app layout; App.svelte hosts shared UI (toast, etc.)
     try {
       const { mount } = await import("svelte");
       const { default: App } = await import("./lib/components/shared/App.svelte");
+      const { default: AppShell } = await import("./lib/components/AppShell.svelte");
       const { setBridgeController, setBridgeRenderer, syncFromVanilla } = await import("./lib/stores/bridge.svelte");
       setBridgeController(ctrl);
       setBridgeRenderer(ui);
       syncFromVanilla();
+
+      // Mount AppShell into #app (replaces UIRenderer.renderApp() innerHTML)
+      const appEl = document.getElementById('app')!;
+      mount(AppShell, { target: appEl });
+
+      // Mount shared UI (Toast, SvelteReady) in a separate root
       const svelteRoot = document.createElement("div");
       svelteRoot.id = "svelte-root";
       document.body.appendChild(svelteRoot);
       mount(App, { target: svelteRoot });
-      console.log("[DecentChat] Svelte 5 bridge initialized");
+      console.log("[DecentChat] Svelte 5 bridge + AppShell initialized");
     } catch (err) {
       console.warn("[DecentChat] Svelte mount failed (non-fatal):", err);
     }
