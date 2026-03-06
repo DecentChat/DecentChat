@@ -18,4 +18,12 @@ declare module '*.svelte' {
   export const showJoinWorkspaceModal: (config: any) => void;
   export const showPeerSelectModal: (config: any) => void;
   export const showAddContactModal: (config: any) => void;
+  export const showSettingsModal: (config: any) => Promise<void>;
+  export const createQRFlow: (config: any) => {
+    showMyQR: (data: any) => Promise<void>;
+    showScanQR: () => Promise<void>;
+    showSeedQR: (mnemonic: string) => Promise<void>;
+    showRestoreSeed: () => Promise<void>;
+    close: () => void;
+  };
 }
