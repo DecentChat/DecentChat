@@ -748,6 +748,23 @@ async function init(): Promise<void> {
 
       state.activeChannelId = restoredChannel?.id || ws.channels[0]?.id || null;
 
+      // Load persisted messages for all workspace channels (survives page refresh)
+      try {
+        const channelIds = ws.channels.map((ch: any) => ch.id);
+        for (const channelId of channelIds) {
+          const persisted = await ctrl.persistentStore.getMessagesByChannel(channelId);
+          if (persisted.length > 0) {
+            // Use forceAdd to bypass hash chain validation (already validated on first receipt)
+            for (const msg of persisted) {
+              ctrl.messageStore.forceAdd(msg);
+            }
+            console.log(`[DecentChat] Restored ${persisted.length} messages for channel ${channelId.slice(0, 8)}`);
+          }
+        }
+      } catch (err) {
+        console.warn('[DecentChat] Failed to restore persisted messages:', err);
+      }
+
       ui.renderApp();
 
       // Restore open thread if it still exists in the restored channel.

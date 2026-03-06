@@ -151,6 +151,40 @@ export class PersistentStore {
     });
   }
 
+  /**
+   * Load messages for a specific channel from persistence.
+   * Used on startup to restore messages that survive page refresh.
+   * Returns messages sorted by timestamp ascending.
+   */
+  async getMessagesByChannel(channelId: string): Promise<any[]> {
+    const tx = this.getDB().transaction('messages', 'readonly');
+    const store = tx.objectStore('messages');
+    const index = store.index('channelId');
+    const request = index.getAll(channelId);
+    return new Promise((resolve, reject) => {
+      request.onsuccess = async () => {
+        const messages = request.result || [];
+        // T3.5: Decrypt content if at-rest encryption is active
+        if (this.atRest?.ready) {
+          for (const msg of messages) {
+            if (typeof msg?.content === 'string') {
+              try {
+                msg.content = await this.atRest.decrypt(msg.content);
+              } catch {
+                // Keep encrypted if decryption fails
+              }
+            }
+          }
+        }
+        // Sort by timestamp ascending (consistent with MessageStore expectations)
+        messages.sort((a: any, b: any) => a.timestamp - b.timestamp);
+        resolve(messages);
+      };
+      request.onerror = () => reject(request.error);
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
   async getChannelMessages(channelId: string): Promise<any[]> {
     const messages: any[] = await new Promise((resolve, reject) => {
       const tx = this.getDB().transaction('messages', 'readonly');
