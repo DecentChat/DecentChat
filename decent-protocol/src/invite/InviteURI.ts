@@ -42,6 +42,14 @@ export interface InviteData {
   workspaceId?: string;
   /** Workspace name (display only) */
   workspaceName?: string;
+  /** Optional expiration timestamp (ms since epoch) */
+  expiresAt?: number;
+  /** Optional maximum number of uses (0 or undefined = unlimited) */
+  maxUses?: number;
+  /** Inviter peer identity (for auditing/UX) */
+  inviterId?: string;
+  /** Optional cryptographic signature over canonical payload */
+  signature?: string;
 }
 
 /** Default public signaling servers (bootstrap nodes) */
@@ -57,7 +65,21 @@ export class InviteURI {
    * Use encodeNative() for the decent:// protocol format.
    */
   static encode(data: InviteData, webDomain = 'decentchat.app'): string {
-    const { host, port, inviteCode, secure, peerId, publicKey, workspaceName, workspaceId, path } = data;
+    const {
+      host,
+      port,
+      inviteCode,
+      secure,
+      peerId,
+      publicKey,
+      workspaceName,
+      workspaceId,
+      path,
+      expiresAt,
+      maxUses,
+      inviterId,
+      signature,
+    } = data;
 
     // Build web URL: https://decentchat.app/join/CODE?signal=host:port&...
     const params = new URLSearchParams();
@@ -69,6 +91,10 @@ export class InviteURI {
     if (workspaceId) params.set('ws', workspaceId);
     if (secure) params.set('secure', '1');
     if (path && path !== '/peerjs') params.set('path', path);
+    if (typeof expiresAt === 'number' && expiresAt > 0) params.set('exp', String(expiresAt));
+    if (typeof maxUses === 'number' && maxUses > 0) params.set('max', String(maxUses));
+    if (inviterId) params.set('inviter', inviterId);
+    if (signature) params.set('sig', signature);
 
     if (data.fallbackServers && data.fallbackServers.length > 0) {
       for (const server of data.fallbackServers) {
@@ -124,6 +150,10 @@ export class InviteURI {
     if (data.workspaceId) params.set('ws', data.workspaceId);
     if (secure) params.set('secure', '1');
     if (data.path && data.path !== '/peerjs') params.set('path', data.path);
+    if (typeof data.expiresAt === 'number' && data.expiresAt > 0) params.set('exp', String(data.expiresAt));
+    if (typeof data.maxUses === 'number' && data.maxUses > 0) params.set('max', String(data.maxUses));
+    if (data.inviterId) params.set('inviter', data.inviterId);
+    if (data.signature) params.set('sig', data.signature);
 
     // Append additional peer IDs for multi-peer join resilience
     if (data.peers && data.peers.length > 0) {
@@ -175,6 +205,12 @@ export class InviteURI {
     const turnServers = params.getAll('turn');
     const secure = params.get('secure') === '1' || port === 443;
     const peerPath = params.get('path') || '/peerjs';
+    const expRaw = params.get('exp');
+    const maxRaw = params.get('max');
+    const expiresAt = expRaw ? Number(expRaw) : undefined;
+    const maxUses = maxRaw ? Number(maxRaw) : undefined;
+    const inviterId = params.get('inviter') || undefined;
+    const signature = params.get('sig') || undefined;
 
     // Read all peer params — first is primary, rest are additional
     const allPeers = params.getAll('peer');
@@ -194,6 +230,10 @@ export class InviteURI {
       publicKey: params.get('pk') || undefined,
       workspaceName: params.get('name') || undefined,
       workspaceId: params.get('ws') || undefined,
+      expiresAt: Number.isFinite(expiresAt) ? expiresAt : undefined,
+      maxUses: Number.isFinite(maxUses) ? maxUses : undefined,
+      inviterId,
+      signature,
     };
   }
 
@@ -229,6 +269,10 @@ export class InviteURI {
     const allPeers = parsed.searchParams.getAll('peer');
     const primaryPeer = allPeers[0] || undefined;
     const additionalPeers = allPeers.length > 1 ? allPeers.slice(1) : undefined;
+    const expRaw = parsed.searchParams.get('exp');
+    const maxRaw = parsed.searchParams.get('max');
+    const expiresAt = expRaw ? Number(expRaw) : undefined;
+    const maxUses = maxRaw ? Number(maxRaw) : undefined;
 
     return {
       host,
@@ -243,6 +287,10 @@ export class InviteURI {
       publicKey: parsed.searchParams.get('pk') || undefined,
       workspaceName: parsed.searchParams.get('name') || undefined,
       workspaceId: parsed.searchParams.get('ws') || undefined,
+      expiresAt: Number.isFinite(expiresAt) ? expiresAt : undefined,
+      maxUses: Number.isFinite(maxUses) ? maxUses : undefined,
+      inviterId: parsed.searchParams.get('inviter') || undefined,
+      signature: parsed.searchParams.get('sig') || undefined,
     };
   }
 
@@ -297,6 +345,22 @@ export class InviteURI {
     if (isNaN(port)) port = 9000;
 
     return { host, port, path };
+  }
+
+  /**
+   * Canonical payload used for signing/verification.
+   * Keep this deterministic and stable across versions.
+   */
+  static getSignPayload(data: InviteData): string {
+    return `${data.inviteCode}:${data.workspaceId || ''}:${data.expiresAt || 0}:${data.maxUses || 0}`;
+  }
+
+  /**
+   * Whether invite has expired based on `expiresAt` (if provided).
+   */
+  static isExpired(data: InviteData, now = Date.now()): boolean {
+    if (!data.expiresAt) return false;
+    return now > data.expiresAt;
   }
 
   /**
