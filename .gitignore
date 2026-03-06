@@ -35,3 +35,7 @@ Thumbs.db
 # Bun
 bun.lockb
 review-output/
+
+# Local git worktrees
+.worktrees/
+worktrees/
