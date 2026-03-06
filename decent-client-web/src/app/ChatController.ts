@@ -1590,6 +1590,36 @@ export class ChatController {
       return;
     }
 
+    // Handle member-left event (voluntary leave)
+    if (msg.sync?.type === 'member-left' && msg.workspaceId) {
+      const ws = this.workspaceManager.getWorkspace(msg.workspaceId);
+      if (ws) {
+        const leftPeerId = msg.sync.peerId;
+
+        ws.members = ws.members.filter((m: any) => m.peerId !== leftPeerId);
+        for (const ch of ws.channels) {
+          ch.members = ch.members.filter((id: string) => id !== leftPeerId);
+        }
+
+        if (leftPeerId === this.state.myPeerId) {
+          const ok = await this.cleanupWorkspaceLocalState(ws.id, ws);
+          if (ok) {
+            this.workspaceManager.removeWorkspace(ws.id);
+            this.ui?.showToast('You left the workspace', 'info');
+            this.ui?.updateWorkspaceRail?.();
+            this.ui?.updateSidebar();
+            this.ui?.updateChannelHeader();
+            this.ui?.renderMessages();
+            this.ui?.updateComposePlaceholder?.();
+          }
+        } else {
+          this.persistWorkspace(ws.id).catch(() => {});
+          this.ui?.renderApp();
+        }
+      }
+      return;
+    }
+
     // Handle member-removed event
     // SECURITY: Verify ECDSA signature. Fallback to local-state permission check.
     if (msg.sync?.type === 'member-removed' && msg.workspaceId) {
@@ -1635,12 +1665,22 @@ export class ChatController {
         for (const ch of ws.channels) {
           ch.members = ch.members.filter((id: string) => id !== removedPeerId);
         }
-        this.persistWorkspace(ws.id).catch(() => {});
 
         if (removedPeerId === this.state.myPeerId) {
-          this.ui?.showToast('You have been removed from this workspace', 'error');
+          const ok = await this.cleanupWorkspaceLocalState(ws.id, ws);
+          if (ok) {
+            this.workspaceManager.removeWorkspace(ws.id);
+            this.ui?.showToast('You have been removed from this workspace', 'error');
+            this.ui?.updateWorkspaceRail?.();
+            this.ui?.updateSidebar();
+            this.ui?.updateChannelHeader();
+            this.ui?.renderMessages();
+            this.ui?.updateComposePlaceholder?.();
+          }
+        } else {
+          this.persistWorkspace(ws.id).catch(() => {});
+          this.ui?.renderApp();
         }
-        this.ui?.renderApp();
       }
       return;
     }
@@ -3270,6 +3310,53 @@ export class ChatController {
       this.ui?.updateComposePlaceholder?.();
     }
     return ok;
+  }
+
+  async leaveWorkspace(wsId: string): Promise<{ success: boolean; error?: string }> {
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return { success: false, error: 'Workspace not found' };
+
+    const me = ws.members.find((m: any) => m.peerId === this.state.myPeerId);
+    if (!me) return { success: false, error: 'You are not a member of this workspace' };
+
+    if (me.role === 'owner') {
+      return { success: false, error: 'Owner cannot leave workspace. Transfer ownership or delete workspace.' };
+    }
+
+    const timestamp = Date.now();
+
+    // Broadcast voluntary leave event to connected members.
+    for (const connectedPeerId of this.state.connectedPeers) {
+      this.transport.send(connectedPeerId, {
+        type: 'workspace-sync',
+        workspaceId: wsId,
+        sync: {
+          type: 'member-left',
+          peerId: this.state.myPeerId,
+          timestamp,
+        },
+      });
+    }
+
+    // Remove locally and purge all persisted workspace data.
+    ws.members = ws.members.filter((m: any) => m.peerId !== this.state.myPeerId);
+    for (const ch of ws.channels) {
+      ch.members = ch.members.filter((id: string) => id !== this.state.myPeerId);
+    }
+
+    const ok = await this.cleanupWorkspaceLocalState(wsId, ws);
+    if (!ok) return { success: false, error: 'Failed to delete local workspace data' };
+
+    this.workspaceManager.removeWorkspace(wsId);
+
+    this.ui?.showToast('You left the workspace', 'info');
+    this.ui?.updateWorkspaceRail?.();
+    this.ui?.updateSidebar();
+    this.ui?.updateChannelHeader();
+    this.ui?.renderMessages();
+    this.ui?.updateComposePlaceholder?.();
+
+    return { success: true };
   }
 
   async removeWorkspaceMember(peerId: string): Promise<{ success: boolean; error?: string }> {

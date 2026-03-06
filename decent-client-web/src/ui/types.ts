@@ -31,6 +31,7 @@ export interface UICallbacks {
   updateWorkspacePermissions?: (permissions: Partial<import('decent-protocol').WorkspacePermissions>) => Promise<{ success: boolean; error?: string }>;
   updateWorkspaceInfo?: (updates: { name?: string; description?: string }) => Promise<{ success: boolean; error?: string }>;
   deleteWorkspace?: (workspaceId: string) => Promise<boolean>;
+  leaveWorkspace?: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
   createDM: (peerId: string) => { success: boolean; channel?: import('decent-protocol').Channel };
   persistWorkspace: (wsId: string) => Promise<void>;
   persistSetting: (key: string, value: unknown) => Promise<void>;

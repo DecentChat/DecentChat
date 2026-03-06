@@ -4,6 +4,7 @@
 import { type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { startRelayServer, type RelayServer } from '../mocks/mock-relay-server';
 import { getMockTransportScript } from '../mocks/MockTransport';
+import { createBrowserContext } from './context-permissions';
 
 export interface TestUser { name: string; context: BrowserContext; page: Page }
 
@@ -16,7 +17,7 @@ export async function startRelay(): Promise<RelayServer> {
 }
 
 export async function createUser(browser: Browser, name: string): Promise<TestUser> {
-  const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
+  const context = await createBrowserContext(browser);
   const page = await context.newPage();
 
   const script = getMockTransportScript(`ws://localhost:${relay.port}`);

@@ -9,10 +9,12 @@
     name: string;
     description: string;
     isOwner: boolean;
+    canLeave?: boolean;
     permissions: { whoCanCreateChannels: string; whoCanInviteMembers: string };
     onSave: (data: { name: string; description: string; whoCanCreateChannels: string; whoCanInviteMembers: string }) => Promise<boolean>;
     onManageMembers: () => void;
     onDelete: () => Promise<void>;
+    onLeave?: () => Promise<boolean>;
     onToast: (message: string, type?: string) => void;
   }
 
@@ -40,15 +42,17 @@
     name: string;
     description: string;
     isOwner: boolean;
+    canLeave?: boolean;
     permissions: { whoCanCreateChannels: string; whoCanInviteMembers: string };
     onSave: (data: { name: string; description: string; whoCanCreateChannels: string; whoCanInviteMembers: string }) => Promise<boolean>;
     onManageMembers: () => void;
     onDelete: () => Promise<void>;
+    onLeave?: () => Promise<boolean>;
     onToast: (message: string, type?: string) => void;
     onClose: () => void;
   }
 
-  let { name: initialName, description: initialDesc, isOwner, permissions, onSave, onManageMembers, onDelete, onToast, onClose }: Props = $props();
+  let { name: initialName, description: initialDesc, isOwner, canLeave = false, permissions, onSave, onManageMembers, onDelete, onLeave, onToast, onClose }: Props = $props();
 
   let wsName = $state(initialName);
   let wsDescription = $state(initialDesc);
@@ -92,6 +96,14 @@
     await onDelete();
     onClose();
   }
+
+  async function handleLeave() {
+    if (!onLeave) return;
+    const confirmed = confirm(`Leave "${wsName}"? Your local workspace data will be deleted on this device.`);
+    if (!confirmed) return;
+    const success = await onLeave();
+    if (success) onClose();
+  }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -125,11 +137,13 @@
       <div class="form-group">
         <button type="button" class="btn-secondary" style="width:100%;" onclick={handleManageMembers}>Manage Members</button>
       </div>
-      {#if isOwner}
-        <div class="form-group" style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border);">
+      <div class="form-group" style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border);">
+        {#if isOwner}
           <button type="button" class="btn-danger" style="width:100%;" onclick={handleDelete}>Delete Workspace</button>
-        </div>
-      {/if}
+        {:else if canLeave}
+          <button type="button" class="btn-danger" style="width:100%;" onclick={handleLeave}>Leave Workspace</button>
+        {/if}
+      </div>
       <div class="modal-actions">
         <button type="button" class="btn-secondary" onclick={onClose}>Cancel</button>
         <button type="submit" class="btn-primary">Save</button>

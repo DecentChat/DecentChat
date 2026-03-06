@@ -113,7 +113,7 @@
     <h2>Workspace Members</h2>
     <form onsubmit={(e) => { e.preventDefault(); onClose(); }}>
       <div class="form-group" style="margin-bottom: 8px;">
-        <div style="font-size: 13px; color: var(--text-muted);">{members.length} member{members.length === 1 ? '' : 's'}</div>
+        <div id="members-count-label" style="font-size: 13px; color: var(--text-muted);">{members.length} member{members.length === 1 ? '' : 's'}</div>
       </div>
       <div class="members-list">
         {#each members as member (member.peerId)}

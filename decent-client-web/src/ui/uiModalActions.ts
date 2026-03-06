@@ -322,6 +322,7 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
       name: ws.name,
       description: ws.description || '',
       isOwner,
+      canLeave: !isOwner,
       permissions: { whoCanCreateChannels: perms.whoCanCreateChannels, whoCanInviteMembers: perms.whoCanInviteMembers },
       onSave: async (data: { name: string; description: string; whoCanCreateChannels: string; whoCanInviteMembers: string }) => {
         if (data.name !== ws.name || data.description !== (ws.description || '')) {
@@ -357,6 +358,18 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
         } else {
           showToast('Failed to delete workspace', 'error');
         }
+      },
+      onLeave: async () => {
+        const result = await callbacks.leaveWorkspace?.(ws.id);
+        if (result?.success) {
+          showToast('You left the workspace', 'success');
+          state.activeWorkspaceId = null;
+          state.activeChannelId = null;
+          renderApp();
+          return true;
+        }
+        showToast(result?.error || 'Failed to leave workspace', 'error');
+        return false;
       },
       onToast: (msg: string, type?: string) => showToast(msg, type as any),
     });

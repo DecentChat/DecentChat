@@ -4,6 +4,7 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import { startRelayServer, type RelayServer } from '../mocks/mock-relay-server';
 import { getMockTransportScript } from '../mocks/MockTransport';
+import { createBrowserContext } from './context-permissions';
 
 let relay: RelayServer;
 
@@ -15,7 +16,7 @@ test.beforeAll(async () => {
 test.afterAll(() => relay?.close());
 
 async function createPage(browser: Browser): Promise<Page> {
-  const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
+  const context = await createBrowserContext(browser);
   const page = await context.newPage();
 
   // Log all console messages

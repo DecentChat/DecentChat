@@ -1,6 +1,7 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import { startRelayServer, type RelayServer } from '../mocks/mock-relay-server';
 import { getMockTransportScript } from '../mocks/MockTransport';
+import { createBrowserContext } from './context-permissions';
 
 interface TestUser {
   name: string;
@@ -30,7 +31,7 @@ test.afterAll(async () => {
 });
 
 async function createUser(browser: Browser, name: string): Promise<TestUser> {
-  const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
+  const context = await createBrowserContext(browser);
   const page = await context.newPage();
 
   await page.addInitScript(getMockTransportScript(`ws://localhost:${relay.port}`));
@@ -222,7 +223,9 @@ async function getHistoryStats(page: Page): Promise<{
 test.describe('Runtime Negentropy full-history multi-device sync', () => {
   test.setTimeout(300000);
 
-  test('syncs 1000 mixed channel/thread messages to same-user second device without duplicates', async ({ browser }) => {
+  test('syncs 1000 mixed channel/thread messages to same-user second device without duplicates', async ({ browser, browserName }) => {
+    if (browserName === 'firefox') test.setTimeout(420000);
+
     const alice = await createUser(browser, 'Alice');
     const bob = await createUser(browser, 'Bob');
 
@@ -284,6 +287,7 @@ test.describe('Runtime Negentropy full-history multi-device sync', () => {
         runSendOps(bob.page, bobOps),
       ]);
 
+      const initialSyncTimeout = browserName === 'firefox' ? 180000 : 90000;
       await alice.page.waitForFunction((expected: number) => {
         const s = (window as any).__state;
         const ctrl = (window as any).__ctrl;
@@ -292,7 +296,7 @@ test.describe('Runtime Negentropy full-history multi-device sync', () => {
         let total = 0;
         for (const ch of ws.channels) total += ctrl.messageStore.getMessages(ch.id).length;
         return total >= expected;
-      }, EXPECTED_TOTAL_MESSAGES, { timeout: 90000 });
+      }, EXPECTED_TOTAL_MESSAGES, { timeout: initialSyncTimeout });
 
       const bobIdentity = await bob.page.evaluate(async () => {
         const ctrl = (window as any).__ctrl;
@@ -318,6 +322,7 @@ test.describe('Runtime Negentropy full-history multi-device sync', () => {
 
         await joinViaInviteUrl(bobDevice2.page, inviteUrl, 'Bob Device 2');
 
+        const restoreSyncTimeout = browserName === 'firefox' ? 180000 : 120000;
         await bobDevice2.page.waitForFunction((expected: number) => {
           const s = (window as any).__state;
           const ctrl = (window as any).__ctrl;
@@ -326,7 +331,7 @@ test.describe('Runtime Negentropy full-history multi-device sync', () => {
           let total = 0;
           for (const ch of ws.channels) total += ctrl.messageStore.getMessages(ch.id).length;
           return total >= expected;
-        }, EXPECTED_TOTAL_MESSAGES, { timeout: 120000 });
+        }, EXPECTED_TOTAL_MESSAGES, { timeout: restoreSyncTimeout });
 
         const stats = await getHistoryStats(bobDevice2.page);
         expect(stats.total).toBeGreaterThanOrEqual(EXPECTED_TOTAL_MESSAGES);

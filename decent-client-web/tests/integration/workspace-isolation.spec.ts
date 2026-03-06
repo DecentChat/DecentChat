@@ -16,6 +16,7 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import { startRelayServer, type RelayServer } from '../mocks/mock-relay-server';
 import { getMockTransportScript } from '../mocks/MockTransport';
+import { createBrowserContext } from './context-permissions';
 
 let relay: RelayServer;
 
@@ -39,9 +40,7 @@ interface TestUser {
 }
 
 async function createUser(browser: Browser, name: string): Promise<TestUser> {
-  const context = await browser.newContext({
-    permissions: ['clipboard-read', 'clipboard-write'],
-  });
+  const context = await createBrowserContext(browser);
   const page = await context.newPage();
 
   const script = getMockTransportScript(`ws://localhost:${relay.port}`);
@@ -741,7 +740,11 @@ test.describe('Workspace Isolation — Multi-Workspace Multi-User', () => {
       await joinViaInviteUrl(bob.page, publicInvite, 'Bob');
       await waitForPeerConnection(bob.page, 2, 30000);
 
-      // Bob should see WS-Public data only
+      // Bob should see WS-Public data only (channel sync can lag briefly on Firefox)
+      await bob.page.waitForFunction(
+        () => Array.from(document.querySelectorAll('.sidebar-item')).some((el) => el.textContent?.includes('public-channel')),
+        { timeout: 15000 },
+      );
       const bobChannels = await getChannelNames(bob.page);
       expect(bobChannels).toContain('general');
       expect(bobChannels).toContain('public-channel');

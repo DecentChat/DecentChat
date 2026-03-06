@@ -223,6 +223,7 @@ async function init(): Promise<void> {
     updateWorkspacePermissions: (permissions) => ctrl.updateWorkspacePermissions(permissions),
     updateWorkspaceInfo: (updates) => ctrl.updateWorkspaceInfo(updates),
     deleteWorkspace: (wsId) => ctrl.deleteWorkspace(wsId),
+    leaveWorkspace: (wsId) => ctrl.leaveWorkspace(wsId),
     persistWorkspace: (wsId) => ctrl.persistWorkspace(wsId),
     persistSetting: (key, value) => ctrl.persistSetting(key, value),
     getCommandSuggestions: (prefix) => commandParser.autocomplete(prefix).map(c => ({
