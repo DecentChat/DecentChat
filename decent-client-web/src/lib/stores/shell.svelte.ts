@@ -23,6 +23,7 @@ export interface ShellMemberData {
   isMe: boolean;
   role: string;
   isBot: boolean;
+  allowWorkspaceDMs?: boolean;
   statusClass: string;
   statusTitle: string;
 }

@@ -4021,6 +4021,14 @@ html, body {
   background: var(--sidebar-hover) !important;
 }
 
+/* Workspace DM privacy affordance */
+.dm-disallowed .member-row {
+  opacity: 0.75;
+}
+.dm-disallowed .member-row:hover {
+  background: rgba(255, 99, 132, 0.12) !important;
+}
+
 .member-avatar-sm {
   width: 32px;
   height: 32px;

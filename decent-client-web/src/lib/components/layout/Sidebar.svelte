@@ -19,6 +19,7 @@
     isMe: boolean;
     role?: string;
     isBot?: boolean;
+    allowWorkspaceDMs?: boolean;
     statusClass: string;
     statusTitle: string;
   }
@@ -166,8 +167,13 @@
         <div class="sidebar-section-header member-group-header">Online — {onlineMembers.length}</div>
         <div id="workspace-member-list-online">
           {#each onlineMembers as member (member.peerId)}
+            {@const dmAllowed = member.allowWorkspaceDMs !== false}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div onclick={() => onMemberClick(member.peerId)}>
+            <div
+              class:dm-disallowed={!dmAllowed}
+              title={!dmAllowed ? 'This member disallows workspace DMs' : ''}
+              onclick={() => onMemberClick(member.peerId)}
+            >
               <MemberRow {...member} />
             </div>
           {/each}
@@ -177,8 +183,13 @@
         <div class="sidebar-section-header member-group-header">Offline — {offlineMembers.length}</div>
         <div id="workspace-member-list-offline" class="members-offline">
           {#each offlineMembers as member (member.peerId)}
+            {@const dmAllowed = member.allowWorkspaceDMs !== false}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div onclick={() => onMemberClick(member.peerId)}>
+            <div
+              class:dm-disallowed={!dmAllowed}
+              title={!dmAllowed ? 'This member disallows workspace DMs' : ''}
+              onclick={() => onMemberClick(member.peerId)}
+            >
               <MemberRow {...member} />
             </div>
           {/each}

@@ -15,6 +15,11 @@ export interface DirectConversation {
   id: string;
   /** The contact's peer ID */
   contactPeerId: string;
+  /**
+   * Optional workspace context where this DM was initiated.
+   * When present, receiver may apply workspace DM privacy policy.
+   */
+  originWorkspaceId?: string;
   /** When this conversation was created */
   createdAt: number;
   /** Last message timestamp (for sorting) */
@@ -26,7 +31,7 @@ export interface DirectConversation {
 // ---------------------------------------------------------------------------
 
 export interface DirectConversationStore {
-  create(contactPeerId: string): Promise<DirectConversation>;
+  create(contactPeerId: string, opts?: { originWorkspaceId?: string }): Promise<DirectConversation>;
   get(id: string): Promise<DirectConversation | undefined>;
   getByContact(contactPeerId: string): Promise<DirectConversation | undefined>;
   list(): Promise<DirectConversation[]>;
@@ -41,7 +46,7 @@ export interface DirectConversationStore {
 export class MemoryDirectConversationStore implements DirectConversationStore {
   private conversations = new Map<string, DirectConversation>();
 
-  async create(contactPeerId: string): Promise<DirectConversation> {
+  async create(contactPeerId: string, opts?: { originWorkspaceId?: string }): Promise<DirectConversation> {
     // Return existing conversation if one already exists for this contact
     for (const conv of this.conversations.values()) {
       if (conv.contactPeerId === contactPeerId) return conv;
@@ -50,6 +55,7 @@ export class MemoryDirectConversationStore implements DirectConversationStore {
     const conversation: DirectConversation = {
       id: crypto.randomUUID(),
       contactPeerId,
+      originWorkspaceId: opts?.originWorkspaceId,
       createdAt: Date.now(),
       lastMessageAt: 0,
     };

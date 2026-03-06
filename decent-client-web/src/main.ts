@@ -240,7 +240,7 @@ async function init(): Promise<void> {
     addContact: (contact) => ctrl.addContact(contact),
     removeContact: (peerId) => ctrl.removeContact(peerId),
     getContacts: () => ctrl.getContacts(),
-    startDirectMessage: (contactPeerId) => ctrl.startDirectMessage(contactPeerId),
+    startDirectMessage: (contactPeerId, options) => ctrl.startDirectMessage(contactPeerId, options),
     getDirectConversations: () => ctrl.getDirectConversations(),
     onSettingsAction: async (action) => {
       if (action === 'generateSeed') {

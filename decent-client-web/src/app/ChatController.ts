@@ -848,6 +848,12 @@ export class ChatController {
           return;
         }
 
+        // --- Workspace DM privacy denial ---
+        if (data?.type === 'direct-denied' && data.reason === 'workspace-dm-disabled') {
+          this.ui?.showToast('Recipient disallows workspace DMs', 'error');
+          return;
+        }
+
         // --- Name announce (peer telling us their display name) ---
         if (data?.type === 'name-announce' && data.alias) {
           const allWorkspaces = this.workspaceManager.getAllWorkspaces();
@@ -991,6 +997,24 @@ export class ChatController {
 
         // Direct message from a contact (outside workspace)
         if (data.isDirect) {
+          // Receiver-side policy guard for workspace-origin DMs.
+          const workspaceContextId = typeof (data as any).workspaceContextId === 'string'
+            ? (data as any).workspaceContextId
+            : undefined;
+          if (workspaceContextId) {
+            const ws = this.workspaceManager.getWorkspace(workspaceContextId);
+            const me = ws?.members.find((m: any) => m.peerId === this.state.myPeerId);
+            if (me && me.allowWorkspaceDMs === false) {
+              this.sendControlWithRetry(peerId, {
+                type: 'direct-denied',
+                workspaceId: workspaceContextId,
+                reason: 'workspace-dm-disabled',
+              }, { label: 'direct-denied' });
+              console.warn(`[Privacy] Rejected workspace DM from ${peerId.slice(0, 8)} in ${workspaceContextId.slice(0, 8)} (recipient disabled workspace DMs)`);
+              return;
+            }
+          }
+
           // Multi-device dedup for DMs
           if (data.messageId && this.multiDeviceDedup.isDuplicate(data.messageId)) {
             console.log(`[MultiDevice] Dedup: skipping duplicate DM ${(data.messageId as string).slice(0, 8)} from ${peerId.slice(0, 8)}`);
@@ -3831,8 +3855,25 @@ export class ChatController {
   // Standalone Direct Messages
   // =========================================================================
 
-  async startDirectMessage(contactPeerId: string): Promise<DirectConversation> {
-    const conv = await this.directConversationStore.create(contactPeerId);
+  async startDirectMessage(
+    contactPeerId: string,
+    options?: { sourceWorkspaceId?: string },
+  ): Promise<DirectConversation> {
+    const sourceWorkspaceId = options?.sourceWorkspaceId;
+
+    // Sender-side policy guard: if DM is initiated from workspace context,
+    // respect recipient preference for workspace-origin DMs.
+    if (sourceWorkspaceId) {
+      const ws = this.workspaceManager.getWorkspace(sourceWorkspaceId);
+      const targetMember = ws?.members.find((m: any) => m.peerId === contactPeerId);
+      if (targetMember && targetMember.allowWorkspaceDMs === false) {
+        throw new Error('This member disallows workspace DMs.');
+      }
+    }
+
+    const conv = await this.directConversationStore.create(contactPeerId, {
+      originWorkspaceId: sourceWorkspaceId,
+    });
     await this.persistentStore.saveDirectConversation(conv);
     this.ui?.updateSidebar();
     return conv;
@@ -3910,6 +3951,9 @@ export class ChatController {
       (envelope as any).threadId = threadId;
       (envelope as any).vectorClock = (msg as any).vectorClock;
       (envelope as any).isDirect = true;
+      if ((conv as any).originWorkspaceId) {
+        (envelope as any).workspaceContextId = (conv as any).originWorkspaceId;
+      }
 
       // Include thread root snapshot for DM thread replies
       if (threadId) {

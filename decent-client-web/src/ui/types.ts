@@ -80,7 +80,7 @@ export interface UICallbacks {
   addContact?: (contact: Contact) => Promise<void>;
   removeContact?: (peerId: string) => Promise<void>;
   getContacts?: () => Promise<Contact[]>;
-  startDirectMessage?: (contactPeerId: string) => Promise<DirectConversation>;
+  startDirectMessage?: (contactPeerId: string, options?: { sourceWorkspaceId?: string }) => Promise<DirectConversation>;
   getDirectConversations?: () => Promise<DirectConversation[]>;
   getAllWorkspaces?: () => Array<import('decent-protocol').Workspace>;
   setWorkspaceAlias?: (wsId: string, alias: string) => void;

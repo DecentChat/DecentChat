@@ -239,17 +239,17 @@ export function createUIService(
   }
 
   function startMemberDM(peerId: string): void {
-    const existing = cachedData.directConversations.find(c => c.contactPeerId === peerId);
-    if (existing) {
-      switchToDirectConversation(existing.id);
-      return;
-    }
-    callbacks.startDirectMessage?.(peerId)
+    callbacks.startDirectMessage?.(peerId, {
+      sourceWorkspaceId: state.activeWorkspaceId || undefined,
+    })
       .then(async conv => {
         await refreshContactsCache();
         switchToDirectConversation(conv.id);
       })
-      .catch(() => showToast('Could not start DM', 'error'));
+      .catch((err: any) => {
+        const message = err?.message || 'Could not start DM';
+        showToast(message, 'error');
+      });
   }
 
   function hideLoading(): void {

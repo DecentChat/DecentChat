@@ -70,8 +70,13 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
             const isMe = identityPeers.includes(state.myPeerId);
             const isOnline = isMe || identityPeers.some((pid: string) => peerStatusClass(pid) === 'online');
             return {
-              peerId: m.peerId, alias: getPeerAlias(m.peerId), isOnline, isMe,
-              role: m.role, isBot: m.isBot,
+              peerId: m.peerId,
+              alias: getPeerAlias(m.peerId),
+              isOnline,
+              isMe,
+              role: m.role,
+              isBot: m.isBot,
+              allowWorkspaceDMs: m.allowWorkspaceDMs !== false,
               statusClass: peerStatusClass(m.peerId),
               statusTitle: peerStatusTitle(m.peerId),
             };
