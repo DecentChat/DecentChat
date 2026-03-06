@@ -2813,7 +2813,7 @@ export class ChatController {
   }
 
   // =========================================================================
-  // Workspace / channel helpers (delegated to by UIRenderer callbacks)
+  // Workspace / channel helpers (delegated to by UIService callbacks)
   // =========================================================================
 
   createWorkspace(name: string, alias: string): Workspace {

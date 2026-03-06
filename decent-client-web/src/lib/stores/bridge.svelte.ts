@@ -1,10 +1,6 @@
 /**
- * Bridge Layer — Connects existing vanilla ChatController/UIRenderer state
+ * Bridge Layer — Connects existing vanilla ChatController/UIService state
  * to Svelte's reactivity system.
- *
- * During migration, this lets new Svelte components read/write the same
- * state as the vanilla code. Once migration is complete, the bridge is
- * deleted and stores become the source of truth.
  *
  * Usage in Svelte components:
  *   import { appState } from '$lib/stores/bridge.svelte';

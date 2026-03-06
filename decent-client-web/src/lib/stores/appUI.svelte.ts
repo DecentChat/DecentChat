@@ -7,7 +7,7 @@
 
 import type { PlaintextMessage, Contact, DirectConversation } from 'decent-protocol';
 import type { HuddleState, HuddleParticipant } from '../../huddle/HuddleManager';
-import type { UICallbacks, ActivityItem } from '../../ui/UIRenderer';
+import type { UICallbacks, ActivityItem } from '../../ui/types';
 
 // ── Types ──
 
@@ -117,22 +117,13 @@ export const appUI = $state({
   headerIsHuddleActive: false,
 });
 
-// ── Callbacks reference (set once by UIRenderer) ──
+// ── Callbacks reference (set once by uiService) ──
 let _callbacks: UICallbacks | null = null;
-let _renderer: any = null;
 
 export function setUICallbacks(callbacks: UICallbacks): void {
   _callbacks = callbacks;
 }
 
-export function setUIRenderer(renderer: any): void {
-  _renderer = renderer;
-}
-
 export function getUICallbacks(): UICallbacks | null {
   return _callbacks;
-}
-
-export function getUIRenderer(): any {
-  return _renderer;
 }

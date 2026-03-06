@@ -1,9 +1,9 @@
 /**
  * P2P Chat PWA — Entry Point
  *
- * Thin bootstrap: creates ChatController + UIRenderer, wires them together,
- * then calls init().  All business logic lives in ChatController; all DOM
- * rendering lives in UIRenderer.
+ * Thin bootstrap: creates ChatController + UIService, wires them together,
+ * then calls init().  All business logic lives in ChatController; all UI
+ * state management lives in uiService (writing to Svelte stores).
  */
 
 import './ui/styles/main.css';
@@ -71,7 +71,7 @@ import './ui/styles/tooltips.css';
 import { initTooltips } from './ui/TooltipManager';
 import { ChatController } from './app/ChatController';
 import { LifecycleReconnectGuard } from './app/LifecycleReconnectGuard';
-import { UIRenderer } from './ui/UIRenderer';
+import { createUIService, type UIService } from './ui/uiService';
 import { CommandParser } from './commands/CommandParser';
 import { registerCommands } from './commands/registerCommands';
 import type { AppSettings } from './storage/types';
@@ -183,8 +183,8 @@ async function init(): Promise<void> {
   const commandParser = new CommandParser();
   registerCommands(commandParser, ctrl, state);
 
-  // Create renderer (owns all DOM manipulation)
-  const ui = new UIRenderer(state, ctrl.workspaceManager, ctrl.messageStore, {
+  // Create UI service (owns all DOM manipulation via Svelte stores)
+  const ui = createUIService(state, ctrl.workspaceManager, ctrl.messageStore, {
     sendMessage: async (content, threadId) => {
       if (commandParser.isCommand(content)) {
         const result = await commandParser.execute(content);
