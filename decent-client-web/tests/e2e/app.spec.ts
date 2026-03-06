@@ -22,6 +22,14 @@ test.describe('DecentChat E2E', () => {
     await expect(page).toHaveTitle(/DecentChat/);
   });
 
+  test('join workspace modal shows DM privacy checkbox checked by default', async ({ page }) => {
+    await page.click('#join-ws-btn');
+    await expect(page.locator('.modal')).toBeVisible();
+    const checkbox = page.locator('input[name="allowWorkspaceDMs"]');
+    await expect(checkbox).toBeVisible();
+    await expect(checkbox).toBeChecked();
+  });
+
   // ─── Workspace Creation ────────────────────────────────────────────────
 
   test('create workspace shows modal', async ({ page }) => {

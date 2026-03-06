@@ -104,10 +104,24 @@ export async function getMessages(page: Page): Promise<string[]> {
   return page.locator('.message-content').allTextContents();
 }
 
-export async function joinViaInviteUrl(page: Page, inviteUrl: string, alias: string): Promise<void> {
+export async function joinViaInviteUrl(
+  page: Page,
+  inviteUrl: string,
+  alias: string,
+  options?: { allowWorkspaceDMs?: boolean },
+): Promise<void> {
   await page.goto(inviteUrl);
   await page.waitForSelector('.modal', { timeout: 10000 });
   await page.locator('input[name="alias"]').fill(alias);
+
+  if (options && typeof options.allowWorkspaceDMs === 'boolean') {
+    const checkbox = page.locator('input[name="allowWorkspaceDMs"]');
+    if (await checkbox.count()) {
+      if (options.allowWorkspaceDMs) await checkbox.check();
+      else await checkbox.uncheck();
+    }
+  }
+
   await page.click('.modal .btn-primary');
   await page.waitForSelector('.sidebar-header', { timeout: 15000 });
 }

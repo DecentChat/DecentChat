@@ -37,6 +37,7 @@
         "workbox-precaching": "^7.4.0",
         "workbox-routing": "^7.4.0",
         "workbox-window": "^7.1.0",
+        "ws": "^8.19.0",
       },
     },
     "decent-openclaw": {
