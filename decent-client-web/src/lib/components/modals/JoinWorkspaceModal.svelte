@@ -154,6 +154,7 @@
         <input
           type="text"
           id="join-invite"
+          name="invite"
           class="invite-input{autofilled ? ' invite-autofilled' : ''}"
           placeholder="https://decentchat.app/join/... or paste invite link"
           required
@@ -180,6 +181,7 @@
         <input
           type="text"
           id="join-alias"
+          name="alias"
           class="join-alias-input"
           placeholder="Your name"
           required

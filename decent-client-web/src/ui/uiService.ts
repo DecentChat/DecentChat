@@ -9,7 +9,7 @@
  *   - Initialization (createUIService factory)
  */
 
-import type { WorkspaceManager, MessageStore, PlaintextMessage, InviteData } from 'decent-protocol';
+import type { WorkspaceManager, MessageStore, PlaintextMessage, InviteData, Contact, WorkspacePermissions } from 'decent-protocol';
 import { InviteURI } from 'decent-protocol';
 import { MessageSearch } from './MessageSearch';
 import { SettingsPanel } from './SettingsPanel';
@@ -483,6 +483,18 @@ export function createUIService(
       callbacks.markThreadActivityRead?.(state.activeChannelId, messageId);
       syncShellHeader();
     }
+    // After thread panel opens/switches, the channel messages container width changes
+    // (text rewraps, scrollHeight changes). Clamp scroll to valid range so channel
+    // messages stay visible instead of scrolling into whitespace.
+    requestAnimationFrame(() => {
+      const ml = document.getElementById('messages-list');
+      if (ml) {
+        const maxScroll = ml.scrollHeight - ml.clientHeight;
+        if (ml.scrollTop > maxScroll) {
+          ml.scrollTop = maxScroll;
+        }
+      }
+    });
     setTimeout(() => {
       (document.getElementById('thread-input') as HTMLTextAreaElement)?.focus();
     }, 100);
@@ -493,6 +505,16 @@ export function createUIService(
     state.threadOpen = false;
     persistViewState();
     syncShellThread();
+    // Clamp channel scroll after layout reflow (thread panel closing changes width)
+    requestAnimationFrame(() => {
+      const ml = document.getElementById('messages-list');
+      if (ml) {
+        const maxScroll = ml.scrollHeight - ml.clientHeight;
+        if (ml.scrollTop > maxScroll) {
+          ml.scrollTop = maxScroll;
+        }
+      }
+    });
   }
 
   function startMemberDM(peerId: string): void {
@@ -745,7 +767,7 @@ export function createUIService(
 
   function showAddContactModal(): void {
     svelteShowAddContactModal({
-      onAdd: async (contact) => {
+      onAdd: async (contact: Contact) => {
         await callbacks.addContact?.(contact);
         await refreshContactsCache();
         updateSidebar();
@@ -858,8 +880,17 @@ export function createUIService(
           const infoRes = await callbacks.updateWorkspaceInfo?.({ name: data.name, description: data.description });
           if (infoRes && !infoRes.success) { showToast(infoRes.error || 'Failed to update workspace info', 'error'); return false; }
         }
-        if (data.whoCanCreateChannels !== perms.whoCanCreateChannels || data.whoCanInviteMembers !== perms.whoCanInviteMembers) {
-          const permRes = await callbacks.updateWorkspacePermissions?.({ whoCanCreateChannels: data.whoCanCreateChannels, whoCanInviteMembers: data.whoCanInviteMembers });
+
+        const normalizedPerms: WorkspacePermissions = {
+          whoCanCreateChannels: data.whoCanCreateChannels === 'admins' ? 'admins' : 'everyone',
+          whoCanInviteMembers: data.whoCanInviteMembers === 'admins' ? 'admins' : 'everyone',
+        };
+
+        if (
+          normalizedPerms.whoCanCreateChannels !== perms.whoCanCreateChannels ||
+          normalizedPerms.whoCanInviteMembers !== perms.whoCanInviteMembers
+        ) {
+          const permRes = await callbacks.updateWorkspacePermissions?.(normalizedPerms);
           if (permRes && !permRes.success) { showToast(permRes.error || 'Failed to update permissions', 'error'); return false; }
         }
         showToast('Workspace settings saved', 'success');
