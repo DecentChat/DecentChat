@@ -234,7 +234,7 @@ async function init(): Promise<void> {
     broadcastStopTyping: () => ctrl.broadcastStopTyping(),
     toggleReaction: (msgId, emoji) => ctrl.toggleReaction(msgId, emoji),
     getSettings: async () => ctrl.persistentStore.getSettings({}),
-    generateInviteURL: (wsId) => ctrl.generateInviteURL(wsId),
+    generateInviteURL: (wsId) => ctrl.generateInviteURL(wsId), // returns Promise<string> now
     addContact: (contact) => ctrl.addContact(contact),
     removeContact: (peerId) => ctrl.removeContact(peerId),
     getContacts: () => ctrl.getContacts(),

@@ -60,6 +60,7 @@ export type { TimeSyncRequest, TimeSyncResponse, PeerClockInfo } from './time/Cl
 // ─── Invite ─────────────────────────────────────────────────────────────────
 export { InviteURI, DEFAULT_PUBLIC_SERVERS } from './invite/InviteURI';
 export type { InviteData } from './invite/InviteURI';
+export { signInvite, verifyInviteSignature } from './invite/InviteAuth';
 
 // ─── Transport ──────────────────────────────────────────────────────────────
 // ─── Security ───────────────────────────────────────────────────────────────

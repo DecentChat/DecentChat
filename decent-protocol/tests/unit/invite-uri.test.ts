@@ -378,6 +378,134 @@ describe('InviteURI - Multi-Peer Discovery', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Invite security fields (expiresAt, maxUses, inviteId, inviterId, signature)
+// ---------------------------------------------------------------------------
+
+describe('InviteURI - Security Fields Encode/Decode', () => {
+  test('encode includes security fields as URL params', () => {
+    const uri = InviteURI.encode({
+      host: '10.0.0.1',
+      port: 9000,
+      inviteCode: 'SEC001',
+      secure: false,
+      path: '/peerjs',
+      fallbackServers: [],
+      turnServers: [],
+      expiresAt: 1700000000000,
+      maxUses: 5,
+      inviteId: 'inv-abc123',
+      inviterId: 'alice',
+      signature: 'dGVzdC1zaWc',
+    });
+
+    const decoded = decodeURIComponent(uri);
+    expect(decoded).toContain('exp=1700000000000');
+    expect(decoded).toContain('max=5');
+    expect(decoded).toContain('i=inv-abc123');
+    expect(decoded).toContain('inviter=alice');
+    expect(decoded).toContain('sig=dGVzdC1zaWc');
+  });
+
+  test('decode parses security fields from web URL', () => {
+    const uri = 'https://decentchat.app/join/SEC002?signal=10.0.0.1:9000&exp=1700000000000&max=10&i=inv-web-2&inviter=bob&sig=abc123';
+    const data = InviteURI.decode(uri);
+
+    expect(data.expiresAt).toBe(1700000000000);
+    expect(data.maxUses).toBe(10);
+    expect(data.inviteId).toBe('inv-web-2');
+    expect(data.inviterId).toBe('bob');
+    expect(data.signature).toBe('abc123');
+  });
+
+  test('decode parses security fields from native URI', () => {
+    const uri = 'decent://10.0.0.1:9000/SEC003?exp=1700000000000&max=3&i=inv-native-3&inviter=carol&sig=xyz789';
+    const data = InviteURI.decode(uri);
+
+    expect(data.expiresAt).toBe(1700000000000);
+    expect(data.maxUses).toBe(3);
+    expect(data.inviteId).toBe('inv-native-3');
+    expect(data.inviterId).toBe('carol');
+    expect(data.signature).toBe('xyz789');
+  });
+
+  test('encode → decode roundtrip preserves security fields', () => {
+    const original = InviteURI.encode({
+      host: '10.0.0.1',
+      port: 9000,
+      inviteCode: 'ROUND004',
+      secure: false,
+      path: '/peerjs',
+      fallbackServers: [],
+      turnServers: [],
+      expiresAt: 1700000000000,
+      maxUses: 25,
+      inviteId: 'inv-round-4',
+      inviterId: 'dave',
+      signature: 'sig-value-here',
+    });
+
+    const decoded = InviteURI.decode(original);
+    expect(decoded.expiresAt).toBe(1700000000000);
+    expect(decoded.maxUses).toBe(25);
+    expect(decoded.inviteId).toBe('inv-round-4');
+    expect(decoded.inviterId).toBe('dave');
+    expect(decoded.signature).toBe('sig-value-here');
+  });
+
+  test('encodeNative → decode roundtrip preserves security fields', () => {
+    const original = InviteURI.encodeNative({
+      host: '10.0.0.1',
+      port: 9000,
+      inviteCode: 'ROUND005',
+      secure: false,
+      path: '/peerjs',
+      fallbackServers: [],
+      turnServers: [],
+      expiresAt: 1700000000000,
+      maxUses: 50,
+      inviteId: 'inv-round-5',
+      inviterId: 'eve',
+      signature: 'native-sig',
+    });
+
+    const decoded = InviteURI.decode(original);
+    expect(decoded.expiresAt).toBe(1700000000000);
+    expect(decoded.maxUses).toBe(50);
+    expect(decoded.inviteId).toBe('inv-round-5');
+    expect(decoded.inviterId).toBe('eve');
+    expect(decoded.signature).toBe('native-sig');
+  });
+
+  test('old invites without security fields still decode fine', () => {
+    const uri = 'https://decentchat.app/join/OLD003?signal=10.0.0.1:9000&peer=alice';
+    const data = InviteURI.decode(uri);
+
+    expect(data.inviteCode).toBe('OLD003');
+    expect(data.peerId).toBe('alice');
+    expect(data.expiresAt).toBeUndefined();
+    expect(data.maxUses).toBeUndefined();
+    expect(data.inviteId).toBeUndefined();
+    expect(data.inviterId).toBeUndefined();
+    expect(data.signature).toBeUndefined();
+  });
+
+  test('maxUses=0 is not encoded (unlimited)', () => {
+    const uri = InviteURI.encode({
+      host: '10.0.0.1',
+      port: 9000,
+      inviteCode: 'NOLIMIT',
+      secure: false,
+      path: '/peerjs',
+      fallbackServers: [],
+      turnServers: [],
+      maxUses: 0,
+    });
+
+    expect(uri).not.toContain('max=');
+  });
+});
+
 describe('InviteURI - Share Text', () => {
   test('generates shareable text with web URL', () => {
     const text = InviteURI.toShareText({

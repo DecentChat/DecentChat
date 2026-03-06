@@ -34,6 +34,7 @@ function makeInviteData(overrides: Partial<InviteData> = {}): InviteData {
     workspaceId: 'ws-abc-123',
     expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
     maxUses: 0,
+    inviteId: 'inv-test-123',
     inviterId: 'alice-peer-id',
     ...overrides,
   };
@@ -158,6 +159,7 @@ describe('InviteAuth - Sign and Verify', () => {
     expect(decoded.expiresAt).toBe(data.expiresAt);
     // maxUses=0 (unlimited) is not encoded, so decoded is undefined — both map to 0 in getSignPayload
     expect(decoded.maxUses ?? 0).toBe(data.maxUses ?? 0);
+    expect(decoded.inviteId).toBe(data.inviteId);
     expect(decoded.inviterId).toBe(data.inviterId);
 
     // Verify the decoded data with the signature still works
@@ -211,8 +213,20 @@ describe('InviteAuth - getSignPayload', () => {
       workspaceId: 'ws-1',
       expiresAt: 12345,
       maxUses: 10,
+      inviteId: undefined,
     });
     expect(InviteURI.getSignPayload(data)).toBe('ABC:ws-1:12345:10');
+  });
+
+  test('includes inviteId when present', () => {
+    const data = makeInviteData({
+      inviteCode: 'ABC',
+      workspaceId: 'ws-1',
+      expiresAt: 12345,
+      maxUses: 10,
+      inviteId: 'inv-xyz',
+    });
+    expect(InviteURI.getSignPayload(data)).toBe('ABC:ws-1:12345:10:inv-xyz');
   });
 
   test('handles missing optional fields with defaults', () => {
@@ -220,6 +234,7 @@ describe('InviteAuth - getSignPayload', () => {
       workspaceId: undefined,
       expiresAt: undefined,
       maxUses: undefined,
+      inviteId: undefined,
     });
     expect(InviteURI.getSignPayload(data)).toBe(`${data.inviteCode}::0:0`);
   });

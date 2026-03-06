@@ -407,6 +407,12 @@ export class NodeXenaPeer {
         return;
       }
 
+      // Validate invite expiration
+      if (InviteURI.isExpired(invite)) {
+        this.opts.log?.warn?.('[xena-peer] invite has expired; skipping join');
+        return;
+      }
+
       await this.transport.connect(invite.peerId);
 
       const member: WorkspaceMember = {
@@ -418,7 +424,7 @@ export class NodeXenaPeer {
         joinedAt: Date.now(),
       };
 
-      this.syncProtocol.requestJoin(invite.peerId, invite.inviteCode, member);
+      this.syncProtocol.requestJoin(invite.peerId, invite.inviteCode, member, invite.inviteId);
       this.opts.log?.info(`[xena-peer] join request sent to ${invite.peerId}`);
     } catch (err) {
       this.opts.log?.error?.(`[xena-peer] join failed: ${String(err)}`);

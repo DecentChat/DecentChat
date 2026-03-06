@@ -48,7 +48,7 @@ export interface UICallbacks {
     pending: Array<{ peerId: string; name: string; at?: number }>;
   } | null;
   getSettings?: () => Promise<any>;
-  generateInviteURL?: (workspaceId: string) => string;
+  generateInviteURL?: (workspaceId: string) => string | Promise<string>;
   onSettingsAction?: (action: string) => void | Promise<void>;
   onQRContactScanned?: (data: ContactURIData) => void;
   getMyPublicKey?: () => string;

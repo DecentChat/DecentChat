@@ -102,11 +102,12 @@ export class SyncProtocol {
   /**
    * Send a join request to a peer (I want to join their workspace)
    */
-  requestJoin(targetPeerId: string, inviteCode: string, myMember: WorkspaceMember): void {
+  requestJoin(targetPeerId: string, inviteCode: string, myMember: WorkspaceMember, inviteId?: string): void {
     const msg: SyncMessage = {
       type: 'join-request',
       inviteCode,
       member: myMember,
+      inviteId,
       pexServers: this.serverDiscovery?.getHandshakeServers(),
     };
     this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
@@ -183,6 +184,15 @@ export class SyncProtocol {
       this.sendFn(fromPeerId, {
         type: 'workspace-sync',
         sync: { type: 'join-rejected', reason: 'Invalid invite code' } as SyncMessage,
+      });
+      return;
+    }
+
+    // Reject revoked invite links (if invite has a stable id)
+    if (msg.inviteId && this.workspaceManager.isInviteRevoked(workspace.id, msg.inviteId)) {
+      this.sendFn(fromPeerId, {
+        type: 'workspace-sync',
+        sync: { type: 'join-rejected', reason: 'This invite link has been revoked by an admin' } as SyncMessage,
       });
       return;
     }

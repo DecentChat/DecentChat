@@ -84,7 +84,11 @@ export class WorkspaceManager {
   /** Get the effective permissions for a workspace (with backward-compat defaults). */
   getPermissions(workspaceId: string): WorkspacePermissions {
     const workspace = this.workspaces.get(workspaceId);
-    return workspace?.permissions ?? { ...DEFAULT_WORKSPACE_PERMISSIONS };
+    const perms = workspace?.permissions ?? { ...DEFAULT_WORKSPACE_PERMISSIONS };
+    return {
+      ...perms,
+      revokedInviteIds: Array.isArray(perms.revokedInviteIds) ? [...new Set(perms.revokedInviteIds)] : [],
+    };
   }
 
   /** Update workspace permissions. Only Owner or Admin can do this. */
@@ -99,10 +103,22 @@ export class WorkspaceManager {
       return { success: false, error: 'Only admins and owners can change workspace settings' };
     }
 
-    workspace.permissions = {
+    const next = {
       ...(workspace.permissions ?? { ...DEFAULT_WORKSPACE_PERMISSIONS }),
       ...permissions,
-    };
+    } as WorkspacePermissions;
+
+    if (permissions.revokedInviteIds !== undefined) {
+      next.revokedInviteIds = Array.from(new Set(
+        permissions.revokedInviteIds
+          .map((id) => String(id || '').trim())
+          .filter((id) => id.length > 0),
+      ));
+    } else {
+      next.revokedInviteIds = Array.isArray(next.revokedInviteIds) ? [...new Set(next.revokedInviteIds)] : [];
+    }
+
+    workspace.permissions = next;
     return { success: true };
   }
 
@@ -162,6 +178,12 @@ export class WorkspaceManager {
     const perms = workspace.permissions ?? DEFAULT_WORKSPACE_PERMISSIONS;
     if (perms.whoCanInviteMembers === 'everyone') return true;
     return this.isAdmin(workspaceId, peerId);
+  }
+
+  isInviteRevoked(workspaceId: string, inviteId?: string): boolean {
+    if (!inviteId) return false;
+    const perms = this.getPermissions(workspaceId);
+    return (perms.revokedInviteIds || []).includes(inviteId);
   }
 
   canRemoveMember(workspaceId: string, actorPeerId: string, targetPeerId: string): boolean {
@@ -431,6 +453,14 @@ export class WorkspaceManager {
     // Ensure backward-compat: old workspaces without permissions get defaults
     if (!workspace.permissions) {
       workspace.permissions = { ...DEFAULT_WORKSPACE_PERMISSIONS };
+    } else {
+      workspace.permissions = {
+        ...DEFAULT_WORKSPACE_PERMISSIONS,
+        ...workspace.permissions,
+        revokedInviteIds: Array.isArray(workspace.permissions.revokedInviteIds)
+          ? [...new Set(workspace.permissions.revokedInviteIds)]
+          : [],
+      };
     }
     // Normalize legacy roles: old workspaces only had 'owner' | 'member'
     for (const member of workspace.members) {

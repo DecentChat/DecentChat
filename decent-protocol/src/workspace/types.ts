@@ -11,11 +11,14 @@ export enum WorkspaceRole {
 export interface WorkspacePermissions {
   whoCanCreateChannels: 'everyone' | 'admins';
   whoCanInviteMembers: 'everyone' | 'admins';
+  /** Invite IDs that admins/owners have revoked. */
+  revokedInviteIds?: string[];
 }
 
 export const DEFAULT_WORKSPACE_PERMISSIONS: WorkspacePermissions = {
   whoCanCreateChannels: 'everyone',
   whoCanInviteMembers: 'everyone',
+  revokedInviteIds: [],
 };
 
 export interface Workspace {
@@ -75,7 +78,7 @@ export interface PEXServer {
 
 // P2P sync messages
 export type SyncMessage =
-  | { type: 'join-request'; inviteCode: string; member: WorkspaceMember; pexServers?: PEXServer[] }
+  | { type: 'join-request'; inviteCode: string; member: WorkspaceMember; inviteId?: string; pexServers?: PEXServer[] }
   // `messageHistory` intentionally omits plaintext message content during sync.
   | { type: 'join-accepted'; workspace: Workspace; messageHistory: Record<string, any[]>; pexServers?: PEXServer[] }
   | { type: 'join-rejected'; reason: string }

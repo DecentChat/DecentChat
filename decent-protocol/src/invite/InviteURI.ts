@@ -46,6 +46,8 @@ export interface InviteData {
   expiresAt?: number;
   /** Optional maximum number of uses (0 or undefined = unlimited) */
   maxUses?: number;
+  /** Stable per-invite identifier (for revocation) */
+  inviteId?: string;
   /** Inviter peer identity (for auditing/UX) */
   inviterId?: string;
   /** Optional cryptographic signature over canonical payload */
@@ -77,6 +79,7 @@ export class InviteURI {
       path,
       expiresAt,
       maxUses,
+      inviteId,
       inviterId,
       signature,
     } = data;
@@ -93,6 +96,7 @@ export class InviteURI {
     if (path && path !== '/peerjs') params.set('path', path);
     if (typeof expiresAt === 'number' && expiresAt > 0) params.set('exp', String(expiresAt));
     if (typeof maxUses === 'number' && maxUses > 0) params.set('max', String(maxUses));
+    if (inviteId) params.set('i', inviteId);
     if (inviterId) params.set('inviter', inviterId);
     if (signature) params.set('sig', signature);
 
@@ -152,6 +156,7 @@ export class InviteURI {
     if (data.path && data.path !== '/peerjs') params.set('path', data.path);
     if (typeof data.expiresAt === 'number' && data.expiresAt > 0) params.set('exp', String(data.expiresAt));
     if (typeof data.maxUses === 'number' && data.maxUses > 0) params.set('max', String(data.maxUses));
+    if (data.inviteId) params.set('i', data.inviteId);
     if (data.inviterId) params.set('inviter', data.inviterId);
     if (data.signature) params.set('sig', data.signature);
 
@@ -209,6 +214,7 @@ export class InviteURI {
     const maxRaw = params.get('max');
     const expiresAt = expRaw ? Number(expRaw) : undefined;
     const maxUses = maxRaw ? Number(maxRaw) : undefined;
+    const inviteId = params.get('i') || undefined;
     const inviterId = params.get('inviter') || undefined;
     const signature = params.get('sig') || undefined;
 
@@ -232,6 +238,7 @@ export class InviteURI {
       workspaceId: params.get('ws') || undefined,
       expiresAt: Number.isFinite(expiresAt) ? expiresAt : undefined,
       maxUses: Number.isFinite(maxUses) ? maxUses : undefined,
+      inviteId,
       inviterId,
       signature,
     };
@@ -273,6 +280,7 @@ export class InviteURI {
     const maxRaw = parsed.searchParams.get('max');
     const expiresAt = expRaw ? Number(expRaw) : undefined;
     const maxUses = maxRaw ? Number(maxRaw) : undefined;
+    const inviteId = parsed.searchParams.get('i') || undefined;
 
     return {
       host,
@@ -289,6 +297,7 @@ export class InviteURI {
       workspaceId: parsed.searchParams.get('ws') || undefined,
       expiresAt: Number.isFinite(expiresAt) ? expiresAt : undefined,
       maxUses: Number.isFinite(maxUses) ? maxUses : undefined,
+      inviteId,
       inviterId: parsed.searchParams.get('inviter') || undefined,
       signature: parsed.searchParams.get('sig') || undefined,
     };
@@ -352,7 +361,9 @@ export class InviteURI {
    * Keep this deterministic and stable across versions.
    */
   static getSignPayload(data: InviteData): string {
-    return `${data.inviteCode}:${data.workspaceId || ''}:${data.expiresAt || 0}:${data.maxUses || 0}`;
+    const base = `${data.inviteCode}:${data.workspaceId || ''}:${data.expiresAt || 0}:${data.maxUses || 0}`;
+    // Backward-compat: old signed invites omitted inviteId entirely.
+    return data.inviteId ? `${base}:${data.inviteId}` : base;
   }
 
   /**

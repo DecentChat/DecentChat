@@ -54,6 +54,7 @@ describe('DEFAULT_WORKSPACE_PERMISSIONS', () => {
   it('defaults to everyone for both policies', () => {
     expect(DEFAULT_WORKSPACE_PERMISSIONS.whoCanCreateChannels).toBe('everyone');
     expect(DEFAULT_WORKSPACE_PERMISSIONS.whoCanInviteMembers).toBe('everyone');
+    expect(DEFAULT_WORKSPACE_PERMISSIONS.revokedInviteIds).toEqual([]);
   });
 });
 
@@ -523,6 +524,21 @@ describe('updatePermissions', () => {
     const perms = wm.getPermissions(ws.id);
     expect(perms.whoCanCreateChannels).toBe('admins');
     expect(perms.whoCanInviteMembers).toBe('admins');
+  });
+
+  it('can persist revoked invite ids and dedupe values', () => {
+    const res = wm.updatePermissions(ws.id, 'owner-peer', {
+      revokedInviteIds: ['inv-a', 'inv-b', 'inv-a', '  inv-c  ', ''],
+    });
+    expect(res.success).toBe(true);
+    expect(wm.getPermissions(ws.id).revokedInviteIds).toEqual(['inv-a', 'inv-b', 'inv-c']);
+  });
+
+  it('isInviteRevoked returns true only for revoked ids', () => {
+    wm.updatePermissions(ws.id, 'owner-peer', { revokedInviteIds: ['inv-x'] });
+    expect(wm.isInviteRevoked(ws.id, 'inv-x')).toBe(true);
+    expect(wm.isInviteRevoked(ws.id, 'inv-y')).toBe(false);
+    expect(wm.isInviteRevoked(ws.id, undefined)).toBe(false);
   });
 
   it('fails for non-existent workspace', () => {

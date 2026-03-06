@@ -95,23 +95,51 @@ export function registerCommands(parser: CommandParser, ctrl: ChatController, st
 
   parser.register({
     name: 'invite',
-    description: 'Generate invite link for this workspace',
-    usage: '/invite',
+    description: 'Generate invite link for this workspace (expiring by default)',
+    usage: '/invite [permanent|--permanent]',
     category: 'workspace',
-    execute: () => {
+    execute: async (args) => {
       if (!state.activeWorkspaceId) {
         return { handled: true, error: 'No active workspace' };
       }
       const ws = ctrl.workspaceManager.getWorkspace(state.activeWorkspaceId);
       if (!ws) return { handled: true, error: 'Workspace not found' };
 
+      const normalizedArgs = args.map((arg) => arg.trim().toLowerCase()).filter(Boolean);
+      const permanent = normalizedArgs.includes('permanent') || normalizedArgs.includes('--permanent') || normalizedArgs.includes('-p');
+      const unknown = normalizedArgs.filter((arg) => !['permanent', '--permanent', '-p'].includes(arg));
+      if (unknown.length > 0) {
+        return { handled: true, error: 'Usage: /invite [permanent|--permanent]' };
+      }
+
       const code = ws.inviteCode || 'NONE';
-      const uri = ctrl.generateInviteURL(state.activeWorkspaceId);
+      const uri = await ctrl.generateInviteURL(state.activeWorkspaceId, { permanent });
 
       return {
         handled: true,
-        output: `📨 Invite to "${ws.name}":\n\n${uri}\n\nInvite code: ${code}\nPeer ID: ${state.myPeerId}\n\nShare this with someone to invite them.`,
+        output: `📨 ${permanent ? 'Permanent' : 'Invite'} link to "${ws.name}":\n\n${uri}\n\nInvite code: ${code}\nPeer ID: ${state.myPeerId}\n\n${permanent ? 'This invite does not expire unless revoked by an admin.' : 'This invite expires in 7 days.'}`,
       };
+    },
+  });
+
+  parser.register({
+    name: 'invite-revoke',
+    description: 'Revoke a specific invite link by ID or URL (admin/owner)',
+    usage: '/invite-revoke <inviteId|inviteURL>',
+    category: 'workspace',
+    execute: async (_args, rawArgs) => {
+      if (!state.activeWorkspaceId) return { handled: true, error: 'No active workspace' };
+      const input = rawArgs.trim();
+      if (!input) return { handled: true, error: 'Usage: /invite-revoke <inviteId|inviteURL>' };
+
+      const result = await ctrl.revokeInviteLink(input);
+      if (!result.success) return { handled: true, error: result.error || 'Failed to revoke invite' };
+
+      if (result.alreadyRevoked) {
+        return { handled: true, output: `ℹ️ Invite ${result.inviteId} is already revoked.` };
+      }
+
+      return { handled: true, output: `🛑 Revoked invite ${result.inviteId}.` };
     },
   });
 

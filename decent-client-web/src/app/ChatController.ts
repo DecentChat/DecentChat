@@ -28,6 +28,7 @@ import {
   generateImageThumbnail,
   CHUNK_SIZE,
   InviteURI,
+  signInvite,
   MemoryContactStore,
   MemoryDirectConversationStore,
   ServerDiscovery,
@@ -1548,6 +1549,10 @@ export class ChatController {
         const validValues = ['everyone', 'admins'];
         if (settings.whoCanCreateChannels && !validValues.includes(settings.whoCanCreateChannels)) return;
         if (settings.whoCanInviteMembers && !validValues.includes(settings.whoCanInviteMembers)) return;
+        if (settings.revokedInviteIds !== undefined) {
+          if (!Array.isArray(settings.revokedInviteIds)) return;
+          if (settings.revokedInviteIds.some((id: any) => typeof id !== 'string')) return;
+        }
 
         // Replay protection for settings events
         const settingsTsKey = `settings:${msg.workspaceId}`;
@@ -1582,7 +1587,13 @@ export class ChatController {
           }
         }
 
-        ws.permissions = settings;
+        ws.permissions = {
+          ...(ws.permissions || { whoCanCreateChannels: 'everyone', whoCanInviteMembers: 'everyone', revokedInviteIds: [] }),
+          ...settings,
+          revokedInviteIds: Array.isArray(settings.revokedInviteIds)
+            ? Array.from(new Set(settings.revokedInviteIds.map((id: string) => id.trim()).filter(Boolean)))
+            : (ws.permissions?.revokedInviteIds || []),
+        };
         if (msg.sync.timestamp) this.lastRoleChangeTimestamp.set(settingsTsKey, msg.sync.timestamp);
         this.persistWorkspace(ws.id).catch(() => {});
         this.ui?.showToast('Workspace settings updated', 'info');
@@ -2900,6 +2911,60 @@ export class ChatController {
 
   async joinWorkspace(code: string, alias: string, peerId: string, inviteData?: InviteData): Promise<void> {
     console.log('[DecentChat] joinWorkspace called:', { code, alias, peerId, hasUI: !!this.ui });
+
+    // ── Invite security validation ──────────────────────────────────────
+    if (inviteData) {
+      // Check expiration
+      if (InviteURI.isExpired(inviteData)) {
+        const msg = 'This invite link has expired';
+        console.warn(`[DecentChat] ${msg}`);
+        this.ui?.showToast(msg, 'error');
+        return;
+      }
+
+      // Check revocation (when we already know this workspace locally)
+      const knownWorkspace = (inviteData.workspaceId ? this.workspaceManager.getWorkspace(inviteData.workspaceId) : null)
+        || this.workspaceManager.validateInviteCode(inviteData.inviteCode);
+      if (inviteData.inviteId && knownWorkspace && this.workspaceManager.isInviteRevoked(knownWorkspace.id, inviteData.inviteId)) {
+        const msg = 'This invite link has been revoked by an admin';
+        console.warn(`[DecentChat] ${msg}`);
+        this.ui?.showToast(msg, 'error');
+        return;
+      }
+
+      // Check max uses (tracked in localStorage per invite code)
+      if (inviteData.maxUses && inviteData.maxUses > 0) {
+        const usageKey = `invite-usage:${inviteData.inviteCode}`;
+        const currentUses = parseInt(localStorage.getItem(usageKey) || '0', 10);
+        if (currentUses >= inviteData.maxUses) {
+          const msg = 'This invite has reached its maximum uses';
+          console.warn(`[DecentChat] ${msg}`);
+          this.ui?.showToast(msg, 'error');
+          return;
+        }
+        // Increment usage
+        localStorage.setItem(usageKey, String(currentUses + 1));
+      }
+
+      // Verify signature if present (optional — unsigned invites still work for backward compat)
+      if (inviteData.signature && inviteData.publicKey) {
+        try {
+          const { verifyInviteSignature } = await import('decent-protocol');
+          const valid = await verifyInviteSignature(inviteData.publicKey, inviteData);
+          if (!valid) {
+            const msg = 'This invite link has an invalid signature — it may have been tampered with';
+            console.warn(`[DecentChat] ${msg}`);
+            this.ui?.showToast(msg, 'error');
+            return;
+          }
+          console.log('[DecentChat] Invite signature verified ✓');
+        } catch (err) {
+          console.warn('[DecentChat] Failed to verify invite signature:', err);
+          // Don't block join — verification failure is non-fatal for backward compat
+        }
+      }
+    }
+
     // Create the workspace locally for the joining user
     const ws = this.workspaceManager.createWorkspace(
       code, // use invite code as workspace name (will be updated from peer)
@@ -3511,6 +3576,46 @@ export class ChatController {
     return { success: true };
   }
 
+  async revokeInviteLink(inviteIdOrUrl: string): Promise<{ success: boolean; error?: string; inviteId?: string; alreadyRevoked?: boolean }> {
+    if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
+
+    const ws = this.workspaceManager.getWorkspace(this.state.activeWorkspaceId);
+    if (!ws) return { success: false, error: 'Workspace not found' };
+
+    let inviteId = String(inviteIdOrUrl || '').trim();
+    if (!inviteId) return { success: false, error: 'Usage: /invite-revoke <inviteId|inviteURL>' };
+
+    if (inviteId.includes('://') || inviteId.includes('/join/')) {
+      try {
+        const decoded = InviteURI.decode(inviteId);
+        if (decoded.workspaceId && decoded.workspaceId !== ws.id) {
+          return { success: false, error: 'Invite URL belongs to a different workspace' };
+        }
+        if (!decoded.workspaceId && decoded.inviteCode !== ws.inviteCode) {
+          return { success: false, error: 'Invite URL does not match this workspace' };
+        }
+        if (!decoded.inviteId) {
+          return { success: false, error: 'Invite URL has no revokable invite ID (older link)' };
+        }
+        inviteId = decoded.inviteId;
+      } catch {
+        return { success: false, error: 'Invalid invite URL' };
+      }
+    }
+
+    const existingRevoked = this.workspaceManager.getPermissions(ws.id).revokedInviteIds || [];
+    if (existingRevoked.includes(inviteId)) {
+      return { success: true, inviteId, alreadyRevoked: true };
+    }
+
+    const result = await this.updateWorkspacePermissions({
+      revokedInviteIds: [...existingRevoked, inviteId],
+    });
+    if (!result.success) return result;
+
+    return { success: true, inviteId };
+  }
+
   async updateWorkspaceInfo(updates: { name?: string; description?: string }): Promise<{ success: boolean; error?: string }> {
     if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
 
@@ -3801,10 +3906,12 @@ export class ChatController {
   // Typing / Presence
   // =========================================================================
 
-  /** Generate a full invite URL for a workspace */
-  generateInviteURL(workspaceId: string): string {
+  /** Generate a full invite URL for a workspace (signed, expiring by default). */
+  async generateInviteURL(workspaceId: string, opts?: { permanent?: boolean }): Promise<string> {
     const ws = this.workspaceManager.getWorkspace(workspaceId);
     if (!ws) return '';
+
+    const permanent = opts?.permanent === true;
 
     // Parse primary signaling server
     const defaultServer = getDefaultSignalingServer();
@@ -3835,7 +3942,7 @@ export class ChatController {
       }
     }
 
-    // Build InviteData
+    // Build InviteData with security fields
     const inviteData: InviteData = {
       host,
       port,
@@ -3849,13 +3956,33 @@ export class ChatController {
       publicKey: this.myPublicKey || undefined,
       workspaceName: ws.name || undefined,
       workspaceId: ws.id,
+      // Invite security: 7-day expiration by default, unlimited uses, signed by inviter
+      expiresAt: permanent ? undefined : Date.now() + 7 * 24 * 60 * 60 * 1000,
+      maxUses: 0,
+      inviteId: this.createInviteId(),
+      inviterId: this.state.myPeerId,
     };
+
+    // Sign invite with ECDSA key if available
+    if (this.signingKeyPair?.privateKey) {
+      try {
+        inviteData.signature = await signInvite(this.signingKeyPair.privateKey, inviteData);
+      } catch (err) {
+        console.warn('[DecentChat] Failed to sign invite:', err);
+        // Continue without signature — backward compatible
+      }
+    }
 
     // Use InviteURI.encode to generate proper URL (InviteURI hardcodes https, fix for localhost)
     const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
     const webDomain = isLocal ? `${window.location.hostname}:${window.location.port}` : 'decentchat.app';
     const url = InviteURI.encode(inviteData, webDomain);
     return isLocal ? url.replace('https://', 'http://') : url;
+  }
+
+  private createInviteId(): string {
+    // 12-char stable token for this invite instance (short but collision-resistant enough for local admin revocation lists).
+    return crypto.randomUUID().replace(/-/g, '').slice(0, 12);
   }
 
   private findMessageById(messageId: string): PlaintextMessage | null {

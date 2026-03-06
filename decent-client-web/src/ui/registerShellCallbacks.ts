@@ -71,6 +71,15 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     syncShellHuddle,
   } = ctx;
 
+  const copyInviteForActiveWorkspace = async (successMessage: string): Promise<void> => {
+    if (!state.activeWorkspaceId) return;
+    const inviteURL = await callbacks.generateInviteURL?.(state.activeWorkspaceId);
+    if (inviteURL) {
+      await navigator.clipboard.writeText(inviteURL);
+      showToast(successMessage, 'success');
+    }
+  };
+
   setShellCallbacks({
     // Welcome screen
     onCreateWorkspace: () => modalActions.showCreateWorkspaceModal(),
@@ -100,19 +109,15 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     onStartDM: () => modalActions.showStartDirectMessageModal(),
     onAddContact: () => modalActions.showAddContactModal(),
     onConnectPeer: () => modalActions.showConnectPeerModal(),
-    onCopyInvite: () => {
-      if (!state.activeWorkspaceId) return;
-      const inviteURL = callbacks.generateInviteURL?.(state.activeWorkspaceId);
-      if (inviteURL) { navigator.clipboard.writeText(inviteURL); showToast('Invite link copied!', 'success'); }
+    onCopyInvite: async () => {
+      await copyInviteForActiveWorkspace('Invite link copied!');
     },
     onShowQR: () => modalActions.showMyQR(),
     onCopyPeerId: () => { navigator.clipboard.writeText(state.myPeerId); showToast('Peer ID copied!'); },
     onWorkspaceSettings: () => modalActions.showWorkspaceSettingsModal(),
     onWorkspaceMembers: () => modalActions.showWorkspaceMembersModal(),
-    onWorkspaceInvite: () => {
-      if (!state.activeWorkspaceId) return;
-      const inviteURL = callbacks.generateInviteURL?.(state.activeWorkspaceId);
-      if (inviteURL) { navigator.clipboard.writeText(inviteURL); showToast('Invite link copied!', 'success'); }
+    onWorkspaceInvite: async () => {
+      await copyInviteForActiveWorkspace('Invite link copied!');
     },
     onWorkspaceNotifications: () => modalActions.showSettings(),
     getUnreadCount: (id) => callbacks.getUnreadCount?.(id) || 0,
@@ -131,10 +136,8 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     onHeaderConnectPeer: () => modalActions.showConnectPeerModal(),
     onHeaderShowQR: () => modalActions.showMyQR(),
     onSearch: () => modalActions.showSearchPanel(),
-    onInvite: () => {
-      if (!state.activeWorkspaceId) return;
-      const inviteURL = callbacks.generateInviteURL?.(state.activeWorkspaceId);
-      if (inviteURL) { navigator.clipboard.writeText(inviteURL); showToast('Invite link copied! Share it with anyone.', 'success'); }
+    onInvite: async () => {
+      await copyInviteForActiveWorkspace('Invite link copied! Share it with anyone.');
     },
     onSettings: () => modalActions.showSettings(),
     onChannelMembers: () => modalActions.showChannelMembersModal(),

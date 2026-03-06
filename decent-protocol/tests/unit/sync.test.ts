@@ -122,6 +122,26 @@ describe('SyncProtocol - Join Flow', () => {
     expect((bob.events[0] as any).reason).toContain('Invalid invite code');
   });
 
+  test('join with revoked invite id is rejected', async () => {
+    const ws = alice.wm.createWorkspace('Team', 'alice', 'Alice', 'alice-key');
+    alice.wm.updatePermissions(ws.id, 'alice', { revokedInviteIds: ['inv-revoked-1'] });
+
+    bob.sync.requestJoin('alice', ws.inviteCode, {
+      peerId: 'bob', alias: 'Bob', publicKey: 'bob-key',
+      joinedAt: Date.now(), role: 'member',
+    }, 'inv-revoked-1');
+
+    await deliver(bob, alice);
+    await deliver(alice, bob);
+
+    expect(bob.events).toHaveLength(1);
+    expect(bob.events[0].type).toBe('join-rejected');
+    expect((bob.events[0] as any).reason).toContain('revoked');
+
+    const aliceWs = alice.wm.getWorkspace(ws.id)!;
+    expect(aliceWs.members.some((m) => m.peerId === 'bob')).toBe(false);
+  });
+
   test('join syncs message history', async () => {
     const ws = alice.wm.createWorkspace('Team', 'alice', 'Alice', 'alice-key');
     const channelId = ws.channels[0].id;
