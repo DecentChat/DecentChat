@@ -100,7 +100,7 @@ export interface MountContext {
   mountCompose: () => void;
   mountHuddleBar: () => void;
   mountLightbox: () => void;
-  mountSidebar: (el: HTMLElement) => void;
+  mountSidebar: (el?: HTMLElement) => void;
   mountThreadPanel: () => void;
 }
 

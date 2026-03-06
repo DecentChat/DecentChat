@@ -24,11 +24,10 @@ import { showWorkspaceSettingsModal as svelteShowWorkspaceSettingsModal } from '
 import { showJoinWorkspaceModal as svelteShowJoinWorkspaceModal } from '../lib/components/modals/JoinWorkspaceModal.svelte';
 import { showPeerSelectModal } from '../lib/components/modals/PeerSelectModal.svelte';
 import { showAddContactModal as svelteShowAddContactModal } from '../lib/components/modals/AddContactModal.svelte';
-import { mount, unmount } from 'svelte';
+// mount/unmount no longer needed — AppShell.svelte handles all component mounting
 import * as MH from './MountHelpers';
 import type { MountContext } from './MountHelpers';
-// Most component imports moved to MountHelpers.ts
-import WelcomePage from '../lib/components/layout/WelcomePage.svelte';
+// Most component imports moved to MountHelpers.ts (WelcomePage now in AppShell.svelte)
 
 // ActivityItem + UICallbacks interfaces moved to ./types.ts
 import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
@@ -36,6 +35,9 @@ import type { AppState } from '../main';
 
 // Svelte 5 stores — single source of truth for UI state
 import { huddleUI, lightboxUI, activityUI, cachedData, componentRefs } from '../lib/stores/ui.svelte';
+
+// Shell store — reactive props for AppShell (replaces mount/unmount pattern)
+import { shellData, setShellCallbacks, type ShellCallbacks } from '../lib/stores/shell.svelte';
 
 // ---------------------------------------------------------------------------
 // UIRenderer
@@ -80,6 +82,327 @@ export class UIRenderer {
     lightboxUI.src = '';
     lightboxUI.name = '';
     lightboxUI.blobUrl = null;
+
+    // Set up shell callbacks (stable references for AppShell)
+    this.initShellCallbacks();
+  }
+
+  /** Initialize stable callback references for AppShell components */
+  private initShellCallbacks(): void {
+    setShellCallbacks({
+      // Welcome screen
+      onCreateWorkspace: () => this.showCreateWorkspaceModal(),
+      onJoinWorkspace: () => this.showJoinWorkspaceModal(),
+      onRestoreSeed: () => this.qrCodeManager.showRestoreSeed(),
+
+      // Workspace rail
+      onSwitchToDMs: () => {
+        this.state.activeWorkspaceId = null;
+        if (!this.state.activeDirectConversationId) this.state.activeChannelId = null;
+        this.persistViewState();
+        this.refreshContactsCache().catch(() => {});
+        this.syncShellSidebar();
+        this.syncShellRail();
+        this.syncShellHeader();
+        this.syncShellMessages();
+      },
+      onSwitchWorkspace: (wsId) => this.switchWorkspace(wsId),
+      onToggleActivity: () => this.toggleActivityPanel(),
+      onAddWorkspace: () => this.showCreateWorkspaceModal(),
+
+      // Sidebar
+      onChannelClick: (channelId) => this.switchChannel(channelId),
+      onMemberClick: (peerId) => this.startMemberDM(peerId),
+      onDirectConvClick: (convId) => this.switchToDirectConversation(convId),
+      onAddChannel: () => this.showCreateChannelModal(),
+      onStartDM: () => this.showStartDirectMessageModal(),
+      onAddContact: () => this.showAddContactModal(),
+      onConnectPeer: () => this.showConnectPeerModal(),
+      onCopyInvite: () => {
+        if (!this.state.activeWorkspaceId) return;
+        const inviteURL = this.callbacks.generateInviteURL?.(this.state.activeWorkspaceId);
+        if (inviteURL) { navigator.clipboard.writeText(inviteURL); this.showToast('Invite link copied!', 'success'); }
+      },
+      onShowQR: () => this.showMyQR(),
+      onCopyPeerId: () => { navigator.clipboard.writeText(this.state.myPeerId); this.showToast('Peer ID copied!'); },
+      onWorkspaceSettings: () => this.showWorkspaceSettingsModal(),
+      onWorkspaceMembers: () => this.showWorkspaceMembersModal(),
+      onWorkspaceInvite: () => {
+        if (!this.state.activeWorkspaceId) return;
+        const inviteURL = this.callbacks.generateInviteURL?.(this.state.activeWorkspaceId);
+        if (inviteURL) { navigator.clipboard.writeText(inviteURL); this.showToast('Invite link copied!', 'success'); }
+      },
+      onWorkspaceNotifications: () => this.showSettings(),
+      getUnreadCount: (id) => this.callbacks.getUnreadCount?.(id) || 0,
+      getPeerAlias: (peerId) => this.getPeerAlias(peerId),
+      getPeerStatusClass: (peerId) => this.peerStatusClass(peerId),
+      getPeerStatusTitle: (peerId) => this.peerStatusTitle(peerId),
+
+      // Channel header
+      onHamburger: () => {
+        const sidebar = document.getElementById('sidebar');
+        sidebar?.classList.contains('open') ? this.closeMobileSidebar() : this.openMobileSidebar();
+      },
+      onHuddleToggle: async () => {
+        const channelId = this.state.activeChannelId;
+        if (!channelId) return;
+        if (huddleUI.state === 'in-call') { await this.callbacks.leaveHuddle?.(); }
+        else { await this.callbacks.startHuddle?.(channelId); }
+      },
+      onHeaderConnectPeer: () => this.showConnectPeerModal(),
+      onHeaderShowQR: () => this.showMyQR(),
+      onSearch: () => this.showSearchPanel(),
+      onInvite: () => {
+        if (!this.state.activeWorkspaceId) return;
+        const inviteURL = this.callbacks.generateInviteURL?.(this.state.activeWorkspaceId);
+        if (inviteURL) { navigator.clipboard.writeText(inviteURL); this.showToast('Invite link copied! Share it with anyone.', 'success'); }
+      },
+      onSettings: () => this.showSettings(),
+      onChannelMembers: () => this.showChannelMembersModal(),
+
+      // Messages
+      getThread: (channelId, messageId) => this.messageStore.getThread(channelId, messageId),
+      isBot: (senderId) => {
+        const ws = this.state.activeWorkspaceId ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId) : null;
+        return ws?.members.find((m: any) => m.peerId === senderId)?.isBot === true;
+      },
+      onOpenThread: (messageId) => this.openThread(messageId),
+      onToggleReaction: (messageId, emoji) => this.callbacks.toggleReaction?.(messageId, emoji),
+      onRememberReaction: (emoji) => this.rememberReaction(emoji),
+      onShowMessageInfo: (messageId) => this.showMessageInfo(messageId),
+      onImageClick: (name, src) => this.openLightbox(src, name),
+
+      // Compose
+      onSend: async (text, files) => {
+        if (files.length > 0) {
+          for (let i = 0; i < files.length; i++) {
+            await this.callbacks.sendAttachment(files[i], i === 0 ? (text || undefined) : undefined, undefined);
+          }
+        } else if (text) {
+          await this.callbacks.sendMessage(text, undefined);
+        }
+      },
+      onTyping: () => this.callbacks.broadcastTyping?.(),
+      onStopTyping: () => this.callbacks.broadcastStopTyping?.(),
+      getCommandSuggestions: this.callbacks.getCommandSuggestions
+        ? (prefix: string) => this.callbacks.getCommandSuggestions!(prefix)
+        : undefined,
+      getMembers: () => {
+        const ws = this.state.activeWorkspaceId ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId) : null;
+        if (!ws) return [];
+        return ws.members.filter((m: any) => m.peerId !== this.state.myPeerId).map((m: any) => ({
+          peerId: m.peerId, name: this.getPeerAlias(m.peerId),
+        }));
+      },
+
+      // Thread
+      onCloseThread: () => this.closeThread(),
+      onThreadSend: async (text, files) => {
+        const threadId = this.state.activeThreadId || undefined;
+        if (files.length > 0) {
+          for (let i = 0; i < files.length; i++) {
+            await this.callbacks.sendAttachment(files[i], i === 0 ? (text || undefined) : undefined, threadId);
+          }
+        } else if (text) {
+          await this.callbacks.sendMessage(text, threadId);
+        }
+      },
+
+      // Huddle
+      onToggleMute: () => {
+        const muted = this.callbacks.toggleHuddleMute?.() ?? false;
+        huddleUI.muted = muted;
+        this.syncShellHuddle();
+      },
+      onLeaveHuddle: async () => { await this.callbacks.leaveHuddle?.(); },
+      onJoinHuddle: async () => {
+        const channelId = huddleUI.channelId || this.state.activeChannelId;
+        if (channelId) await this.callbacks.joinHuddle?.(channelId);
+      },
+
+      // Lightbox
+      onCloseLightbox: () => this.closeLightbox(),
+
+      // Search
+      onSearchQuery: (query) => {
+        const search = new MessageSearch(this.messageStore);
+        return search.search(query, { channelId: this.state.activeChannelId || undefined, limit: 20 });
+      },
+      onScrollToMessage: (messageId) => this.scrollToMessageAndHighlight(messageId),
+      onCloseSearch: () => {
+        shellData.search.open = false;
+      },
+
+      // Activity
+      onCloseActivity: () => this.toggleActivityPanel(),
+      onMarkAllRead: () => {
+        this.callbacks.markAllActivityRead?.();
+      },
+      onMarkRead: (id) => this.callbacks.markActivityRead?.(id),
+      onNavigateActivity: (item: any) => {
+        this.toggleActivityPanel();
+        const needsChannelSwitch = item.channelId && item.channelId !== this.state.activeChannelId;
+        const needsThreadOpen = !!(item.threadId && item.threadId.trim());
+        const needsThreadSwitch = needsThreadOpen && (!this.state.threadOpen || this.state.activeThreadId !== item.threadId);
+
+        if (needsChannelSwitch) this.switchChannel(item.channelId);
+
+        if (needsThreadOpen && needsThreadSwitch) {
+          setTimeout(() => {
+            this.openThread(item.threadId!);
+            if (item.messageId) setTimeout(() => this.scrollToMessageAndHighlight(item.messageId, 'thread-messages'), 100);
+          }, needsChannelSwitch ? 50 : 0);
+        } else if (needsThreadOpen && !needsThreadSwitch) {
+          if (item.messageId) this.scrollToMessageAndHighlight(item.messageId, 'thread-messages');
+        } else if (item.messageId) {
+          setTimeout(() => this.scrollToMessageAndHighlight(item.messageId, 'messages-list'), needsChannelSwitch ? 100 : 0);
+        }
+
+        this.syncShellHeader();
+        this.syncShellRail();
+      },
+      getActivityPeerAlias: (peerId) => this.getPeerAlias(peerId),
+    });
+  }
+
+  // =========================================================================
+  // Shell store sync methods — write computed props to shellData
+  // =========================================================================
+
+  /** Sync all shell data (called on renderApp / full refresh) */
+  syncShellAll(): void {
+    this.syncShellRail();
+    this.syncShellSidebar();
+    this.syncShellHeader();
+    this.syncShellMessages();
+    this.syncShellCompose();
+    this.syncShellThread();
+    this.syncShellHuddle();
+    this.syncShellLightbox();
+  }
+
+  private syncShellRail(): void {
+    shellData.rail.workspaces = this.callbacks.getAllWorkspaces?.() || [];
+    shellData.rail.activeWorkspaceId = this.state.activeWorkspaceId;
+    shellData.rail.activityUnread = this.callbacks.getActivityUnreadCount?.() || 0;
+  }
+
+  private syncShellSidebar(): void {
+    const ws = this.state.activeWorkspaceId
+      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+      : null;
+    const channels = ws ? this.workspaceManager.getChannels(ws.id) : [];
+
+    const memberData = ws
+      ? (() => {
+          const seen = new Set<string>();
+          return ws.members.filter((m: any) => {
+            const key = m.identityId || m.peerId;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          }).map((m: any) => {
+            const identityPeers = m.identityId
+              ? ws.members.filter((other: any) => other.identityId === m.identityId).map((other: any) => other.peerId)
+              : [m.peerId];
+            const isMe = identityPeers.includes(this.state.myPeerId);
+            const isOnline = isMe || identityPeers.some((pid: string) => this.peerStatusClass(pid) === 'online');
+            return {
+              peerId: m.peerId, alias: this.getPeerAlias(m.peerId), isOnline, isMe,
+              role: m.role, isBot: m.isBot,
+              statusClass: this.peerStatusClass(m.peerId),
+              statusTitle: this.peerStatusTitle(m.peerId),
+            };
+          });
+        })()
+      : [];
+
+    shellData.sidebar.workspaceName = ws?.name ?? null;
+    shellData.sidebar.channels = channels.map((ch: any) => ({ id: ch.id, name: ch.name }));
+    shellData.sidebar.members = memberData;
+    shellData.sidebar.directConversations = cachedData.directConversations.map(c => ({
+      id: c.id, contactPeerId: c.contactPeerId, lastMessageAt: c.lastMessageAt,
+    }));
+    shellData.sidebar.activeChannelId = this.state.activeChannelId;
+    shellData.sidebar.activeDirectConversationId = this.state.activeDirectConversationId;
+    shellData.sidebar.myPeerId = this.state.myPeerId;
+  }
+
+  private syncShellHeader(): void {
+    const isDirectMessage = !!this.state.activeDirectConversationId;
+    let channelName = 'Select a channel';
+    let memberCount = 0;
+
+    if (isDirectMessage) {
+      const conv = cachedData.directConversations.find(c => c.id === this.state.activeDirectConversationId);
+      channelName = conv ? this.getPeerAlias(conv.contactPeerId) : 'Direct Message';
+    } else {
+      const ws = this.state.activeWorkspaceId ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId) : null;
+      const channel = this.state.activeChannelId && ws ? this.workspaceManager.getChannel(ws.id, this.state.activeChannelId) : null;
+      if (channel) {
+        channelName = channel.type === 'dm' ? channel.name : `# ${channel.name}`;
+        memberCount = channel.members.length;
+      }
+    }
+
+    shellData.header.channelName = channelName;
+    shellData.header.memberCount = memberCount;
+    shellData.header.isDirectMessage = isDirectMessage;
+    shellData.header.isHuddleActive = huddleUI.state === 'in-call' && huddleUI.channelId === this.state.activeChannelId;
+  }
+
+  private syncShellMessages(): void {
+    const channelName = MH.getActiveChannelName(this.ctx());
+    const messages = this.state.activeChannelId
+      ? this.messageStore.getMessages(this.state.activeChannelId).filter((m: PlaintextMessage) => !m.threadId)
+      : [];
+
+    shellData.messages.messages = messages;
+    shellData.messages.channelName = channelName;
+    shellData.messages.activeChannelId = this.state.activeChannelId;
+    shellData.messages.myPeerId = this.state.myPeerId;
+    shellData.messages.myDisplayName = this.getMyDisplayName();
+    shellData.messages.frequentReactions = this.getFrequentReactions();
+  }
+
+  private syncShellCompose(): void {
+    shellData.compose.placeholder = this.getComposePlaceholder();
+  }
+
+  private syncShellThread(): void {
+    if (!this.state.activeChannelId || !this.state.activeThreadId) {
+      shellData.thread.open = this.state.threadOpen;
+      shellData.thread.threadId = null;
+      shellData.thread.channelId = this.state.activeChannelId;
+      shellData.thread.parentMessage = null;
+      shellData.thread.replies = [];
+    } else {
+      const allMsgs = this.messageStore.getMessages(this.state.activeChannelId);
+      let parent = allMsgs.find((m: PlaintextMessage) => m.id === this.state.activeThreadId);
+      if (!parent) parent = this.messageStore.getThreadRoot(this.state.activeThreadId);
+      const replies = this.messageStore.getThread(this.state.activeChannelId, this.state.activeThreadId!);
+
+      shellData.thread.open = this.state.threadOpen;
+      shellData.thread.threadId = this.state.activeThreadId;
+      shellData.thread.channelId = this.state.activeChannelId;
+      shellData.thread.parentMessage = parent || null;
+      shellData.thread.replies = replies;
+    }
+    shellData.thread.myPeerId = this.state.myPeerId;
+    shellData.thread.myDisplayName = this.getMyDisplayName();
+    shellData.thread.frequentReactions = this.getFrequentReactions();
+  }
+
+  private syncShellHuddle(): void {
+    shellData.huddle.state = huddleUI.state;
+    shellData.huddle.muted = huddleUI.muted;
+    shellData.huddle.participants = huddleUI.participants;
+  }
+
+  private syncShellLightbox(): void {
+    shellData.lightbox.open = lightboxUI.open;
+    shellData.lightbox.src = lightboxUI.src;
+    shellData.lightbox.name = lightboxUI.name;
   }
 
   private tracePrefix(): string {
@@ -146,11 +469,11 @@ export class UIRenderer {
       updateWorkspaceRail: () => this.updateWorkspaceRail(),
       renderMessages: () => this.renderMessages(),
       updateComposePlaceholder: () => this.updateComposePlaceholder(),
-      mountCompose: () => this.mountCompose(),
-      mountHuddleBar: () => this.mountHuddleBar(),
-      mountLightbox: () => this.mountLightbox(),
-      mountSidebar: (el) => this.mountSidebar(el),
-      mountThreadPanel: () => this.mountThreadPanel(),
+      mountCompose: () => this.syncShellCompose(),
+      mountHuddleBar: () => this.syncShellHuddle(),
+      mountLightbox: () => this.syncShellLightbox(),
+      mountSidebar: () => this.syncShellSidebar(),
+      mountThreadPanel: () => this.syncShellThread(),
     };
   }
 
@@ -195,26 +518,10 @@ export class UIRenderer {
 
   renderWelcome(): void {
     this.hideLoading();
-    const app = document.getElementById('app')!;
-    const hasWorkspace = (this.callbacks.getAllWorkspaces?.().length || 0) > 0;
-
-    // Unmount previous welcome component if any
-    if (componentRefs.welcome) {
-      try { unmount(componentRefs.welcome); } catch {}
-      componentRefs.welcome = null;
-    }
-    app.innerHTML = '';
-
-    componentRefs.welcome = mount(WelcomePage, {
-      target: app,
-      props: {
-        myPeerId: this.state.myPeerId,
-        hasWorkspace,
-        onCreateWorkspace: () => this.showCreateWorkspaceModal(),
-        onJoinWorkspace: () => this.showJoinWorkspaceModal(),
-        onRestoreSeed: () => this.qrCodeManager.showRestoreSeed(),
-      },
-    });
+    // Set shell store to show welcome view (AppShell handles rendering)
+    shellData.welcome.myPeerId = this.state.myPeerId;
+    shellData.welcome.hasWorkspace = (this.callbacks.getAllWorkspaces?.().length || 0) > 0;
+    shellData.view = 'welcome';
   }
 
   // =========================================================================
@@ -223,64 +530,10 @@ export class UIRenderer {
 
   renderApp(): void {
     this.hideLoading();
-    const app = document.getElementById('app')!;
-    app.innerHTML = `
-      <div class="app-layout">
-        <div class="workspace-rail" id="workspace-rail"></div>
-        <div class="sidebar" id="sidebar"></div>
-        <div class="main-content">
-          <div id="channel-header-mount"></div>
-          <div id="search-mount"></div>
-          <div id="huddle-mount"></div>
-          <div class="messages-area">
-            <div class="messages-pane">
-              <div class="messages-list" id="messages-list"></div>
-              <div class="typing-indicator" id="typing-indicator"></div>
-              <div id="huddle-bar-mount"></div>
-              <div id="compose-mount"></div>
-            </div>
-            <div id="thread-mount"></div>
-          </div>
-        </div>
-        <div id="lightbox-mount"></div>
-      </div>
-    `;
-
-    this.updateWorkspaceRail();
-    this.mountSidebar(document.getElementById('sidebar')!);
-    this.mountChannelHeader(document.getElementById('channel-header-mount')!);
-    this.mountCompose();
-    this.mountThreadPanel();
-    this.mountHuddleBar();
-    this.mountLightbox();
-    this.bindAppEvents();
-    this.renderMessages();
-  }
-
-  // ── Svelte component mounts ──
-
-  private mountCompose(): void {
-    const ref = { current: componentRefs.compose };
-    MH.mountCompose(ref, this.ctx());
-    componentRefs.compose = ref.current;
-  }
-
-  private mountThreadPanel(): void {
-    const ref = { current: componentRefs.threadPanel };
-    MH.mountThreadPanel(ref, this.ctx());
-    componentRefs.threadPanel = ref.current;
-  }
-
-  private mountHuddleBar(): void {
-    const ref = { current: componentRefs.huddleBar };
-    MH.mountHuddleBar(ref, this.ctx());
-    componentRefs.huddleBar = ref.current;
-  }
-
-  private mountLightbox(): void {
-    const ref = { current: componentRefs.lightbox };
-    MH.mountLightbox(ref, this.ctx());
-    componentRefs.lightbox = ref.current;
+    // AppShell.svelte owns the layout and component mounting.
+    // Sync all data to the shell store and switch to app view.
+    this.syncShellAll();
+    shellData.view = 'app';
   }
 
   // =========================================================================
@@ -310,9 +563,7 @@ export class UIRenderer {
   }
 
   updateWorkspaceRail(): void {
-    const ref = { current: componentRefs.workspaceRail };
-    MH.mountWorkspaceRail(ref, this.ctx());
-    componentRefs.workspaceRail = ref.current;
+    this.syncShellRail();
   }
 
   // =========================================================================
@@ -356,9 +607,7 @@ export class UIRenderer {
   // ensureScrollListener() — removed (scroll management now in Svelte MessageList)
 
   renderMessages(): void {
-    const ref = { current: componentRefs.messageList };
-    MH.mountMessages(ref, this.ctx());
-    componentRefs.messageList = ref.current;
+    this.syncShellMessages();
   }
 
   private getMyDisplayName(): string {
@@ -384,8 +633,7 @@ export class UIRenderer {
   }
 
   renderThreadMessages(): void {
-    // Re-mount the thread panel with updated data
-    this.mountThreadPanel();
+    this.syncShellThread();
   }
 
   /**
@@ -442,8 +690,7 @@ export class UIRenderer {
     this.state.activeThreadId = messageId;
     this.state.threadOpen = true;
 
-    // Re-mount thread panel with updated state
-    this.mountThreadPanel();
+    this.syncShellThread();
 
     this.persistViewState();
     if (this.state.activeChannelId) {
@@ -461,7 +708,7 @@ export class UIRenderer {
     this.state.activeThreadId = null;
     this.state.threadOpen = false;
     this.persistViewState();
-    this.mountThreadPanel();
+    this.syncShellThread();
   }
 
   // setupThreadResize() — removed (migrated to ThreadPanel.svelte)
@@ -546,8 +793,7 @@ export class UIRenderer {
   }
 
   private updateComposePlaceholder(): void {
-    // Re-mount compose area to update placeholder
-    this.mountCompose();
+    this.syncShellCompose();
   }
 
   // =========================================================================
@@ -555,40 +801,18 @@ export class UIRenderer {
   // =========================================================================
 
   updateSidebar(): void {
-    const sidebar = document.getElementById('sidebar');
-    if (!sidebar) return;
     this.refreshContactsCache()
       .catch(() => {})
       .finally(() => {
-        this.mountSidebar(sidebar);
+        this.syncShellSidebar();
       });
   }
 
-  private mountSidebar(sidebar: HTMLElement): void {
-    const ref = { current: componentRefs.sidebar };
-    MH.mountSidebar(ref, sidebar, this.ctx());
-    componentRefs.sidebar = ref.current;
-  }
-
   updateChannelHeader(): void {
-    const headerContainer = document.getElementById('channel-header-mount');
-    if (!headerContainer) return;
-    this.mountChannelHeader(headerContainer);
+    this.syncShellHeader();
   }
 
-  private mountChannelHeader(container: HTMLElement): void {
-    const ref = { current: componentRefs.channelHeader };
-    MH.mountChannelHeader(ref, container, this.ctx());
-    componentRefs.channelHeader = ref.current;
-  }
-
-  // =========================================================================
-  // Event binding
-  // =========================================================================
-
-  private bindAppEvents(): void {
-    MH.bindAppEvents(this.ctx());
-  }
+  // bindAppEvents() — moved to AppShell.svelte
 
   /**
    * Start a DM with a workspace member — reuses existing conversation if one exists,
@@ -616,13 +840,13 @@ export class UIRenderer {
   onHuddleStateChange(state: HuddleState, channelId: string | null): void {
     huddleUI.state = state;
     huddleUI.channelId = channelId;
-    this.mountHuddleBar();
+    this.syncShellHuddle();
     this.updateChannelHeader();
   }
 
   onHuddleParticipantsChange(participants: HuddleParticipant[]): void {
     huddleUI.participants = participants;
-    this.mountHuddleBar();
+    this.syncShellHuddle();
   }
 
   // =========================================================================
@@ -631,27 +855,21 @@ export class UIRenderer {
 
   toggleActivityPanel(): void {
     activityUI.panelOpen = !activityUI.panelOpen;
-    const sidebar = document.getElementById('sidebar');
-    if (!sidebar) return;
 
+    // AppShell handles sidebar/activity panel switching reactively
+    shellData.activity.panelOpen = activityUI.panelOpen;
     if (activityUI.panelOpen) {
-      if (componentRefs.sidebar) { try { unmount(componentRefs.sidebar); } catch {} componentRefs.sidebar = null; }
-      if (componentRefs.activityPanel) { try { unmount(componentRefs.activityPanel); } catch {} componentRefs.activityPanel = null; }
-      const ref = { current: componentRefs.activityPanel };
-      MH.mountActivityPanel(ref, sidebar, this.ctx());
-      componentRefs.activityPanel = ref.current;
+      shellData.activity.items = this.callbacks.getActivityItems?.() || [];
       document.getElementById('activity-btn')?.classList.add('active');
     } else {
-      if (componentRefs.activityPanel) { try { unmount(componentRefs.activityPanel); } catch {} componentRefs.activityPanel = null; }
-      this.mountSidebar(sidebar);
+      this.syncShellSidebar();
       document.getElementById('activity-btn')?.classList.remove('active');
     }
   }
 
   refreshActivityPanel(): void {
     if (!activityUI.panelOpen) return;
-    this.toggleActivityPanel();
-    this.toggleActivityPanel();
+    shellData.activity.items = this.callbacks.getActivityItems?.() || [];
   }
 
   private showChannelMembersModal(): void {
@@ -756,7 +974,7 @@ export class UIRenderer {
           this.showToast('Workspace deleted', 'success');
           this.state.activeWorkspaceId = null;
           this.state.activeChannelId = null;
-          (this as any).renderApp?.() ?? this.updateSidebar();
+          this.renderApp();
         } else {
           this.showToast('Failed to delete workspace', 'error');
         }
@@ -1007,9 +1225,10 @@ export class UIRenderer {
   // addPendingAttachments() — moved to MountHelpers.ts
 
   showSearchPanel(): void {
-    const ref = { current: componentRefs.searchPanel };
-    MH.mountSearchPanel(ref, this.ctx());
-    componentRefs.searchPanel = ref.current;
+    // Toggle search panel visibility
+    shellData.search.open = !shellData.search.open;
+    shellData.search.myPeerId = this.state.myPeerId;
+    shellData.search.myAlias = this.state.myAlias || 'You';
   }
 
   /** Show QR code with user's identity */
@@ -1109,7 +1328,7 @@ export class UIRenderer {
     lightboxUI.open = true;
     lightboxUI.src = src;
     lightboxUI.name = name;
-    this.mountLightbox();
+    this.syncShellLightbox();
   }
 
   private closeLightbox(): void {
@@ -1120,7 +1339,7 @@ export class UIRenderer {
       URL.revokeObjectURL(lightboxUI.blobUrl);
       lightboxUI.blobUrl = null;
     }
-    this.mountLightbox();
+    this.syncShellLightbox();
   }
 
   // renderAttachments() — removed (migrated to MessageItem.svelte)
