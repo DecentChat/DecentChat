@@ -1569,6 +1569,7 @@ export class ChatController {
         })),
         inviteCode: ws.inviteCode,
         permissions: ws.permissions,
+        bans: ws.bans || [],
       },
     }, { label: 'workspace-sync' });
   }
@@ -1583,13 +1584,40 @@ export class ChatController {
       return;
     }
 
-    // Handle join rejection (e.g. banned peer trying to rejoin)
+    // Handle join rejection.
+    // Important: do NOT always self-revoke here; join negotiation can include
+    // rejections from peers that are not authoritative for our target workspace.
     if (msg.sync?.type === 'join-rejected') {
-      const wsId = msg.workspaceId || this.state.activeWorkspaceId;
-      if (wsId) {
-        await this.handleSelfWorkspaceRevocation(wsId, 'banned', peerId);
+      const reason = String(msg.sync.reason || 'Join rejected');
+      const indicatesRevocation = /banned|kicked|removed/i.test(reason);
+
+      const candidates = [msg.workspaceId, this.state.activeWorkspaceId]
+        .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+      // Prefer a local workspace candidate where I am currently a member.
+      let targetWsId: string | null = null;
+      for (const wsId of candidates) {
+        const ws = this.workspaceManager.getWorkspace(wsId);
+        if (ws && ws.members.some((m: any) => m.peerId === this.state.myPeerId)) {
+          targetWsId = wsId;
+          break;
+        }
+      }
+
+      // Fallback for join flow: if server rejected a join but IDs differ,
+      // active workspace is still the provisional one we should remove.
+      if (!targetWsId && this.state.activeWorkspaceId) {
+        const active = this.workspaceManager.getWorkspace(this.state.activeWorkspaceId);
+        if (active && active.members.some((m: any) => m.peerId === this.state.myPeerId)) {
+          targetWsId = this.state.activeWorkspaceId;
+        }
+      }
+
+      if (targetWsId && indicatesRevocation) {
+        const mappedReason: 'kicked' | 'banned' = /banned/i.test(reason) ? 'banned' : 'kicked';
+        await this.handleSelfWorkspaceRevocation(targetWsId, mappedReason, peerId);
       } else {
-        this.ui?.showToast(msg.sync.reason || 'Join rejected', 'error');
+        this.ui?.showToast(reason, 'error');
       }
       return;
     }
@@ -1910,6 +1938,20 @@ export class ChatController {
 
     if (!localWs) return;
 
+    // SECURITY: never accept workspace-state from a banned peer.
+    if (this.workspaceManager.isBanned(localWs.id, peerId)) {
+      this.sendControlWithRetry(peerId, {
+        type: 'workspace-sync',
+        workspaceId: localWs.id,
+        sync: {
+          type: 'join-rejected',
+          reason: 'Join rejected: you are banned from this workspace',
+        },
+      }, { label: 'workspace-sync' });
+      console.warn(`[Security] Ignoring workspace-state from banned peer ${peerId.slice(0, 8)} for workspace ${localWs.id.slice(0, 8)}`);
+      return;
+    }
+
     // SECURITY: workspace IDs should match for normal sync.
     // But on fresh invite-join flows, the joiner may have created a provisional
     // local workspace ID before receiving the owner's canonical workspace-state.
@@ -2039,9 +2081,24 @@ export class ChatController {
       }
     }
 
+    // Sync bans FIRST so we can reject banned members immediately
+    if (sync.bans && Array.isArray(sync.bans)) {
+      localWs.bans = sync.bans.filter((ban: any) => ban && typeof ban.peerId === 'string' && typeof ban.bannedAt === 'number');
+    }
+
+    // Check if I am banned AFTER receiving bans from owner
+    if (sync.bans && this.workspaceManager.isBanned(localWs.id, this.state.myPeerId)) {
+      console.warn(`[Security] Received workspace-state but I am banned from workspace ${localWs.id.slice(0, 8)}`);
+      await this.handleSelfWorkspaceRevocation(localWs.id, 'banned', peerId);
+      return;
+    }
+
     // Sync members: add missing, update aliases for existing
     if (sync.members && Array.isArray(sync.members)) {
       for (const remoteMember of sync.members) {
+        if (this.workspaceManager.isBanned(localWs.id, remoteMember.peerId)) {
+          continue;
+        }
         const existing = localWs.members.find((m: any) => m.peerId === remoteMember.peerId);
         if (!existing) {
           // SECURITY: Only accept elevated roles from workspace owner

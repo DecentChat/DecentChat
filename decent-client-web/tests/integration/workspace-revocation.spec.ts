@@ -126,6 +126,19 @@ test.describe('Workspace revocation UX', () => {
       }, bobState.myPeerId);
       expect(banResult.success).toBe(true);
 
+      const ownerBanState = await alice.page.evaluate((targetPeerId: string) => {
+        const s = (window as any).__state;
+        const c = (window as any).__ctrl;
+        const ws = c.workspaceManager.getWorkspace(s.activeWorkspaceId);
+        return {
+          wsId: s.activeWorkspaceId,
+          isBanned: c.workspaceManager.isBanned(s.activeWorkspaceId, targetPeerId),
+          bans: ws?.bans || [],
+          members: (ws?.members || []).map((m: any) => m.peerId),
+        };
+      }, bobState.myPeerId);
+      console.log('[ban-debug owner after ban]', JSON.stringify(ownerBanState));
+
       // Bob loses workspace immediately
       await bob.page.waitForFunction((removedWsId) => {
         const c = (window as any).__ctrl;
@@ -139,13 +152,19 @@ test.describe('Workspace revocation UX', () => {
 
       const bobAfterRejoin = await bob.page.evaluate(async () => {
         const c = (window as any).__ctrl;
+        const s = (window as any).__state;
         const ws = c.workspaceManager.getAllWorkspaces();
         const persisted = await c.persistentStore.getAllWorkspaces();
+        const toasts = Array.from(document.querySelectorAll('.toast')).map((t: any) => t.textContent || '');
         return {
+          activeWorkspaceId: s.activeWorkspaceId,
           workspaceNames: ws.map((w: any) => w.name),
           persistedNames: persisted.map((w: any) => w.name),
+          membersByWorkspace: ws.map((w: any) => ({ id: w.id, name: w.name, members: (w.members || []).map((m: any) => m.alias) })),
+          toasts,
         };
       });
+      console.log('[ban-debug bob after rejoin]', JSON.stringify(bobAfterRejoin));
 
       expect(bobAfterRejoin.workspaceNames).not.toContain('Ban UX WS');
       expect(bobAfterRejoin.persistedNames).not.toContain('Ban UX WS');
