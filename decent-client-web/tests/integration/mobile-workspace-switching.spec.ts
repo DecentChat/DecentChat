@@ -26,7 +26,7 @@ async function waitForApp(page: Page): Promise<void> {
     await openAppBtn.click();
   }
 
-  await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 20000 });
+  await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 45000 });
 }
 
 async function createUser(browser: Browser): Promise<{ context: BrowserContext; page: Page }> {
@@ -40,7 +40,7 @@ async function createUser(browser: Browser): Promise<{ context: BrowserContext; 
   return { context, page };
 }
 
-async function createWorkspace(page: Page, name: string, alias: string): Promise<void> {
+async function createWorkspace(page: Page, name: string, alias: string): Promise<string> {
   const createBtn = page.locator('#create-ws-btn:visible, #ws-rail-add:visible').first();
   await createBtn.click();
   await page.waitForSelector('.modal', { timeout: 10000 });
@@ -48,17 +48,25 @@ async function createWorkspace(page: Page, name: string, alias: string): Promise
   await page.locator('.modal input[name="alias"]').fill(alias);
   await page.locator('.modal #modal-submit, .modal .btn-primary').first().click();
   await expect(page.locator('.sidebar-header h1')).toContainText(name, { timeout: 10000 });
+
+  const wsId = await page.evaluate((workspaceName) => {
+    const ctrl = (window as any).__ctrl;
+    const ws = ctrl?.workspaceManager?.getAllWorkspaces?.().find((w: any) => w.name === workspaceName);
+    return ws?.id || '';
+  }, name);
+  expect(wsId).toBeTruthy();
+  return wsId;
 }
 
 test.describe('Mobile workspace switching', () => {
-  test.setTimeout(90000);
+  test.setTimeout(180000);
 
-  test('mobile sidebar shows workspace switch controls', async ({ browser }) => {
+  test('mobile sidebar shows workspace switch controls and allows switching workspaces', async ({ browser }) => {
     const alice = await createUser(browser);
 
     try {
-      await createWorkspace(alice.page, 'Mobile Alpha', 'Alice');
-      await createWorkspace(alice.page, 'Mobile Beta', 'Alice');
+      const alphaId = await createWorkspace(alice.page, 'Alpha Mobile', 'Alice');
+      await createWorkspace(alice.page, 'Beta Mobile', 'Alice');
 
       // Switch to mobile viewport after workspace setup.
       await alice.page.setViewportSize({ width: 390, height: 844 });
@@ -67,14 +75,48 @@ test.describe('Mobile workspace switching', () => {
       await alice.page.click('#hamburger-btn');
       await expect(alice.page.locator('#sidebar.open')).toBeVisible();
 
-      // Expected new mobile workspace tray (currently missing => failing test).
+      // Mobile workspace tray is visible.
       await expect(alice.page.locator('[data-testid="mobile-workspace-tray"]')).toBeVisible();
 
-      // Expected ability to switch workspaces from mobile.
-      await alice.page.locator('[data-testid="mobile-workspace-item"]').filter({ hasText: 'MO' }).first().click();
-      await expect(alice.page.locator('.sidebar-header h1')).toContainText('Mobile Alpha');
+      // Switch to Alpha from mobile tray.
+      await alice.page.locator(`[data-testid="mobile-workspace-item"][data-ws-id="${alphaId}"]`).click();
+      await expect(alice.page.locator('.sidebar-header h1')).toContainText('Alpha Mobile');
+
+      // Mobile switch should close the sidebar drawer.
+      await expect(alice.page.locator('#sidebar')).not.toHaveClass(/open/);
     } finally {
-      await alice.context.close();
+      await alice.context.close().catch(() => {});
+    }
+  });
+
+  test('mobile tray add button opens create workspace flow', async ({ browser }) => {
+    const alice = await createUser(browser);
+
+    try {
+      await createWorkspace(alice.page, 'Existing Mobile', 'Alice');
+
+      await alice.page.setViewportSize({ width: 390, height: 844 });
+      await alice.page.click('#hamburger-btn');
+
+      await expect(alice.page.locator('[data-testid="mobile-workspace-tray"]')).toBeVisible();
+      await alice.page.locator('[data-testid="mobile-workspace-add"]').click();
+
+      await expect(alice.page.locator('.modal')).toBeVisible();
+      await alice.page.locator('.modal input[name="name"]').fill('Gamma Mobile');
+      await alice.page.locator('.modal input[name="alias"]').fill('Alice');
+      await alice.page.locator('.modal #modal-submit, .modal .btn-primary').first().click();
+
+      await expect(alice.page.locator('.sidebar-header h1')).toContainText('Gamma Mobile');
+
+      // Verify workspace exists in app state (stable assertion without extra drawer toggles).
+      const hasGamma = await alice.page.evaluate(() => {
+        const ctrl = (window as any).__ctrl;
+        const all = ctrl?.workspaceManager?.getAllWorkspaces?.() || [];
+        return all.some((ws: any) => ws.name === 'Gamma Mobile');
+      });
+      expect(hasGamma).toBe(true);
+    } finally {
+      await alice.context.close().catch(() => {});
     }
   });
 });

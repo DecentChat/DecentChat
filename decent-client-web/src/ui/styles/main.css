@@ -164,6 +164,11 @@ body {
   border-radius: 1px;
 }
 
+/* Hidden by default; mobile styles enable it. */
+.mobile-workspace-tray {
+  display: none;
+}
+
 /* === Sidebar === */
 .sidebar {
   width: var(--sidebar-width);
@@ -2697,6 +2702,45 @@ body.compact .messages-list { gap: 0; }
   :root { --sidebar-width: 85vw; --thread-width: 100%; }
 
   .workspace-rail { display: none; }
+
+  .mobile-workspace-tray {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-workspace-chip {
+    min-width: 40px;
+    height: 40px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--sidebar-text);
+    font-size: 12px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 12px;
+    flex: 0 0 auto;
+    cursor: pointer;
+  }
+
+  .mobile-workspace-chip.active {
+    background: var(--primary);
+    border-color: transparent;
+    color: #fff;
+  }
+
+  .mobile-workspace-add {
+    color: var(--primary-light);
+    font-size: 18px;
+    font-weight: 500;
+  }
 
   /* Sidebar slides in from left, full safe height */
   .sidebar {

@@ -213,6 +213,7 @@ export function createUIService(
     syncShellHeader();
     renderMessages();
     syncShellCompose();
+    closeMobileSidebar();
   }
 
   function openThread(messageId: string): void {
