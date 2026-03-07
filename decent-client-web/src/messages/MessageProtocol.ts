@@ -35,6 +35,12 @@ export interface RatchetEnvelope {
     fileName?: string;
     fileSize?: number;
     mimeType?: string;
+    assistant?: {
+      modelId?: string;
+      modelName?: string;
+      modelAlias?: string;
+      modelLabel?: string;
+    };
   };
 }
 
@@ -55,6 +61,12 @@ export interface LegacyEnvelope {
     fileName?: string;
     fileSize?: number;
     mimeType?: string;
+    assistant?: {
+      modelId?: string;
+      modelName?: string;
+      modelAlias?: string;
+      modelLabel?: string;
+    };
   };
 }
 
@@ -235,7 +247,17 @@ export class MessageProtocol {
     peerId: string,
     content: string,
     type: 'text' | 'file' | 'system' | 'handshake' = 'text',
-    metadata?: { fileName?: string; fileSize?: number; mimeType?: string }
+    metadata?: {
+      fileName?: string;
+      fileSize?: number;
+      mimeType?: string;
+      assistant?: {
+        modelId?: string;
+        modelName?: string;
+        modelAlias?: string;
+        modelLabel?: string;
+      };
+    },
   ): Promise<MessageEnvelope> {
     if (!this._signingKeyPair) throw new Error('Signing key pair not initialized');
     const signature = await this.cipher.sign(content, this._signingKeyPair.privateKey);
@@ -269,7 +291,17 @@ export class MessageProtocol {
     content: string,
     type: 'text' | 'file' | 'system' | 'handshake',
     signature: string,
-    metadata?: { fileName?: string; fileSize?: number; mimeType?: string },
+    metadata?: {
+      fileName?: string;
+      fileSize?: number;
+      mimeType?: string;
+      assistant?: {
+        modelId?: string;
+        modelName?: string;
+        modelAlias?: string;
+        modelLabel?: string;
+      };
+    },
   ): Promise<LegacyEnvelope> {
     const sharedSecret = this.sharedSecrets.get(peerId);
     if (!sharedSecret) throw new Error(`No shared secret for peer: ${peerId}`);

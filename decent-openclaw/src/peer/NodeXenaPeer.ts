@@ -14,7 +14,7 @@ import {
   WorkspaceManager,
   Negentropy,
 } from 'decent-protocol';
-import type { Workspace, WorkspaceMember, PlaintextMessage } from 'decent-protocol';
+import type { Workspace, WorkspaceMember, PlaintextMessage, MessageMetadata, AssistantMessageMetadata } from 'decent-protocol';
 import { PeerTransport } from 'decent-transport-webrtc';
 import { randomUUID } from 'node:crypto';
 import { FileStore } from './FileStore.js';
@@ -77,6 +77,22 @@ type MediaResponse = {
   totalChunks?: number;
   suggestedPeers?: string[];
 };
+
+type AssistantModelMeta = AssistantMessageMetadata;
+
+function buildMessageMetadata(model?: AssistantModelMeta): MessageMetadata | undefined {
+  if (!model) return undefined;
+  const hasAssistantModel = Boolean(model.modelId || model.modelName || model.modelAlias || model.modelLabel);
+  if (!hasAssistantModel) return undefined;
+  return {
+    assistant: {
+      ...(model.modelId ? { modelId: model.modelId } : {}),
+      ...(model.modelName ? { modelName: model.modelName } : {}),
+      ...(model.modelAlias ? { modelAlias: model.modelAlias } : {}),
+      ...(model.modelLabel ? { modelLabel: model.modelLabel } : {}),
+    },
+  };
+}
 
 type PendingMediaRequest = {
   attachmentId: string;
@@ -329,10 +345,21 @@ export class NodeXenaPeer {
 
   /** Persist a message to the local store (FileStore) without sending over WebRTC.
    *  Used after streaming completes so the bot has the message for Negentropy sync. */
-  async persistMessageLocally(channelId: string, workspaceId: string, content: string, threadId?: string, replyToId?: string, messageId?: string): Promise<void> {
+  async persistMessageLocally(
+    channelId: string,
+    workspaceId: string,
+    content: string,
+    threadId?: string,
+    replyToId?: string,
+    messageId?: string,
+    model?: AssistantModelMeta,
+  ): Promise<void> {
     if (!content.trim()) return;
     const msg = await this.messageStore.createMessage(channelId, this.myPeerId, content.trim(), 'text', threadId);
     if (messageId) msg.id = messageId;
+    if (model) {
+      (msg as any).metadata = buildMessageMetadata(model);
+    }
     const added = await this.messageStore.addMessage(msg);
     if (added.success) {
       this.persistMessagesForChannel(channelId);
@@ -340,11 +367,23 @@ export class NodeXenaPeer {
     }
   }
 
-  async sendMessage(channelId: string, workspaceId: string, content: string, threadId?: string, replyToId?: string, messageId?: string): Promise<void> {
+  async sendMessage(
+    channelId: string,
+    workspaceId: string,
+    content: string,
+    threadId?: string,
+    replyToId?: string,
+    messageId?: string,
+    model?: AssistantModelMeta,
+  ): Promise<void> {
     if (!this.transport || !this.messageProtocol || !content.trim()) return;
 
+    const modelMeta = buildMessageMetadata(model);
     const msg = await this.messageStore.createMessage(channelId, this.myPeerId, content.trim(), 'text', threadId);
     if (messageId) msg.id = messageId; // Use provided messageId for dedup with streamed messages
+    if (modelMeta) {
+      (msg as any).metadata = modelMeta;
+    }
     const added = await this.messageStore.addMessage(msg);
     if (added.success) {
       this.persistMessagesForChannel(channelId);
@@ -367,6 +406,7 @@ export class NodeXenaPeer {
           threadId,
           replyToId,
           isDirect: false,
+          ...(modelMeta ? { metadata: modelMeta } : {}),
         });
         continue;
       }
@@ -381,8 +421,9 @@ export class NodeXenaPeer {
           threadId,
           replyToId,
           isDirect: false,
+          ...(modelMeta ? { metadata: modelMeta } : {}),
         });
-        const envelope = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text');
+        const envelope = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text', modelMeta);
         (envelope as any).channelId = channelId;
         (envelope as any).workspaceId = workspaceId;
         (envelope as any).senderId = this.myPeerId;
@@ -1098,14 +1139,29 @@ export class NodeXenaPeer {
   }
 
   /** Public convenience: resolve workspace by channelId then call sendMessage. */
-  async sendToChannel(channelId: string, content: string, threadId?: string, replyToId?: string, messageId?: string): Promise<void> {
+  async sendToChannel(
+    channelId: string,
+    content: string,
+    threadId?: string,
+    replyToId?: string,
+    messageId?: string,
+    model?: AssistantModelMeta,
+  ): Promise<void> {
     const workspaceId = this.findWorkspaceIdForChannel(channelId);
-    return this.sendMessage(channelId, workspaceId, content, threadId, replyToId, messageId);
+    return this.sendMessage(channelId, workspaceId, content, threadId, replyToId, messageId, model);
   }
 
   /** Send a direct (non-workspace) message to a specific peer with isDirect=true. */
-  async sendDirectToPeer(peerId: string, content: string, threadId?: string, replyToId?: string, messageId?: string): Promise<void> {
+  async sendDirectToPeer(
+    peerId: string,
+    content: string,
+    threadId?: string,
+    replyToId?: string,
+    messageId?: string,
+    model?: AssistantModelMeta,
+  ): Promise<void> {
     if (!this.transport || !this.messageProtocol || !content.trim()) return;
+    const modelMeta = buildMessageMetadata(model);
     const outboundMessageId = messageId || randomUUID();
     if (!this.transport.getConnectedPeers().includes(peerId)) {
       await this.enqueueOffline(peerId, {
@@ -1116,6 +1172,7 @@ export class NodeXenaPeer {
         threadId,
         replyToId,
         isDirect: true,
+        ...(modelMeta ? { metadata: modelMeta } : {}),
       });
       return;
     }
@@ -1129,8 +1186,9 @@ export class NodeXenaPeer {
         threadId,
         replyToId,
         isDirect: true,
+        ...(modelMeta ? { metadata: modelMeta } : {}),
       });
-      const envelope = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text');
+      const envelope = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text', modelMeta);
       (envelope as any).isDirect = true;
       (envelope as any).senderId = this.myPeerId;
       (envelope as any).senderName = this.opts.account.alias;
@@ -1173,13 +1231,14 @@ export class NodeXenaPeer {
     threadId?: string;
     replyToId?: string;
     isDirect?: false;
+    model?: AssistantModelMeta;
   }): Promise<void> {
     if (!this.transport) return;
     const workspace = params.workspaceId ? this.workspaceManager.getWorkspace(params.workspaceId) : undefined;
     const recipients = workspace
       ? workspace.members.map((m) => m.peerId).filter((p) => p !== this.myPeerId)
       : this.transport.getConnectedPeers().filter((p) => p !== this.myPeerId);
-    const envelope = {
+    const envelope: any = {
       type: 'stream-start',
       messageId: params.messageId,
       channelId: params.channelId,
@@ -1190,6 +1249,9 @@ export class NodeXenaPeer {
       ...(params.threadId ? { threadId: params.threadId } : {}),
       ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     };
+    if (params.model) {
+      envelope.modelMeta = params.model;
+    }
     for (const peerId of recipients) {
       if (this.transport.getConnectedPeers().includes(peerId)) {
         this.transport.send(peerId, envelope);
@@ -1200,9 +1262,10 @@ export class NodeXenaPeer {
   async startDirectStream(params: {
     peerId: string;
     messageId: string;
+    model?: AssistantModelMeta;
   }): Promise<void> {
     if (!this.transport || !this.transport.getConnectedPeers().includes(params.peerId)) return;
-    this.transport.send(params.peerId, {
+    const envelope: any = {
       type: 'stream-start',
       messageId: params.messageId,
       channelId: params.peerId,
@@ -1210,7 +1273,11 @@ export class NodeXenaPeer {
       senderId: this.myPeerId,
       senderName: this.opts.account.alias,
       isDirect: true,
-    });
+    };
+    if (params.model) {
+      envelope.modelMeta = params.model;
+    }
+    this.transport.send(params.peerId, envelope);
   }
 
   async sendStreamDelta(params: {
@@ -1518,7 +1585,7 @@ export class NodeXenaPeer {
     for (const item of pending) {
       if (!item || typeof item.content !== 'string') continue;
       try {
-        const envelope = await this.messageProtocol.encryptMessage(peerId, item.content, 'text');
+        const envelope = await this.messageProtocol.encryptMessage(peerId, item.content, 'text', item.metadata);
         (envelope as any).senderId = item.senderId ?? this.myPeerId;
         (envelope as any).senderName = item.senderName ?? this.opts.account.alias;
         (envelope as any).messageId = item.messageId;
@@ -1559,7 +1626,7 @@ export class NodeXenaPeer {
       try {
         if (!item.messageId) item.messageId = randomUUID();
         await this.queuePendingAck(peerId, item);
-        const envelope = await this.messageProtocol.encryptMessage(peerId, item.content, 'text');
+        const envelope = await this.messageProtocol.encryptMessage(peerId, item.content, 'text', item.metadata);
         (envelope as any).senderId = item.senderId ?? this.myPeerId;
         (envelope as any).senderName = item.senderName ?? this.opts.account.alias;
         (envelope as any).messageId = item.messageId;

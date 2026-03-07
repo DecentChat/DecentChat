@@ -2,6 +2,24 @@
  * Message types for the P2P chat protocol
  */
 
+export interface AssistantMessageMetadata {
+  /** Full selected model id when available (e.g. openai-codex/gpt-5.3-codex). */
+  modelId?: string;
+  /** Provider-free model name (e.g. gpt-5.3-codex). */
+  modelName?: string;
+  /** Alias used by the caller/config when available (e.g. codex). */
+  modelAlias?: string;
+  /** Final display label for UI badges. */
+  modelLabel?: string;
+}
+
+export interface MessageMetadata {
+  fileName?: string;
+  fileSize?: number;
+  mimeType?: string;
+  assistant?: AssistantMessageMetadata;
+}
+
 export interface ChatMessage {
   id: string;
   channelId: string;
@@ -24,11 +42,7 @@ export interface ChatMessage {
   ackedAt?: Record<string, number>;
   readBy?: string[];
   readAt?: Record<string, number>;
-  metadata?: {
-    fileName?: string;
-    fileSize?: number;
-    mimeType?: string;
-  };
+  metadata?: MessageMetadata;
 }
 
 /**
@@ -52,9 +66,5 @@ export interface PlaintextMessage {
   readBy?: string[];
   readAt?: Record<string, number>;
   vectorClock?: Record<string, number>;
-  metadata?: {
-    fileName?: string;
-    fileSize?: number;
-    mimeType?: string;
-  };
+  metadata?: MessageMetadata;
 }

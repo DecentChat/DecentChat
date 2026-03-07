@@ -111,7 +111,7 @@ export type {
   PEXServer,
 } from './workspace/types';
 export type { SyncEvent, SendFn, OnEvent } from './workspace/SyncProtocol';
-export type { ChatMessage, PlaintextMessage } from './messages/types';
+export type { ChatMessage, PlaintextMessage, MessageMetadata, AssistantMessageMetadata } from './messages/types';
 export type {
   DecentIdentity,
   IdentityBundle,

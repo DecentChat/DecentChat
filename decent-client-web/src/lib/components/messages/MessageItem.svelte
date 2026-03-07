@@ -31,6 +31,7 @@
     type?: string;
     isMine: boolean;
     isBot: boolean;
+    modelLabel?: string;
     isGrouped: boolean;
     inThreadView: boolean;
     isActiveThreadRoot?: boolean;
@@ -60,6 +61,7 @@
     type = 'text',
     isMine,
     isBot,
+    modelLabel = '',
     isGrouped,
     inThreadView,
     isActiveThreadRoot = false,
@@ -153,6 +155,7 @@
       <div class="message-header">
         <span class="message-sender">{senderName}</span>
         {#if isBot}<span class="msg-bot-badge">BOT</span>{/if}
+        {#if isBot && modelLabel}<span class="msg-model-badge">{modelLabel}</span>{/if}
         <span class="message-time">{time}</span>
         {#if isMine}
           <span class="msg-delivery-status {statusClass}" data-message-id={id} title={deliveryTitle()}>

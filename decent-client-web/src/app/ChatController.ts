@@ -213,6 +213,12 @@ export class ChatController {
     senderName?: string;
     threadId?: string;
     isDirect: boolean;
+    modelMeta?: {
+      modelId?: string;
+      modelName?: string;
+      modelAlias?: string;
+      modelLabel?: string;
+    };
   }>();
 
   /** Active chunked transfers (receiving) */
@@ -518,7 +524,7 @@ export class ChatController {
         }
 
         if (data?.type === 'stream-start') {
-          const { messageId, channelId, senderId, senderName, isDirect, threadId, replyToId } = data as any;
+          const { messageId, channelId, senderId, senderName, isDirect, threadId, replyToId, modelMeta } = data as any;
           let targetChannelId = channelId as string;
           const streamSenderId = (senderId ?? peerId) as string;
 
@@ -540,6 +546,7 @@ export class ChatController {
             senderName,
             threadId: streamThreadId,
             isDirect: !!isDirect,
+            modelMeta: modelMeta as any,
           });
 
           // === CREATE MESSAGE + DOM ELEMENT IN stream-start (not delta) ===
@@ -554,6 +561,9 @@ export class ChatController {
           msg.id = messageId;
           (msg as any).senderName = senderName;
           (msg as any).streaming = true;
+          if (modelMeta) {
+            (msg as any).metadata = { assistant: modelMeta };
+          }
           await this.messageStore.addMessage(msg);
           await this.persistMessage(msg); // Persist to IndexedDB immediately so it survives refresh
 
@@ -1055,6 +1065,9 @@ export class ChatController {
               this.mediaStore.registerMeta(wsId, att, 'pruned');
             }
           }
+          if ((data as any).metadata) {
+            (msg as any).metadata = (data as any).metadata;
+          }
           const result = await this.messageStore.addMessage(msg);
 
           if (result.success) {
@@ -1147,6 +1160,9 @@ export class ChatController {
               if ((data as any).attachments?.length) {
                 (msg as any).attachments = (data as any).attachments;
               }
+              if ((data as any).metadata) {
+                (msg as any).metadata = (data as any).metadata;
+              }
               const result = await this.messageStore.addMessage(msg);
               if (result.success) {
                 const crdt = this.getOrCreateCRDT(channelId);
@@ -1232,6 +1248,10 @@ export class ChatController {
           }
         }
 
+        // Carry message metadata (model info, etc.)
+        if (data.metadata) {
+          (msg as any).metadata = data.metadata;
+        }
 
         // Streaming dedup: if this messageId was already received via streaming,
         // update the existing message content, clear streaming flag, persist, and return.

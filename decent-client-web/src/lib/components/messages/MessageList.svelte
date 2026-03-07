@@ -129,6 +129,17 @@
       && msg.timestamp - prev.timestamp < 300000
       && msg.type !== 'system';
   }
+
+  function getModelLabel(msg: PlaintextMessage): string {
+    const assistant = (msg as any).metadata?.assistant as {
+      modelLabel?: string;
+      modelAlias?: string;
+      modelName?: string;
+      modelId?: string;
+    } | undefined;
+    if (!assistant) return '';
+    return assistant.modelLabel || assistant.modelAlias || assistant.modelName || (assistant.modelId?.split('/').pop() ?? '');
+  }
 </script>
 
 <div style="display: contents;">
@@ -156,6 +167,7 @@
         type={threadRoot.type}
         isMine={threadRoot.senderId === myPeerId}
         isBot={isBot(threadRoot.senderId)}
+        modelLabel={getModelLabel(threadRoot)}
         isGrouped={false}
         {inThreadView}
         attachments={(threadRoot as any).attachments}
@@ -184,6 +196,7 @@
         type={msg.type}
         isMine={msg.senderId === myPeerId}
         isBot={isBot(msg.senderId)}
+        modelLabel={getModelLabel(msg)}
         isGrouped={isGrouped(msg, i, messages)}
         {inThreadView}
         isActiveThreadRoot={!inThreadView && !!activeThreadRootId && msg.id === activeThreadRootId}
