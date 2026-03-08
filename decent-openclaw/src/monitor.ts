@@ -248,6 +248,7 @@ export async function relayInboundMessageToPeer(params: {
   const streamEnabled = ctx.account.streamEnabled !== false;
   let finalizeInFlight: Promise<void> | null = null;
   let processingComplete = false; // Guard: prevent idle timer from finalizing mid-response
+  let lastSentStreamContent = "";
 
   const finalizeStream = async () => {
     // Ignore idle-timer finalize calls while LLM is still generating
@@ -270,11 +271,11 @@ export async function relayInboundMessageToPeer(params: {
       ctx.log?.info?.(`[decentchat] stream telemetry: enabled=${streamEnabled} chunks=${streamChunkCount} finalChars=${finalReply.length}`);
       streamedReply = "";
       streamChunkCount = 0;
+      // keep lastSentStreamContent until finalize reliability guard evaluates
 
-      // Reliability guard: push a final full delta before stream-done.
-      // If interim deltas were dropped (network jitter/sleep/resume), this ensures
-      // the receiver still gets content and doesn't end up with an empty stream shell.
-      if (mid && streamEnabled && finalReply) {
+      // Reliability guard: push one final full delta before stream-done, but only
+      // when it adds new visible content compared to the last emitted delta.
+      if (mid && streamEnabled && finalReply && finalReply !== lastSentStreamContent) {
         try {
           if (incoming.chatType === "direct") {
             await xenaPeer.sendDirectStreamDelta({
@@ -290,6 +291,7 @@ export async function relayInboundMessageToPeer(params: {
               content: finalReply,
             });
           }
+          lastSentStreamContent = finalReply;
         } catch (err) {
           ctx.log?.warn?.(`[decentchat] finalizeStream final-delta failed: ${String(err)}`);
         }
@@ -410,7 +412,9 @@ export async function relayInboundMessageToPeer(params: {
       streamChunkCount += 1;
       ctx.log?.info?.(`[decentchat] deliver #${streamChunkCount}: +${replyText.length} chars, total=${streamedReply.length}`);
 
-      if (streamEnabled) {
+      const hasVisibleContent = streamedReply.trim().length > 0;
+
+      if (streamEnabled && hasVisibleContent) {
         if (!streamMessageId) {
           streamMessageId = randomUUID();
           // Always reply in a thread (Slack-bot style): use the existing thread root,
@@ -433,8 +437,6 @@ export async function relayInboundMessageToPeer(params: {
         }
 
         // Send cumulative content so receiver's replace-rendering shows progressive growth.
-        // Fallback smoothing: if provider gives a single big block, emit small progressive
-        // deltas so UX still looks like streaming (similar to TUI typing feel).
         const sendDelta = async (content: string) => {
           if (incoming.chatType === "direct") {
             await xenaPeer.sendDirectStreamDelta({ peerId: incoming.senderId, messageId: streamMessageId, content });
@@ -448,11 +450,16 @@ export async function relayInboundMessageToPeer(params: {
           }
         };
 
-        await sendDelta(streamedReply);
+        if (streamedReply !== lastSentStreamContent) {
+          await sendDelta(streamedReply);
+          lastSentStreamContent = streamedReply;
+        }
       }
 
-      if (streamTimer) clearTimeout(streamTimer);
-      streamTimer = setTimeout(() => { void finalizeStream(); }, 200);
+      if (hasVisibleContent) {
+        if (streamTimer) clearTimeout(streamTimer);
+        streamTimer = setTimeout(() => { void finalizeStream(); }, 200);
+      }
     },
     undefined,
     incoming.attachments,
