@@ -30,6 +30,13 @@
     lastMessageAt: number;
   }
 
+  interface ConnectionBanner {
+    showBanner: boolean;
+    level: 'offline' | 'warning' | 'info';
+    message: string;
+    detail?: string;
+  }
+
   interface Props {
     workspaceName: string | null;
     channels: ChannelInfo[];
@@ -38,6 +45,7 @@
     activeChannelId: string | null;
     activeDirectConversationId: string | null;
     myPeerId: string;
+    connectionBanner: ConnectionBanner;
     getUnreadCount: (id: string) => number;
     getPeerAlias: (peerId: string) => string;
     getPeerStatusClass: (peerId: string) => string;
@@ -56,6 +64,7 @@
     onWorkspaceMembers: () => void;
     onWorkspaceInvite: () => void;
     onWorkspaceNotifications: () => void;
+    onRetryReconnect: () => Promise<void>;
   }
 
   let {
@@ -66,6 +75,7 @@
     activeChannelId,
     activeDirectConversationId,
     myPeerId,
+    connectionBanner,
     getUnreadCount,
     getPeerAlias,
     getPeerStatusClass,
@@ -84,7 +94,10 @@
     onWorkspaceMembers,
     onWorkspaceInvite,
     onWorkspaceNotifications,
+    onRetryReconnect,
   }: Props = $props();
+
+  let retrying = $state(false);
 
   let isInWorkspace = $derived(workspaceName !== null);
   let onlineMembers = $derived(members.filter(m => m.isOnline));
@@ -96,6 +109,16 @@
 
   function toggleWorkspaceMenu() {
     workspaceMenuOpen = !workspaceMenuOpen;
+  }
+
+  async function retryReconnect() {
+    if (retrying) return;
+    retrying = true;
+    try {
+      await onRetryReconnect();
+    } finally {
+      retrying = false;
+    }
   }
 
   function formatTime(timestamp: number): string {
@@ -121,6 +144,20 @@
   {/if}
   <span class="status-dot"></span>
 </div>
+
+{#if connectionBanner.showBanner}
+  <div class="sidebar-connection-banner {connectionBanner.level}">
+    <div class="sidebar-connection-copy">
+      <div class="sidebar-connection-title">{connectionBanner.message}</div>
+      {#if connectionBanner.detail}
+        <div class="sidebar-connection-detail">{connectionBanner.detail}</div>
+      {/if}
+    </div>
+    <button class="sidebar-connection-retry" onclick={retryReconnect} disabled={retrying}>
+      {retrying ? 'Retrying…' : 'Retry'}
+    </button>
+  </div>
+{/if}
 
 {#if isInWorkspace}
   <div class="workspace-menu" id="workspace-menu" style="display:{workspaceMenuOpen ? 'block' : 'none'};">

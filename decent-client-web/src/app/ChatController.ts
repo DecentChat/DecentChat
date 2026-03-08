@@ -183,6 +183,12 @@ export class ChatController {
   /** Auth timeout: fall back to TOFU if peer doesn't respond to challenge */
   private static readonly AUTH_TIMEOUT_MS = 5000;
   private static readonly WORKSPACE_INVITES_SETTING_KEY = 'workspaceInvites';
+  /** Peer considered "likely online" if seen within this window. */
+  private static readonly LIKELY_PEER_WINDOW_MS = 6 * 60 * 60 * 1000;
+  /** During startup, treat all peers as likely to avoid missing first reconnection. */
+  private static readonly INITIAL_LIKELY_BOOTSTRAP_MS = 2 * 60 * 1000;
+  /** Cold peers are retried sparsely to avoid noisy constant reconnect churn. */
+  private static readonly COLD_PEER_RETRY_MS = 5 * 60 * 1000;
   /** Cleanup interval for the seen-set (every 5 min) */
   private _gossipCleanupInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -223,6 +229,9 @@ export class ChatController {
   private channelViewInFlight = new Map<string, Promise<void>>();
   private pendingReadReceiptKeys = new Set<string>();
   private workspaceInviteRegistry: WorkspaceInviteRegistry = {};
+  private readonly peerLastSeenAt = new Map<string, number>();
+  private readonly peerLastConnectAttemptAt = new Map<string, number>();
+  private readonly startedAt = Date.now();
 
   constructor(private state: AppState) {
     this.cryptoManager = new CryptoManager();
@@ -378,6 +387,7 @@ export class ChatController {
     this.transport.onConnect = async (peerId: string) => {
       this.state.connectedPeers.add(peerId);
       this.state.connectingPeers.delete(peerId);
+      this.peerLastSeenAt.set(peerId, Date.now());
       this.ui?.updateSidebar();
 
       try {
@@ -411,6 +421,7 @@ export class ChatController {
 
     this.transport.onMessage = async (peerId: string, rawData: unknown) => {
       const data = rawData as any;
+      this.peerLastSeenAt.set(peerId, Date.now());
       
       // Rate limit + validate before any processing.
       // Trusted sync-control traffic gets its own lane (still authenticated by
@@ -1380,6 +1391,14 @@ export class ChatController {
       window.addEventListener('online', () => {
         const peers = this.transport.getConnectedPeers();
         console.log(`[Network] Reconnected. Re-probing ${peers.length} peers...`);
+        this.runPeerMaintenanceNow('browser-online');
+        void this.reinitializeTransportIfStuck('browser-online');
+        this.ui?.updateSidebar();
+      });
+
+      window.addEventListener('offline', () => {
+        console.log('[Network] Offline. Waiting for connectivity…');
+        this.ui?.updateSidebar();
       });
     }
   }
@@ -2225,17 +2244,153 @@ export class ChatController {
     }, 20_000);
   }
 
-  /** Number of known workspace peers (excluding self) that should be connected. */
-  getExpectedWorkspacePeerCount(): number {
-    const peerIds = new Set<string>();
-    for (const ws of this.workspaceManager.getAllWorkspaces()) {
-      for (const member of ws.members) {
-        if (member.peerId && member.peerId !== this.state.myPeerId) {
-          peerIds.add(member.peerId);
-        }
-      }
+  private isLikelyOnlinePeer(peerId: string, joinedAt?: number, now = Date.now()): boolean {
+    if (this.state.connectedPeers.has(peerId) || this.state.connectingPeers.has(peerId) || this.state.readyPeers.has(peerId)) {
+      return true;
     }
-    return peerIds.size;
+
+    const recentlySeenAt = this.peerLastSeenAt.get(peerId) ?? 0;
+    if (recentlySeenAt > 0 && now - recentlySeenAt <= ChatController.LIKELY_PEER_WINDOW_MS) {
+      return true;
+    }
+
+    // Bootstrap: right after startup, assume peers are likely so we quickly reconnect once.
+    if (now - this.startedAt <= ChatController.INITIAL_LIKELY_BOOTSTRAP_MS) {
+      return true;
+    }
+
+    // Freshly joined members are also likely candidates for a while.
+    if (joinedAt && now - joinedAt <= ChatController.LIKELY_PEER_WINDOW_MS) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private getActiveWorkspacePeerStats(now = Date.now()): {
+    totalPeers: number;
+    likelyPeers: string[];
+    coldPeers: string[];
+    connectedPeers: string[];
+  } {
+    const ws = this.state.activeWorkspaceId
+      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+      : null;
+    if (!ws) {
+      return { totalPeers: 0, likelyPeers: [], coldPeers: [], connectedPeers: [] };
+    }
+
+    const connectedSet = new Set(this.transport.getConnectedPeers());
+    const likelyPeers: string[] = [];
+    const coldPeers: string[] = [];
+    const connectedPeers: string[] = [];
+
+    for (const member of ws.members) {
+      const peerId = member.peerId;
+      if (!peerId || peerId === this.state.myPeerId) continue;
+
+      if (connectedSet.has(peerId)) connectedPeers.push(peerId);
+      if (this.isLikelyOnlinePeer(peerId, member.joinedAt, now)) likelyPeers.push(peerId);
+      else coldPeers.push(peerId);
+    }
+
+    return {
+      totalPeers: likelyPeers.length + coldPeers.length,
+      likelyPeers,
+      coldPeers,
+      connectedPeers,
+    };
+  }
+
+  /** Number of likely-online peers in the active workspace. */
+  getExpectedWorkspacePeerCount(): number {
+    return this.getActiveWorkspacePeerStats().likelyPeers.length;
+  }
+
+  /** Sidebar reconnect banner model (best-effort heuristics). */
+  getConnectionStatus(): {
+    showBanner: boolean;
+    level: 'offline' | 'warning' | 'info';
+    message: string;
+    detail?: string;
+  } {
+    const browserOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+
+    const signalingStatus = typeof this.transport.getSignalingStatus === 'function'
+      ? this.transport.getSignalingStatus()
+      : [];
+    const signalingConnectedCount = signalingStatus.filter((s: any) => !!s.connected).length;
+    const signalingConnected = signalingStatus.length === 0 || signalingConnectedCount > 0;
+
+    if (!browserOnline) {
+      return {
+        showBanner: true,
+        level: 'offline',
+        message: 'You are offline',
+        detail: 'Reconnect to the internet, then press Retry.',
+      };
+    }
+
+    if (!signalingConnected) {
+      return {
+        showBanner: true,
+        level: 'offline',
+        message: 'Disconnected from signaling',
+        detail: 'Peer discovery is down. Press Retry to reconnect.',
+      };
+    }
+
+    const stats = this.getActiveWorkspacePeerStats();
+    const connected = stats.connectedPeers.length;
+    const likely = stats.likelyPeers.length;
+    const connectingLikely = stats.likelyPeers.filter((peerId) => this.state.connectingPeers.has(peerId)).length;
+
+    // If at least one peer is connected, keep UI calm by default.
+    if (connected > 0) {
+      return {
+        showBanner: false,
+        level: 'info',
+        message: '',
+      };
+    }
+
+    // Nobody connected. Only warn when there are likely-online peers to recover.
+    if (likely > 0) {
+      return {
+        showBanner: true,
+        level: connectingLikely > 0 ? 'info' : 'warning',
+        message: connectingLikely > 0 ? 'Reconnecting…' : 'No peers connected',
+        detail: connectingLikely > 0
+          ? `Trying ${connectingLikely}/${likely} likely peer(s).`
+          : `Expected ${likely} likely peer(s) online. Press Retry to reconnect.`,
+      };
+    }
+
+    // All peers look cold/offline — avoid noisy banner.
+    return {
+      showBanner: false,
+      level: 'info',
+      message: '',
+    };
+  }
+
+  /** Manual reconnect action for the sidebar Retry button. */
+  async retryReconnectNow(): Promise<{ attempted: number; reinitialized: boolean }> {
+    const firstAttempt = this.runPeerMaintenanceNow('user-retry');
+    const noPeersConnected = this.transport.getConnectedPeers().length === 0;
+    const reinitialized = (firstAttempt === 0 || noPeersConnected)
+      ? await this.reinitializeTransportIfStuck('user-retry')
+      : false;
+
+    const secondAttempt = (reinitialized || firstAttempt > 0)
+      ? 0
+      : this.runPeerMaintenanceNow('user-retry-post');
+
+    this.ui?.updateSidebar();
+    return {
+      attempted: firstAttempt + secondAttempt,
+      reinitialized,
+    };
   }
 
   /** Public one-shot maintenance hook for startup/resume reconnect bootstrap. */
@@ -2452,49 +2607,73 @@ export class ChatController {
     const now = Date.now();
     let attempted = 0;
 
+    const likelyTargets: string[] = [];
+    const coldTargets: string[] = [];
+
     for (const member of ws.members) {
-      if (member.peerId === this.state.myPeerId) continue;
-      if (connectedPeers.has(member.peerId)) {
+      const peerId = member.peerId;
+      if (!peerId || peerId === this.state.myPeerId) continue;
+
+      if (connectedPeers.has(peerId)) {
         // Even when transport still thinks a peer is connected, traffic can be
         // dropped during relay outages. Periodic sync closes those gaps.
-        if (this.state.readyPeers.has(member.peerId)) {
-          const last = this.lastMessageSyncRequestAt.get(member.peerId) ?? 0;
+        if (this.state.readyPeers.has(peerId)) {
+          const last = this.lastMessageSyncRequestAt.get(peerId) ?? 0;
           if (now - last >= 10_000) {
-            this.lastMessageSyncRequestAt.set(member.peerId, now);
-            this.requestMessageSync(member.peerId).catch(err => {
+            this.lastMessageSyncRequestAt.set(peerId, now);
+            this.requestMessageSync(peerId).catch(err => {
               console.warn('[Maintenance] Periodic message sync failed:', err);
             });
           }
         }
         continue;
       }
+
+      if (this.isLikelyOnlinePeer(peerId, member.joinedAt, now)) likelyTargets.push(peerId);
+      else coldTargets.push(peerId);
+    }
+
+    const connectPeer = (peerId: string): void => {
       // Use the transport's own in-flight state (connectingTo + pending reconnect
       // timers) instead of app-level connectingPeers, which can go stale when
       // connect() returns immediately (dedup early-return, no catch fired).
       if (typeof this.transport.isConnectingToPeer === 'function' &&
-          this.transport.isConnectingToPeer(member.peerId)) {
-        this.state.connectingPeers.add(member.peerId); // keep UI in sync
-        continue;
+          this.transport.isConnectingToPeer(peerId)) {
+        this.state.connectingPeers.add(peerId); // keep UI in sync
+        return;
       }
 
       attempted++;
-      this.state.connectingPeers.add(member.peerId);
+      this.peerLastConnectAttemptAt.set(peerId, now);
+      this.state.connectingPeers.add(peerId);
       this.ui?.updateSidebar();
       // Stop the pulsating indicator quickly — if the peer doesn't answer in
       // 4s, show them as offline rather than spinning forever. PeerTransport
       // keeps retrying silently in the background; onConnect will light them
       // up green the moment they come back.
       setTimeout(() => {
-        if (!this.state.connectedPeers.has(member.peerId)) {
-          this.state.connectingPeers.delete(member.peerId);
+        if (!this.state.connectedPeers.has(peerId)) {
+          this.state.connectingPeers.delete(peerId);
           this.ui?.updateSidebar();
         }
       }, 4000);
-      this.transport.connect(member.peerId).catch(() => { /* retries handled by PeerTransport */ });
+      this.transport.connect(peerId).catch(() => { /* retries handled by PeerTransport */ });
+    };
+
+    // Aggressive reconnect for likely-online peers.
+    for (const peerId of likelyTargets) {
+      connectPeer(peerId);
+    }
+
+    // Sparse reconnect for cold peers (background probing, low noise).
+    for (const peerId of coldTargets) {
+      const lastAttempt = this.peerLastConnectAttemptAt.get(peerId) ?? 0;
+      if (now - lastAttempt < ChatController.COLD_PEER_RETRY_MS) continue;
+      connectPeer(peerId);
     }
 
     if (attempted > 0) {
-      console.log(`[Maintenance] Attempting reconnect to ${attempted} workspace member(s)`);
+      console.log(`[Maintenance] Attempting reconnect to ${attempted} workspace member(s) [likely=${likelyTargets.length}, cold=${coldTargets.length}]`);
     }
     return attempted;
   }

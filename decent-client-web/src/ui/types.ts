@@ -101,4 +101,11 @@ export interface UICallbacks {
   joinHuddle?: (channelId: string) => Promise<void>;
   leaveHuddle?: () => Promise<void>;
   toggleHuddleMute?: () => boolean;
+  getConnectionStatus?: () => {
+    showBanner: boolean;
+    level: 'offline' | 'warning' | 'info';
+    message: string;
+    detail?: string;
+  };
+  retryReconnect?: () => Promise<{ attempted: number; reinitialized: boolean }>;
 }

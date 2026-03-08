@@ -48,7 +48,8 @@
       if (target.classList.contains('attachment-thumbnail')) {
         const img = target as HTMLImageElement;
         const name = img.getAttribute('data-attachment-name') || '';
-        cb?.onImageClick(name, img.src);
+        const attachmentId = img.getAttribute('data-attachment-id') || undefined;
+        await cb?.onImageClick(name, img.src, attachmentId);
       }
     };
 
@@ -165,6 +166,7 @@
           activeChannelId={shellData.sidebar.activeChannelId}
           activeDirectConversationId={shellData.sidebar.activeDirectConversationId}
           myPeerId={shellData.sidebar.myPeerId}
+          connectionBanner={shellData.sidebar.connectionBanner}
           getUnreadCount={cb.getUnreadCount}
           getPeerAlias={cb.getPeerAlias}
           getPeerStatusClass={cb.getPeerStatusClass}
@@ -183,6 +185,7 @@
           onWorkspaceMembers={cb.onWorkspaceMembers}
           onWorkspaceInvite={cb.onWorkspaceInvite}
           onWorkspaceNotifications={cb.onWorkspaceNotifications}
+          onRetryReconnect={cb.onRetryReconnect}
         />
       {:else if cb && shellData.activity.panelOpen}
         <ActivityPanel
@@ -262,6 +265,7 @@
                 onRememberReaction={cb.onRememberReaction}
                 onShowMessageInfo={cb.onShowMessageInfo}
                 onImageClick={cb.onImageClick}
+                resolveAttachmentImageUrl={cb.resolveAttachmentImageUrl}
               />
             {/if}
           </div>
@@ -306,6 +310,7 @@
               onClose={cb.onCloseThread}
               onSend={cb.onThreadSend}
               getMembers={cb.getMembers}
+              resolveAttachmentImageUrl={cb.resolveAttachmentImageUrl}
             />
           {/if}
         </div>

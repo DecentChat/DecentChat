@@ -120,6 +120,23 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
       await copyInviteForActiveWorkspace('Invite link copied!');
     },
     onWorkspaceNotifications: () => modalActions.showSettings(),
+    onRetryReconnect: async () => {
+      if (!callbacks.retryReconnect) return;
+      try {
+        const result = await callbacks.retryReconnect();
+        if (result.reinitialized) {
+          showToast('Transport was restarted. Reconnecting…', 'info');
+        } else if (result.attempted > 0) {
+          showToast(`Retrying connection to ${result.attempted} peer(s)…`, 'info');
+        } else {
+          showToast('Reconnect check triggered.', 'info');
+        }
+      } catch (err) {
+        showToast(`Reconnect failed: ${(err as Error).message}`, 'error');
+      } finally {
+        syncShellSidebar();
+      }
+    },
     getUnreadCount: (id) => callbacks.getUnreadCount?.(id) || 0,
     getPeerAlias: (peerId) => getPeerAlias(peerId),
     getPeerStatusClass: (peerId) => peerStatusClass(peerId),
@@ -152,7 +169,19 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     onToggleReaction: (messageId, emoji) => callbacks.toggleReaction?.(messageId, emoji),
     onRememberReaction: (emoji) => rememberReaction(emoji),
     onShowMessageInfo: (messageId) => showMessageInfo(messageId),
-    onImageClick: (name, src) => openLightbox(src, name),
+    resolveAttachmentImageUrl: callbacks.resolveAttachmentImageUrl,
+    onImageClick: async (name, src, attachmentId) => {
+      if (attachmentId && callbacks.resolveAttachmentImageUrl) {
+        try {
+          const fullSrc = await callbacks.resolveAttachmentImageUrl(attachmentId);
+          openLightbox(fullSrc || src, name);
+          return;
+        } catch {
+          // Fallback to thumbnail lightbox
+        }
+      }
+      openLightbox(src, name);
+    },
 
     // Compose
     onSend: async (text, files) => {

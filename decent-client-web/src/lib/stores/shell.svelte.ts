@@ -44,6 +44,13 @@ export interface ShellWorkspaceData {
   name: string;
 }
 
+export interface SidebarConnectionBanner {
+  showBanner: boolean;
+  level: 'offline' | 'warning' | 'info';
+  message: string;
+  detail?: string;
+}
+
 // ── Reactive data store (UIRenderer writes, AppShell reads) ──
 
 export const shellData = $state({
@@ -72,6 +79,11 @@ export const shellData = $state({
     activeChannelId: null as string | null,
     activeDirectConversationId: null as string | null,
     myPeerId: '',
+    connectionBanner: {
+      showBanner: false,
+      level: 'info',
+      message: '',
+    } as SidebarConnectionBanner,
   },
 
   // Channel header
@@ -169,6 +181,7 @@ export interface ShellCallbacks {
   onWorkspaceMembers: () => void;
   onWorkspaceInvite: () => void;
   onWorkspaceNotifications: () => void;
+  onRetryReconnect: () => Promise<void>;
   getUnreadCount: (id: string) => number;
   getPeerAlias: (peerId: string) => string;
   getPeerStatusClass: (peerId: string) => string;
@@ -191,7 +204,8 @@ export interface ShellCallbacks {
   onToggleReaction: (messageId: string, emoji: string) => void;
   onRememberReaction: (emoji: string) => void;
   onShowMessageInfo: (messageId: string) => void;
-  onImageClick: (name: string, src: string) => void;
+  onImageClick: (name: string, src: string, attachmentId?: string) => void | Promise<void>;
+  resolveAttachmentImageUrl?: (attachmentId: string) => Promise<string | null>;
 
   // Compose
   onSend: (text: string, files: File[]) => Promise<void>;

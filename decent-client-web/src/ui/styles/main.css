@@ -2030,6 +2030,69 @@ body.debug-mode .msg-delivery-detail {
 .connection-bar.connecting { background: var(--warning); color: #000; }
 .connection-bar.error { background: var(--error); color: white; }
 
+/* Sidebar reconnect banner */
+.sidebar-connection-banner {
+  margin: 8px 12px 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sidebar-connection-banner.offline {
+  background: rgba(214, 48, 49, 0.14);
+  border-color: rgba(214, 48, 49, 0.35);
+}
+
+.sidebar-connection-banner.warning {
+  background: rgba(253, 203, 110, 0.12);
+  border-color: rgba(253, 203, 110, 0.35);
+}
+
+.sidebar-connection-banner.info {
+  background: rgba(9, 132, 227, 0.12);
+  border-color: rgba(9, 132, 227, 0.35);
+}
+
+.sidebar-connection-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-connection-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--sidebar-text);
+}
+
+.sidebar-connection-detail {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.sidebar-connection-retry {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--sidebar-text);
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sidebar-connection-retry:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.sidebar-connection-retry:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
 /* === Toast === */
 .toast {
   position: fixed;
@@ -4173,6 +4236,26 @@ html, body {
   letter-spacing: 0.03em;
   vertical-align: middle;
   line-height: 1.4;
+}
+
+.msg-model-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 120px;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  margin-left: 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .message-avatar.bot-avatar {
   font-size: 16px;

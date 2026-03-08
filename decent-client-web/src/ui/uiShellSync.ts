@@ -90,9 +90,18 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
     shellData.sidebar.directConversations = cachedData.directConversations.map(c => ({
       id: c.id, contactPeerId: c.contactPeerId, lastMessageAt: c.lastMessageAt,
     }));
+    const connectionStatus = callbacks.getConnectionStatus?.();
+    const connectionBanner = {
+      showBanner: connectionStatus?.showBanner ?? false,
+      level: connectionStatus?.level ?? ('info' as const),
+      message: connectionStatus?.message ?? '',
+      detail: connectionStatus?.detail,
+    };
+
     shellData.sidebar.activeChannelId = state.activeChannelId;
     shellData.sidebar.activeDirectConversationId = state.activeDirectConversationId;
     shellData.sidebar.myPeerId = state.myPeerId;
+    shellData.sidebar.connectionBanner = connectionBanner;
   }
 
   function syncShellHeader(): void {

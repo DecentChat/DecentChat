@@ -286,6 +286,8 @@ async function init(): Promise<void> {
     onChannelViewed: (channelId) => ctrl.onChannelViewed(channelId),
     getDisplayNameForPeer: (peerId) => ctrl.getDisplayNameForPeer(peerId),
     getMessageReceiptInfo: (messageId) => ctrl.getMessageReceiptInfo(messageId),
+    getConnectionStatus: () => ctrl.getConnectionStatus(),
+    retryReconnect: () => ctrl.retryReconnectNow(),
 
     // Identity restore / transfer
     getCurrentSeed: () => ctrl.persistentStore.getSetting('seedPhrase') as Promise<string | null>,
