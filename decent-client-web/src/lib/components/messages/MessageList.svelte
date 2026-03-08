@@ -26,6 +26,7 @@
     onRememberReaction: (emoji: string) => void;
     onShowMessageInfo: (messageId: string) => void;
     onImageClick?: (name: string, src: string) => void;
+    resolveAttachmentImageUrl?: (attachmentId: string) => Promise<string | null>;
   }
 
   let {
@@ -46,6 +47,7 @@
     onRememberReaction,
     onShowMessageInfo,
     onImageClick,
+    resolveAttachmentImageUrl,
   }: Props = $props();
 
   // Auto-scroll: find the parent scroll container after mount
@@ -183,6 +185,7 @@
         {onRememberReaction}
         {onShowMessageInfo}
         {onImageClick}
+        {resolveAttachmentImageUrl}
       />
       <div class="thread-root-separator"><span>Thread</span></div>
     {/if}
@@ -213,6 +216,7 @@
         {onRememberReaction}
         {onShowMessageInfo}
         {onImageClick}
+        {resolveAttachmentImageUrl}
       />
     {/each}
   {/if}

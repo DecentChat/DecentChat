@@ -3,6 +3,7 @@
   Replaces the innerHTML generation in appendMessageToDOM().
 -->
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { peerColor, escapeHtml } from '$lib/utils/peer';
   import { formatFileSize, formatTime } from '$lib/utils/format';
   import { renderMarkdown } from '../../../ui/renderMarkdown';
@@ -50,6 +51,7 @@
     onRememberReaction: (emoji: string) => void;
     onShowMessageInfo: (messageId: string) => void;
     onImageClick?: (name: string, src: string) => void;
+    resolveAttachmentImageUrl?: (attachmentId: string) => Promise<string | null>;
   }
 
   let {
@@ -79,6 +81,7 @@
     onRememberReaction,
     onShowMessageInfo,
     onImageClick,
+    resolveAttachmentImageUrl,
   }: Props = $props();
 
   let initial = $derived(senderName.slice(0, 2).toUpperCase());
@@ -87,20 +90,79 @@
   let avatarContent = $derived(isBot ? '🤖' : initial);
   let isSystem = $derived(type === 'system');
 
+  // Prefer receipt-derived state when available. This avoids stale ⏳ when
+  // receipt arrays are already updated but `status` lags behind.
   let statusClass = $derived(
-    status === 'read' ? 'read' : (status || 'pending')
+    recipientCount > 0 && readCount >= recipientCount
+      ? 'read'
+      : recipientCount > 0 && ackedCount >= recipientCount
+        ? 'delivered'
+        : (status === 'read' || status === 'delivered' || status === 'sent' || status === 'pending')
+          ? status
+          : 'pending'
   );
+
+  const receiptTotal = $derived(Math.max(0, recipientCount || 0));
+  const receiptDelivered = $derived(Math.max(0, Math.min(ackedCount || 0, receiptTotal)));
+  const receiptRead = $derived(Math.max(0, Math.min(readCount || 0, receiptTotal)));
+
+  // If status already says delivered/read but counts lag, avoid misleading 0/N.
+  const effectiveDelivered = $derived(
+    (statusClass === 'delivered' || statusClass === 'read')
+      ? Math.max(receiptDelivered, receiptTotal)
+      : receiptDelivered
+  );
+  const effectiveRead = $derived(
+    statusClass === 'read'
+      ? Math.max(receiptRead, receiptTotal)
+      : receiptRead
+  );
+
   let statusSymbol = $derived(
     statusClass === 'read' ? '✓✓' : statusClass === 'delivered' ? '✓✓' : statusClass === 'sent' ? '✓' : '⏳'
   );
-  let deliveryTitle = $derived(() => {
-    if (statusClass === 'read') return recipientCount > 0 ? `Read (${readCount}/${recipientCount})` : 'Read';
-    if (statusClass === 'delivered') return recipientCount > 0 ? `Delivered (${ackedCount}/${recipientCount})` : 'Delivered';
-    if (statusClass === 'sent') return recipientCount > 0 ? `Sent (${ackedCount}/${recipientCount} delivered)` : 'Sent';
-    return 'Sending…';
-  });
+  let deliveryTitle = $derived(
+    statusClass === 'read'
+      ? (receiptTotal > 0 ? `Read by ${effectiveRead}/${receiptTotal}` : 'Read')
+      : statusClass === 'delivered'
+        ? (receiptTotal > 0 ? `Delivered to ${effectiveDelivered}/${receiptTotal} • Read by ${effectiveRead}/${receiptTotal}` : 'Delivered')
+        : statusClass === 'sent'
+          ? (receiptTotal > 0 ? 'Sent • Waiting for delivery receipt' : 'Sent')
+          : (receiptTotal > 0 && (effectiveDelivered > 0 || effectiveRead > 0)
+              ? `Syncing status… Delivered to ${effectiveDelivered}/${receiptTotal} • Read by ${effectiveRead}/${receiptTotal}`
+              : 'Sending…')
+  );
 
   let renderedContent = $derived(renderMarkdown(content));
+
+  // Always prefer full-quality attachment images in chat.
+  // Do not render low-quality metadata thumbnails inline.
+  const fullImageUrls = $state<Record<string, string>>({});
+  const requestedImageIds = new Set<string>();
+
+  $effect(() => {
+    if (!resolveAttachmentImageUrl) return;
+    const imageAttachments = attachments.filter((att) => att.type === 'image');
+    for (const att of imageAttachments) {
+      if (!att.id || fullImageUrls[att.id] || requestedImageIds.has(att.id)) continue;
+      requestedImageIds.add(att.id);
+      void (async () => {
+        try {
+          const url = await resolveAttachmentImageUrl(att.id);
+          if (!url) return;
+          fullImageUrls[att.id] = url;
+        } catch {
+          // keep placeholder if full image is unavailable
+        }
+      })();
+    }
+  });
+
+  onDestroy(() => {
+    for (const url of Object.values(fullImageUrls)) {
+      if (url.startsWith('blob:')) URL.revokeObjectURL(url);
+    }
+  });
 
   // Thread indicator data
   let threadCount = $derived(threadReplies.length);
@@ -158,7 +220,7 @@
         {#if modelLabel}<span class="msg-model-badge">{modelLabel}</span>{/if}
         <span class="message-time">{time}</span>
         {#if isMine}
-          <span class="msg-delivery-status {statusClass}" data-message-id={id} title={deliveryTitle()}>
+          <span class="msg-delivery-status {statusClass}" data-message-id={id} data-tooltip={deliveryTitle} data-tooltip-pos="top">
             {statusSymbol}
           </span>
           {#if recipientCount > 0}
@@ -174,29 +236,32 @@
 
       {#if attachments.length > 0}
         {#each attachments as att (att.id)}
-          {#if att.type === 'image' && att.thumbnail}
-            <div class="attachment attachment-image" data-attachment-id={att.id}>
-              <img
-                src="data:image/jpeg;base64,{att.thumbnail}"
-                alt={att.name}
-                class="attachment-thumbnail"
-                data-attachment-name={att.name}
-                data-attachment-id={att.id}
-              />
-              <div class="attachment-info">
-                <span class="attachment-name">{att.name}</span>
-                <span class="attachment-size">{formatFileSize(att.size)}</span>
+          {#if att.type === 'image'}
+            {@const fullSrc = fullImageUrls[att.id]}
+            {#if fullSrc}
+              <div class="attachment attachment-image" data-attachment-id={att.id}>
+                <img
+                  src={fullSrc}
+                  alt={att.name}
+                  class="attachment-thumbnail"
+                  data-attachment-name={att.name}
+                  data-attachment-id={att.id}
+                />
+                <div class="attachment-info">
+                  <span class="attachment-name">{att.name}</span>
+                  <span class="attachment-size">{formatFileSize(att.size)}</span>
+                </div>
               </div>
-            </div>
-          {:else if att.type === 'image' && !att.thumbnail}
-            <div class="attachment attachment-image attachment-no-preview" data-attachment-id={att.id}>
-              <span class="attachment-icon">🖼️</span>
-              <div class="attachment-info">
-                <span class="attachment-name">{att.name}</span>
-                <span class="attachment-size">{formatFileSize(att.size)}</span>
-                <span class="attachment-hint">Image — preview unavailable</span>
+            {:else}
+              <div class="attachment attachment-image attachment-no-preview" data-attachment-id={att.id}>
+                <span class="attachment-icon">🖼️</span>
+                <div class="attachment-info">
+                  <span class="attachment-name">{att.name}</span>
+                  <span class="attachment-size">{formatFileSize(att.size)}</span>
+                  <span class="attachment-hint">Loading full-quality image…</span>
+                </div>
               </div>
-            </div>
+            {/if}
           {:else if att.type === 'voice' || att.type === 'audio'}
             <div class="attachment attachment-audio" data-attachment-id={att.id}>
               <span class="attachment-icon">🎵</span>

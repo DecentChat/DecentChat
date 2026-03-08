@@ -27,6 +27,7 @@
     onClose: () => void;
     onSend: (text: string, files: File[]) => Promise<void>;
     getMembers?: () => Array<{ peerId: string; name: string }>;
+    resolveAttachmentImageUrl?: (attachmentId: string) => Promise<string | null>;
   }
 
   let {
@@ -48,6 +49,7 @@
     onClose,
     onSend,
     getMembers,
+    resolveAttachmentImageUrl,
   }: Props = $props();
 
   let panelEl: HTMLDivElement | undefined = $state();
@@ -145,6 +147,7 @@
         {onToggleReaction}
         {onRememberReaction}
         {onShowMessageInfo}
+        {resolveAttachmentImageUrl}
       />
     {/if}
   </div>
