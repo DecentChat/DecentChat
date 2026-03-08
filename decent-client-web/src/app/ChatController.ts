@@ -389,11 +389,16 @@ export class ChatController {
     return trySend(1);
   }
 
+  private markPeerSeen(peerId: string): void {
+    const seenMap = this.peerLastSeenAt ?? ((this as any).peerLastSeenAt = new Map<string, number>());
+    seenMap.set(peerId, Date.now());
+  }
+
   setupTransportHandlers(): void {
     this.transport.onConnect = async (peerId: string) => {
       this.state.connectedPeers.add(peerId);
       this.state.connectingPeers.delete(peerId);
-      this.peerLastSeenAt.set(peerId, Date.now());
+      this.markPeerSeen(peerId);
       this.ui?.updateSidebar();
 
       try {
@@ -427,7 +432,7 @@ export class ChatController {
 
     this.transport.onMessage = async (peerId: string, rawData: unknown) => {
       const data = rawData as any;
-      this.peerLastSeenAt.set(peerId, Date.now());
+      this.markPeerSeen(peerId);
       
       // Rate limit + validate before any processing.
       // Trusted sync-control traffic gets its own lane (still authenticated by
@@ -2322,9 +2327,17 @@ export class ChatController {
     };
   }
 
-  /** Number of likely-online peers in the active workspace. */
+  /** Number of known workspace peers (excluding self) across all workspaces. */
   getExpectedWorkspacePeerCount(): number {
-    return this.getActiveWorkspacePeerStats().likelyPeers.length;
+    const peerIds = new Set<string>();
+    for (const ws of this.workspaceManager.getAllWorkspaces()) {
+      for (const member of ws.members) {
+        if (member.peerId && member.peerId !== this.state.myPeerId) {
+          peerIds.add(member.peerId);
+        }
+      }
+    }
+    return peerIds.size;
   }
 
   /** Sidebar reconnect banner model (best-effort heuristics). */

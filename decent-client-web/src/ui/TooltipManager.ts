@@ -21,6 +21,7 @@ let tooltipEl: HTMLElement | null = null;
 let arrowEl: HTMLElement | null = null;
 let currentAnchor: HTMLElement | null = null;
 let hideTimeout: ReturnType<typeof setTimeout> | null = null;
+let anchorObserver: MutationObserver | null = null;
 
 function getPlacement(anchor: HTMLElement): Placement {
   const pos = anchor.dataset.tooltipPos;
@@ -43,6 +44,28 @@ function ensureTooltipEl(): { tooltip: HTMLElement; arrow: HTMLElement } {
   return { tooltip: tooltipEl, arrow: arrowEl! };
 }
 
+
+function clearAnchorObserver(): void {
+  if (anchorObserver) {
+    anchorObserver.disconnect();
+    anchorObserver = null;
+  }
+}
+
+function watchAnchor(anchor: HTMLElement): void {
+  clearAnchorObserver();
+  anchorObserver = new MutationObserver((mutations) => {
+    if (!currentAnchor || currentAnchor !== anchor) return;
+    for (const m of mutations) {
+      if (m.type === 'attributes' && (m.attributeName === 'data-tooltip' || m.attributeName === 'data-tooltip-pos')) {
+        void showTooltip(anchor);
+        break;
+      }
+    }
+  });
+  anchorObserver.observe(anchor, { attributes: true, attributeFilter: ['data-tooltip', 'data-tooltip-pos'] });
+}
+
 async function showTooltip(anchor: HTMLElement): Promise<void> {
   if (hideTimeout) {
     clearTimeout(hideTimeout);
@@ -53,6 +76,7 @@ async function showTooltip(anchor: HTMLElement): Promise<void> {
   if (!text) return;
 
   currentAnchor = anchor;
+  watchAnchor(anchor);
   const { tooltip } = ensureTooltipEl(); // arrowEl set as side-effect (module-level var)
 
   // Set text (excluding the arrow child)
@@ -125,6 +149,7 @@ function hideTooltip(): void {
   hideTimeout = setTimeout(() => {
     if (tooltipEl) tooltipEl.style.display = 'none';
     currentAnchor = null;
+    clearAnchorObserver();
   }, 150);
 }
 

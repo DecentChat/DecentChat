@@ -299,19 +299,51 @@ export function createUIService(
   }
 
   function updateMessageStatus(
-    _messageId: string,
-    _status: 'pending' | 'sent' | 'delivered' | 'read',
-    _detail?: { acked?: number; total?: number; read?: number },
+    messageId: string,
+    status: 'pending' | 'sent' | 'delivered' | 'read',
+    detail?: { acked?: number; total?: number; read?: number },
   ): void {
+    const patch = (msg: any) => {
+      if (!msg || msg.id !== messageId) return msg;
+      return {
+        ...msg,
+        status,
+        recipientPeerIds: typeof detail?.total === 'number'
+          ? Array.from({ length: detail.total }, (_, i) => msg?.recipientPeerIds?.[i] ?? `pending-${i}`)
+          : msg.recipientPeerIds,
+        ackedBy: typeof detail?.acked === 'number'
+          ? Array.from({ length: detail.acked }, (_, i) => msg?.ackedBy?.[i] ?? `acked-${i}`)
+          : msg.ackedBy,
+        readBy: typeof detail?.read === 'number'
+          ? Array.from({ length: detail.read }, (_, i) => msg?.readBy?.[i] ?? `read-${i}`)
+          : msg.readBy,
+      };
+    };
+
+    shellData.messages.messages = shellData.messages.messages.map((msg: any) => patch(msg));
+    if (shellData.thread.parentMessage?.id === messageId) {
+      shellData.thread.parentMessage = patch(shellData.thread.parentMessage as any);
+    }
+    shellData.thread.replies = shellData.thread.replies.map((msg: any) => patch(msg));
+
     renderMessages();
+    if (state.threadOpen && state.activeThreadId) {
+      renderThreadMessages();
+    }
   }
 
   function updateStreamingMessage(_messageId: string, _content: string): void {
     renderMessages();
+    if (state.threadOpen) {
+      renderThreadMessages();
+    }
   }
 
   function finalizeStreamingMessage(_messageId: string): void {
     renderMessages();
+    if (state.threadOpen) {
+      renderThreadMessages();
+    }
   }
 
   function updateThreadIndicator(_parentMessageId: string, _channelId: string): void {
