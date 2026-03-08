@@ -189,6 +189,8 @@ export class ChatController {
   private static readonly INITIAL_LIKELY_BOOTSTRAP_MS = 2 * 60 * 1000;
   /** Cold peers are retried sparsely to avoid noisy constant reconnect churn. */
   private static readonly COLD_PEER_RETRY_MS = 5 * 60 * 1000;
+  /** Join validation timeout: provisional join workspace must be confirmed by owner workspace-state. */
+  private static readonly JOIN_VALIDATION_TIMEOUT_MS = 5000;
   /** Cleanup interval for the seen-set (every 5 min) */
   private _gossipCleanupInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -238,6 +240,8 @@ export class ChatController {
   private readonly peerLastSeenAt = new Map<string, number>();
   private readonly peerLastConnectAttemptAt = new Map<string, number>();
   private readonly startedAt = Date.now();
+  /** Provisional joined workspaces awaiting authoritative owner workspace-state. */
+  private pendingJoinValidationTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private state: AppState) {
     this.cryptoManager = new CryptoManager();
@@ -1613,6 +1617,11 @@ export class ChatController {
         }
       }
 
+      // Last resort: if a join is pending, map rejection to that provisional workspace.
+      if (!targetWsId && this.pendingJoinValidationTimers.size > 0) {
+        targetWsId = Array.from(this.pendingJoinValidationTimers.keys())[0] || null;
+      }
+
       if (targetWsId && indicatesRevocation) {
         const mappedReason: 'kicked' | 'banned' = /banned/i.test(reason) ? 'banned' : 'kicked';
         await this.handleSelfWorkspaceRevocation(targetWsId, mappedReason, peerId);
@@ -2181,6 +2190,15 @@ export class ChatController {
         await this.handleSelfWorkspaceRevocation(localWs.id, 'kicked', peerId);
         return;
       }
+    }
+
+    // Join validation: first authoritative owner workspace-state confirms provisional join.
+    if (
+      this.pendingJoinValidationTimers.has(localWs.id) &&
+      this.workspaceManager.isOwner(localWs.id, peerId) &&
+      localWs.members.some((m: any) => m.peerId === this.state.myPeerId)
+    ) {
+      this.markJoinValidated(localWs.id);
     }
 
     // Bug 1 fix: connect to workspace members we haven't connected to yet.
@@ -3453,8 +3471,11 @@ export class ChatController {
     this.state.activeWorkspaceId = ws.id;
     this.state.activeChannelId = ws.channels[0]?.id || null;
 
-    // Persist BEFORE rendering — if this fails the workspace would be lost on refresh
+    // Persist provisional workspace (will be rolled back if not validated by owner state).
     await this.persistWorkspace(ws.id);
+
+    // Require authoritative workspace-state within timeout, otherwise rollback provisional join.
+    this.schedulePendingJoinValidation(ws.id);
 
     // Render the app UI
     this.ui?.renderApp();
@@ -3738,11 +3759,61 @@ export class ChatController {
     );
   }
 
+  private schedulePendingJoinValidation(wsId: string): void {
+    this.clearPendingJoinValidation(wsId);
+    const timer = setTimeout(() => {
+      void this.rollbackUnvalidatedJoin(wsId);
+    }, ChatController.JOIN_VALIDATION_TIMEOUT_MS);
+    this.pendingJoinValidationTimers.set(wsId, timer);
+  }
+
+  private clearPendingJoinValidation(wsId: string): void {
+    const timer = this.pendingJoinValidationTimers.get(wsId);
+    if (timer) {
+      clearTimeout(timer);
+      this.pendingJoinValidationTimers.delete(wsId);
+    }
+  }
+
+  private async rollbackUnvalidatedJoin(wsId: string): Promise<void> {
+    // Timeout fired, ensure still pending.
+    if (!this.pendingJoinValidationTimers.has(wsId)) return;
+    this.clearPendingJoinValidation(wsId);
+
+    const ws = this.workspaceManager.getWorkspace(wsId);
+    if (!ws) return;
+
+    const workspaceName = ws.name || 'workspace';
+    await this.cleanupWorkspaceLocalState(wsId, ws);
+    this.workspaceManager.removeWorkspace(wsId);
+
+    if (!this.state.activeWorkspaceId) {
+      const fallback = this.workspaceManager.getAllWorkspaces()[0];
+      if (fallback) {
+        this.state.activeWorkspaceId = fallback.id;
+        const fallbackChannel = fallback.channels.find((ch: any) => ch.type === 'channel') || fallback.channels[0] || null;
+        this.state.activeChannelId = fallbackChannel?.id || null;
+      }
+    }
+
+    this.ui?.showToast(`Could not join ${workspaceName}. Access denied or join timed out.`, 'error');
+    this.ui?.updateWorkspaceRail?.();
+    this.ui?.updateSidebar();
+    this.ui?.updateChannelHeader();
+    this.ui?.renderMessages();
+    this.ui?.updateComposePlaceholder?.();
+  }
+
+  private markJoinValidated(wsId: string): void {
+    this.clearPendingJoinValidation(wsId);
+  }
+
   private async handleSelfWorkspaceRevocation(
     wsId: string,
     reason: 'kicked' | 'banned',
     _byPeerId: string,
   ): Promise<void> {
+    this.clearPendingJoinValidation(wsId);
     const ws = this.workspaceManager.getWorkspace(wsId);
     if (!ws) return;
 
