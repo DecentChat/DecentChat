@@ -191,6 +191,10 @@ export class ChatController {
   private static readonly COLD_PEER_RETRY_MS = 5 * 60 * 1000;
   /** Join validation timeout: provisional join workspace must be confirmed by owner workspace-state. */
   private static readonly JOIN_VALIDATION_TIMEOUT_MS = 5000;
+  private static readonly WORKSPACE_INVITES_SETTING_KEY = 'workspaceInvites';
+  private static readonly LIKELY_PEER_WINDOW_MS = 6 * 60 * 60 * 1000;
+  private static readonly INITIAL_LIKELY_BOOTSTRAP_MS = 2 * 60 * 1000;
+  private static readonly COLD_PEER_RETRY_MS = 5 * 60 * 1000;
   /** Cleanup interval for the seen-set (every 5 min) */
   private _gossipCleanupInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -242,6 +246,10 @@ export class ChatController {
   private readonly startedAt = Date.now();
   /** Provisional joined workspaces awaiting authoritative owner workspace-state. */
   private pendingJoinValidationTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private workspaceInviteRegistry: WorkspaceInviteRegistry = {};
+  private readonly peerLastSeenAt = new Map<string, number>();
+  private readonly peerLastConnectAttemptAt = new Map<string, number>();
+  private readonly startedAt = Date.now();
 
   constructor(private state: AppState) {
     this.cryptoManager = new CryptoManager();
