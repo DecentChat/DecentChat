@@ -11,8 +11,9 @@
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",
-    "test:integration": "playwright test tests/integration/",
-    "test:integration:headed": "playwright test tests/integration/ --headed",
+    "test:integration": "playwright test tests/integration/ --project=chromium",
+    "test:integration:all": "playwright test tests/integration/",
+    "test:integration:headed": "playwright test tests/integration/ --project=chromium --headed",
     "test:integration:migration": "PW_ENABLE_SIGNALING=0 playwright test tests/integration/migration-sync-convergence.spec.ts",
     "test:unit": "bun test tests/unit/",
     "test:e2e:live-smoke": "playwright test -c playwright.live-smoke.config.ts"
