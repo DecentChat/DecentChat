@@ -635,19 +635,20 @@ export class ChatController {
 
           // Record thread/mention activity for streamed messages (same as normal inbound)
           if (msg && msg.senderId !== this.state.myPeerId) {
-            let activityChanged = false;
+            const lenBefore = this.activityItems.length;
+            const unreadBefore = this.getActivityUnreadCount();
+
             const wsId = this.resolveWorkspaceIdByChannelId(msg.channelId);
             if (wsId) {
-              const before = this.activityItems.length;
               this.maybeRecordMentionActivity(msg, msg.channelId, wsId);
-              if (this.activityItems.length !== before) activityChanged = true;
             }
             if (msg.threadId) {
-              const before = this.activityItems.length;
               this.maybeRecordThreadActivity(msg, msg.channelId);
-              if (this.activityItems.length !== before) activityChanged = true;
             }
-            if (activityChanged) {
+
+            const lenAfter = this.activityItems.length;
+            const unreadAfter = this.getActivityUnreadCount();
+            if (lenAfter !== lenBefore || unreadAfter !== unreadBefore) {
               this.ui?.updateChannelHeader();
               this.ui?.updateWorkspaceRail?.();
             }
@@ -1337,18 +1338,19 @@ export class ChatController {
           void this._gossipRelay(peerId, msg.id, msg.senderId, content, channelId, data);
 
           const wsIdForMsg = this.resolveWorkspaceIdByChannelId(channelId);
-          let activityChanged = false;
+          const lenBefore = this.activityItems.length;
+          const unreadBefore = this.getActivityUnreadCount();
+
           if (wsIdForMsg) {
-            const before = this.activityItems.length;
             this.maybeRecordMentionActivity(msg, channelId, wsIdForMsg);
-            if (this.activityItems.length !== before) activityChanged = true;
           }
           if (msg.threadId) {
-            const before = this.activityItems.length;
             this.maybeRecordThreadActivity(msg, channelId);
-            if (this.activityItems.length !== before) activityChanged = true;
           }
-          if (activityChanged) {
+
+          const lenAfter = this.activityItems.length;
+          const unreadAfter = this.getActivityUnreadCount();
+          if (lenAfter !== lenBefore || unreadAfter !== unreadBefore) {
             this.ui?.updateChannelHeader();
             this.ui?.updateWorkspaceRail?.();
           }
@@ -5507,16 +5509,22 @@ export class ChatController {
       let syncActivityChanged = false;
       for (const msg of toSync) {
         if (msg.senderId === this.state.myPeerId) continue;
+
+        const lenBefore = this.activityItems.length;
+        const unreadBefore = this.getActivityUnreadCount();
+
         const wsId = this.resolveWorkspaceIdByChannelId(msg.channelId);
         if (wsId) {
-          const before = this.activityItems.length;
           this.maybeRecordMentionActivity(msg as any, msg.channelId, wsId);
-          if (this.activityItems.length !== before) syncActivityChanged = true;
         }
         if (msg.threadId) {
-          const before = this.activityItems.length;
           this.maybeRecordThreadActivity(msg as any, msg.channelId);
-          if (this.activityItems.length !== before) syncActivityChanged = true;
+        }
+
+        const lenAfter = this.activityItems.length;
+        const unreadAfter = this.getActivityUnreadCount();
+        if (lenAfter !== lenBefore || unreadAfter !== unreadBefore) {
+          syncActivityChanged = true;
         }
       }
       if (syncActivityChanged) {

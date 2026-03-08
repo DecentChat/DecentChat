@@ -440,6 +440,7 @@ export function createUIService(
     syncShellRail,
     syncShellHeader,
     syncShellMessages,
+    refreshActivityPanel,
     switchWorkspace,
     switchChannel,
     switchToDirectConversation,

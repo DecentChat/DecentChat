@@ -19,6 +19,7 @@ interface RegisterShellCallbacksContext {
   syncShellRail: () => void;
   syncShellHeader: () => void;
   syncShellMessages: () => void;
+  refreshActivityPanel: () => void;
   switchWorkspace: (workspaceId: string) => void;
   switchChannel: (channelId: string) => void;
   switchToDirectConversation: (conversationId: string) => void;
@@ -52,6 +53,7 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     syncShellRail,
     syncShellHeader,
     syncShellMessages,
+    refreshActivityPanel,
     switchWorkspace,
     switchChannel,
     switchToDirectConversation,
@@ -244,8 +246,16 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
 
     // Activity
     onCloseActivity: () => toggleActivityPanel(),
-    onMarkAllRead: () => { callbacks.markAllActivityRead?.(); },
-    onMarkRead: (id) => callbacks.markActivityRead?.(id),
+    onMarkAllRead: () => {
+      callbacks.markAllActivityRead?.();
+      syncShellRail();
+      refreshActivityPanel();
+    },
+    onMarkRead: (id) => {
+      callbacks.markActivityRead?.(id);
+      syncShellRail();
+      refreshActivityPanel();
+    },
     onNavigateActivity: (item: any) => {
       toggleActivityPanel();
       const needsChannelSwitch = item.channelId && item.channelId !== state.activeChannelId;
