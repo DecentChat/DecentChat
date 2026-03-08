@@ -24,6 +24,13 @@ type ThreadHistoryEntry = {
   timestamp: number;
 };
 
+type AssistantModelMeta = {
+  modelId?: string;
+  modelName?: string;
+  modelAlias?: string;
+  modelLabel?: string;
+};
+
 type PeerContext = {
   account: ResolvedDecentChatAccount;
   accountId: string;
@@ -58,8 +65,9 @@ type StreamingPeerAdapter = {
     messageId: string;
     threadId?: string;
     replyToId?: string;
+    model?: AssistantModelMeta;
   }) => Promise<void>;
-  startDirectStream: (args: { peerId: string; messageId: string }) => Promise<void>;
+  startDirectStream: (args: { peerId: string; messageId: string; model?: AssistantModelMeta }) => Promise<void>;
   sendStreamDelta: (args: {
     channelId: string;
     workspaceId: string;
@@ -73,9 +81,9 @@ type StreamingPeerAdapter = {
   }) => Promise<void>;
   sendDirectStreamDone: (args: { peerId: string; messageId: string }) => Promise<void>;
   sendStreamDone: (args: { channelId: string; workspaceId: string; messageId: string }) => Promise<void>;
-  sendDirectToPeer: (peerId: string, content: string, threadId?: string, replyToId?: string, messageId?: string) => Promise<void>;
-  sendToChannel: (channelId: string, content: string, threadId?: string, replyToId?: string, messageId?: string) => Promise<void>;
-  persistMessageLocally: (channelId: string, workspaceId: string, content: string, threadId?: string, replyToId?: string, messageId?: string) => Promise<void>;
+  sendDirectToPeer: (peerId: string, content: string, threadId?: string, replyToId?: string, messageId?: string, model?: AssistantModelMeta) => Promise<void>;
+  sendToChannel: (channelId: string, content: string, threadId?: string, replyToId?: string, messageId?: string, model?: AssistantModelMeta) => Promise<void>;
+  persistMessageLocally: (channelId: string, workspaceId: string, content: string, threadId?: string, replyToId?: string, messageId?: string, model?: AssistantModelMeta) => Promise<void>;
   sendReadReceipt: (peerId: string, channelId: string, messageId: string) => Promise<void>;
   requestFullImage: (peerId: string, attachmentId: string) => Promise<Buffer | null>;
   getThreadHistory?: (args: {
@@ -170,6 +178,32 @@ function logThreadRouteDecision(
   log?.info?.(message);
 }
 
+function normalizeModelMeta(selection?: { provider?: string; model?: string }): AssistantModelMeta | undefined {
+  if (!selection?.model && !selection?.provider) return undefined;
+
+  const rawModel = String(selection?.model ?? "").trim();
+  const rawProvider = String(selection?.provider ?? "").trim();
+  const providerPrefix = rawProvider ? `${rawProvider}/` : "";
+
+  let modelName = rawModel;
+  if (providerPrefix && rawModel.startsWith(providerPrefix)) {
+    modelName = rawModel.slice(providerPrefix.length);
+  } else if (rawModel.includes("/")) {
+    modelName = rawModel.split("/").pop() || rawModel;
+  }
+
+  const modelId = rawProvider && modelName ? `${rawProvider}/${modelName}` : (rawModel || undefined);
+  const modelLabel = modelName || rawModel || undefined;
+
+  if (!modelLabel && !modelId) return undefined;
+
+  return {
+    modelId,
+    modelName: modelName || undefined,
+    modelLabel,
+  };
+}
+
 export async function finalizePeerStream(params: {
   xenaPeer: {
     sendDirectStreamDone: (args: { peerId: string; messageId: string }) => Promise<void>;
@@ -210,6 +244,7 @@ export async function relayInboundMessageToPeer(params: {
   let streamTimer: ReturnType<typeof setTimeout> | null = null;
   let streamedReply = "";
   let streamChunkCount = 0;
+  let selectedModel: AssistantModelMeta | undefined;
   const streamEnabled = ctx.account.streamEnabled !== false;
   let finalizeInFlight: Promise<void> | null = null;
   let processingComplete = false; // Guard: prevent idle timer from finalizing mid-response
@@ -230,6 +265,36 @@ export async function relayInboundMessageToPeer(params: {
 
       const mid = streamMessageId;
       streamMessageId = null;
+
+      const finalReply = streamedReply.trim();
+      ctx.log?.info?.(`[decentchat] stream telemetry: enabled=${streamEnabled} chunks=${streamChunkCount} finalChars=${finalReply.length}`);
+      streamedReply = "";
+      streamChunkCount = 0;
+
+      // Reliability guard: push a final full delta before stream-done.
+      // If interim deltas were dropped (network jitter/sleep/resume), this ensures
+      // the receiver still gets content and doesn't end up with an empty stream shell.
+      if (mid && streamEnabled && finalReply) {
+        try {
+          if (incoming.chatType === "direct") {
+            await xenaPeer.sendDirectStreamDelta({
+              peerId: incoming.senderId,
+              messageId: mid,
+              content: finalReply,
+            });
+          } else {
+            await xenaPeer.sendStreamDelta({
+              channelId: incoming.channelId,
+              workspaceId: incoming.workspaceId,
+              messageId: mid,
+              content: finalReply,
+            });
+          }
+        } catch (err) {
+          ctx.log?.warn?.(`[decentchat] finalizeStream final-delta failed: ${String(err)}`);
+        }
+      }
+
       await finalizePeerStream({
         xenaPeer,
         chatType: incoming.chatType === "direct" ? "direct" : "group",
@@ -239,10 +304,6 @@ export async function relayInboundMessageToPeer(params: {
         streamMessageId: mid,
       });
 
-      const finalReply = streamedReply.trim();
-      ctx.log?.info?.(`[decentchat] stream telemetry: enabled=${streamEnabled} chunks=${streamChunkCount} finalChars=${finalReply.length}`);
-      streamedReply = "";
-      streamChunkCount = 0;
       if (!finalReply) {
         ctx.log?.warn?.("[decentchat] finalizeStream: empty final reply, skipping persistence");
         return;
@@ -259,7 +320,15 @@ export async function relayInboundMessageToPeer(params: {
             ? incoming.threadId
             : (incoming.threadId ?? incoming.messageId);
           // Store in bot's message store (FileStore) without sending over WebRTC
-          await xenaPeer.persistMessageLocally(incoming.channelId, incoming.workspaceId, finalReply, persistThreadId, incoming.messageId, mid);
+          await xenaPeer.persistMessageLocally(
+            incoming.channelId,
+            incoming.workspaceId,
+            finalReply,
+            persistThreadId,
+            incoming.messageId,
+            mid,
+            selectedModel,
+          );
           ctx.log?.info?.(`[decentchat] persisted streamed reply locally for sync (${finalReply.length} chars)`);
         } catch (err) {
           ctx.log?.error?.(`[decentchat] failed to persist streamed reply locally: ${String(err)}`);
@@ -274,9 +343,9 @@ export async function relayInboundMessageToPeer(params: {
           : (incoming.threadId ?? incoming.messageId);
 
         if (incoming.chatType === "direct") {
-          await xenaPeer.sendDirectToPeer(incoming.senderId, finalReply, persistThreadId, incoming.messageId);
+          await xenaPeer.sendDirectToPeer(incoming.senderId, finalReply, persistThreadId, incoming.messageId, undefined, selectedModel);
         } else {
-          await xenaPeer.sendToChannel(incoming.channelId, finalReply, persistThreadId, incoming.messageId);
+          await xenaPeer.sendToChannel(incoming.channelId, finalReply, persistThreadId, incoming.messageId, undefined, selectedModel);
         }
         ctx.log?.info?.(`[decentchat] persisted assistant reply (${finalReply.length} chars) in ${incoming.chatType}`);
       } catch (err) {
@@ -350,7 +419,7 @@ export async function relayInboundMessageToPeer(params: {
             ? undefined
             : (incoming.threadId ?? incoming.messageId);
           if (incoming.chatType === "direct") {
-            await xenaPeer.startDirectStream({ peerId: incoming.senderId, messageId: streamMessageId });
+            await xenaPeer.startDirectStream({ peerId: incoming.senderId, messageId: streamMessageId, model: selectedModel });
           } else {
             await xenaPeer.startStream({
               channelId: incoming.channelId,
@@ -358,6 +427,7 @@ export async function relayInboundMessageToPeer(params: {
               messageId: streamMessageId,
               threadId: outThreadId,
               replyToId: incoming.messageId,
+              model: selectedModel,
             });
           }
         }
@@ -387,7 +457,12 @@ export async function relayInboundMessageToPeer(params: {
     undefined,
     incoming.attachments,
     fullImageBuffers,
-    { streamEnabled },
+    {
+      streamEnabled,
+      onModelResolved: (model) => {
+        selectedModel = model;
+      },
+    },
   );
 
   processingComplete = true;
@@ -568,7 +643,10 @@ async function processInboundMessage(
   onDeliverError?: (reason: string) => void,
   attachments?: InboundAttachment[],
   fullImageBuffers?: Map<string, Buffer>,
-  options?: { streamEnabled?: boolean },
+  options?: {
+    streamEnabled?: boolean;
+    onModelResolved?: (model: AssistantModelMeta | undefined) => void;
+  },
 ): Promise<void> {
   let rawBody = msg.content?.trim() ?? "";
 
@@ -820,6 +898,12 @@ async function processInboundMessage(
     accountId: ctx.accountId,
   });
 
+  const onModelSelectedWithCapture = (modelCtx: { provider?: string; model?: string }) => {
+    const normalized = normalizeModelMeta(modelCtx);
+    options?.onModelResolved?.(normalized);
+    onModelSelected?.(modelCtx as any);
+  };
+
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
@@ -851,7 +935,7 @@ async function processInboundMessage(
       },
     },
     replyOptions: {
-      onModelSelected,
+      onModelSelected: onModelSelectedWithCapture,
       suppressToolErrorWarnings: true,
       // Real token-level streaming: onPartialReply fires with each LLM token delta.
       // We forward these directly to the P2P stream protocol for live rendering.
