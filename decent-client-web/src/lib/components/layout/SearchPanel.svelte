@@ -44,6 +44,13 @@
     results = onSearch(query.trim());
   }
 
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Escape') return;
+    onClose();
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
   function handleResultClick(messageId: string) {
     onScrollToMessage(messageId);
   }
@@ -65,6 +72,7 @@
       class="search-field"
       id="search-input"
       oninput={handleInput}
+      onkeydown={handleKeydown}
     />
     <button class="icon-btn" id="search-close" onclick={onClose}>✕</button>
   </div>
