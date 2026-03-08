@@ -330,6 +330,39 @@ export function createUIService(
     if (state.threadOpen && state.activeThreadId) {
       renderThreadMessages();
     }
+
+    const total = Math.max(0, detail?.total ?? 0);
+    const acked = Math.max(0, Math.min(detail?.acked ?? 0, total));
+    const read = Math.max(0, Math.min(detail?.read ?? 0, total));
+    const effectiveDelivered = (status === 'delivered' || status === 'read') ? Math.max(acked, total) : acked;
+    const effectiveRead = status === 'read' ? Math.max(read, total) : read;
+    const symbol = status === 'read' || status === 'delivered' ? '✓✓' : status === 'sent' ? '✓' : '⏳';
+    const tooltip = status === 'read'
+      ? (total > 0 ? `Read by ${effectiveRead}/${total}` : 'Read')
+      : status === 'delivered'
+        ? (total > 0 ? `Delivered to ${effectiveDelivered}/${total} • Read by ${effectiveRead}/${total}` : 'Delivered')
+        : status === 'sent'
+          ? (total > 0 ? 'Sent • Waiting for delivery receipt' : 'Sent')
+          : (total > 0 && (effectiveDelivered > 0 || effectiveRead > 0)
+              ? `Syncing status… Delivered to ${effectiveDelivered}/${total} • Read by ${effectiveRead}/${total}`
+              : 'Sending…');
+
+    const statusNodes = document.querySelectorAll(`.msg-delivery-status[data-message-id="${messageId}"]`);
+    statusNodes.forEach((node) => {
+      const el = node as HTMLElement;
+      el.textContent = symbol;
+      el.setAttribute('data-tooltip', tooltip);
+      el.classList.remove('pending', 'sent', 'delivered', 'read');
+      el.classList.add(status);
+    });
+
+    if (total > 0) {
+      const detailText = `${status === 'read' ? effectiveRead : (status === 'delivered' ? effectiveDelivered : acked)}/${total}`;
+      const detailNodes = document.querySelectorAll(`.msg-delivery-detail[data-message-id="${messageId}"]`);
+      detailNodes.forEach((node) => {
+        (node as HTMLElement).textContent = detailText;
+      });
+    }
   }
 
   function updateStreamingMessage(_messageId: string, _content: string): void {
