@@ -317,14 +317,20 @@
   // Global paste listener (for paste when textarea not focused)
   $effect(() => {
     const handler = (e: Event) => {
-      // Only capture if compose area's textarea or its container is the active element's parent
-      const active = document.activeElement;
+      const active = document.activeElement as HTMLElement | null;
       if (active === textareaEl) return; // Already handled by onpaste on textarea
-      // Check if we're the right target based on our target prop
+
+      // Keep paste routing isolated between thread/main composers.
+      const eventTarget = e.target as HTMLElement | null;
+      const inThreadContext = !!eventTarget?.closest?.('#thread-panel') || !!active?.closest?.('#thread-panel');
+
       if (target === 'thread') {
-        const threadPanel = (e.target as HTMLElement)?.closest?.('#thread-panel');
-        if (!threadPanel) return;
+        if (!inThreadContext) return;
+      } else {
+        // Main composer must ignore pastes that originate in thread context.
+        if (inThreadContext) return;
       }
+
       const clipEvent = e as ClipboardEvent;
       const items = Array.from(clipEvent.clipboardData?.items || []);
       const imageItems = items.filter(item => item.type.startsWith('image/'));
