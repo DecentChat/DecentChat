@@ -15,6 +15,7 @@
     myDisplayName: string;
     inThreadView?: boolean;
     threadRoot?: PlaintextMessage | null;
+    activeThreadRootId?: string | null;
     frequentReactions: string[];
     // Callbacks
     getThread: (channelId: string, messageId: string) => PlaintextMessage[];
@@ -35,6 +36,7 @@
     myDisplayName,
     inThreadView = false,
     threadRoot = null,
+    activeThreadRootId = null,
     frequentReactions,
     getThread,
     getPeerAlias,
@@ -184,6 +186,7 @@
         isBot={isBot(msg.senderId)}
         isGrouped={isGrouped(msg, i, messages)}
         {inThreadView}
+        isActiveThreadRoot={!inThreadView && !!activeThreadRootId && msg.id === activeThreadRootId}
         attachments={(msg as any).attachments}
         threadReplies={activeChannelId ? getThread(activeChannelId, msg.id) : []}
         status={(msg as any).status}

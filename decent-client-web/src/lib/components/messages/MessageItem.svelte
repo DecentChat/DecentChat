@@ -33,6 +33,7 @@
     isBot: boolean;
     isGrouped: boolean;
     inThreadView: boolean;
+    isActiveThreadRoot?: boolean;
     attachments?: Attachment[];
     threadReplies?: ThreadReply[];
     status?: string;
@@ -61,6 +62,7 @@
     isBot,
     isGrouped,
     inThreadView,
+    isActiveThreadRoot = false,
     attachments = [],
     threadReplies = [],
     status = 'pending',
@@ -135,7 +137,7 @@
 </script>
 
 <div
-  class="message {isSystem ? 'system' : ''} {isGrouped ? 'grouped' : ''} {animate ? 'message-new' : ''}"
+  class="message {isSystem ? 'system' : ''} {isGrouped ? 'grouped' : ''} {animate ? 'message-new' : ''} {isActiveThreadRoot ? 'thread-root-active' : ''}"
   data-message-id={id}
   data-senderId={senderId}
   data-timestamp={String(timestamp)}

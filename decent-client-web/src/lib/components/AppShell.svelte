@@ -252,6 +252,7 @@
                 activeChannelId={shellData.messages.activeChannelId}
                 myPeerId={shellData.messages.myPeerId}
                 myDisplayName={shellData.messages.myDisplayName}
+                activeThreadRootId={shellData.thread.open ? shellData.thread.threadId : null}
                 frequentReactions={shellData.messages.frequentReactions}
                 getThread={cb.getThread}
                 getPeerAlias={cb.getPeerAlias}
