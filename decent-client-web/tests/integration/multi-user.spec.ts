@@ -543,7 +543,8 @@ test.describe('Multi-User P2P Integration', () => {
       // Modal stays open and workspace state reflects removal.
       await alice.page.waitForTimeout(600);
       await expect(alice.page.locator('.modal .members-list')).toBeVisible();
-      await expect(alice.page.locator('#members-count-label')).toContainText('1 member');
+      // Member count shown in modal header area (Svelte modal uses a div, not #members-count-label).
+      await expect(alice.page.locator('.modal').getByText(/1 member/)).toBeVisible({ timeout: 5000 });
       await expect.poll(async () => {
         return await alice.page.evaluate(() => {
           const s = (window as any).__state;

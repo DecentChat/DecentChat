@@ -31,8 +31,8 @@ export default defineConfig({
     {
       command: `VITE_SIGNAL_PORT=${SIGNAL_PORT} bun run dev -- --host 127.0.0.1 --port 5173`,
       port: 5173,
-      reuseExistingServer: true,
-      timeout: 45000,
+      timeout: 90000,
+      reuseExistingServer: false,
     },
   ],
   projects: [
