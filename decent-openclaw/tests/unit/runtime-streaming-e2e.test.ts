@@ -649,7 +649,7 @@ describe("runtime streaming relay integration", () => {
     expect(recorded[0]?.sessionKey).toContain(":thread:root-777");
     expect(recorded[0]?.ctx?.ParentSessionKey).toBe("session:group:ws:chan");
   });
-  test("onPartialReply delivers tokens and final deliver is skipped when stream is active", async () => {
+  test("rapid partials are coalesced into a single final streamed delta", async () => {
     const streamStarts: Array<{ peerId: string; messageId: string }> = [];
     const streamDeltas: Array<{ peerId: string; messageId: string; content: string }> = [];
     const streamDone: Array<{ peerId: string; messageId: string }> = [];
@@ -672,6 +672,7 @@ describe("runtime streaming relay integration", () => {
         persistedReplies.push({ peerId, content, threadId, replyToId });
       },
       sendToChannel: async () => {},
+      persistMessageLocally: async () => {},
     };
 
     await relayInboundMessageToPeer({
@@ -685,12 +686,94 @@ describe("runtime streaming relay integration", () => {
     });
 
     expect(streamStarts).toHaveLength(1);
-    expect(streamDeltas).toHaveLength(3);
-    expect(streamDeltas.map((d) => d.content)).toEqual(["Hel", "Hello", "Hello world"]);
+    expect(streamDeltas).toHaveLength(1);
+    expect(streamDeltas.map((d) => d.content)).toEqual(["Hello world"]);
     expect(streamDone).toHaveLength(1);
     expect(streamDone[0]?.messageId).toBe(streamStarts[0]?.messageId);
     // Deliver(final text) is skipped in stream mode after partials became active.
     expect(persistedReplies).toEqual([]);
+  });
+
+  test("channel replies send typing start immediately and stop after first streamed output", async () => {
+    const calls: string[] = [];
+
+    const xenaPeer = {
+      startStream: async () => { calls.push('startStream'); },
+      startDirectStream: async () => {},
+      sendStreamDelta: async (args: { channelId: string; workspaceId: string; messageId: string; content: string }) => {
+        void args;
+        calls.push('sendStreamDelta');
+      },
+      sendDirectStreamDelta: async () => {},
+      sendStreamDone: async () => { calls.push('sendStreamDone'); },
+      sendDirectStreamDone: async () => {},
+      sendDirectToPeer: async () => {},
+      sendToChannel: async () => {},
+      sendTyping: async (args: { channelId: string; workspaceId: string; typing: boolean }) => {
+        calls.push(args.typing ? 'typingStart' : 'typingStop');
+      },
+    };
+
+    await relayInboundMessageToPeer({
+      incoming: makeIncoming({
+        messageId: 'inbound-typing-1',
+        chatType: 'channel',
+        channelId: 'chan-1',
+        workspaceId: 'ws-1',
+      }),
+      ctx: {
+        account: { streamEnabled: true } as any,
+        accountId: 'acct-1',
+      },
+      core: makeRuntime({ partials: ['Hello'], finalText: 'Hello' }),
+      xenaPeer: xenaPeer as any,
+    });
+
+    expect(calls[0]).toBe('typingStart');
+    expect(calls).toContain('startStream');
+    expect(calls).toContain('sendStreamDelta');
+    expect(calls).toContain('typingStop');
+    expect(calls.indexOf('typingStart')).toBeLessThan(calls.indexOf('sendStreamDelta'));
+    expect(calls.indexOf('sendStreamDelta')).toBeLessThan(calls.indexOf('typingStop'));
+  });
+
+  test("channel replies send typing start immediately and stop after non-stream final reply", async () => {
+    const calls: string[] = [];
+
+    const xenaPeer = {
+      startStream: async () => {},
+      startDirectStream: async () => {},
+      sendStreamDelta: async () => {},
+      sendDirectStreamDelta: async () => {},
+      sendStreamDone: async () => {},
+      sendDirectStreamDone: async () => {},
+      sendDirectToPeer: async () => {},
+      sendToChannel: async () => { calls.push('sendToChannel'); },
+      sendTyping: async (args: { channelId: string; workspaceId: string; typing: boolean }) => {
+        calls.push(args.typing ? 'typingStart' : 'typingStop');
+      },
+    };
+
+    await relayInboundMessageToPeer({
+      incoming: makeIncoming({
+        messageId: 'inbound-typing-2',
+        chatType: 'channel',
+        channelId: 'chan-1',
+        workspaceId: 'ws-1',
+      }),
+      ctx: {
+        account: { streamEnabled: false } as any,
+        accountId: 'acct-1',
+      },
+      core: makeRuntime({ finalText: 'single final reply' }),
+      xenaPeer: xenaPeer as any,
+    });
+
+    expect(calls[0]).toBe('typingStart');
+    expect(calls).toContain('sendToChannel');
+    expect(calls).toContain('typingStop');
+    expect(calls.indexOf('typingStart')).toBeLessThan(calls.indexOf('sendToChannel'));
+    expect(calls.indexOf('sendToChannel')).toBeLessThan(calls.indexOf('typingStop'));
   });
 
   test("when streamEnabled=false, deliver callback persists final reply normally", async () => {

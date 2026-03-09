@@ -1223,6 +1223,25 @@ export class NodeXenaPeer {
     }
   }
 
+  async sendTyping(params: { channelId: string; workspaceId: string; typing: boolean }): Promise<void> {
+    if (!this.transport || !params.channelId) return;
+    const workspace = params.workspaceId ? this.workspaceManager.getWorkspace(params.workspaceId) : undefined;
+    const recipients = workspace
+      ? workspace.members.map((m) => m.peerId).filter((p) => p !== this.myPeerId)
+      : this.transport.getConnectedPeers().filter((p) => p !== this.myPeerId);
+    const envelope = {
+      type: 'typing' as const,
+      channelId: params.channelId,
+      peerId: this.myPeerId,
+      typing: params.typing,
+    };
+    for (const peerId of recipients) {
+      if (this.transport.getConnectedPeers().includes(peerId)) {
+        this.transport.send(peerId, envelope);
+      }
+    }
+  }
+
   /** Send stream-start to all workspace peers (or direct peer for DMs) */
   async startStream(params: {
     channelId: string;

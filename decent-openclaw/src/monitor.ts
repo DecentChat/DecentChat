@@ -81,6 +81,7 @@ type StreamingPeerAdapter = {
   }) => Promise<void>;
   sendDirectStreamDone: (args: { peerId: string; messageId: string }) => Promise<void>;
   sendStreamDone: (args: { channelId: string; workspaceId: string; messageId: string }) => Promise<void>;
+  sendTyping?: (args: { channelId: string; workspaceId: string; typing: boolean }) => Promise<void>;
   sendDirectToPeer: (peerId: string, content: string, threadId?: string, replyToId?: string, messageId?: string, model?: AssistantModelMeta) => Promise<void>;
   sendToChannel: (channelId: string, content: string, threadId?: string, replyToId?: string, messageId?: string, model?: AssistantModelMeta) => Promise<void>;
   persistMessageLocally: (channelId: string, workspaceId: string, content: string, threadId?: string, replyToId?: string, messageId?: string, model?: AssistantModelMeta) => Promise<void>;
@@ -242,13 +243,63 @@ export async function relayInboundMessageToPeer(params: {
   const { incoming, ctx, core, xenaPeer } = params;
   let streamMessageId: string | null = null;
   let streamTimer: ReturnType<typeof setTimeout> | null = null;
+  let streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
   let streamedReply = "";
   let streamChunkCount = 0;
+  const STREAM_COALESCE_MS = 120;
   let selectedModel: AssistantModelMeta | undefined;
   const streamEnabled = ctx.account.streamEnabled !== false;
   let finalizeInFlight: Promise<void> | null = null;
   let processingComplete = false; // Guard: prevent idle timer from finalizing mid-response
   let lastSentStreamContent = "";
+  let typingActive = false;
+
+  const setTyping = async (typing: boolean) => {
+    if (incoming.chatType === 'direct') return;
+    if (!xenaPeer.sendTyping) return;
+    if (typingActive == typing) return;
+    typingActive = typing;
+    try {
+      await xenaPeer.sendTyping({ channelId: incoming.channelId, workspaceId: incoming.workspaceId, typing });
+    } catch (err) {
+      ctx.log?.warn?.(`[decentchat] typing ${typing ? 'start' : 'stop'} failed: ${String(err)}`);
+    }
+  };
+
+  const flushBufferedStream = async () => {
+    const content = streamedReply;
+    if (!streamEnabled || !streamMessageId) return;
+    if (!content.trim()) return;
+    if (content === lastSentStreamContent) return;
+
+    if (incoming.chatType === "direct") {
+      await xenaPeer.sendDirectStreamDelta({
+        peerId: incoming.senderId,
+        messageId: streamMessageId,
+        content,
+      });
+    } else {
+      await xenaPeer.sendStreamDelta({
+        channelId: incoming.channelId,
+        workspaceId: incoming.workspaceId,
+        messageId: streamMessageId,
+        content,
+      });
+    }
+
+    lastSentStreamContent = content;
+    await setTyping(false);
+  };
+
+  const scheduleBufferedStreamFlush = () => {
+    if (streamFlushTimer) return;
+    streamFlushTimer = setTimeout(() => {
+      streamFlushTimer = null;
+      void flushBufferedStream().catch((err) => {
+        ctx.log?.warn?.(`[decentchat] buffered stream flush failed: ${String(err)}`);
+      });
+    }, STREAM_COALESCE_MS);
+  };
 
   const finalizeStream = async () => {
     // Ignore idle-timer finalize calls while LLM is still generating
@@ -262,6 +313,10 @@ export async function relayInboundMessageToPeer(params: {
       if (streamTimer) {
         clearTimeout(streamTimer);
         streamTimer = null;
+      }
+      if (streamFlushTimer) {
+        clearTimeout(streamFlushTimer);
+        streamFlushTimer = null;
       }
 
       const mid = streamMessageId;
@@ -292,6 +347,7 @@ export async function relayInboundMessageToPeer(params: {
             });
           }
           lastSentStreamContent = finalReply;
+          await setTyping(false);
         } catch (err) {
           ctx.log?.warn?.(`[decentchat] finalizeStream final-delta failed: ${String(err)}`);
         }
@@ -385,7 +441,10 @@ export async function relayInboundMessageToPeer(params: {
     await Promise.all(imageRequests);
   }
 
-  await processInboundMessage(
+  await setTyping(true);
+
+  try {
+    await processInboundMessage(
     {
       messageId: incoming.messageId,
       channelId: incoming.channelId,
@@ -436,23 +495,8 @@ export async function relayInboundMessageToPeer(params: {
           }
         }
 
-        // Send cumulative content so receiver's replace-rendering shows progressive growth.
-        const sendDelta = async (content: string) => {
-          if (incoming.chatType === "direct") {
-            await xenaPeer.sendDirectStreamDelta({ peerId: incoming.senderId, messageId: streamMessageId, content });
-          } else {
-            await xenaPeer.sendStreamDelta({
-              channelId: incoming.channelId,
-              workspaceId: incoming.workspaceId,
-              messageId: streamMessageId,
-              content,
-            });
-          }
-        };
-
         if (streamedReply !== lastSentStreamContent) {
-          await sendDelta(streamedReply);
-          lastSentStreamContent = streamedReply;
+          scheduleBufferedStreamFlush();
         }
       }
 
@@ -472,9 +516,12 @@ export async function relayInboundMessageToPeer(params: {
     },
   );
 
-  processingComplete = true;
+    processingComplete = true;
 
-  await finalizeStream();
+    await finalizeStream();
+  } finally {
+    await setTyping(false);
+  }
 }
 
 export async function startDecentChatPeer(ctx: PeerContext): Promise<void> {
