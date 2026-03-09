@@ -228,6 +228,7 @@ export function createUIService(
     }
 
     clampMainMessagesScroll();
+    requestAnimationFrame(() => (window as any).__ctrl?.syncReactionsToDOM?.());
     setTimeout(() => (document.getElementById('thread-input') as HTMLTextAreaElement | null)?.focus(), 100);
   }
 

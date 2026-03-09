@@ -341,7 +341,10 @@ async function init(): Promise<void> {
     updateChannelHeader: () => ui.updateChannelHeader(),
     appendMessageToDOM: (msg, animate) => ui.appendMessageToDOM(msg, undefined, animate),
     showToast: (message, type) => ui.showToast(message, type),
-    renderThreadMessages: () => ui.renderThreadMessages(),
+    renderThreadMessages: () => {
+      ui.renderThreadMessages();
+      ctrl.syncReactionsToDOM();
+    },
     renderMessages: () => {
       ui.renderMessages();
       ctrl.syncReactionsToDOM();

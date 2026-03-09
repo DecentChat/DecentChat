@@ -303,7 +303,11 @@
         </div>
       {/if}
 
-      <div class="message-reactions" id="reactions-{id}"></div>
+      <div
+        class="message-reactions"
+        id={inThreadView ? `thread-reactions-${id}` : `reactions-${id}`}
+        data-reactions-for={id}
+      ></div>
 
       <div class="message-actions-bar{inThreadView ? ' in-thread' : ''}">
         {#each frequentReactions as emoji}

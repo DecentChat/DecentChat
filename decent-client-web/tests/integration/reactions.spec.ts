@@ -551,6 +551,66 @@ test.describe('Reaction Sync (cross-peer)', () => {
       await closeUser(alice);
     }
   });
+
+  test('[BUG FIX] channel copy and thread root stay in sync for reactions on same message', async ({ browser }) => {
+    const alice = await createUser(browser, 'Alice');
+    try {
+      await createWorkspace(alice.page, 'Thread Reaction Sync', 'Alice');
+      await sendMessage(alice.page, 'Root message for thread reaction sync');
+
+      const msgId = await alice.page.evaluate(() => {
+        const msg = Array.from(document.querySelectorAll('.message')).find(
+          m => m.querySelector('.message-content')?.textContent?.includes('Root message for thread reaction sync'),
+        ) as HTMLElement | undefined;
+        return msg?.dataset.messageId || '';
+      });
+      expect(msgId).toBeTruthy();
+
+      // Open the thread so the same root message is rendered twice:
+      // once in channel, once in thread panel.
+      await alice.page.evaluate((id: string) => {
+        const btn = document.querySelector(`.message-thread-btn[data-thread-id="${id}"]`) as HTMLButtonElement | null;
+        if (!btn) throw new Error('Thread button not found');
+        btn.click();
+      }, msgId);
+      await alice.page.waitForSelector('#thread-panel.open, #thread-input', { timeout: 5000 });
+
+      // React to the root message.
+      await alice.page.evaluate((id: string) => {
+        const ctrl = (window as any).__ctrl;
+        ctrl?.toggleReaction?.(id, '✅');
+      }, msgId);
+
+      // Both rendered copies must show the same reaction.
+      await alice.page.waitForFunction((id: string) => {
+        const channelCopy = document.querySelector(`#messages-list .message[data-message-id="${id}"] .reaction-pill`);
+        const threadCopy = document.querySelector(`#thread-messages .message[data-message-id="${id}"] .reaction-pill`);
+        return !!channelCopy && !!threadCopy
+          && channelCopy.textContent?.includes('✅')
+          && threadCopy.textContent?.includes('✅');
+      }, msgId, { timeout: 5000 });
+
+      // Re-opening the thread should preserve the same reaction state.
+      await alice.page.click('#thread-close');
+      await alice.page.waitForTimeout(100);
+      await alice.page.evaluate((id: string) => {
+        const btn = document.querySelector(`.message-thread-btn[data-thread-id="${id}"]`) as HTMLButtonElement | null;
+        if (!btn) throw new Error('Thread button not found after close');
+        btn.click();
+      }, msgId);
+      await alice.page.waitForSelector('#thread-panel.open, #thread-input', { timeout: 5000 });
+
+      await alice.page.waitForFunction((id: string) => {
+        const channelCopy = document.querySelector(`#messages-list .message[data-message-id="${id}"] .reaction-pill`);
+        const threadCopy = document.querySelector(`#thread-messages .message[data-message-id="${id}"] .reaction-pill`);
+        return !!channelCopy && !!threadCopy
+          && channelCopy.textContent?.includes('✅')
+          && threadCopy.textContent?.includes('✅');
+      }, msgId, { timeout: 5000 });
+    } finally {
+      await closeUser(alice);
+    }
+  });
 });
 
 /** Wait for a pill to appear (or stay absent) — used for dedup test */

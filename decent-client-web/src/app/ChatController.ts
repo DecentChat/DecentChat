@@ -266,17 +266,7 @@ export class ChatController {
     this.presence = new PresenceManager();
     this.reactions = new ReactionManager();
     this.reactions.onReactionsChanged = (messageId) => {
-      const el = document.getElementById(`reactions-${messageId}`);
-      if (el) {
-        el.innerHTML = this.reactions.renderReactions(messageId, this.state.myPeerId);
-        // Re-wire reaction pill clicks
-        el.querySelectorAll('.reaction-pill').forEach(btn => {
-          btn.addEventListener('click', () => {
-            const emoji = (btn as HTMLElement).dataset.emoji!;
-            this.toggleReaction(messageId, emoji);
-          });
-        });
-      }
+      this.syncReactionNodes(messageId);
       this.schedulePersistReactions();
     };
     this.contactStore = new MemoryContactStore();
@@ -2892,12 +2882,10 @@ export class ChatController {
     }, 200);
   }
 
-  /** Re-render persisted reactions into currently visible DOM message slots. */
-  syncReactionsToDOM(): void {
-    const nodes = document.querySelectorAll<HTMLElement>('[id^="reactions-"]');
+  private syncReactionNodes(messageId: string): void {
+    const selector = `[data-reactions-for="${CSS.escape(messageId)}"]`;
+    const nodes = document.querySelectorAll<HTMLElement>(selector);
     nodes.forEach((el) => {
-      const messageId = el.id.slice('reactions-'.length);
-      if (!messageId) return;
       el.innerHTML = this.reactions.renderReactions(messageId, this.state.myPeerId);
       el.querySelectorAll('.reaction-pill').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -2905,6 +2893,18 @@ export class ChatController {
           this.toggleReaction(messageId, emoji);
         });
       });
+    });
+  }
+
+  /** Re-render persisted reactions into currently visible DOM message slots. */
+  syncReactionsToDOM(): void {
+    const nodes = document.querySelectorAll<HTMLElement>('[data-reactions-for]');
+    const seen = new Set<string>();
+    nodes.forEach((el) => {
+      const messageId = el.dataset.reactionsFor || '';
+      if (!messageId || seen.has(messageId)) return;
+      seen.add(messageId);
+      this.syncReactionNodes(messageId);
     });
   }
 
