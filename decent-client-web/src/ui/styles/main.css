@@ -4141,9 +4141,11 @@ html, body {
 }
 
 /* Workspace DM privacy affordance */
+.member-row.dm-disallowed,
 .dm-disallowed .member-row {
   opacity: 0.75;
 }
+.member-row.dm-disallowed:hover,
 .dm-disallowed .member-row:hover {
   background: rgba(255, 99, 132, 0.12) !important;
 }
@@ -4204,6 +4206,13 @@ html, body {
   align-items: center;
   gap: 4px;
   min-width: 0;
+}
+
+.member-meta-trailing {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
 }
 
 .member-role-tag {

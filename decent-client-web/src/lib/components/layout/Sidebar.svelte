@@ -4,7 +4,6 @@
   Event delegation is preserved via data attributes for backward compatibility.
 -->
 <script lang="ts">
-  import { peerColor, escapeHtml } from '$lib/utils/peer';
   import MemberRow from '../members/MemberRow.svelte';
   import MobileWorkspaceTray from './MobileWorkspaceTray.svelte';
 
@@ -230,14 +229,12 @@
         <div id="workspace-member-list-online">
           {#each onlineMembers as member (member.peerId)}
             {@const dmAllowed = member.allowWorkspaceDMs !== false}
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div
-              class:dm-disallowed={!dmAllowed}
+            <MemberRow
+              {...member}
+              disabled={!dmAllowed}
               title={!dmAllowed ? 'This member disallows workspace DMs' : ''}
-              onclick={() => onMemberClick(member.peerId)}
-            >
-              <MemberRow {...member} />
-            </div>
+              onClick={() => onMemberClick(member.peerId)}
+            />
           {/each}
         </div>
       {/if}
@@ -246,14 +243,12 @@
         <div id="workspace-member-list-offline" class="members-offline">
           {#each offlineMembers as member (member.peerId)}
             {@const dmAllowed = member.allowWorkspaceDMs !== false}
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div
-              class:dm-disallowed={!dmAllowed}
+            <MemberRow
+              {...member}
+              disabled={!dmAllowed}
               title={!dmAllowed ? 'This member disallows workspace DMs' : ''}
-              onclick={() => onMemberClick(member.peerId)}
-            >
-              <MemberRow {...member} />
-            </div>
+              onClick={() => onMemberClick(member.peerId)}
+            />
           {/each}
         </div>
       {/if}
@@ -270,21 +265,20 @@
             {@const name = getPeerAlias(conv.contactPeerId)}
             {@const isActive = activeDirectConversationId === conv.id}
             {@const unread = getUnreadCount(conv.id)}
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div
-              class="sidebar-item {isActive ? 'active' : ''} {unread > 0 ? 'has-unread' : ''}"
-              data-direct-conv-id={conv.id}
-              data-testid="direct-conversation-item"
-              onclick={() => onDirectConvClick(conv.id)}
-            >
-              <span class="dm-status {getPeerStatusClass(conv.contactPeerId)}" title={getPeerStatusTitle(conv.contactPeerId)}></span>
-              <span>{name}</span>
-              {#if unread > 0}
-                <span class="unread-badge">{unread > 99 ? '99+' : unread}</span>
-              {:else}
-                <span class="sidebar-item-meta">{formatTime(conv.lastMessageAt)}</span>
-              {/if}
-            </div>
+            <MemberRow
+              peerId={conv.contactPeerId}
+              alias={name}
+              isOnline={getPeerStatusClass(conv.contactPeerId) === 'online'}
+              isMe={conv.contactPeerId === myPeerId}
+              statusClass={getPeerStatusClass(conv.contactPeerId)}
+              statusTitle={getPeerStatusTitle(conv.contactPeerId)}
+              isActive={isActive}
+              unreadCount={unread}
+              metaText={formatTime(conv.lastMessageAt)}
+              directConversationId={conv.id}
+              testId="direct-conversation-item"
+              onClick={() => onDirectConvClick(conv.id)}
+            />
           {/each}
         {:else}
           <div class="sidebar-item" style="font-size:12px; opacity:0.5;">No direct messages yet</div>
