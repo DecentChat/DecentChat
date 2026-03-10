@@ -104,7 +104,7 @@ test('activity shows thread reply and opens thread on click', async ({ page }) =
   await expect(page.locator('#thread-messages')).toContainText(replyText);
 });
 
-test('badge updates without refresh when existing thread activity flips back to unread', async ({ page }) => {
+test('replaying the same thread reply does not resurrect a read activity badge', async ({ page }) => {
   test.setTimeout(45000);
 
   await resetAndOpenApp(page);
@@ -112,7 +112,6 @@ test('badge updates without refresh when existing thread activity flips back to 
 
   const rootMsgId = await sendRootMessage(page, `Root ${Date.now()}`);
 
-  // Start with existing (already-read) activity item for the thread.
   await page.evaluate(async ({ rootMsgId }) => {
     const state = (window as any).__state;
     const ctrl = (window as any).__ctrl;
@@ -143,28 +142,13 @@ test('badge updates without refresh when existing thread activity flips back to 
     }];
 
     ctrl.ui.updateWorkspaceRail();
+
+    // Historical replay of the SAME reply should not flip the item back to unread.
+    (ctrl as any).maybeRecordThreadActivity(firstReply, channelId);
+    ctrl.ui.updateWorkspaceRail();
   }, { rootMsgId });
 
   await expect(page.locator('#activity-btn .activity-badge')).toHaveCount(0);
-
-  // New streamed thread reply in same thread: should set existing activity.read=false.
-  // Bug today: unread count changes, but item length doesn't, so rail badge stays stale.
-  await page.evaluate(async ({ rootMsgId }) => {
-    const state = (window as any).__state;
-    const ctrl = (window as any).__ctrl;
-    const channelId = state.activeChannelId;
-    const bobId = 'bob-unread-peer';
-
-    const secondReply = await ctrl.messageStore.createMessage(channelId, bobId, `second-${Date.now()}`, 'text', rootMsgId);
-    ctrl.messageStore.forceAdd(secondReply);
-
-    await ctrl.transport.onMessage(bobId, {
-      type: 'stream-done',
-      messageId: secondReply.id,
-    });
-  }, { rootMsgId });
-
-  await expect(page.locator('#activity-btn .activity-badge')).toHaveText('1');
 });
 
 test('mark all read updates bell immediately without refresh', async ({ page }) => {

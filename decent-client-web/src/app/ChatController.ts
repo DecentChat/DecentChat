@@ -3682,13 +3682,18 @@ export class ChatController {
     const existingIdx = this.activityItems.findIndex(i => i.id === threadActivityId);
 
     if (existingIdx >= 0) {
-      // Update existing entry with latest reply info and bump to top
+      // Ignore historical replay of the same (or older) reply so a previously
+      // read activity item does not get resurrected as unread after refresh/sync.
       const existing = this.activityItems[existingIdx];
+      const isSameOrOlderReply = existing.messageId === msg.id || msg.timestamp <= existing.timestamp;
+      if (isSameOrOlderReply) return;
+
+      // Update existing entry with latest reply info and bump to top
       existing.actorId = msg.senderId;
       existing.snippet = msg.content.slice(0, 140);
       existing.messageId = msg.id;
       existing.timestamp = msg.timestamp;
-      if (!isCurrentlyOpen) existing.read = false; // re-mark as unread
+      if (!isCurrentlyOpen) existing.read = false; // re-mark as unread only for newer replies
       // Move to top
       this.activityItems.splice(existingIdx, 1);
       this.activityItems.unshift(existing);
