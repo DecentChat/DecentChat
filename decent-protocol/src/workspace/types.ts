@@ -4,6 +4,7 @@
 
 import type {
   WorkspaceShell,
+  MemberDirectoryPage,
   DirectoryShardRef,
   ChannelAccessPolicy,
   PresenceAggregate,
@@ -168,6 +169,10 @@ export type SyncMessage =
   | { type: 'workspace-shell-response'; shell: WorkspaceShell; inviteCode?: string }
   | { type: 'workspace-delta'; delta: WorkspaceDelta }
   | { type: 'workspace-delta-ack'; workspaceId: string; version: number; checkpointId?: string }
+  | { type: 'member-page-request'; workspaceId: string; cursor?: string; pageSize?: number; shardPrefix?: string }
+  | { type: 'member-page-response'; page: MemberDirectoryPage }
+  | { type: 'directory-shard-advertisement'; shard: DirectoryShardRef }
+  | { type: 'directory-shard-repair'; workspaceId: string; shardId: string; requestedBy: string; targetReplicaPeerIds?: string[] }
   | { type: 'peer-exchange'; servers: PEXServer[] }
   | { type: 'device-announce'; identityId: string; device: DeviceInfoSync; proof: DeviceProofSync }
   | { type: 'device-ack'; identityId: string; deviceId: string };

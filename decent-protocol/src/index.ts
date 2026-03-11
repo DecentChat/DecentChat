@@ -21,6 +21,8 @@ export { Negentropy } from './crdt/Negentropy';
 export { WorkspaceManager } from './workspace/WorkspaceManager';
 export { SyncProtocol } from './workspace/SyncProtocol';
 export { WorkspaceDeltaProtocol } from './workspace/WorkspaceDeltaProtocol';
+export { DirectoryProtocol } from './workspace/DirectoryProtocol';
+export { DirectoryShardPlanner } from './workspace/DirectoryShardPlanner';
 export { ServerDiscovery } from './workspace/ServerDiscovery';
 export type { ServerStats } from './workspace/ServerDiscovery';
 
