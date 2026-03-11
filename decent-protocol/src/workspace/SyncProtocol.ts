@@ -6,8 +6,16 @@
  * and message history sync.
  */
 
-import type { Workspace, WorkspaceMember, Channel, SyncMessage } from './types';
+import type {
+  Workspace,
+  WorkspaceMember,
+  Channel,
+  SyncMessage,
+  MemberDirectoryPage,
+  DirectoryShardRef,
+} from './types';
 import { WorkspaceDeltaProtocol } from './WorkspaceDeltaProtocol';
+import { DirectoryProtocol } from './DirectoryProtocol';
 import type { PlaintextMessage } from '../messages/types';
 import { WorkspaceManager } from './WorkspaceManager';
 import { MessageStore } from '../messages/MessageStore';
@@ -24,6 +32,8 @@ export type SyncEvent =
   | { type: 'channel-created'; workspaceId: string; channel: Channel }
   | { type: 'channel-removed'; workspaceId: string; channelId: string }
   | { type: 'workspace-deleted'; workspaceId: string; deletedBy: string }
+  | { type: 'member-page-received'; workspaceId: string; page: MemberDirectoryPage }
+  | { type: 'directory-shards-updated'; workspaceId: string; shards: DirectoryShardRef[] }
   // Message history sent during sync intentionally omits plaintext `content`.
   | { type: 'workspace-joined'; workspace: Workspace; messageHistory: Record<string, SyncedHistoryMessage[]> }
   | { type: 'join-rejected'; reason: string }
@@ -38,6 +48,7 @@ export class SyncProtocol {
   private myPeerId: string;
   private serverDiscovery?: ServerDiscovery; // DEP-002: Optional PEX support
   private workspaceDelta: WorkspaceDeltaProtocol;
+  private directoryProtocol: DirectoryProtocol;
 
   constructor(
     workspaceManager: WorkspaceManager,
@@ -54,6 +65,7 @@ export class SyncProtocol {
     this.myPeerId = myPeerId;
     this.serverDiscovery = serverDiscovery;
     this.workspaceDelta = new WorkspaceDeltaProtocol(this.workspaceManager);
+    this.directoryProtocol = new DirectoryProtocol(this.workspaceManager);
   }
 
   /**
@@ -104,6 +116,18 @@ export class SyncProtocol {
         this.handleWorkspaceDelta(fromPeerId, msg);
         break;
       case 'workspace-delta-ack':
+        break;
+      case 'member-page-request':
+        this.handleMemberPageRequest(fromPeerId, msg);
+        break;
+      case 'member-page-response':
+        this.handleMemberPageResponse(msg);
+        break;
+      case 'directory-shard-advertisement':
+        this.handleDirectoryShardAdvertisement(msg);
+        break;
+      case 'directory-shard-repair':
+        this.handleDirectoryShardRepair(fromPeerId, msg);
         break;
       case 'peer-exchange':
         this.handlePeerExchange(msg);
@@ -185,6 +209,21 @@ export class SyncProtocol {
 
   requestWorkspaceShell(targetPeerId: string, workspaceId: string): void {
     const msg: SyncMessage = { type: 'workspace-shell-request', workspaceId };
+    this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
+  }
+
+  requestMemberPage(
+    targetPeerId: string,
+    workspaceId: string,
+    options: { cursor?: string; pageSize?: number; shardPrefix?: string } = {},
+  ): void {
+    const msg: SyncMessage = {
+      type: 'member-page-request',
+      workspaceId,
+      cursor: options.cursor,
+      pageSize: options.pageSize,
+      shardPrefix: options.shardPrefix,
+    };
     this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
   }
 
@@ -304,6 +343,71 @@ export class SyncProtocol {
       this.sendFn(fromPeerId, { type: 'workspace-sync', sync: ack, workspaceId: msg.delta.workspaceId });
       this.onEvent({ type: 'sync-complete', workspaceId: msg.delta.workspaceId });
     }
+  }
+
+  private handleMemberPageRequest(fromPeerId: string, msg: Extract<SyncMessage, { type: 'member-page-request' }>): void {
+    const response = this.directoryProtocol.buildMemberPageResponse(msg.workspaceId, {
+      cursor: msg.cursor,
+      pageSize: msg.pageSize,
+      shardPrefix: msg.shardPrefix,
+    });
+    this.sendFn(fromPeerId, { type: 'workspace-sync', sync: response, workspaceId: msg.workspaceId });
+  }
+
+  private handleMemberPageResponse(msg: Extract<SyncMessage, { type: 'member-page-response' }>): void {
+    this.onEvent({
+      type: 'member-page-received',
+      workspaceId: msg.page.workspaceId,
+      page: msg.page,
+    });
+  }
+
+  private handleDirectoryShardAdvertisement(msg: Extract<SyncMessage, { type: 'directory-shard-advertisement' }>): void {
+    const workspace = this.workspaceManager.getWorkspace(msg.shard.workspaceId);
+    if (!workspace) return;
+
+    const shards = [...(workspace.directoryShards ?? [])];
+    const existingIndex = shards.findIndex((shard) => shard.shardId === msg.shard.shardId);
+    if (existingIndex >= 0) {
+      const existing = shards[existingIndex]!;
+      const nextVersion = msg.shard.version ?? 0;
+      const currentVersion = existing.version ?? 0;
+      if (nextVersion < currentVersion) return;
+      shards[existingIndex] = {
+        ...existing,
+        ...msg.shard,
+        replicaPeerIds: [...new Set([...(existing.replicaPeerIds ?? []), ...(msg.shard.replicaPeerIds ?? [])])].sort(),
+      };
+    } else {
+      shards.push({
+        ...msg.shard,
+        replicaPeerIds: [...new Set(msg.shard.replicaPeerIds ?? [])].sort(),
+      });
+    }
+
+    workspace.directoryShards = shards.sort((a, b) => a.shardId.localeCompare(b.shardId));
+    this.onEvent({
+      type: 'directory-shards-updated',
+      workspaceId: workspace.id,
+      shards: workspace.directoryShards,
+    });
+  }
+
+  private handleDirectoryShardRepair(fromPeerId: string, msg: Extract<SyncMessage, { type: 'directory-shard-repair' }>): void {
+    const shouldReply = !msg.targetReplicaPeerIds?.length || msg.targetReplicaPeerIds.includes(this.myPeerId);
+    if (!shouldReply) return;
+
+    const workspace = this.workspaceManager.getWorkspace(msg.workspaceId);
+    if (!workspace) return;
+
+    const shard = workspace.directoryShards?.find((entry) => entry.shardId === msg.shardId);
+    if (!shard) return;
+
+    this.sendFn(fromPeerId, {
+      type: 'workspace-sync',
+      sync: { type: 'directory-shard-advertisement', shard } satisfies SyncMessage,
+      workspaceId: msg.workspaceId,
+    });
   }
 
   private handleMemberJoined(msg: Extract<SyncMessage, { type: 'member-joined' }> & { workspaceId?: string }): void {
