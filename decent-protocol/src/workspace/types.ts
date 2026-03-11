@@ -2,6 +2,26 @@
  * Workspace, Channel, and Member types
  */
 
+import type {
+  WorkspaceShell,
+  DirectoryShardRef,
+  ChannelAccessPolicy,
+  PresenceAggregate,
+  HistoryPageRef,
+  PeerCapabilities,
+} from './DirectoryTypes';
+
+export type {
+  WorkspaceShell,
+  MemberSummary,
+  MemberDirectoryPage,
+  DirectoryShardRef,
+  ChannelAccessPolicy,
+  PresenceAggregate,
+  HistoryPageRef,
+  PeerCapabilities,
+} from './DirectoryTypes';
+
 export enum WorkspaceRole {
   Owner = 'owner',
   Admin = 'admin',
@@ -40,6 +60,14 @@ export interface Workspace {
   channels: Channel[];
   permissions?: WorkspacePermissions;
   description?: string;
+  /** Lightweight shell metadata for scalable/paged clients. */
+  shell?: WorkspaceShell;
+  /** Optional references to distributed member-directory shards. */
+  directoryShards?: DirectoryShardRef[];
+  /** Optional aggregate presence view for scalable clients. */
+  presenceAggregate?: PresenceAggregate;
+  /** Optional advertised capabilities visible within this workspace. */
+  peerCapabilities?: Record<string, PeerCapabilities>;
   /** Access revocation list for workspace-level bans */
   bans?: WorkspaceBan[];
 }
@@ -67,7 +95,17 @@ export interface Channel {
   workspaceId: string;
   name: string;
   type: 'channel' | 'dm';
-  members: string[]; // PeerIds (for DMs: exactly 2; for channels: all workspace members or subset)
+  /**
+   * Explicit membership list.
+   * - Required for DMs
+   * - Compatibility path for legacy/private/small channels
+   * - Not authoritative for scalable public-workspace channels when accessPolicy is present
+   */
+  members: string[];
+  /** Optional scalable access rule. When present, this is authoritative over legacy member arrays. */
+  accessPolicy?: ChannelAccessPolicy;
+  /** Optional lightweight history pagination hints for scalable clients. */
+  historyPages?: HistoryPageRef[];
   createdBy: string;
   createdAt: number;
 }

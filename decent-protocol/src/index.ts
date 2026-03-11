@@ -109,6 +109,14 @@ export type {
   WorkspacePermissions,
   SyncMessage,
   PEXServer,
+  WorkspaceShell,
+  MemberSummary,
+  MemberDirectoryPage,
+  DirectoryShardRef,
+  ChannelAccessPolicy,
+  PresenceAggregate,
+  HistoryPageRef,
+  PeerCapabilities,
 } from './workspace/types';
 export type { SyncEvent, SendFn, OnEvent } from './workspace/SyncProtocol';
 export type { ChatMessage, PlaintextMessage, MessageMetadata, AssistantMessageMetadata } from './messages/types';

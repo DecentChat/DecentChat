@@ -70,9 +70,11 @@ describe('WorkspaceManager', () => {
     expect(bob?.allowWorkspaceDMs).toBe(true);
   });
 
-  test('new member is added to all public channels', () => {
+  test('new member gains access to public channels without per-channel member mutation', () => {
     const ws = wm.createWorkspace('Team', 'alice', 'Alice', 'key');
     wm.createChannel(ws.id, 'random', 'alice');
+
+    const before = wm.getChannels(ws.id).map(ch => ({ id: ch.id, members: [...ch.members] }));
 
     wm.addMember(ws.id, {
       peerId: 'bob', alias: 'Bob', publicKey: 'bob-key',
@@ -81,7 +83,9 @@ describe('WorkspaceManager', () => {
 
     const channels = wm.getChannels(ws.id);
     for (const ch of channels) {
-      expect(ch.members).toContain('bob');
+      expect(wm.isPublicWorkspaceChannel(ch)).toBe(true);
+      expect(wm.isMemberAllowedInChannel(ws.id, ch.id, 'bob')).toBe(true);
+      expect(ch.members).toEqual(before.find(prev => prev.id === ch.id)?.members ?? []);
     }
   });
 
@@ -126,7 +130,7 @@ describe('WorkspaceManager', () => {
     expect(result.error).toContain('Cannot remove owner');
   });
 
-  test('removed member is removed from all channels', () => {
+  test('removed member loses access to public channels', () => {
     const ws = wm.createWorkspace('Team', 'alice', 'Alice', 'key');
     wm.addMember(ws.id, {
       peerId: 'bob', alias: 'Bob', publicKey: 'key',
@@ -137,7 +141,7 @@ describe('WorkspaceManager', () => {
     wm.removeMember(ws.id, 'bob', 'alice');
 
     for (const ch of wm.getChannels(ws.id)) {
-      expect(ch.members).not.toContain('bob');
+      expect(wm.isMemberAllowedInChannel(ws.id, ch.id, 'bob')).toBe(false);
     }
   });
 
@@ -472,11 +476,11 @@ describe('Multi-Peer Scenarios', () => {
     expect(wm.getDMs(ws.id, 'bob')).toHaveLength(2);
     expect(wm.getDMs(ws.id, 'charlie')).toHaveLength(1);
 
-    // All channels have all members
+    // All members have access to all public channels
     for (const ch of wm.getChannels(ws.id)) {
-      expect(ch.members).toContain('alice');
-      expect(ch.members).toContain('bob');
-      expect(ch.members).toContain('charlie');
+      expect(wm.isMemberAllowedInChannel(ws.id, ch.id, 'alice')).toBe(true);
+      expect(wm.isMemberAllowedInChannel(ws.id, ch.id, 'bob')).toBe(true);
+      expect(wm.isMemberAllowedInChannel(ws.id, ch.id, 'charlie')).toBe(true);
     }
   });
 
@@ -497,9 +501,9 @@ describe('Multi-Peer Scenarios', () => {
     // Remove bob
     wm.removeMember(ws.id, 'bob', 'alice');
 
-    // Bob should be removed from all channels
+    // Bob should lose access to all public channels
     for (const ch of wm.getChannels(ws.id)) {
-      expect(ch.members).not.toContain('bob');
+      expect(wm.isMemberAllowedInChannel(ws.id, ch.id, 'bob')).toBe(false);
     }
 
     // Workspace should have 2 members

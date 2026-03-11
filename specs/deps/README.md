@@ -17,6 +17,8 @@ DEPs are design documents that describe new features, protocol changes, or proce
 | [002](DEP-002.md) | Peer Exchange (PEX) for Signaling Server Discovery | Transport | Final |
 | [003](DEP-003-derived-peer-id.md) | Derived Peer ID from Seed Phrase | Core | Active |
 | [012](DEP-012-reliable-multi-recipient-delivery.md) | Reliable Multi-Recipient Delivery & Reconnect Replay | Core | Draft |
+| [013](DEP-013-workspace-dm-privacy.md) | Workspace DM Privacy Preference (Invite-Time Allow/Disallow) | Application | Draft |
+| [014](DEP-014-adaptive-public-workspaces.md) | Adaptive P2P Public Workspaces | Core | Draft |
 
 ## How to Submit a DEP
 

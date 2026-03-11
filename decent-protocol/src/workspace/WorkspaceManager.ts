@@ -5,7 +5,7 @@
  * No server involved.
  */
 
-import type { Workspace, WorkspaceMember, Channel, WorkspacePermissions, WorkspaceBan } from './types';
+import type { Workspace, WorkspaceMember, Channel, WorkspacePermissions, WorkspaceBan, ChannelAccessPolicy } from './types';
 import { DEFAULT_WORKSPACE_PERMISSIONS } from './types';
 
 export class WorkspaceManager {
@@ -49,6 +49,7 @@ export class WorkspaceManager {
       name: 'general',
       type: 'channel',
       members: [myPeerId],
+      accessPolicy: { mode: 'public-workspace' },
       createdBy: myPeerId,
       createdAt: Date.now(),
     };
@@ -293,9 +294,10 @@ export class WorkspaceManager {
 
     workspace.members.push(normalizedMember);
 
-    // Add member to all public channels
+    // For scalable public-workspace channels, access is policy-derived.
+    // Do not mutate explicit member arrays on each join.
     for (const channel of workspace.channels) {
-      if (channel.type === 'channel' && !channel.members.includes(normalizedMember.peerId)) {
+      if (channel.type === 'channel' && !this.isPublicWorkspaceChannel(channel) && !channel.members.includes(normalizedMember.peerId)) {
         channel.members.push(normalizedMember.peerId);
       }
     }
@@ -315,9 +317,12 @@ export class WorkspaceManager {
 
     workspace.members = workspace.members.filter(m => m.peerId !== peerId);
 
-    // Remove from all channels
+    // Remove from channels with explicit membership. Public-workspace channels derive access
+    // from workspace membership and do not require per-channel array churn.
     for (const channel of workspace.channels) {
-      channel.members = channel.members.filter(id => id !== peerId);
+      if (!this.isPublicWorkspaceChannel(channel)) {
+        channel.members = channel.members.filter(id => id !== peerId);
+      }
     }
 
     return { success: true };
@@ -356,7 +361,9 @@ export class WorkspaceManager {
     // Also remove from active membership/channel lists.
     workspace.members = workspace.members.filter(m => m.peerId !== targetPeerId);
     for (const channel of workspace.channels) {
-      channel.members = channel.members.filter(id => id !== targetPeerId);
+      if (!this.isPublicWorkspaceChannel(channel)) {
+        channel.members = channel.members.filter(id => id !== targetPeerId);
+      }
     }
 
     return { success: true, ban };
@@ -431,12 +438,19 @@ export class WorkspaceManager {
       return { success: false, error: `Channel #${name} already exists` };
     }
 
+    const accessPolicy: ChannelAccessPolicy | undefined = type === 'dm'
+      ? { mode: 'dm', explicitMemberPeerIds: members || [createdBy] }
+      : (members
+        ? { mode: 'explicit', explicitMemberPeerIds: [...members] }
+        : { mode: 'public-workspace' });
+
     const channel: Channel = {
       id: this.generateId(),
       workspaceId,
       name,
       type,
       members: members || workspace.members.map(m => m.peerId),
+      accessPolicy,
       createdBy,
       createdAt: Date.now(),
     };
@@ -514,6 +528,39 @@ export class WorkspaceManager {
   getDMs(workspaceId: string, peerId: string): Channel[] {
     const workspace = this.workspaces.get(workspaceId);
     return workspace?.channels.filter(c => c.type === 'dm' && c.members.includes(peerId)) || [];
+  }
+
+  isPublicWorkspaceChannel(channel: Channel): boolean {
+    return channel.type === 'channel' && channel.accessPolicy?.mode === 'public-workspace';
+  }
+
+  isMemberAllowedInChannel(workspaceId: string, channelId: string, peerId: string): boolean {
+    const workspace = this.workspaces.get(workspaceId);
+    if (!workspace) return false;
+
+    const member = workspace.members.find(m => m.peerId === peerId);
+    if (!member) return false;
+
+    const channel = workspace.channels.find(c => c.id === channelId);
+    if (!channel) return false;
+
+    if (channel.type === 'dm') {
+      return channel.members.includes(peerId);
+    }
+
+    switch (channel.accessPolicy?.mode) {
+      case 'public-workspace':
+        return true;
+      case 'role-gated':
+        return channel.accessPolicy.roles?.includes(member.role) ?? false;
+      case 'explicit':
+        return channel.accessPolicy.explicitMemberPeerIds?.includes(peerId) ?? channel.members.includes(peerId);
+      case 'group':
+        // Group resolution is not implemented yet; explicit members remain compatibility fallback.
+        return channel.accessPolicy.explicitMemberPeerIds?.includes(peerId) ?? channel.members.includes(peerId);
+      default:
+        return channel.members.includes(peerId);
+    }
   }
 
   // === Invite / Join ===
