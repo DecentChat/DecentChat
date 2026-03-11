@@ -266,37 +266,62 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     const channel = ws ? workspaceManager.getChannel(ws.id, state.activeChannelId) : null;
     if (!ws || !channel) return;
 
+    const isPublicWorkspaceChannel = channel.type === 'channel' && channel.accessPolicy?.mode === 'public-workspace';
     void callbacks.prefetchWorkspaceMemberDirectory?.(ws.id);
-    const directoryView = callbacks.getWorkspaceMemberDirectory?.(ws.id);
 
-    const channelMembers = channel.type === 'channel' && channel.accessPolicy?.mode === 'public-workspace'
-      ? (directoryView?.members || []).map((member) => ({
-          peerId: member.peerId,
-          alias: member.alias,
-          isBot: member.isBot,
-          isOnline: member.isOnline,
-          isYou: member.isYou,
-        }))
-      : ws.members
-          .filter(m => channel.members.includes(m.peerId))
-          .map(member => ({
-            peerId: member.peerId,
-            alias: getPeerAlias(member.peerId),
-            isBot: !!(member as any).isBot,
-            isOnline: state.connectedPeers.has(member.peerId) || member.peerId === state.myPeerId,
-            isYou: member.peerId === state.myPeerId,
-          }));
-
-    svelteShowChannelMembersModal({
-      channelName: channel.name,
-      members: channelMembers.map(member => ({
+    const mapDirectoryMembers = (members: WorkspaceMemberDirectoryView['members']) =>
+      members.map((member) => ({
         peerId: member.peerId,
-        name: member.alias,
+        name: member.alias || getPeerAlias(member.peerId),
         isOnline: member.isOnline,
         isYou: member.isYou,
         isBot: member.isBot,
         color: peerColor(member.peerId),
-      })),
+      }));
+
+    const directoryView = callbacks.getWorkspaceMemberDirectory?.(ws.id);
+
+    const fallbackMembers = ws.members
+      .filter((member) => channel.members.includes(member.peerId))
+      .map((member) => ({
+        peerId: member.peerId,
+        name: getPeerAlias(member.peerId),
+        isOnline: state.connectedPeers.has(member.peerId) || member.peerId === state.myPeerId,
+        isYou: member.peerId === state.myPeerId,
+        isBot: !!(member as any).isBot,
+        color: peerColor(member.peerId),
+      }));
+
+    const usingDirectoryState = isPublicWorkspaceChannel && (
+      (directoryView?.members.length ?? 0) > 0 || (directoryView?.hasMore ?? false)
+    );
+
+    svelteShowChannelMembersModal({
+      channelName: channel.name,
+      members: usingDirectoryState ? mapDirectoryMembers(directoryView?.members || []) : fallbackMembers,
+      loadedCount: usingDirectoryState ? (directoryView?.loadedCount ?? 0) : fallbackMembers.length,
+      totalCount: usingDirectoryState ? (directoryView?.totalCount ?? fallbackMembers.length) : fallbackMembers.length,
+      hasMore: usingDirectoryState ? (directoryView?.hasMore ?? false) : false,
+      onLoadMore: usingDirectoryState
+        ? async () => {
+            const nextDirectoryView = callbacks.loadMoreWorkspaceMemberDirectory
+              ? await callbacks.loadMoreWorkspaceMemberDirectory(ws.id)
+              : await (async () => {
+                  await callbacks.prefetchWorkspaceMemberDirectory?.(ws.id);
+                  return callbacks.getWorkspaceMemberDirectory?.(ws.id) || null;
+                })();
+
+            if (!nextDirectoryView) return null;
+
+            return {
+              members: mapDirectoryMembers(nextDirectoryView.members),
+              loadedCount: nextDirectoryView.loadedCount,
+              totalCount: nextDirectoryView.totalCount,
+              hasMore: nextDirectoryView.hasMore,
+            };
+          }
+        : undefined,
+      onToast: (msg: string, type?: string) => showToast(msg, type as any),
     });
   }
 

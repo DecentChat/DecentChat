@@ -5,16 +5,30 @@
 <script lang="ts" module>
   import { mount, unmount } from 'svelte';
 
+  interface ChannelMember {
+    peerId: string;
+    name: string;
+    isOnline: boolean;
+    isYou: boolean;
+    isBot: boolean;
+    color: string;
+  }
+
+  interface ChannelMembersPagePayload {
+    members: ChannelMember[];
+    loadedCount: number;
+    totalCount: number;
+    hasMore: boolean;
+  }
+
   interface ChannelMembersConfig {
     channelName: string;
-    members: Array<{
-      peerId: string;
-      name: string;
-      isOnline: boolean;
-      isYou: boolean;
-      isBot: boolean;
-      color: string;
-    }>;
+    members: ChannelMember[];
+    loadedCount?: number;
+    totalCount?: number;
+    hasMore?: boolean;
+    onLoadMore?: () => Promise<ChannelMembersPagePayload | null>;
+    onToast?: (message: string, type?: string) => void;
   }
 
   export function showChannelMembersModal(config: ChannelMembersConfig): void {
@@ -37,22 +51,46 @@
 </script>
 
 <script lang="ts">
-  import { escapeHtml } from '$lib/utils/peer';
+  interface ChannelMember {
+    peerId: string;
+    name: string;
+    isOnline: boolean;
+    isYou: boolean;
+    isBot: boolean;
+    color: string;
+  }
+
+  interface ChannelMembersPagePayload {
+    members: ChannelMember[];
+    loadedCount: number;
+    totalCount: number;
+    hasMore: boolean;
+  }
 
   interface Props {
     channelName: string;
-    members: Array<{
-      peerId: string;
-      name: string;
-      isOnline: boolean;
-      isYou: boolean;
-      isBot: boolean;
-      color: string;
-    }>;
+    members: ChannelMember[];
+    loadedCount?: number;
+    totalCount?: number;
+    hasMore?: boolean;
+    onLoadMore?: () => Promise<ChannelMembersPagePayload | null>;
+    onToast?: (message: string, type?: string) => void;
     onClose: () => void;
   }
 
-  let { channelName, members, onClose }: Props = $props();
+  let {
+    channelName,
+    members: initialMembers,
+    loadedCount,
+    totalCount,
+    hasMore = false,
+    onLoadMore,
+    onToast,
+    onClose,
+  }: Props = $props();
+
+  let members = $state(initialMembers);
+  let loadingMore = $state(false);
 
   function handleOverlayClick(e: MouseEvent) {
     if (e.target === e.currentTarget) onClose();
@@ -65,6 +103,24 @@
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   });
+
+  async function handleLoadMore() {
+    if (!onLoadMore || loadingMore || !hasMore) return;
+    loadingMore = true;
+    try {
+      const next = await onLoadMore();
+      if (!next) return;
+      members = next.members;
+      loadedCount = next.loadedCount;
+      totalCount = next.totalCount;
+      hasMore = next.hasMore;
+    } catch (err) {
+      console.error('[ChannelMembersModal] load more failed', err);
+      onToast?.('Failed to load more members', 'error');
+    } finally {
+      loadingMore = false;
+    }
+  }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -74,7 +130,15 @@
     <h2>Channel Members · #{channelName}</h2>
     <form onsubmit={(e) => { e.preventDefault(); onClose(); }}>
       <div class="form-group" style="margin-bottom: 8px;">
-        <div style="font-size: 13px; color: var(--text-muted);">{members.length} member{members.length === 1 ? '' : 's'}</div>
+        {@const visibleCount = members.length}
+        {@const totalMemberCount = totalCount ?? visibleCount}
+        <div id="members-count-label" style="font-size: 13px; color: var(--text-muted);">
+          {#if hasMore && totalMemberCount > visibleCount}
+            Showing {visibleCount} of {totalMemberCount} members
+          {:else}
+            {members.length} member{members.length === 1 ? '' : 's'}
+          {/if}
+        </div>
       </div>
       <div class="members-list">
         {#each members as member (member.peerId)}
@@ -97,6 +161,15 @@
         {/each}
       </div>
       <div class="modal-actions">
+        {#if hasMore && onLoadMore}
+          <button type="button" class="btn-secondary" onclick={handleLoadMore} disabled={loadingMore}>
+            {#if loadingMore}
+              Loading more…
+            {:else}
+              Load more members
+            {/if}
+          </button>
+        {/if}
         <button type="button" class="btn-secondary" onclick={onClose}>Close</button>
       </div>
     </form>
