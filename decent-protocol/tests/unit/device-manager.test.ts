@@ -4,7 +4,7 @@
  * DeviceManager: device-announce with cryptographic proof, verification, device tracking.
  */
 import { describe, test, expect, beforeAll } from 'bun:test';
-import { DeviceManager, type DeviceAnnouncement, type DeviceProof } from '../../src/identity/DeviceManager';
+import { DeviceManager } from '../../src/identity/DeviceManager';
 import { SeedPhraseManager } from '../../src/identity/SeedPhrase';
 
 describe('DeviceManager', () => {
