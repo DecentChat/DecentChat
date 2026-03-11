@@ -69,6 +69,9 @@ import { NotificationManager } from '../ui/NotificationManager';
 import { HuddleManager } from '../huddle/HuddleManager';
 import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
 import type { AppState } from '../main';
+import { TopologyTelemetry } from './topology/TopologyTelemetry';
+import { TopologyAnomalyDetector } from './topology/TopologyAnomalyDetector';
+import type { TopologyDebugSnapshot, TopologyMaintenanceEvent, TopologyPeerEvent } from './topology/TopologyTelemetry';
 
 const PROTOCOL_VERSION = 2;
 const NEGENTROPY_SYNC_CAPABILITY = 'negentropy-sync-v1';
@@ -114,6 +117,61 @@ export interface UIUpdater {
   onHuddleParticipantsChange?: (participants: HuddleParticipant[]) => void;
   /** Refresh the activity sidebar panel if open */
   refreshActivityPanel?: () => void;
+}
+
+// ---------------------------------------------------------------------------
+// Peer selection policy types
+// ---------------------------------------------------------------------------
+
+type PeerSelectionDeviceClass = 'desktop' | 'mobile';
+
+interface PeerConnectionSnapshot {
+  connected: Set<string>;
+  connecting: Set<string>;
+  ready: Set<string>;
+}
+
+interface WorkspacePeerCandidate {
+  peerId: string;
+  role: 'owner' | 'admin' | 'member';
+  joinedAt?: number;
+  connected: boolean;
+  connecting: boolean;
+  ready: boolean;
+  likelyOnline: boolean;
+  recentlySeenAt: number;
+  sharedWorkspaceCount: number;
+  connectedAt?: number;
+  lastSyncAt?: number;
+  disconnectCount: number;
+  lastExplorerAt?: number;
+}
+
+interface DesiredPeerSelection {
+  anchors: WorkspacePeerCandidate[];
+  core: WorkspacePeerCandidate[];
+  explorers: WorkspacePeerCandidate[];
+  desiredPeerIds: string[];
+  budget: number;
+}
+
+interface ConnectionStatusModel {
+  showBanner: boolean;
+  level: 'offline' | 'warning' | 'info';
+  message: string;
+  detail?: string;
+  debug?: {
+    partialMeshEnabled: boolean;
+    desiredPeerCount?: number;
+    connectedDesiredPeerCount?: number;
+    connectingDesiredPeerCount?: number;
+    connectedPeerCount: number;
+    likelyPeerCount: number;
+    coldPeerCount: number;
+    desiredPeers?: string[];
+    anchors?: string[];
+    explorers?: string[];
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +253,18 @@ export class ChatController {
   private static readonly LIKELY_PEER_WINDOW_MS = 6 * 60 * 60 * 1000;
   private static readonly INITIAL_LIKELY_BOOTSTRAP_MS = 2 * 60 * 1000;
   private static readonly COLD_PEER_RETRY_MS = 5 * 60 * 1000;
+  private static readonly PARTIAL_MESH_ENABLED = true;
+  private static readonly PARTIAL_MESH_DESKTOP_TARGET = 8;
+  private static readonly PARTIAL_MESH_MOBILE_TARGET = 5;
+  private static readonly PARTIAL_MESH_DESKTOP_HARD_CAP = 12;
+  private static readonly PARTIAL_MESH_MOBILE_HARD_CAP = 8;
+  private static readonly PARTIAL_MESH_MIN_SAFE_PEERS = 3;
+  private static readonly PARTIAL_MESH_ANCHOR_SLOTS = 2;
+  private static readonly PARTIAL_MESH_DESKTOP_EXPLORER_SLOTS = 2;
+  private static readonly PARTIAL_MESH_MOBILE_EXPLORER_SLOTS = 1;
+  private static readonly PARTIAL_MESH_EXPLORER_ROTATION_MS = 3 * 60 * 1000;
+  private static readonly PARTIAL_MESH_REPLACE_THRESHOLD = 20;
+  private static readonly PARTIAL_MESH_MIN_DWELL_MS = 90 * 1000;
   /** Cleanup interval for the seen-set (every 5 min) */
   private _gossipCleanupInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -249,6 +319,13 @@ export class ChatController {
   private workspaceInviteRegistry: WorkspaceInviteRegistry = {};
   private readonly peerLastSeenAt = new Map<string, number>();
   private readonly peerLastConnectAttemptAt = new Map<string, number>();
+  private readonly peerLastSuccessfulSyncAt = new Map<string, number>();
+  private readonly peerConnectedAt = new Map<string, number>();
+  private readonly peerDisconnectCount = new Map<string, number>();
+  private readonly peerExplorerLastUsedAt = new Map<string, number>();
+  private topologyTelemetry?: TopologyTelemetry;
+  private topologyAnomalyDetector?: TopologyAnomalyDetector;
+  private topologyDesiredSetByWorkspace?: Map<string, string[]>;
   private readonly startedAt = Date.now();
 
   constructor(private state: AppState) {
@@ -272,6 +349,9 @@ export class ChatController {
     this.contactStore = new MemoryContactStore();
     this.directConversationStore = new MemoryDirectConversationStore();
     this.notifications = new NotificationManager();
+    this.topologyTelemetry = new TopologyTelemetry();
+    this.topologyAnomalyDetector = new TopologyAnomalyDetector();
+    this.topologyDesiredSetByWorkspace = new Map<string, string[]>();
     this.messageGuard.rateLimiter.onViolation = (v) => {
       console.warn(`[Guard] ${v.severity} violation from ${v.peerId.slice(0, 8)}: ${v.action}`);
       if (v.severity === 'ban') {
@@ -396,11 +476,64 @@ export class ChatController {
     seenMap.set(peerId, Date.now());
   }
 
+  private getTopologyTelemetry(): TopologyTelemetry {
+    if (!this.topologyTelemetry) this.topologyTelemetry = new TopologyTelemetry();
+    return this.topologyTelemetry;
+  }
+
+  private getTopologyDesiredSetMemory(): Map<string, string[]> {
+    if (!this.topologyDesiredSetByWorkspace) this.topologyDesiredSetByWorkspace = new Map<string, string[]>();
+    return this.topologyDesiredSetByWorkspace;
+  }
+
+  private getTopologyAnomalyDetector(): TopologyAnomalyDetector {
+    if (!this.topologyAnomalyDetector) this.topologyAnomalyDetector = new TopologyAnomalyDetector();
+    return this.topologyAnomalyDetector;
+  }
+
+  private recordTopologyMaintenanceEvent(event: TopologyMaintenanceEvent): void {
+    const anomalies = this.getTopologyAnomalyDetector().observeMaintenance(event);
+    for (const anomaly of anomalies) this.getTopologyTelemetry().recordAnomalyEvent(anomaly);
+  }
+
+  private resolveTopologyWorkspaceId(peerId: string, preferredWorkspaceId?: string): string {
+    if (preferredWorkspaceId && this.isWorkspaceMember(peerId, preferredWorkspaceId)) return preferredWorkspaceId;
+    const activeWorkspaceId = this.state.activeWorkspaceId ?? '';
+    if (activeWorkspaceId && this.isWorkspaceMember(peerId, activeWorkspaceId)) return activeWorkspaceId;
+    for (const ws of this.workspaceManager.getAllWorkspaces()) {
+      if (ws.members.some((member: any) => member.peerId === peerId)) return ws.id;
+    }
+    return preferredWorkspaceId ?? activeWorkspaceId ?? '';
+  }
+
+  private recordTopologyPeerEvent(payload: Omit<TopologyPeerEvent, 'kind' | 'ts'>): void {
+    if (!payload.workspaceId) return;
+    const event = this.getTopologyTelemetry().recordPeerEvent(payload);
+    const anomalies = this.getTopologyAnomalyDetector().observePeerEvent(event);
+    for (const anomaly of anomalies) this.getTopologyTelemetry().recordAnomalyEvent(anomaly);
+  }
+
+  getTopologyDebugSnapshot(workspaceId = this.state.activeWorkspaceId ?? ''): TopologyDebugSnapshot {
+    return this.getTopologyTelemetry().getDebugSnapshot(workspaceId || undefined);
+  }
+
   setupTransportHandlers(): void {
     this.transport.onConnect = async (peerId: string) => {
       this.state.connectedPeers.add(peerId);
       this.state.connectingPeers.delete(peerId);
+      this.peerConnectedAt.set(peerId, Date.now());
       this.markPeerSeen(peerId);
+      const workspaceId = this.resolveTopologyWorkspaceId(peerId);
+      this.recordTopologyPeerEvent({
+        level: 'info',
+        workspaceId,
+        peerId,
+        event: 'connected',
+        connected: true,
+        connecting: false,
+        ready: this.state.readyPeers.has(peerId),
+        connectedAt: this.peerConnectedAt.get(peerId),
+      });
       this.ui?.updateSidebar();
 
       try {
@@ -419,6 +552,18 @@ export class ChatController {
       this.state.connectedPeers.delete(peerId);
       this.state.connectingPeers.delete(peerId);
       this.state.readyPeers.delete(peerId);
+      this.peerConnectedAt.delete(peerId);
+      this.peerDisconnectCount.set(peerId, (this.peerDisconnectCount.get(peerId) ?? 0) + 1);
+      this.recordTopologyPeerEvent({
+        level: 'info',
+        workspaceId: this.resolveTopologyWorkspaceId(peerId),
+        peerId,
+        event: 'disconnected',
+        connected: false,
+        connecting: false,
+        ready: false,
+        disconnectCount: this.peerDisconnectCount.get(peerId) ?? 0,
+      });
       this.messageProtocol?.clearSharedSecret(peerId);
       this.peerCapabilities.delete(peerId);
       this.authenticatedPeers.delete(peerId);
@@ -2418,6 +2563,339 @@ export class ChatController {
     return false;
   }
 
+  private getPeerConnectionSnapshot(): PeerConnectionSnapshot {
+    return {
+      connected: new Set<string>(this.transport.getConnectedPeers() as string[]),
+      connecting: new Set(this.state.connectingPeers),
+      ready: new Set(this.state.readyPeers),
+    };
+  }
+
+  private detectPeerSelectionDeviceClass(isMobileOverride?: boolean): PeerSelectionDeviceClass {
+    if (typeof isMobileOverride === 'boolean') return isMobileOverride ? 'mobile' : 'desktop';
+    if (typeof navigator === 'undefined') return 'desktop';
+    const userAgent = navigator.userAgent || '';
+    const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent);
+    return mobile ? 'mobile' : 'desktop';
+  }
+
+  private computeTargetPeerCount(options?: { isMobile?: boolean }): number {
+    return this.detectPeerSelectionDeviceClass(options?.isMobile) === 'mobile'
+      ? ChatController.PARTIAL_MESH_MOBILE_TARGET
+      : ChatController.PARTIAL_MESH_DESKTOP_TARGET;
+  }
+
+  private isPartialMeshEnabled(): boolean {
+    try {
+      const stored = globalThis.localStorage?.getItem?.('decentchat.partialMesh.enabled')
+        ?? (typeof window !== 'undefined' ? window.localStorage?.getItem('decentchat.partialMesh.enabled') : null);
+      if (stored === 'true' || stored === '1') return true;
+      if (stored === 'false' || stored === '0') return false;
+    } catch {
+      // ignore storage access errors
+    }
+
+    const envFlag = (import.meta as any)?.env?.VITE_PARTIAL_MESH_ENABLED;
+    if (envFlag === 'true' || envFlag === '1' || envFlag === true) return true;
+    if (envFlag === 'false' || envFlag === '0' || envFlag === false) return false;
+
+    return ChatController.PARTIAL_MESH_ENABLED;
+  }
+
+  private computeHardCap(options?: { isMobile?: boolean }): number {
+    return this.detectPeerSelectionDeviceClass(options?.isMobile) === 'mobile'
+      ? ChatController.PARTIAL_MESH_MOBILE_HARD_CAP
+      : ChatController.PARTIAL_MESH_DESKTOP_HARD_CAP;
+  }
+
+  private computeExplorerSlotCount(options?: { isMobile?: boolean }): number {
+    return this.detectPeerSelectionDeviceClass(options?.isMobile) === 'mobile'
+      ? ChatController.PARTIAL_MESH_MOBILE_EXPLORER_SLOTS
+      : ChatController.PARTIAL_MESH_DESKTOP_EXPLORER_SLOTS;
+  }
+
+  private computeDesiredPeerBudget(candidateCount: number, options?: { isMobile?: boolean }): number {
+    const target = this.computeTargetPeerCount(options);
+    const hardCap = this.computeHardCap(options);
+    return Math.max(0, Math.min(candidateCount, target, hardCap));
+  }
+
+  private getWorkspacePeerCandidates(workspaceId = this.state.activeWorkspaceId ?? '', now = Date.now()): WorkspacePeerCandidate[] {
+    if (!workspaceId) return [];
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (!ws) return [];
+
+    const snapshot = this.getPeerConnectionSnapshot();
+    const allWorkspaces = this.workspaceManager.getAllWorkspaces();
+
+    return ws.members
+      .filter((member) => member.peerId && member.peerId !== this.state.myPeerId)
+      .map((member) => {
+        const peerId = member.peerId;
+        const sharedWorkspaceCount = allWorkspaces.filter((candidateWs) =>
+          candidateWs.members.some((candidateMember) => candidateMember.peerId === peerId),
+        ).length;
+
+        return {
+          peerId,
+          role: member.role,
+          joinedAt: member.joinedAt,
+          connected: snapshot.connected.has(peerId),
+          connecting: snapshot.connecting.has(peerId),
+          ready: snapshot.ready.has(peerId),
+          likelyOnline: this.isLikelyOnlinePeer(peerId, member.joinedAt, now),
+          recentlySeenAt: this.peerLastSeenAt.get(peerId) ?? 0,
+          sharedWorkspaceCount,
+          connectedAt: this.peerConnectedAt.get(peerId),
+          lastSyncAt: this.peerLastSuccessfulSyncAt.get(peerId),
+          disconnectCount: this.peerDisconnectCount.get(peerId) ?? 0,
+          lastExplorerAt: this.peerExplorerLastUsedAt.get(peerId),
+        } satisfies WorkspacePeerCandidate;
+      });
+  }
+
+  private scoreWorkspacePeer(candidate: WorkspacePeerCandidate, now = Date.now()): number {
+    let score = 0;
+
+    if (candidate.connected) score += candidate.ready ? 40 : 25;
+    if (candidate.connecting) score += 5;
+    if (candidate.likelyOnline) score += 25;
+
+    if (candidate.recentlySeenAt > 0) {
+      const age = now - candidate.recentlySeenAt;
+      if (age <= 5 * 60 * 1000) score += 20;
+      else if (age <= ChatController.LIKELY_PEER_WINDOW_MS) score += 10;
+    }
+
+    if (candidate.lastSyncAt && now - candidate.lastSyncAt <= ChatController.LIKELY_PEER_WINDOW_MS) {
+      score += 20;
+    }
+
+    if (candidate.connectedAt && now - candidate.connectedAt >= ChatController.PARTIAL_MESH_MIN_DWELL_MS) {
+      score += 10;
+    }
+
+    if (candidate.role === 'owner') score += 15;
+    else if (candidate.role === 'admin') score += 10;
+
+    score += Math.min(10, Math.max(0, candidate.sharedWorkspaceCount - 1) * 5);
+    score -= Math.min(30, candidate.disconnectCount * 10);
+
+    return score;
+  }
+
+  private rankWorkspacePeers(candidates: WorkspacePeerCandidate[], now = Date.now()): WorkspacePeerCandidate[] {
+    return [...candidates].sort((a, b) => {
+      const scoreDelta = this.scoreWorkspacePeer(b, now) - this.scoreWorkspacePeer(a, now);
+      if (scoreDelta !== 0) return scoreDelta;
+
+      const roleWeight = (candidate: WorkspacePeerCandidate): number =>
+        candidate.role === 'owner' ? 2 : (candidate.role === 'admin' ? 1 : 0);
+      const roleDelta = roleWeight(b) - roleWeight(a);
+      if (roleDelta !== 0) return roleDelta;
+
+      const sharedDelta = (b.sharedWorkspaceCount ?? 0) - (a.sharedWorkspaceCount ?? 0);
+      if (sharedDelta !== 0) return sharedDelta;
+
+      const seenDelta = (b.recentlySeenAt ?? 0) - (a.recentlySeenAt ?? 0);
+      if (seenDelta !== 0) return seenDelta;
+
+      return (a.peerId || '').localeCompare(b.peerId || '');
+    });
+  }
+
+  private pickAnchorPeers(candidates: WorkspacePeerCandidate[], count: number, now = Date.now()): WorkspacePeerCandidate[] {
+    if (count <= 0) return [];
+
+    const ranked = [...candidates].sort((a, b) => {
+      const roleWeight = (candidate: WorkspacePeerCandidate): number =>
+        candidate.role === 'owner' ? 2 : (candidate.role === 'admin' ? 1 : 0);
+      const roleDelta = roleWeight(b) - roleWeight(a);
+      if (roleDelta !== 0) return roleDelta;
+
+      const scoreDelta = this.scoreWorkspacePeer(b, now) - this.scoreWorkspacePeer(a, now);
+      if (scoreDelta !== 0) return scoreDelta;
+
+      return (a.peerId || '').localeCompare(b.peerId || '');
+    });
+
+    return ranked.slice(0, count);
+  }
+
+  private pickExplorerPeers(
+    candidates: WorkspacePeerCandidate[],
+    selectedPeerIds: Set<string>,
+    count: number,
+    now = Date.now(),
+  ): WorkspacePeerCandidate[] {
+    if (count <= 0) return [];
+
+    const pool = candidates.filter((candidate) => !selectedPeerIds.has(candidate.peerId));
+    const ranked = [...pool].sort((a, b) => {
+      const aLast = a.lastExplorerAt ?? 0;
+      const bLast = b.lastExplorerAt ?? 0;
+      const explorerDelta = aLast - bLast;
+      if (explorerDelta !== 0) return explorerDelta;
+
+      const likelyDelta = Number(b.likelyOnline) - Number(a.likelyOnline);
+      if (likelyDelta !== 0) return likelyDelta;
+
+      const scoreDelta = this.scoreWorkspacePeer(b, now) - this.scoreWorkspacePeer(a, now);
+      if (scoreDelta !== 0) return scoreDelta;
+
+      return (a.peerId || '').localeCompare(b.peerId || '');
+    });
+
+    return ranked.slice(0, count);
+  }
+
+  private shouldKeepIncumbent(
+    incumbent: WorkspacePeerCandidate,
+    challenger?: WorkspacePeerCandidate,
+    now = Date.now(),
+  ): boolean {
+    if (!incumbent.connected) return false;
+
+    const connectedAt = incumbent.connectedAt ?? 0;
+    if (connectedAt > 0 && now - connectedAt < ChatController.PARTIAL_MESH_MIN_DWELL_MS) {
+      return true;
+    }
+
+    if (!challenger) return false;
+
+    const incumbentScore = this.scoreWorkspacePeer(incumbent, now);
+    const challengerScore = this.scoreWorkspacePeer(challenger, now);
+    return challengerScore < incumbentScore + ChatController.PARTIAL_MESH_REPLACE_THRESHOLD;
+  }
+
+  private selectDesiredPeers(
+    workspaceId = this.state.activeWorkspaceId ?? '',
+    now = Date.now(),
+    options?: { isMobile?: boolean; emitTopologyEvents?: boolean },
+  ): DesiredPeerSelection {
+    const candidates = this.getWorkspacePeerCandidates(workspaceId, now);
+    const budget = this.computeDesiredPeerBudget(candidates.length, options);
+    if (budget <= 0) {
+      return { anchors: [], core: [], explorers: [], desiredPeerIds: [], budget: 0 };
+    }
+
+    const anchorCount = Math.min(ChatController.PARTIAL_MESH_ANCHOR_SLOTS, budget);
+    const anchors = this.pickAnchorPeers(candidates, anchorCount, now);
+    const selectedPeerIds = new Set(anchors.map((candidate) => candidate.peerId));
+
+    const explorerBudget = Math.max(0, budget - anchors.length);
+    const explorerCount = Math.min(this.computeExplorerSlotCount(options), explorerBudget);
+    let explorers = this.pickExplorerPeers(candidates, selectedPeerIds, explorerCount, now);
+    for (const explorer of explorers) selectedPeerIds.add(explorer.peerId);
+
+    const coreBudget = Math.max(0, budget - anchors.length - explorers.length);
+    let core = this.rankWorkspacePeers(
+      candidates.filter((candidate) => !selectedPeerIds.has(candidate.peerId)),
+      now,
+    ).slice(0, coreBudget);
+
+    let desired = [...anchors, ...core, ...explorers];
+    const nonAnchorIncumbents = this.rankWorkspacePeers(
+      candidates.filter((candidate) => candidate.connected && !desired.some((selected) => selected.peerId === candidate.peerId)),
+      now,
+    );
+
+    for (const incumbent of nonAnchorIncumbents) {
+      const replaceable = [...core, ...explorers]
+        .sort((a, b) => {
+          const connectedDelta = Number(a.connected) - Number(b.connected);
+          if (connectedDelta !== 0) return connectedDelta;
+          return this.scoreWorkspacePeer(a, now) - this.scoreWorkspacePeer(b, now);
+        })[0];
+
+      if (!replaceable) break;
+      if (!this.shouldKeepIncumbent(incumbent, replaceable, now)) continue;
+
+      if (options?.emitTopologyEvents) {
+        this.recordTopologyPeerEvent({
+          level: 'debug',
+          workspaceId,
+          peerId: replaceable.peerId,
+          event: 'skipped-incumbent-protection',
+          reason: `incumbent ${incumbent.peerId} protected against ${replaceable.peerId}`,
+          sharedWorkspaceCount: replaceable.sharedWorkspaceCount,
+          score: this.scoreWorkspacePeer(replaceable, now),
+          connected: replaceable.connected,
+          connecting: replaceable.connecting,
+          ready: replaceable.ready,
+          likelyOnline: replaceable.likelyOnline,
+          disconnectCount: replaceable.disconnectCount,
+          connectedAt: replaceable.connectedAt,
+          lastSyncAt: replaceable.lastSyncAt,
+        });
+      }
+
+      if (core.some((candidate) => candidate.peerId === replaceable.peerId)) {
+        core = core.filter((candidate) => candidate.peerId !== replaceable.peerId);
+        core.push(incumbent);
+      } else {
+        explorers = explorers.filter((candidate) => candidate.peerId !== replaceable.peerId);
+        explorers.push(incumbent);
+      }
+
+      desired = [...anchors, ...core, ...explorers];
+    }
+
+    const desiredPeerIds = desired.map((candidate) => candidate.peerId);
+    return { anchors, core, explorers, desiredPeerIds, budget };
+  }
+
+  private markExplorerSelections(explorers: WorkspacePeerCandidate[], now = Date.now()): void {
+    for (const explorer of explorers) {
+      const lastUsedAt = this.peerExplorerLastUsedAt.get(explorer.peerId) ?? 0;
+      if (lastUsedAt <= 0 || now - lastUsedAt >= ChatController.PARTIAL_MESH_EXPLORER_ROTATION_MS) {
+        this.peerExplorerLastUsedAt.set(explorer.peerId, now);
+      }
+    }
+  }
+
+  private selectConservativePrunePeers(
+    candidates: WorkspacePeerCandidate[],
+    desiredSelection: DesiredPeerSelection,
+    connectedPeers: Set<string>,
+    now = Date.now(),
+  ): WorkspacePeerCandidate[] {
+    if (connectedPeers.size <= Math.max(desiredSelection.budget, ChatController.PARTIAL_MESH_MIN_SAFE_PEERS)) {
+      return [];
+    }
+
+    const desiredSet = new Set(desiredSelection.desiredPeerIds);
+    const pruneableCount = connectedPeers.size - Math.max(desiredSelection.budget, ChatController.PARTIAL_MESH_MIN_SAFE_PEERS);
+    if (pruneableCount <= 0) return [];
+
+    const prunePool = candidates
+      .filter((candidate) => connectedPeers.has(candidate.peerId))
+      .filter((candidate) => !desiredSet.has(candidate.peerId))
+      .filter((candidate) => candidate.sharedWorkspaceCount <= 1)
+      .filter((candidate) => {
+        if (!candidate.connectedAt) return true;
+        return now - candidate.connectedAt >= ChatController.PARTIAL_MESH_MIN_DWELL_MS;
+      });
+
+    return [...prunePool]
+      .sort((a, b) => {
+        const likelyDelta = Number(a.likelyOnline) - Number(b.likelyOnline);
+        if (likelyDelta !== 0) return likelyDelta;
+
+        const readyDelta = Number(a.ready) - Number(b.ready);
+        if (readyDelta !== 0) return readyDelta;
+
+        const scoreDelta = this.scoreWorkspacePeer(a, now) - this.scoreWorkspacePeer(b, now);
+        if (scoreDelta !== 0) return scoreDelta;
+
+        const sharedDelta = (a.sharedWorkspaceCount ?? 0) - (b.sharedWorkspaceCount ?? 0);
+        if (sharedDelta !== 0) return sharedDelta;
+
+        return (a.peerId || '').localeCompare(b.peerId || '');
+      })
+      .slice(0, pruneableCount);
+  }
+
   private getActiveWorkspacePeerStats(now = Date.now()): {
     totalPeers: number;
     likelyPeers: string[];
@@ -2431,7 +2909,7 @@ export class ChatController {
       return { totalPeers: 0, likelyPeers: [], coldPeers: [], connectedPeers: [] };
     }
 
-    const connectedSet = new Set(this.transport.getConnectedPeers());
+    const connectedSet = new Set<string>(this.transport.getConnectedPeers() as string[]);
     const likelyPeers: string[] = [];
     const coldPeers: string[] = [];
     const connectedPeers: string[] = [];
@@ -2467,13 +2945,10 @@ export class ChatController {
   }
 
   /** Sidebar reconnect banner model (best-effort heuristics). */
-  getConnectionStatus(): {
-    showBanner: boolean;
-    level: 'offline' | 'warning' | 'info';
-    message: string;
-    detail?: string;
-  } {
-    const browserOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+  getConnectionStatus(): ConnectionStatusModel {
+    const browserOnline = typeof window === 'undefined'
+      ? true
+      : (typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean' ? navigator.onLine : true);
 
     const signalingStatus = typeof this.transport.getSignalingStatus === 'function'
       ? this.transport.getSignalingStatus()
@@ -2499,10 +2974,65 @@ export class ChatController {
       };
     }
 
-    const stats = this.getActiveWorkspacePeerStats();
+    const now = Date.now();
+    const stats = this.getActiveWorkspacePeerStats(now);
     const connected = stats.connectedPeers.length;
     const likely = stats.likelyPeers.length;
     const connectingLikely = stats.likelyPeers.filter((peerId) => this.state.connectingPeers.has(peerId)).length;
+
+    if (this.isPartialMeshEnabled() && this.state.activeWorkspaceId) {
+      const selection = this.selectDesiredPeers(this.state.activeWorkspaceId, now);
+      if (selection.budget > 0) {
+        const desiredSet = new Set(selection.desiredPeerIds);
+        const connectedDesiredCount = stats.connectedPeers.filter((peerId) => desiredSet.has(peerId)).length;
+        const connectingDesiredCount = selection.desiredPeerIds.filter((peerId) => this.state.connectingPeers.has(peerId)).length;
+        const missingDesired = Math.max(0, selection.budget - connectedDesiredCount);
+
+        const debug = {
+          partialMeshEnabled: true,
+          desiredPeerCount: selection.budget,
+          connectedDesiredPeerCount: connectedDesiredCount,
+          connectingDesiredPeerCount: connectingDesiredCount,
+          connectedPeerCount: connected,
+          likelyPeerCount: likely,
+          coldPeerCount: stats.coldPeers.length,
+          desiredPeers: selection.desiredPeerIds,
+          anchors: selection.anchors.map((candidate) => candidate.peerId),
+          explorers: selection.explorers.map((candidate) => candidate.peerId),
+          topology: this.getTopologyDebugSnapshot(this.state.activeWorkspaceId ?? ''),
+        };
+
+        if (connectedDesiredCount >= selection.budget) {
+          return {
+            showBanner: false,
+            level: 'info',
+            message: `Connected ${connectedDesiredCount}/${selection.budget} desired peers`,
+            detail: 'Topology is healthy.',
+            debug,
+          };
+        }
+
+        if (connectedDesiredCount > 0 || connectingDesiredCount > 0) {
+          return {
+            showBanner: true,
+            level: connectingDesiredCount > 0 ? 'info' : 'warning',
+            message: `Connected ${connectedDesiredCount}/${selection.budget} desired peers`,
+            detail: connectingDesiredCount > 0
+              ? `Reconnecting to ${missingDesired} desired peer(s); ${connectingDesiredCount} in flight.`
+              : `Missing ${missingDesired} desired peer(s). Press Retry to reconnect.`,
+            debug,
+          };
+        }
+
+        return {
+          showBanner: true,
+          level: 'warning',
+          message: `Connected 0/${selection.budget} desired peers`,
+          detail: `Trying ${connectingLikely}/${Math.max(likely, selection.budget)} likely peer(s).`,
+          debug,
+        };
+      }
+    }
 
     // If at least one peer is connected, keep UI calm by default.
     if (connected > 0) {
@@ -2554,7 +3084,7 @@ export class ChatController {
 
   /** Public one-shot maintenance hook for startup/resume reconnect bootstrap. */
   runPeerMaintenanceNow(reason = 'manual'): number {
-    const attempted = this._runPeerMaintenance();
+    const attempted = this._runPeerMaintenance(reason);
     if (attempted > 0) {
       console.log(`[Maintenance] ${reason}: attempted reconnect to ${attempted} peer(s)`);
     }
@@ -2637,7 +3167,7 @@ export class ChatController {
     const ws = workspaceId ? this.workspaceManager.getWorkspace(workspaceId) : null;
     if (!ws) return;
 
-    const connectedPeers = new Set(this.transport.getConnectedPeers());
+    const connectedPeers = new Set<string>(this.transport.getConnectedPeers() as string[]);
 
     for (const member of ws.members) {
       const targetPeerId = member.peerId;
@@ -2756,22 +3286,116 @@ export class ChatController {
    * Complements PeerTransport's auto-reconnect (which only fires on connection
    * drop) by also reaching out to members we've never connected to.
    */
-  private _runPeerMaintenance(): number {
+  private _runPeerMaintenance(reason = 'manual'): number {
     const ws = this.state.activeWorkspaceId
       ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
       : null;
     if (!ws) return 0;
 
-    const connectedPeers = new Set(this.transport.getConnectedPeers());
+    const maintenanceStartedAt = Date.now();
+    const connectedPeers = new Set<string>(this.transport.getConnectedPeers() as string[]);
     const now = Date.now();
+    const candidates = this.getWorkspacePeerCandidates(ws.id, now);
     let attempted = 0;
+    let pruned = 0;
 
     const likelyTargets: string[] = [];
     const coldTargets: string[] = [];
+    const previousDesiredPeerIds = this.getTopologyDesiredSetMemory().get(ws.id) ?? [];
+    const selectionStartedAt = Date.now();
+    const desiredSelection = this.isPartialMeshEnabled()
+      ? this.selectDesiredPeers(ws.id, now, { emitTopologyEvents: true })
+      : undefined;
+    const selectionDurationMs = Date.now() - selectionStartedAt;
+    const desiredPeerIds = new Set(desiredSelection?.desiredPeerIds ?? []);
+    const connectedDesiredCount = desiredSelection
+      ? desiredSelection.desiredPeerIds.filter((peerId) => connectedPeers.has(peerId)).length
+      : connectedPeers.size;
+    const needsMinimumSafeRecovery = connectedDesiredCount < ChatController.PARTIAL_MESH_MIN_SAFE_PEERS;
 
-    for (const member of ws.members) {
-      const peerId = member.peerId;
-      if (!peerId || peerId === this.state.myPeerId) continue;
+    if (desiredSelection) {
+      const previousDesiredSet = new Set(previousDesiredPeerIds);
+      const desiredCandidateMap = new Map(candidates.map((candidate) => [candidate.peerId, candidate]));
+      for (const candidate of desiredSelection.anchors) {
+        if (!previousDesiredSet.has(candidate.peerId)) {
+          this.recordTopologyPeerEvent({
+            level: 'info',
+            workspaceId: ws.id,
+            peerId: candidate.peerId,
+            event: 'selected-anchor',
+            sharedWorkspaceCount: candidate.sharedWorkspaceCount,
+            score: this.scoreWorkspacePeer(candidate, now),
+            connected: candidate.connected,
+            connecting: candidate.connecting,
+            ready: candidate.ready,
+            likelyOnline: candidate.likelyOnline,
+            disconnectCount: candidate.disconnectCount,
+            connectedAt: candidate.connectedAt,
+            lastSyncAt: candidate.lastSyncAt,
+          });
+        }
+      }
+      for (const candidate of desiredSelection.core) {
+        if (!previousDesiredSet.has(candidate.peerId)) {
+          this.recordTopologyPeerEvent({
+            level: 'debug',
+            workspaceId: ws.id,
+            peerId: candidate.peerId,
+            event: 'selected-core',
+            sharedWorkspaceCount: candidate.sharedWorkspaceCount,
+            score: this.scoreWorkspacePeer(candidate, now),
+            connected: candidate.connected,
+            connecting: candidate.connecting,
+            ready: candidate.ready,
+            likelyOnline: candidate.likelyOnline,
+            disconnectCount: candidate.disconnectCount,
+            connectedAt: candidate.connectedAt,
+            lastSyncAt: candidate.lastSyncAt,
+          });
+        }
+      }
+      for (const candidate of desiredSelection.explorers) {
+        if (!previousDesiredSet.has(candidate.peerId)) {
+          this.recordTopologyPeerEvent({
+            level: 'info',
+            workspaceId: ws.id,
+            peerId: candidate.peerId,
+            event: 'selected-explorer',
+            sharedWorkspaceCount: candidate.sharedWorkspaceCount,
+            score: this.scoreWorkspacePeer(candidate, now),
+            connected: candidate.connected,
+            connecting: candidate.connecting,
+            ready: candidate.ready,
+            likelyOnline: candidate.likelyOnline,
+            disconnectCount: candidate.disconnectCount,
+            connectedAt: candidate.connectedAt,
+            lastSyncAt: candidate.lastSyncAt,
+          });
+        }
+      }
+      for (const peerId of desiredSelection.desiredPeerIds) {
+        const candidate = desiredCandidateMap.get(peerId);
+        if (!candidate || candidate.sharedWorkspaceCount <= 1 || previousDesiredSet.has(peerId)) continue;
+        this.recordTopologyPeerEvent({
+          level: 'info',
+          workspaceId: ws.id,
+          peerId,
+          event: 'selected-overlap',
+          sharedWorkspaceCount: candidate.sharedWorkspaceCount,
+          score: this.scoreWorkspacePeer(candidate, now),
+          connected: candidate.connected,
+          connecting: candidate.connecting,
+          ready: candidate.ready,
+          likelyOnline: candidate.likelyOnline,
+          disconnectCount: candidate.disconnectCount,
+          connectedAt: candidate.connectedAt,
+          lastSyncAt: candidate.lastSyncAt,
+        });
+      }
+    }
+
+    for (const candidate of candidates) {
+      const peerId = candidate.peerId;
 
       if (connectedPeers.has(peerId)) {
         // Even when transport still thinks a peer is connected, traffic can be
@@ -2788,7 +3412,10 @@ export class ChatController {
         continue;
       }
 
-      if (this.isLikelyOnlinePeer(peerId, member.joinedAt, now)) likelyTargets.push(peerId);
+      const inDesiredSet = desiredSelection ? desiredPeerIds.has(peerId) : true;
+      if (!inDesiredSet && !needsMinimumSafeRecovery) continue;
+
+      if (candidate.likelyOnline) likelyTargets.push(peerId);
       else coldTargets.push(peerId);
     }
 
@@ -2805,6 +3432,23 @@ export class ChatController {
       attempted++;
       this.peerLastConnectAttemptAt.set(peerId, now);
       this.state.connectingPeers.add(peerId);
+      const connectCandidate = candidates.find((candidate) => candidate.peerId === peerId);
+      this.recordTopologyPeerEvent({
+        level: 'info',
+        workspaceId: ws.id,
+        peerId,
+        event: 'connect-attempt',
+        reason: desiredPeerIds.has(peerId) ? 'desired-peer' : 'safe-minimum-recovery',
+        sharedWorkspaceCount: connectCandidate?.sharedWorkspaceCount,
+        score: connectCandidate ? this.scoreWorkspacePeer(connectCandidate, now) : undefined,
+        connected: connectCandidate?.connected,
+        connecting: true,
+        ready: connectCandidate?.ready,
+        likelyOnline: connectCandidate?.likelyOnline,
+        disconnectCount: connectCandidate?.disconnectCount,
+        connectedAt: connectCandidate?.connectedAt,
+        lastSyncAt: connectCandidate?.lastSyncAt,
+      });
       this.ui?.updateSidebar();
       // Stop the pulsating indicator quickly — if the peer doesn't answer in
       // 4s, show them as offline rather than spinning forever. PeerTransport
@@ -2831,8 +3475,79 @@ export class ChatController {
       connectPeer(peerId);
     }
 
-    if (attempted > 0) {
-      console.log(`[Maintenance] Attempting reconnect to ${attempted} workspace member(s) [likely=${likelyTargets.length}, cold=${coldTargets.length}]`);
+    if (desiredSelection) {
+      this.markExplorerSelections(desiredSelection.explorers, now);
+
+      if (!needsMinimumSafeRecovery && connectedPeers.size > desiredSelection.budget) {
+        const pruneCandidates = this.selectConservativePrunePeers(candidates, desiredSelection, connectedPeers, now);
+        for (const candidate of pruneCandidates) {
+          if (typeof this.transport.disconnect !== 'function') break;
+          this.transport.disconnect(candidate.peerId);
+          pruned++;
+          this.recordTopologyPeerEvent({
+            level: candidate.sharedWorkspaceCount > 1 ? 'warn' : 'info',
+            workspaceId: ws.id,
+            peerId: candidate.peerId,
+            event: 'pruned',
+            reason: 'non-desired-conservative-prune',
+            sharedWorkspaceCount: candidate.sharedWorkspaceCount,
+            score: this.scoreWorkspacePeer(candidate, now),
+            connected: candidate.connected,
+            connecting: candidate.connecting,
+            ready: candidate.ready,
+            likelyOnline: candidate.likelyOnline,
+            disconnectCount: candidate.disconnectCount,
+            connectedAt: candidate.connectedAt,
+            lastSyncAt: candidate.lastSyncAt,
+          });
+          connectedPeers.delete(candidate.peerId);
+        }
+      }
+    }
+
+    if (desiredSelection) {
+      const connectingDesiredCount = desiredSelection.desiredPeerIds.filter((peerId) => this.state.connectingPeers.has(peerId)).length;
+      const overlapDesiredPeerIds = desiredSelection.desiredPeerIds.filter((peerId) => {
+        const candidate = candidates.find((entry) => entry.peerId === peerId);
+        return (candidate?.sharedWorkspaceCount ?? 0) > 1;
+      });
+      const maintenanceEvent = this.getTopologyTelemetry().recordMaintenanceCycle({
+        level: 'info',
+        reason,
+        workspaceId: ws.id,
+        activeWorkspace: this.state.activeWorkspaceId === ws.id,
+        partialMeshEnabled: true,
+        candidatePeerCount: candidates.length,
+        desiredPeerIds: desiredSelection.desiredPeerIds,
+        previousDesiredPeerIds,
+        connectedPeerCount: connectedPeers.size,
+        connectedDesiredPeerCount: desiredSelection.desiredPeerIds.filter((peerId) => connectedPeers.has(peerId)).length,
+        connectingDesiredPeerCount: connectingDesiredCount,
+        likelyPeerCount: likelyTargets.length + candidates.filter((candidate) => candidate.connected && candidate.likelyOnline).length,
+        coldPeerCount: coldTargets.length + candidates.filter((candidate) => candidate.connected && !candidate.likelyOnline).length,
+        anchorPeerIds: desiredSelection.anchors.map((candidate) => candidate.peerId),
+        explorerPeerIds: desiredSelection.explorers.map((candidate) => candidate.peerId),
+        reconnectAttemptsThisSweep: attempted,
+        pruneCountThisSweep: pruned,
+        safeMinimumRecovery: needsMinimumSafeRecovery,
+        safeMinimumTarget: ChatController.PARTIAL_MESH_MIN_SAFE_PEERS,
+        overlapSelectedCount: overlapDesiredPeerIds.length,
+        overlapDesiredPeerIds,
+        selectionDurationMs,
+        maintenanceDurationMs: Date.now() - maintenanceStartedAt,
+        desiredBudget: desiredSelection.budget,
+        hardCap: this.computeHardCap(),
+        targetDegree: this.computeTargetPeerCount(),
+      });
+      this.recordTopologyMaintenanceEvent(maintenanceEvent);
+      this.getTopologyDesiredSetMemory().set(ws.id, [...desiredSelection.desiredPeerIds]);
+    }
+
+    if (attempted > 0 || pruned > 0) {
+      const desiredDetail = desiredSelection
+        ? ` desired=${desiredSelection.desiredPeerIds.length}/${desiredSelection.budget} connectedDesired=${connectedDesiredCount}`
+        : '';
+      console.log(`[Maintenance] reconnect=${attempted} prune=${pruned} [likely=${likelyTargets.length}, cold=${coldTargets.length}]${desiredDetail}`);
     }
     return attempted;
   }
@@ -3682,18 +4397,13 @@ export class ChatController {
     const existingIdx = this.activityItems.findIndex(i => i.id === threadActivityId);
 
     if (existingIdx >= 0) {
-      // Ignore historical replay of the same (or older) reply so a previously
-      // read activity item does not get resurrected as unread after refresh/sync.
-      const existing = this.activityItems[existingIdx];
-      const isSameOrOlderReply = existing.messageId === msg.id || msg.timestamp <= existing.timestamp;
-      if (isSameOrOlderReply) return;
-
       // Update existing entry with latest reply info and bump to top
+      const existing = this.activityItems[existingIdx];
       existing.actorId = msg.senderId;
       existing.snippet = msg.content.slice(0, 140);
       existing.messageId = msg.id;
       existing.timestamp = msg.timestamp;
-      if (!isCurrentlyOpen) existing.read = false; // re-mark as unread only for newer replies
+      if (!isCurrentlyOpen) existing.read = false; // re-mark as unread
       // Move to top
       this.activityItems.splice(existingIdx, 1);
       this.activityItems.unshift(existing);
@@ -4551,6 +5261,58 @@ export class ChatController {
   // Typing / Presence
   // =========================================================================
 
+  private getInviteAdditionalPeerIds(workspaceId: string, maxPeers = 3, now = Date.now()): string[] {
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (!ws || maxPeers <= 0) return [];
+
+    const connectedSet = new Set<string>(this.transport.getConnectedPeers() as string[]);
+    const picked: string[] = [];
+    const addPeer = (peerId: string): void => {
+      if (!peerId || peerId === this.state.myPeerId) return;
+      if (picked.includes(peerId)) return;
+      if (picked.length >= maxPeers) return;
+      picked.push(peerId);
+    };
+
+    // Safety rollout: keep legacy connected-first behavior while the feature flag is off.
+    if (!this.isPartialMeshEnabled()) {
+      for (const member of ws.members) {
+        if (connectedSet.has(member.peerId)) addPeer(member.peerId);
+      }
+      for (const member of ws.members) {
+        addPeer(member.peerId);
+      }
+      return picked;
+    }
+
+    const candidates = this.getWorkspacePeerCandidates(workspaceId, now);
+    const rankedCandidates = this.rankWorkspacePeers(candidates, now);
+    const preferredDesired = this.selectDesiredPeers(workspaceId, now);
+    const desiredSet = new Set(preferredDesired.desiredPeerIds);
+
+    for (const candidate of rankedCandidates) {
+      if (!desiredSet.has(candidate.peerId)) continue;
+      if (!connectedSet.has(candidate.peerId)) continue;
+      addPeer(candidate.peerId);
+    }
+
+    for (const candidate of rankedCandidates) {
+      if (!desiredSet.has(candidate.peerId)) continue;
+      addPeer(candidate.peerId);
+    }
+
+    for (const candidate of rankedCandidates) {
+      if (!connectedSet.has(candidate.peerId)) continue;
+      addPeer(candidate.peerId);
+    }
+
+    for (const member of ws.members) {
+      addPeer(member.peerId);
+    }
+
+    return picked;
+  }
+
   /** Generate a full invite URL for a workspace (signed, expiring by default). */
   async generateInviteURL(workspaceId: string, opts?: { permanent?: boolean }): Promise<string> {
     const ws = this.workspaceManager.getWorkspace(workspaceId);
@@ -4567,30 +5329,9 @@ export class ChatController {
     const defaultServer = getDefaultSignalingServer();
     const { host, port, secure, path } = this.parseSignalingURL(defaultServer);
 
-    // Collect up to 3 online workspace member peer IDs for multi-peer join resilience.
-    // Priority: connected peers first, then known members (excluding self).
-    const connectedSet = new Set(this.transport.getConnectedPeers());
-    const additionalPeers: string[] = [];
-    const MAX_PEERS = 3;
-
-    // First pass: connected peers
-    for (const member of ws.members) {
-      if (additionalPeers.length >= MAX_PEERS) break;
-      if (member.peerId === this.state.myPeerId) continue;
-      if (connectedSet.has(member.peerId)) {
-        additionalPeers.push(member.peerId);
-      }
-    }
-
-    // Second pass: offline members (as fallback — they may come online by join time)
-    if (additionalPeers.length < MAX_PEERS) {
-      for (const member of ws.members) {
-        if (additionalPeers.length >= MAX_PEERS) break;
-        if (member.peerId === this.state.myPeerId) continue;
-        if (additionalPeers.includes(member.peerId)) continue;
-        additionalPeers.push(member.peerId);
-      }
-    }
+    // Collect up to 3 topology-aligned peers for multi-peer join resilience.
+    // Prefer desired/healthy peers first, then connected fallbacks, then known members.
+    const additionalPeers = this.getInviteAdditionalPeerIds(workspaceId, 3);
 
     // Build InviteData with security fields
     const inviteData: InviteData = {
@@ -5145,15 +5886,35 @@ export class ChatController {
   // =========================================================================
 
   private async requestMessageSync(peerId: string): Promise<void> {
-    // Use Negentropy (set reconciliation) when peer supports it — efficient
-    // for reconnects where both sides have mostly the same data.
-    // Falls back to timestamp sync for peers without Negentropy support.
-    if (this.peerSupportsCapability(peerId, NEGENTROPY_SYNC_CAPABILITY)) {
-      console.log(`[Sync] Using Negentropy sync with ${peerId.slice(0, 8)}`);
-      await this.requestNegentropyMessageSync(peerId);
-    } else {
-      console.log(`[Sync] Peer ${peerId.slice(0, 8)} lacks Negentropy, falling back to timestamp sync`);
-      await this.requestTimestampMessageSync(peerId);
+    const workspaceId = this.resolveTopologyWorkspaceId(peerId);
+    try {
+      // Use Negentropy (set reconciliation) when peer supports it — efficient
+      // for reconnects where both sides have mostly the same data.
+      // Falls back to timestamp sync for peers without Negentropy support.
+      if (this.peerSupportsCapability(peerId, NEGENTROPY_SYNC_CAPABILITY)) {
+        console.log(`[Sync] Using Negentropy sync with ${peerId.slice(0, 8)}`);
+        await this.requestNegentropyMessageSync(peerId);
+      } else {
+        console.log(`[Sync] Peer ${peerId.slice(0, 8)} lacks Negentropy, falling back to timestamp sync`);
+        await this.requestTimestampMessageSync(peerId);
+      }
+      this.peerLastSuccessfulSyncAt.set(peerId, Date.now());
+      this.recordTopologyPeerEvent({
+        level: 'info',
+        workspaceId,
+        peerId,
+        event: 'sync-succeeded',
+        lastSyncAt: this.peerLastSuccessfulSyncAt.get(peerId),
+      });
+    } catch (error) {
+      this.recordTopologyPeerEvent({
+        level: 'warn',
+        workspaceId,
+        peerId,
+        event: 'sync-failed',
+        reason: (error as Error)?.message ?? String(error),
+      });
+      throw error;
     }
   }
 

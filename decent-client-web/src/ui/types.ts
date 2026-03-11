@@ -3,6 +3,7 @@
  */
 
 import type { Contact, ContactURIData, DirectConversation } from 'decent-protocol';
+import type { TopologyDebugSnapshot } from '../app/topology/TopologyTelemetry';
 
 export interface ActivityItem {
   id: string;
@@ -107,6 +108,19 @@ export interface UICallbacks {
     level: 'offline' | 'warning' | 'info';
     message: string;
     detail?: string;
+    debug?: {
+      partialMeshEnabled: boolean;
+      desiredPeerCount?: number;
+      connectedDesiredPeerCount?: number;
+      connectingDesiredPeerCount?: number;
+      connectedPeerCount: number;
+      likelyPeerCount: number;
+      coldPeerCount: number;
+      desiredPeers?: string[];
+      anchors?: string[];
+      explorers?: string[];
+      topology?: TopologyDebugSnapshot;
+    };
   };
   retryReconnect?: () => Promise<{ attempted: number; reinitialized: boolean }>;
 }
