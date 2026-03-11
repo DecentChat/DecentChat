@@ -23,6 +23,7 @@ export { SyncProtocol } from './workspace/SyncProtocol';
 export { WorkspaceDeltaProtocol } from './workspace/WorkspaceDeltaProtocol';
 export { DirectoryProtocol } from './workspace/DirectoryProtocol';
 export { DirectoryShardPlanner } from './workspace/DirectoryShardPlanner';
+export { PresenceProtocol } from './workspace/PresenceProtocol';
 export { ServerDiscovery } from './workspace/ServerDiscovery';
 export type { ServerStats } from './workspace/ServerDiscovery';
 
@@ -123,6 +124,14 @@ export type {
   HistoryPageRef,
   PeerCapabilities,
 } from './workspace/types';
+export type {
+  PresenceMessage,
+  PresenceSubscribeMessage,
+  PresenceUnsubscribeMessage,
+  PresenceAggregateMessage,
+  PresencePageResponseMessage,
+  PresencePeerSlice,
+} from './workspace/PresenceProtocol';
 export type { SyncEvent, SendFn, OnEvent } from './workspace/SyncProtocol';
 export type { ChatMessage, PlaintextMessage, MessageMetadata, AssistantMessageMetadata } from './messages/types';
 export type {

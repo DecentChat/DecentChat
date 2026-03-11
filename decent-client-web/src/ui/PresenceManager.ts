@@ -1,6 +1,6 @@
 /**
  * PresenceManager — Typing indicators + online presence
- * 
+ *
  * Ephemeral state — NOT stored, NOT in hash chain.
  * Sent as lightweight P2P signals.
  */
@@ -12,11 +12,43 @@ export interface PresenceState {
   online: boolean;
 }
 
+export interface PresenceSubscriptionScope {
+  workspaceId: string;
+  channelId: string;
+}
+
+export interface PresenceAggregateSnapshot {
+  workspaceId: string;
+  onlineCount: number;
+  awayCount?: number;
+  activeChannelId?: string;
+  updatedAt: number;
+}
+
+export interface PresencePeerSlice {
+  peerId: string;
+  status: 'online' | 'away' | 'offline';
+  lastSeen?: number;
+  typing?: boolean;
+}
+
+export interface PresencePageResponse {
+  type: 'presence-page-response';
+  workspaceId: string;
+  channelId: string;
+  pageSize: number;
+  cursor?: string;
+  nextCursor?: string;
+  peers: PresencePeerSlice[];
+  updatedAt: number;
+}
+
 export interface TypingEvent {
   type: 'typing';
   channelId: string;
   peerId: string;
   typing: boolean;
+  workspaceId?: string;
 }
 
 export interface ReadReceipt {
@@ -33,15 +65,26 @@ const TYPING_TIMEOUT_MS = 3000;
 const TYPING_THROTTLE_MS = 2000;
 
 export class PresenceManager {
-  /** Who's currently typing in each channel: channelId → peerId → expiry */
+  /** Who's currently typing in each scope: (workspaceId+channelId) → peerId → expiry */
   private typingState = new Map<string, Map<string, number>>();
   /** Last time we sent a typing event */
   private lastTypingSent = 0;
   /** Read receipts: channelId → peerId → last read messageId */
   private readReceipts = new Map<string, Map<string, string>>();
+  /** Scoped presence subscriptions: (workspaceId+channelId) -> subscribed peerIds */
+  private subscriptionsByScope = new Map<string, Set<string>>();
+  /** Reverse index for fast unsubscribe/cleanup on disconnect */
+  private scopeByPeerId = new Map<string, string>();
+  /** Local currently-viewed subscription scope */
+  private activeScope: PresenceSubscriptionScope | null = null;
+  /** Latest aggregate snapshot per workspace */
+  private aggregatesByWorkspace = new Map<string, PresenceAggregateSnapshot>();
+  /** Sparse peer presence pages merged per workspace */
+  private peerPresenceByWorkspace = new Map<string, Map<string, PresenceState>>();
   /** Callbacks */
-  onTypingChanged?: (channelId: string, typingPeers: string[]) => void;
+  onTypingChanged?: (channelId: string, typingPeers: string[], workspaceId?: string) => void;
   onReadReceiptChanged?: (channelId: string, peerId: string, messageId: string) => void;
+  onAggregateChanged?: (workspaceId: string, aggregate: PresenceAggregateSnapshot) => void;
   /** Timer for cleanup */
   private cleanupInterval: any;
 
@@ -57,10 +100,11 @@ export class PresenceManager {
    * Handle incoming typing event from a peer
    */
   handleTypingEvent(event: TypingEvent): void {
-    if (!this.typingState.has(event.channelId)) {
-      this.typingState.set(event.channelId, new Map());
+    const scopeKey = this.buildScopeKey(event.channelId, event.workspaceId);
+    if (!this.typingState.has(scopeKey)) {
+      this.typingState.set(scopeKey, new Map());
     }
-    const channelTyping = this.typingState.get(event.channelId)!;
+    const channelTyping = this.typingState.get(scopeKey)!;
 
     if (event.typing) {
       channelTyping.set(event.peerId, Date.now() + TYPING_TIMEOUT_MS);
@@ -68,7 +112,7 @@ export class PresenceManager {
       channelTyping.delete(event.peerId);
     }
 
-    this.notifyTypingChanged(event.channelId);
+    this.notifyTypingChanged(event.channelId, event.workspaceId);
   }
 
   /**
@@ -83,20 +127,134 @@ export class PresenceManager {
   }
 
   /**
+   * Keep track of the local active subscription scope and return transition actions.
+   */
+  setActiveScope(
+    workspaceId: string | null,
+    channelId: string | null,
+  ): { subscribe?: PresenceSubscriptionScope; unsubscribe?: PresenceSubscriptionScope } {
+    const next = workspaceId && channelId ? { workspaceId, channelId } : null;
+    const prev = this.activeScope;
+
+    if (prev && next && prev.workspaceId === next.workspaceId && prev.channelId === next.channelId) {
+      return {};
+    }
+
+    this.activeScope = next;
+    return {
+      unsubscribe: prev || undefined,
+      subscribe: next || undefined,
+    };
+  }
+
+  getActiveScope(): PresenceSubscriptionScope | null {
+    return this.activeScope ? { ...this.activeScope } : null;
+  }
+
+  /**
+   * Track remote peer subscriptions for a specific scope.
+   */
+  trackPeerSubscription(peerId: string, workspaceId: string, channelId: string): boolean {
+    const scopeKey = this.buildScopeKey(channelId, workspaceId);
+    const existingScope = this.scopeByPeerId.get(peerId);
+
+    if (existingScope === scopeKey) return false;
+
+    if (existingScope) {
+      const previousSet = this.subscriptionsByScope.get(existingScope);
+      previousSet?.delete(peerId);
+      if (previousSet && previousSet.size === 0) {
+        this.subscriptionsByScope.delete(existingScope);
+      }
+    }
+
+    let scopeSet = this.subscriptionsByScope.get(scopeKey);
+    if (!scopeSet) {
+      scopeSet = new Set<string>();
+      this.subscriptionsByScope.set(scopeKey, scopeSet);
+    }
+
+    scopeSet.add(peerId);
+    this.scopeByPeerId.set(peerId, scopeKey);
+    return true;
+  }
+
+  untrackPeerSubscription(peerId: string, workspaceId?: string, channelId?: string): boolean {
+    const expectedScope = workspaceId && channelId ? this.buildScopeKey(channelId, workspaceId) : undefined;
+    const currentScope = this.scopeByPeerId.get(peerId);
+    if (!currentScope) return false;
+    if (expectedScope && expectedScope !== currentScope) return false;
+
+    const scopeSet = this.subscriptionsByScope.get(currentScope);
+    scopeSet?.delete(peerId);
+    if (scopeSet && scopeSet.size === 0) {
+      this.subscriptionsByScope.delete(currentScope);
+    }
+
+    this.scopeByPeerId.delete(peerId);
+    return true;
+  }
+
+  clearPeerSubscriptions(peerId: string): void {
+    this.untrackPeerSubscription(peerId);
+  }
+
+  getSubscribedPeers(workspaceId: string, channelId: string): string[] {
+    return Array.from(this.subscriptionsByScope.get(this.buildScopeKey(channelId, workspaceId)) ?? []);
+  }
+
+  /**
+   * Merge newest aggregate snapshot for a workspace.
+   * Older snapshots are ignored.
+   */
+  handlePresenceAggregate(aggregate: PresenceAggregateSnapshot): void {
+    const current = this.aggregatesByWorkspace.get(aggregate.workspaceId);
+    if (current && current.updatedAt > aggregate.updatedAt) return;
+
+    this.aggregatesByWorkspace.set(aggregate.workspaceId, { ...aggregate });
+    this.onAggregateChanged?.(aggregate.workspaceId, { ...aggregate });
+  }
+
+  getPresenceAggregate(workspaceId: string): PresenceAggregateSnapshot | undefined {
+    const aggregate = this.aggregatesByWorkspace.get(workspaceId);
+    return aggregate ? { ...aggregate } : undefined;
+  }
+
+  handlePresencePageResponse(page: PresencePageResponse): void {
+    if (!this.peerPresenceByWorkspace.has(page.workspaceId)) {
+      this.peerPresenceByWorkspace.set(page.workspaceId, new Map());
+    }
+
+    const workspacePresence = this.peerPresenceByWorkspace.get(page.workspaceId)!;
+    for (const peer of page.peers ?? []) {
+      workspacePresence.set(peer.peerId, {
+        peerId: peer.peerId,
+        typing: peer.typing === true,
+        online: peer.status === 'online',
+        lastSeen: peer.lastSeen ?? page.updatedAt,
+      });
+    }
+  }
+
+  getPeerPresence(workspaceId: string, peerId: string): PresenceState | undefined {
+    return this.peerPresenceByWorkspace.get(workspaceId)?.get(peerId);
+  }
+
+  /**
    * Create a typing event to send to peers (throttled)
    */
-  createTypingEvent(channelId: string, peerId: string): TypingEvent | null {
+  createTypingEvent(channelId: string, peerId: string, workspaceId?: string): TypingEvent | null {
     const now = Date.now();
     if (now - this.lastTypingSent < TYPING_THROTTLE_MS) return null;
     this.lastTypingSent = now;
-    return { type: 'typing', channelId, peerId, typing: true };
+    return { type: 'typing', channelId, peerId, typing: true, workspaceId };
   }
 
   /**
    * Create a stop-typing event
    */
-  createStopTypingEvent(channelId: string, peerId: string): TypingEvent {
-    return { type: 'typing', channelId, peerId, typing: false };
+  createStopTypingEvent(channelId: string, peerId: string, workspaceId?: string): TypingEvent {
+    return { type: 'typing', channelId, peerId, typing: false, workspaceId };
   }
 
   /**
@@ -107,10 +265,10 @@ export class PresenceManager {
   }
 
   /**
-   * Get currently typing peers for a channel
+   * Get currently typing peers for a channel scope
    */
-  getTypingPeers(channelId: string): string[] {
-    const channelTyping = this.typingState.get(channelId);
+  getTypingPeers(channelId: string, workspaceId?: string): string[] {
+    const channelTyping = this.typingState.get(this.buildScopeKey(channelId, workspaceId));
     if (!channelTyping) return [];
 
     const now = Date.now();
@@ -142,7 +300,7 @@ export class PresenceManager {
 
   private cleanupExpired(): void {
     const now = Date.now();
-    for (const [channelId, channelTyping] of this.typingState) {
+    for (const [scopeKey, channelTyping] of this.typingState) {
       let changed = false;
       for (const [peerId, expiry] of channelTyping) {
         if (expiry <= now) {
@@ -150,12 +308,31 @@ export class PresenceManager {
           changed = true;
         }
       }
-      if (changed) this.notifyTypingChanged(channelId);
+
+      if (!changed) continue;
+      const scope = this.parseScopeKey(scopeKey);
+      this.notifyTypingChanged(scope.channelId, scope.workspaceId);
     }
   }
 
-  private notifyTypingChanged(channelId: string): void {
-    const peers = this.getTypingPeers(channelId);
-    this.onTypingChanged?.(channelId, peers);
+  private notifyTypingChanged(channelId: string, workspaceId?: string): void {
+    const peers = this.getTypingPeers(channelId, workspaceId);
+    this.onTypingChanged?.(channelId, peers, workspaceId);
+  }
+
+  private buildScopeKey(channelId: string, workspaceId?: string): string {
+    return `${workspaceId || ''}::${channelId}`;
+  }
+
+  private parseScopeKey(scopeKey: string): { workspaceId?: string; channelId: string } {
+    const separatorIndex = scopeKey.indexOf('::');
+    if (separatorIndex < 0) return { channelId: scopeKey };
+
+    const workspaceId = scopeKey.slice(0, separatorIndex);
+    const channelId = scopeKey.slice(separatorIndex + 2);
+    return {
+      workspaceId: workspaceId || undefined,
+      channelId,
+    };
   }
 }

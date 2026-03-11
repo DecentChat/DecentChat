@@ -34,6 +34,7 @@ import {
   MemoryContactStore,
   MemoryDirectConversationStore,
   ServerDiscovery,
+  PresenceProtocol,
 } from 'decent-protocol';
 import type { InviteData } from 'decent-protocol';
 import { MessageCipher } from 'decent-protocol';
@@ -44,6 +45,11 @@ import type {
   NegentropyQuery, NegentropyResponse,
   Contact, DirectConversation,
   WorkspaceShell, MemberDirectoryPage, MemberSummary,
+  PresenceAggregateMessage,
+  PresencePageResponseMessage,
+  PresencePeerSlice,
+  PresenceSubscribeMessage,
+  PresenceUnsubscribeMessage,
 } from 'decent-protocol';
 import {
   buildWorkspaceInviteLists,
@@ -211,6 +217,7 @@ export class ChatController {
   private lastRoleChangeTimestamp = new Map<string, number>(); // peerId → last accepted timestamp
   readonly messageGuard: MessageGuard;
   readonly presence: PresenceManager;
+  private readonly presenceProtocol: PresenceProtocol;
   readonly reactions: ReactionManager;
   readonly notifications: NotificationManager;
   readonly contactStore: MemoryContactStore;
@@ -357,6 +364,7 @@ export class ChatController {
     this.clockSync = new ClockSync();
     this.messageGuard = new MessageGuard();
     this.presence = new PresenceManager();
+    this.presenceProtocol = new PresenceProtocol();
     this.reactions = new ReactionManager();
     this.reactions.onReactionsChanged = (messageId) => {
       this.syncReactionNodes(messageId);
@@ -582,6 +590,7 @@ export class ChatController {
       });
       this.messageProtocol?.clearSharedSecret(peerId);
       this.peerCapabilities.delete(peerId);
+      this.presence.clearPeerSubscriptions(peerId);
       this.authenticatedPeers.delete(peerId);
       this.pendingAuthChallenges.delete(peerId);
       for (const [requestId, pending] of this.pendingNegentropyQueries) {
@@ -933,6 +942,9 @@ export class ChatController {
             }, { label: 'name-announce' });
           }
 
+          // Let the newly-ready peer know which presence slice we're currently viewing.
+          this.sendCurrentPresenceSubscription(peerId);
+
           // Start clock sync with new peer
           const syncReq = this.clockSync.startSync(peerId);
           this.sendControlWithRetry(peerId, syncReq, { label: 'time-sync-request' });
@@ -1032,9 +1044,32 @@ export class ChatController {
           return;
         }
 
+        // --- Presence slice subscriptions / aggregates ---
+        if (data?.type === 'presence-subscribe') {
+          this.handlePresenceSubscribe(peerId, data as PresenceSubscribeMessage);
+          return;
+        }
+        if (data?.type === 'presence-unsubscribe') {
+          this.handlePresenceUnsubscribe(peerId, data as PresenceUnsubscribeMessage);
+          return;
+        }
+        if (data?.type === 'presence-aggregate') {
+          this.handlePresenceAggregate(peerId, data as PresenceAggregateMessage);
+          return;
+        }
+        if (data?.type === 'presence-page-response') {
+          this.handlePresencePageResponse(peerId, data as PresencePageResponseMessage);
+          return;
+        }
+
         // --- Typing indicators ---
         if (data?.type === 'typing') {
-          this.presence.handleTypingEvent(data as TypingEvent);
+          const typing = data as TypingEvent;
+          const wsId = typing.workspaceId || this.findWorkspaceByChannelId(typing.channelId)?.id;
+          if (wsId && !this.workspaceManager.isMemberAllowedInChannel(wsId, typing.channelId, peerId)) {
+            return;
+          }
+          this.presence.handleTypingEvent(typing);
           return;
         }
 
@@ -5530,6 +5565,137 @@ export class ChatController {
   // Typing / Presence
   // =========================================================================
 
+  private getPresenceProtocol(): PresenceProtocol {
+    if (!(this as any).presenceProtocol) {
+      (this as any).presenceProtocol = new PresenceProtocol();
+    }
+    return (this as any).presenceProtocol as PresenceProtocol;
+  }
+
+  private sendCurrentPresenceSubscription(peerId: string): void {
+    if (!this.state.readyPeers.has(peerId)) return;
+    if (!this.presence || typeof (this.presence as any).getActiveScope !== 'function') return;
+
+    const scope = this.presence.getActiveScope();
+    if (!scope) return;
+    if (!this.isWorkspaceMember(peerId, scope.workspaceId)) return;
+    if (!this.workspaceManager.isMemberAllowedInChannel(scope.workspaceId, scope.channelId, peerId)) return;
+
+    const subscribe = this.getPresenceProtocol().buildSubscribeMessage(scope.workspaceId, scope.channelId);
+    this.sendControlWithRetry(peerId, subscribe, { label: 'presence-subscribe' });
+  }
+
+  private syncPresenceScopeForActiveChannel(channelId: string | null): void {
+    if (!this.presence || typeof (this.presence as any).setActiveScope !== 'function') return;
+
+    const transition = this.presence.setActiveScope(this.state.activeWorkspaceId, channelId);
+
+    if (transition.unsubscribe) {
+      this.fanoutPresenceScopeTransition('unsubscribe', transition.unsubscribe);
+    }
+    if (transition.subscribe) {
+      this.fanoutPresenceScopeTransition('subscribe', transition.subscribe);
+    }
+  }
+
+  private fanoutPresenceScopeTransition(
+    kind: 'subscribe' | 'unsubscribe',
+    scope: { workspaceId: string; channelId: string },
+  ): void {
+    const recipients = this
+      .getWorkspaceRecipientPeerIds(scope.workspaceId)
+      .filter((peerId) => this.state.readyPeers.has(peerId));
+
+    if (recipients.length === 0) return;
+
+    const presenceProtocol = this.getPresenceProtocol();
+    const message = kind === 'subscribe'
+      ? presenceProtocol.buildSubscribeMessage(scope.workspaceId, scope.channelId)
+      : presenceProtocol.buildUnsubscribeMessage(scope.workspaceId, scope.channelId);
+
+    for (const peerId of recipients) {
+      if (!this.isWorkspaceMember(peerId, scope.workspaceId)) continue;
+      this.sendControlWithRetry(peerId, message, { label: `presence-${kind}` });
+    }
+  }
+
+  private handlePresenceSubscribe(peerId: string, msg: PresenceSubscribeMessage): void {
+    if (!msg.workspaceId || !msg.channelId) return;
+    if (!this.isWorkspaceMember(peerId, msg.workspaceId)) return;
+    if (!this.workspaceManager.isMemberAllowedInChannel(msg.workspaceId, msg.channelId, peerId)) return;
+
+    this.presence.trackPeerSubscription(peerId, msg.workspaceId, msg.channelId);
+    this.sendPresenceSnapshot(peerId, msg.workspaceId, msg.channelId, msg.pageCursor, msg.pageSize);
+  }
+
+  private handlePresenceUnsubscribe(peerId: string, msg: PresenceUnsubscribeMessage): void {
+    if (!msg.workspaceId || !msg.channelId) {
+      this.presence.clearPeerSubscriptions(peerId);
+      return;
+    }
+
+    this.presence.untrackPeerSubscription(peerId, msg.workspaceId, msg.channelId);
+  }
+
+  private handlePresenceAggregate(peerId: string, msg: PresenceAggregateMessage): void {
+    if (!msg.workspaceId || !msg.aggregate) return;
+    if (!this.isWorkspaceMember(peerId, msg.workspaceId)) return;
+    if (msg.aggregate.workspaceId !== msg.workspaceId) return;
+
+    this.presence.handlePresenceAggregate(msg.aggregate);
+  }
+
+  private handlePresencePageResponse(peerId: string, msg: PresencePageResponseMessage): void {
+    if (!msg.workspaceId || !msg.channelId) return;
+    if (!this.isWorkspaceMember(peerId, msg.workspaceId)) return;
+
+    this.presence.handlePresencePageResponse({
+      type: 'presence-page-response',
+      workspaceId: msg.workspaceId,
+      channelId: msg.channelId,
+      cursor: msg.cursor,
+      nextCursor: msg.nextCursor,
+      pageSize: msg.pageSize,
+      peers: msg.peers,
+      updatedAt: msg.updatedAt,
+    });
+  }
+
+  private sendPresenceSnapshot(
+    peerId: string,
+    workspaceId: string,
+    channelId: string,
+    cursor?: string,
+    pageSize?: number,
+  ): void {
+    const subscribedPeers = this.presence
+      .getSubscribedPeers(workspaceId, channelId)
+      .filter((id) => this.state.readyPeers.has(id));
+
+    const peerIds = new Set<string>([this.state.myPeerId, peerId, ...subscribedPeers]);
+    const slices: PresencePeerSlice[] = [...peerIds].map((id) => ({
+      peerId: id,
+      status: id === this.state.myPeerId || this.state.readyPeers.has(id) ? 'online' : 'offline',
+      lastSeen: Date.now(),
+      typing: false,
+    }));
+
+    const presenceProtocol = this.getPresenceProtocol();
+    const aggregate = presenceProtocol.buildAggregateMessage(workspaceId, {
+      onlineCount: slices.filter((item) => item.status === 'online').length,
+      activeChannelId: channelId,
+    });
+
+    this.sendControlWithRetry(peerId, aggregate, { label: 'presence-aggregate' });
+    this.presence.handlePresenceAggregate(aggregate.aggregate);
+
+    const page = presenceProtocol.buildPageResponseMessage(workspaceId, channelId, slices, {
+      cursor,
+      pageSize,
+    });
+    this.sendControlWithRetry(peerId, page, { label: 'presence-page-response' });
+  }
+
   private getInviteAdditionalPeerIds(workspaceId: string, maxPeers = 3, now = Date.now()): string[] {
     const ws = this.workspaceManager.getWorkspace(workspaceId);
     if (!ws || maxPeers <= 0) return [];
@@ -5688,20 +5854,54 @@ export class ChatController {
     }
   }
 
-  /** Broadcast typing indicator to workspace peers */
+  /** Broadcast typing indicator to subscribed peers for the active channel */
   broadcastTyping(): void {
-    if (!this.state.activeChannelId) return;
-    const event = this.presence.createTypingEvent(this.state.activeChannelId, this.state.myPeerId);
+    const channelId = this.state.activeChannelId;
+    if (!channelId) return;
+    if (!this.presence || typeof (this.presence as any).createTypingEvent !== 'function') return;
+
+    const event = this.presence.createTypingEvent(channelId, this.state.myPeerId, this.state.activeWorkspaceId ?? undefined);
     if (!event) return; // Throttled
 
-    this.broadcastToWorkspacePeers(event);
+    for (const peerId of this.getScopedTypingRecipientPeerIds()) {
+      try { this.transport.send(peerId, event); } catch {}
+    }
   }
 
   /** Broadcast stop typing */
   broadcastStopTyping(): void {
-    if (!this.state.activeChannelId) return;
-    const event = this.presence.createStopTypingEvent(this.state.activeChannelId, this.state.myPeerId);
-    this.broadcastToWorkspacePeers(event);
+    const channelId = this.state.activeChannelId;
+    if (!channelId) return;
+    if (!this.presence || typeof (this.presence as any).createStopTypingEvent !== 'function') return;
+
+    const event = this.presence.createStopTypingEvent(channelId, this.state.myPeerId, this.state.activeWorkspaceId ?? undefined);
+    for (const peerId of this.getScopedTypingRecipientPeerIds()) {
+      try { this.transport.send(peerId, event); } catch {}
+    }
+  }
+
+  private getScopedTypingRecipientPeerIds(): string[] {
+    const workspaceId = this.state.activeWorkspaceId;
+    const channelId = this.state.activeChannelId;
+    const readyWorkspacePeers = this
+      .getWorkspaceRecipientPeerIds(workspaceId ?? undefined)
+      .filter((peerId) => this.state.readyPeers.has(peerId));
+
+    if (!workspaceId || !channelId) {
+      return readyWorkspacePeers;
+    }
+
+    if (!this.presence || typeof (this.presence as any).getSubscribedPeers !== 'function') {
+      return readyWorkspacePeers;
+    }
+
+    const subscribed = this.presence
+      .getSubscribedPeers(workspaceId, channelId)
+      .filter((peerId) => readyWorkspacePeers.includes(peerId));
+
+    // Backward compatibility: if no peer opted into scoped subscriptions,
+    // keep legacy workspace fanout.
+    return subscribed.length > 0 ? subscribed : readyWorkspacePeers;
   }
 
   // =========================================================================
@@ -6765,9 +6965,9 @@ export class ChatController {
     }
   }
 
-  private getWorkspaceRecipientPeerIds(): string[] {
-    const ws = this.state.activeWorkspaceId
-      ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId)
+  private getWorkspaceRecipientPeerIds(workspaceId = this.state.activeWorkspaceId ?? undefined): string[] {
+    const ws = workspaceId
+      ? this.workspaceManager.getWorkspace(workspaceId)
       : null;
 
     if (!ws) {
@@ -6951,6 +7151,7 @@ export class ChatController {
 
   async onWorkspaceActivated(workspaceId: string): Promise<void> {
     await this.prefetchWorkspaceMemberDirectory(workspaceId);
+    this.syncPresenceScopeForActiveChannel(this.state.activeChannelId);
   }
 
   /** Returns display name for the given workspace, falling back to global alias or peer ID slice */
@@ -7015,6 +7216,8 @@ export class ChatController {
   }
 
   async onChannelViewed(channelId: string): Promise<void> {
+    this.syncPresenceScopeForActiveChannel(channelId);
+
     if (!this.channelViewInFlight) this.channelViewInFlight = new Map<string, Promise<void>>();
     if (!this.pendingReadReceiptKeys) this.pendingReadReceiptKeys = new Set<string>();
 
