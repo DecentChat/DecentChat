@@ -91,6 +91,8 @@
 
   let members = $state(initialMembers);
   let loadingMore = $state(false);
+  let visibleCount = $derived(members.length);
+  let totalMemberCount = $derived(totalCount ?? visibleCount);
 
   function handleOverlayClick(e: MouseEvent) {
     if (e.target === e.currentTarget) onClose();
@@ -130,8 +132,6 @@
     <h2>Channel Members · #{channelName}</h2>
     <form onsubmit={(e) => { e.preventDefault(); onClose(); }}>
       <div class="form-group" style="margin-bottom: 8px;">
-        {@const visibleCount = members.length}
-        {@const totalMemberCount = totalCount ?? visibleCount}
         <div id="members-count-label" style="font-size: 13px; color: var(--text-muted);">
           {#if hasMore && totalMemberCount > visibleCount}
             Showing {visibleCount} of {totalMemberCount} members
