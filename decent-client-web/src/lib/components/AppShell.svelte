@@ -291,6 +291,7 @@
                 onStopTyping={cb.onStopTyping}
                 getCommandSuggestions={cb.getCommandSuggestions}
                 getMembers={cb.getMembers}
+                searchMembers={cb.searchMembers}
               />
             {/if}
           </div>
@@ -319,6 +320,7 @@
               onClose={cb.onCloseThread}
               onSend={cb.onThreadSend}
               getMembers={cb.getMembers}
+              searchMembers={cb.searchMembers}
               resolveAttachmentImageUrl={cb.resolveAttachmentImageUrl}
             />
           {/if}

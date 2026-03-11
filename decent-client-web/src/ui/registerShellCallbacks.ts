@@ -2,8 +2,9 @@ import type { WorkspaceManager, MessageStore } from 'decent-protocol';
 import type { AppState } from '../main';
 import { shellData, setShellCallbacks } from '../lib/stores/shell.svelte';
 import { huddleUI } from '../lib/stores/ui.svelte';
-import type { UICallbacks } from './types';
+import type { UICallbacks, WorkspaceMemberDirectoryView } from './types';
 import { MessageSearch } from './MessageSearch';
+import { filterMentionMembers, searchMentionMembers } from './mentionSearch';
 import type { ModalActions } from './uiModalActions';
 
 interface RegisterShellCallbacksContext {
@@ -72,6 +73,72 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     closeLightbox,
     syncShellHuddle,
   } = ctx;
+
+  const MENTION_SUGGESTION_LIMIT = 8;
+  const mentionDirectoryLoadInFlight = new Map<string, Promise<void>>();
+
+  const mapDirectoryMentionMembers = (directoryMembers: WorkspaceMemberDirectoryView['members']) =>
+    directoryMembers
+      .filter((member) => !member.isYou)
+      .map((member) => ({
+        peerId: member.peerId,
+        name: member.alias || getPeerAlias(member.peerId),
+      }));
+
+  const getMentionMembersForWorkspace = (workspaceId: string): Array<{ peerId: string; name: string }> => {
+    const ws = workspaceManager.getWorkspace(workspaceId);
+    if (!ws) return [];
+
+    const directoryView = callbacks.getWorkspaceMemberDirectory?.(workspaceId);
+    if (directoryView && directoryView.members.length > 0) {
+      return mapDirectoryMentionMembers(directoryView.members);
+    }
+
+    return ws.members.filter((member: any) => member.peerId !== state.myPeerId).map((member: any) => ({
+      peerId: member.peerId,
+      name: getPeerAlias(member.peerId),
+    }));
+  };
+
+  const waitForDirectoryAdvance = async (workspaceId: string, loadedCountBaseline: number): Promise<void> => {
+    const timeoutMs = 1200;
+    const pollMs = 120;
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const snapshot = callbacks.getWorkspaceMemberDirectory?.(workspaceId);
+      if (!snapshot) return;
+      if (snapshot.loadedCount > loadedCountBaseline || !snapshot.hasMore) return;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  };
+
+  const loadNextDirectoryPageForMentions = async (workspaceId: string): Promise<void> => {
+    const existing = mentionDirectoryLoadInFlight.get(workspaceId);
+    if (existing) {
+      await existing;
+      return;
+    }
+
+    const initialSnapshot = callbacks.getWorkspaceMemberDirectory?.(workspaceId);
+    if (!initialSnapshot?.hasMore) return;
+
+    const run = (async () => {
+      if (callbacks.loadMoreWorkspaceMemberDirectory) {
+        await callbacks.loadMoreWorkspaceMemberDirectory(workspaceId);
+      } else {
+        await callbacks.prefetchWorkspaceMemberDirectory?.(workspaceId);
+      }
+      await waitForDirectoryAdvance(workspaceId, initialSnapshot.loadedCount);
+    })();
+
+    mentionDirectoryLoadInFlight.set(workspaceId, run);
+    try {
+      await run;
+    } finally {
+      mentionDirectoryLoadInFlight.delete(workspaceId);
+    }
+  };
 
   const copyInviteForActiveWorkspace = async (successMessage: string): Promise<void> => {
     if (!state.activeWorkspaceId) return;
@@ -201,22 +268,29 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
       ? (prefix: string) => callbacks.getCommandSuggestions!(prefix)
       : undefined,
     getMembers: () => {
-      const ws = state.activeWorkspaceId ? workspaceManager.getWorkspace(state.activeWorkspaceId) : null;
-      if (!ws) return [];
+      if (!state.activeWorkspaceId) return [];
+      return getMentionMembersForWorkspace(state.activeWorkspaceId);
+    },
+    searchMembers: async (query, limit = MENTION_SUGGESTION_LIMIT) => {
+      if (!state.activeWorkspaceId) return [];
+      const workspaceId = state.activeWorkspaceId;
 
-      const directoryView = callbacks.getWorkspaceMemberDirectory?.(ws.id);
-      if (directoryView && directoryView.members.length > 0) {
-        return directoryView.members
-          .filter((member) => !member.isYou)
-          .map((member) => ({
-            peerId: member.peerId,
-            name: member.alias || getPeerAlias(member.peerId),
-          }));
+      const initialDirectoryView = callbacks.getWorkspaceMemberDirectory?.(workspaceId);
+      const usingDirectory = Boolean(initialDirectoryView && (initialDirectoryView.members.length > 0 || initialDirectoryView.hasMore));
+      if (!usingDirectory) {
+        return filterMentionMembers(getMentionMembersForWorkspace(workspaceId), query, limit);
       }
 
-      return ws.members.filter((m: any) => m.peerId !== state.myPeerId).map((m: any) => ({
-        peerId: m.peerId, name: getPeerAlias(m.peerId),
-      }));
+      return searchMentionMembers(
+        {
+          getMembers: () => getMentionMembersForWorkspace(workspaceId),
+          getLoadedCount: () => callbacks.getWorkspaceMemberDirectory?.(workspaceId)?.loadedCount ?? 0,
+          hasMore: () => Boolean(callbacks.getWorkspaceMemberDirectory?.(workspaceId)?.hasMore),
+          loadNextPage: () => loadNextDirectoryPageForMentions(workspaceId),
+        },
+        query,
+        limit,
+      );
     },
 
     // Thread

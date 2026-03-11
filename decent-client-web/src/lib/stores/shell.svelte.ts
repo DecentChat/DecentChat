@@ -217,6 +217,7 @@ export interface ShellCallbacks {
   onStopTyping: () => void;
   getCommandSuggestions?: (prefix: string) => any[];
   getMembers: () => Array<{ peerId: string; name: string }>;
+  searchMembers?: (query: string, limit?: number) => Promise<Array<{ peerId: string; name: string }>>;
 
   // Thread
   onCloseThread: () => void;

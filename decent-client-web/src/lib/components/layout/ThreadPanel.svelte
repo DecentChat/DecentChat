@@ -29,6 +29,7 @@
     onClose: () => void;
     onSend: (text: string, files: File[]) => Promise<void>;
     getMembers?: () => Array<{ peerId: string; name: string }>;
+    searchMembers?: (query: string, limit?: number) => Promise<Array<{ peerId: string; name: string }>>;
     resolveAttachmentImageUrl?: (attachmentId: string) => Promise<string | null>;
   }
 
@@ -53,6 +54,7 @@
     onClose,
     onSend,
     getMembers,
+    searchMembers,
     resolveAttachmentImageUrl,
   }: Props = $props();
 
@@ -163,6 +165,7 @@
       target="thread"
       {onSend}
       {getMembers}
+      {searchMembers}
     />
   </div>
 </div>

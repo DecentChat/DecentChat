@@ -32,6 +32,7 @@
     onStopTyping?: () => void;
     getCommandSuggestions?: (prefix: string) => CommandSuggestion[];
     getMembers?: () => MemberSuggestion[];
+    searchMembers?: (query: string, limit?: number) => Promise<MemberSuggestion[]>;
   }
 
   let {
@@ -42,6 +43,7 @@
     onStopTyping,
     getCommandSuggestions,
     getMembers,
+    searchMembers,
   }: Props = $props();
 
   // ── State ──
@@ -57,6 +59,7 @@
   let mentionSuggestions: MemberSuggestion[] = $state([]);
   let mentionSelectedIdx = $state(0);
   let mentionAtStart = $state(0); // cursor position of the @ char
+  let mentionLookupToken = 0;
 
   let typingTimeout: ReturnType<typeof setTimeout> | undefined;
   let limitWarned = $state(false);
@@ -165,7 +168,9 @@
   }
 
   // ── Mention autocomplete ──
-  function updateMentionAutocomplete() {
+  async function updateMentionAutocomplete() {
+    const lookupToken = ++mentionLookupToken;
+
     if (!getMembers) {
       mentionSuggestions = [];
       return;
@@ -183,12 +188,25 @@
     const query = mentionMatch[2].toLowerCase();
     mentionAtStart = mentionMatch.index! + mentionMatch[1].length;
 
-    const members = getMembers()
+    // Show locally available suggestions immediately.
+    const localMembers = getMembers()
       .filter(m => !query || m.name.toLowerCase().includes(query) || m.peerId.toLowerCase().startsWith(query))
       .slice(0, 8);
 
-    mentionSuggestions = members;
+    mentionSuggestions = localMembers;
     mentionSelectedIdx = 0;
+
+    // Then try an async paged-directory backed search when available.
+    if (!searchMembers) return;
+
+    try {
+      const searchedMembers = await searchMembers(query, 8);
+      if (lookupToken !== mentionLookupToken) return;
+      mentionSuggestions = searchedMembers.slice(0, 8);
+      mentionSelectedIdx = 0;
+    } catch {
+      // Keep local suggestions if paged directory search fails.
+    }
   }
 
   function insertMention(name: string) {
@@ -280,7 +298,7 @@
     }
     autoResize();
     updateCommandAutocomplete();
-    updateMentionAutocomplete();
+    void updateMentionAutocomplete();
 
     // Typing indicator
     onTyping?.();
