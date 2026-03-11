@@ -10,6 +10,21 @@ test.describe('DecentChat E2E', () => {
     await waitForApp(page);
   });
 
+  async function seedMessagesViaController(page: any, count: number) {
+    await page.evaluate(async (total: number) => {
+      const ctrl = (window as any).__ctrl;
+      if (!ctrl || typeof ctrl.sendMessage !== 'function') {
+        throw new Error('window.__ctrl.sendMessage not available');
+      }
+
+      for (let i = 0; i < total; i += 1) {
+        const marker = i === 35 ? 'phase2_search_target_old' : `phase2_msg_${String(i).padStart(3, '0')}`;
+        const payload = `${marker} ${'lorem ipsum '.repeat((i % 7) * 8)}`.trim();
+        await ctrl.sendMessage(payload);
+      }
+    }, count);
+  }
+
   // ─── Loading & Welcome ─────────────────────────────────────────────────
 
   test('shows welcome screen on fresh load', async ({ page }) => {
@@ -251,6 +266,46 @@ test.describe('DecentChat E2E', () => {
 
     // Message should get highlight class
     await expect(page.locator('.message.highlight')).toBeVisible({ timeout: 3000 });
+  });
+
+  test('virtualized channel list stays bounded and search jump still works on large history', async ({ page }) => {
+    test.slow();
+
+    await createWorkspace(page);
+    await seedMessagesViaController(page, 260);
+
+    await expect(page.locator('.message-content', { hasText: 'phase2_msg_259' })).toBeVisible({ timeout: 15000 });
+
+    const bottomMetrics = await page.evaluate(() => {
+      const list = document.getElementById('messages-list');
+      const rendered = list?.querySelectorAll('.message[data-message-id]').length ?? 0;
+      const topSpacer = list?.querySelector('.message-spacer') as HTMLElement | null;
+      return {
+        rendered,
+        topSpacerHeight: topSpacer ? topSpacer.offsetHeight : 0,
+      };
+    });
+
+    expect(bottomMetrics.rendered).toBeLessThan(290);
+    expect(bottomMetrics.topSpacerHeight).toBeGreaterThan(0);
+
+    await expect(page.locator('.message-content', { hasText: 'phase2_msg_259' })).toBeVisible({ timeout: 7000 });
+
+    await page.click('#search-btn');
+    await page.locator('#search-input').fill('phase2_search_target_old');
+    const targetResult = page.locator('.search-result', { hasText: 'phase2_search_target_old' }).first();
+    await expect(targetResult).toBeVisible({ timeout: 7000 });
+    await targetResult.click();
+
+    const jumpedMessage = page.locator('.message .message-content', { hasText: 'phase2_search_target_old' }).first();
+    await expect(jumpedMessage).toBeVisible({ timeout: 7000 });
+    await expect(jumpedMessage).toBeInViewport();
+
+    const jumpMetrics = await page.evaluate(() => {
+      const list = document.getElementById('messages-list');
+      return list?.querySelectorAll('.message[data-message-id]').length ?? 0;
+    });
+    expect(jumpMetrics).toBeLessThan(290);
   });
 
   // ─── Settings ─────────────────────────────────────────────────────────

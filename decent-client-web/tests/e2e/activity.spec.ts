@@ -104,6 +104,86 @@ test('activity shows thread reply and opens thread on click', async ({ page }) =
   await expect(page.locator('#thread-messages')).toContainText(replyText);
 });
 
+test('activity jump finds older replies inside a virtualized thread', async ({ page }) => {
+  test.setTimeout(60000);
+
+  await resetAndOpenApp(page);
+  await createWorkspace(page, 'Virtualized Activity WS', 'Alice');
+
+  const rootMsgId = await sendRootMessage(page, `Virtualized root ${Date.now()}`);
+
+  const seeded = await page.evaluate(async ({ rootMsgId }) => {
+    const state = (window as any).__state;
+    const ctrl = (window as any).__ctrl;
+    const wsId = state.activeWorkspaceId;
+    const channelId = state.activeChannelId;
+
+    const bobId = 'bob-virtual-thread-peer';
+    const ws = ctrl.workspaceManager.getWorkspace(wsId);
+    if (!ws.members.some((m: any) => m.peerId === bobId)) {
+      ws.members.push({ peerId: bobId, alias: 'Bob', publicKey: '', joinedAt: Date.now(), role: 'member' });
+    }
+
+    const targetIndex = 24;
+    const totalReplies = 220;
+    let targetId = '';
+    let targetText = '';
+
+    for (let i = 0; i < totalReplies; i += 1) {
+      const text = i === targetIndex
+        ? `phase3_thread_target_${Date.now()}`
+        : `phase3_thread_filler_${String(i).padStart(3, '0')}`;
+      const reply = await ctrl.messageStore.createMessage(channelId, bobId, text, 'text', rootMsgId);
+      ctrl.messageStore.forceAdd(reply);
+      if (i === targetIndex) {
+        targetId = reply.id;
+        targetText = text;
+      }
+    }
+
+    const id = `thread:${wsId}:${channelId}:${rootMsgId}`;
+    (ctrl as any).activityItems = [{
+      id,
+      type: 'thread-reply',
+      workspaceId: wsId,
+      channelId,
+      threadId: rootMsgId,
+      messageId: targetId,
+      actorId: bobId,
+      snippet: targetText,
+      timestamp: Date.now(),
+      read: false,
+    }];
+
+    ctrl.ui.renderMessages();
+    ctrl.ui.updateWorkspaceRail();
+
+    return { targetText, totalReplies };
+  }, { rootMsgId });
+
+  await expect(page.locator('#activity-btn .activity-badge')).toHaveText('1');
+  await page.click('#activity-btn');
+  await page.waitForSelector('.activity-row', { timeout: 10000 });
+  await expect(page.locator('.activity-panel-list')).toContainText(seeded.targetText);
+
+  await page.locator('.activity-row').first().click();
+  await page.waitForSelector('#thread-panel:not(.hidden)', { timeout: 10000 });
+
+  const targetMessage = page.locator('#thread-messages .message .message-content', { hasText: seeded.targetText }).first();
+  await expect(targetMessage).toBeVisible({ timeout: 10000 });
+  await expect(targetMessage).toBeInViewport();
+
+  const metrics = await page.evaluate(() => {
+    const container = document.getElementById('thread-messages');
+    const rendered = container?.querySelectorAll('.message[data-message-id]').length ?? 0;
+    const spacers = container?.querySelectorAll('.message-spacer').length ?? 0;
+    return { rendered, spacers };
+  });
+
+  expect(metrics.rendered).toBeLessThan(seeded.totalReplies + 1);
+  expect(metrics.spacers).toBeGreaterThan(0);
+});
+
 test('replaying the same thread reply does not resurrect a read activity badge', async ({ page }) => {
   test.setTimeout(45000);
 

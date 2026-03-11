@@ -262,6 +262,8 @@
                 myDisplayName={shellData.messages.myDisplayName}
                 activeThreadRootId={shellData.thread.open ? shellData.thread.threadId : null}
                 frequentReactions={shellData.messages.frequentReactions}
+                scrollTargetMessageId={shellData.messages.scrollTargetMessageId}
+                scrollTargetNonce={shellData.messages.scrollTargetNonce}
                 getThread={cb.getThread}
                 getPeerAlias={cb.getPeerAlias}
                 isBot={cb.isBot}
@@ -305,6 +307,8 @@
               myPeerId={shellData.thread.myPeerId}
               myDisplayName={shellData.thread.myDisplayName}
               frequentReactions={shellData.thread.frequentReactions}
+              scrollTargetMessageId={shellData.thread.scrollTargetMessageId}
+              scrollTargetNonce={shellData.thread.scrollTargetNonce}
               getThread={cb.getThread}
               getPeerAlias={cb.getPeerAlias}
               isBot={cb.isBot}

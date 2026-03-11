@@ -102,6 +102,8 @@ export const shellData = $state({
     myPeerId: '',
     myDisplayName: '',
     frequentReactions: [] as string[],
+    scrollTargetMessageId: null as string | null,
+    scrollTargetNonce: 0,
   },
 
   // Compose area
@@ -119,6 +121,8 @@ export const shellData = $state({
     myPeerId: '',
     myDisplayName: '',
     frequentReactions: [] as string[],
+    scrollTargetMessageId: null as string | null,
+    scrollTargetNonce: 0,
   },
 
   // Huddle bar

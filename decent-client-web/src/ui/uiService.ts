@@ -219,6 +219,8 @@ export function createUIService(
   function openThread(messageId: string): void {
     state.activeThreadId = messageId;
     state.threadOpen = true;
+    shellData.thread.scrollTargetMessageId = null;
+    shellData.thread.scrollTargetNonce = 0;
     syncShellThread();
     persistViewState();
 
@@ -235,6 +237,8 @@ export function createUIService(
   function closeThread(): void {
     state.activeThreadId = null;
     state.threadOpen = false;
+    shellData.thread.scrollTargetMessageId = null;
+    shellData.thread.scrollTargetNonce = 0;
     persistViewState();
     syncShellThread();
     clampMainMessagesScroll();

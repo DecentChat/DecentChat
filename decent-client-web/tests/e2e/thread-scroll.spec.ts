@@ -29,31 +29,39 @@ test.describe('Thread Panel Scroll', () => {
     await waitForApp(page);
   });
 
-  test('long threads keep a scrollable reply list', async ({ page }) => {
+  test('long threads stay virtualized, bounded, and scrollable', async ({ page }) => {
+    test.slow();
+
     await createWorkspace(page, 'Thread Scroll Test', 'Tester');
 
     const rootText = `thread-root-${Date.now()}`;
     await sendMessage(page, rootText);
 
     const threadId = await openThreadFor(page, rootText);
+    const replyCount = 180;
 
     await page.evaluate(async ({ id, count }) => {
       const ctrl = (window as any).__ctrl;
       for (let i = 1; i <= count; i += 1) {
-        await ctrl.sendMessage(`Thread reply ${i.toString().padStart(2, '0')}`, id);
+        await ctrl.sendMessage(`Thread reply ${i.toString().padStart(3, '0')}`, id);
       }
-    }, { id: threadId, count: 40 });
+    }, { id: threadId, count: replyCount });
 
     await page.waitForFunction(
-      (expectedCount: number) => document.querySelectorAll('#thread-messages .message').length >= expectedCount,
-      41,
-      { timeout: 15000 }
+      ({ id, expectedCount }) => {
+        const ctrl = (window as any).__ctrl;
+        const state = (window as any).__state;
+        const replies = ctrl?.messageStore?.getThread?.(state?.activeChannelId, id);
+        return Array.isArray(replies) && replies.length >= expectedCount;
+      },
+      { id: threadId, expectedCount: replyCount },
+      { timeout: 30000 }
     );
 
     const metrics = await page.evaluate(() => {
       const container = document.getElementById('thread-messages') as HTMLElement | null;
-      const messages = container?.querySelectorAll('.message');
-      const lastMessage = messages?.[messages.length - 1] as HTMLElement | undefined;
+      const renderedMessages = container?.querySelectorAll('.message[data-message-id]') ?? [];
+      const lastMessage = renderedMessages[renderedMessages.length - 1] as HTMLElement | undefined;
 
       if (!container || !lastMessage) {
         return {
@@ -62,6 +70,8 @@ test.describe('Thread Panel Scroll', () => {
           clientHeight: 0,
           scrollTopAfterScroll: 0,
           overflowY: '',
+          renderedCount: 0,
+          topSpacerHeight: 0,
           lastMessageVisibleAfterScroll: false,
         };
       }
@@ -70,6 +80,7 @@ test.describe('Thread Panel Scroll', () => {
 
       const containerRect = container.getBoundingClientRect();
       const lastRect = lastMessage.getBoundingClientRect();
+      const spacers = Array.from(container.querySelectorAll('.message-spacer')) as HTMLElement[];
 
       return {
         exists: true,
@@ -77,6 +88,8 @@ test.describe('Thread Panel Scroll', () => {
         clientHeight: container.clientHeight,
         scrollTopAfterScroll: container.scrollTop,
         overflowY: window.getComputedStyle(container).overflowY,
+        renderedCount: renderedMessages.length,
+        topSpacerHeight: spacers[0]?.offsetHeight ?? 0,
         lastMessageVisibleAfterScroll:
           lastRect.bottom <= containerRect.bottom + 1 &&
           lastRect.top >= containerRect.top - 1,
@@ -88,6 +101,8 @@ test.describe('Thread Panel Scroll', () => {
     expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
     expect(metrics.scrollTopAfterScroll).toBeGreaterThan(0);
     expect(metrics.lastMessageVisibleAfterScroll).toBe(true);
+    expect(metrics.renderedCount).toBeLessThan(replyCount + 1);
+    expect(metrics.topSpacerHeight).toBeGreaterThan(0);
   });
 
   test('opening an existing thread auto-scrolls to the latest reply', async ({ page }) => {

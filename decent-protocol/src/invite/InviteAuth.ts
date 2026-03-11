@@ -84,8 +84,10 @@ export async function verifyInviteSignature(
     const payload = InviteURI.getSignPayload(data);
     const encoded = new TextEncoder().encode(payload);
     const sigBytes = fromBase64url(data.signature);
+    // Normalize into a fresh ArrayBuffer-backed view for stricter TS/WebCrypto typings.
+    const sigBuffer = new Uint8Array(sigBytes).buffer;
 
-    return await crypto.subtle.verify(ECDSA_PARAMS, key, sigBytes, encoded);
+    return await crypto.subtle.verify(ECDSA_PARAMS, key, sigBuffer, encoded);
   } catch {
     return false;
   }

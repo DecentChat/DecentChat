@@ -91,12 +91,24 @@ export function createDomEffects(ctx: DomEffectsContext): DomEffects {
       const selector = `[data-message-id="${messageId}"]`;
       const container = containerId ? document.getElementById(containerId) : null;
       const msgEl = container?.querySelector(selector) ?? document.querySelector(selector);
-      if (!msgEl) return;
-      msgEl.classList.remove('highlight');
-      void (msgEl as HTMLElement).offsetWidth;
-      msgEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      msgEl.classList.add('highlight');
-      setTimeout(() => msgEl.classList.remove('highlight'), 2500);
+      if (msgEl) {
+        msgEl.classList.remove('highlight');
+        void (msgEl as HTMLElement).offsetWidth;
+        msgEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        msgEl.classList.add('highlight');
+        setTimeout(() => msgEl.classList.remove('highlight'), 2500);
+        return;
+      }
+
+      // Virtualization fallback: if message isn't currently in DOM,
+      // ask the relevant MessageList instance to shift its viewport window.
+      if (!containerId || containerId === 'messages-list') {
+        shellData.messages.scrollTargetMessageId = messageId;
+        shellData.messages.scrollTargetNonce += 1;
+      } else if (containerId === 'thread-messages') {
+        shellData.thread.scrollTargetMessageId = messageId;
+        shellData.thread.scrollTargetNonce += 1;
+      }
     });
   }
 

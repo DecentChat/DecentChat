@@ -16,6 +16,8 @@
     myPeerId: string;
     myDisplayName: string;
     frequentReactions: string[];
+    scrollTargetMessageId?: string | null;
+    scrollTargetNonce?: number;
     // Callbacks
     getThread: (channelId: string, messageId: string) => PlaintextMessage[];
     getPeerAlias: (peerId: string) => string;
@@ -39,6 +41,8 @@
     myPeerId,
     myDisplayName,
     frequentReactions,
+    scrollTargetMessageId = null,
+    scrollTargetNonce = 0,
     getThread,
     getPeerAlias,
     isBot,
@@ -140,6 +144,8 @@
         inThreadView={true}
         threadRoot={parentMessage}
         {frequentReactions}
+        {scrollTargetMessageId}
+        {scrollTargetNonce}
         {getThread}
         {getPeerAlias}
         {isBot}

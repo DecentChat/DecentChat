@@ -164,6 +164,8 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
       shellData.thread.channelId = state.activeChannelId;
       shellData.thread.parentMessage = null;
       shellData.thread.replies = [];
+      shellData.thread.scrollTargetMessageId = null;
+      shellData.thread.scrollTargetNonce = 0;
     } else {
       const allMsgs = messageStore.getMessages(state.activeChannelId);
       let parent = allMsgs.find((m: PlaintextMessage) => m.id === state.activeThreadId);

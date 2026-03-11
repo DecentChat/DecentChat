@@ -1,11 +1,23 @@
 <!--
-  MessageList.svelte — Message list with scroll management.
-  Replaces renderMessages() + the messages-list DOM manipulation in UIRenderer.
+  MessageList.svelte — Main + thread message list with adaptive virtualization.
+  Keeps full message data in store while bounding DOM rows.
 -->
 <script lang="ts">
   import type { PlaintextMessage } from 'decent-protocol';
   import MessageItem from './MessageItem.svelte';
-  import { peerColor } from '$lib/utils/peer';
+  import {
+    MAIN_VIRTUALIZATION,
+    THREAD_VIRTUALIZATION,
+    DEFAULT_MESSAGE_HEIGHT,
+    MIN_ESTIMATED_HEIGHT,
+    MAX_ESTIMATED_HEIGHT,
+    MESSAGE_VERTICAL_GAP_PX,
+    computeAdaptiveWindowSize,
+    computeSmoothedAverageHeight,
+    shouldKeepBottomAnchored,
+    shouldApplyTopSpacerCompensation,
+    type VirtualizationConfig,
+  } from './virtualizationHeuristics';
 
   interface Props {
     messages: PlaintextMessage[];
@@ -17,6 +29,8 @@
     threadRoot?: PlaintextMessage | null;
     activeThreadRootId?: string | null;
     frequentReactions: string[];
+    scrollTargetMessageId?: string | null;
+    scrollTargetNonce?: number;
     // Callbacks
     getThread: (channelId: string, messageId: string) => PlaintextMessage[];
     getPeerAlias: (peerId: string) => string;
@@ -39,6 +53,8 @@
     threadRoot = null,
     activeThreadRootId = null,
     frequentReactions,
+    scrollTargetMessageId = null,
+    scrollTargetNonce = 0,
     getThread,
     getPeerAlias,
     isBot,
@@ -50,20 +66,58 @@
     resolveAttachmentImageUrl,
   }: Props = $props();
 
-  // Auto-scroll: find the parent scroll container after mount
   let mounted = $state(false);
+  let isNearBottom = $state(true);
 
-  $effect(() => {
-    mounted = true;
-  });
+  // Virtualized window [windowStart, windowEnd)
+  let windowStart = $state(0);
+  let windowEnd = $state(0);
 
-  // After messages change, scroll the parent container:
-  // - Channel view: scroll to bottom (newest messages)
-  // - Thread view: scroll to bottom (latest reply)
-  // Only scrolls when message count actually changes (not on re-renders).
-  // Scroll to bottom on channel switch or new messages.
-  // Track message count + channel + thread root to catch thread switches.
-  let prevScrollKey = '';
+  // Spacer heights for offscreen continuity
+  let topSpacerHeight = $state(0);
+  let bottomSpacerHeight = $state(0);
+  let averageMessageHeight = $state(DEFAULT_MESSAGE_HEIGHT);
+  const measuredHeights = new Map<string, number>();
+
+  // Cached virtual-height index for fast spacer math + offset->index lookup.
+  let offsetsDirty = true;
+  let estimatedOffsets: number[] = [0];
+  const messageIndexById = new Map<string, number>();
+
+  let prevContextKey = '';
+  let prevMessageCount = 0;
+  let lastHandledScrollNonce = 0;
+
+  let scrollSyncRaf: number | null = null;
+  let spacerRefreshRaf: number | null = null;
+  let spacerRefreshPreserveScroll = false;
+  let rowResizeObserver: ResizeObserver | null = null;
+  let suppressScrollVirtualizationUntil = 0;
+  let keepBottomAnchoredUntil = 0;
+
+  const renderedMessages = $derived(messages.slice(windowStart, windowEnd));
+
+  const visibleStartIndex = $derived(windowStart);
+
+  function getVirtualizationConfig(): VirtualizationConfig {
+    return inThreadView ? THREAD_VIRTUALIZATION : MAIN_VIRTUALIZATION;
+  }
+
+  function getContainer(): HTMLElement | null {
+    return document.getElementById(inThreadView ? 'thread-messages' : 'messages-list');
+  }
+
+  function getVirtualAnchorOffset(container: HTMLElement): number {
+    const anchor = container.querySelector('.message-virtual-anchor') as HTMLElement | null;
+    if (!anchor) return 0;
+
+    const top = Number(anchor.offsetTop);
+    return Number.isFinite(top) ? Math.max(0, top) : 0;
+  }
+
+  function viewportOffsetFromContainerScroll(container: HTMLElement, scrollTop = container.scrollTop): number {
+    return Math.max(0, scrollTop - getVirtualAnchorOffset(container));
+  }
 
   function scrollToEnd(container: HTMLElement): void {
     container.style.scrollBehavior = 'auto';
@@ -71,52 +125,525 @@
     requestAnimationFrame(() => { container.style.scrollBehavior = ''; });
   }
 
-  $effect(() => {
-    if (!mounted) return;
-    const len = messages.length;
-    const chId = activeChannelId ?? '';
-    const threadKey = inThreadView ? (threadRoot?.id ?? '') : '';
-    const scope = inThreadView ? 'thread' : 'channel';
-    const scrollKey = `${scope}:${chId}:${threadKey}:${len}`;
-    if (scrollKey === prevScrollKey) return;
-    prevScrollKey = scrollKey;
+  function updateNearBottom(container: HTMLElement): void {
+    isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - getVirtualizationConfig().nearBottomPx;
+  }
+
+  function armBottomAnchor(durationMs = 800): void {
+    keepBottomAnchoredUntil = Math.max(keepBottomAnchoredUntil, performance.now() + durationMs);
+  }
+
+  function shouldAutoStickToBottomNow(nowMs = performance.now()): boolean {
+    return shouldKeepBottomAnchored({
+      isNearBottom,
+      pinnedUntilMs: keepBottomAnchoredUntil,
+      nowMs,
+    });
+  }
+
+  function clampEstimatedHeight(height: number): number {
+    return Math.max(MIN_ESTIMATED_HEIGHT, Math.min(MAX_ESTIMATED_HEIGHT, height));
+  }
+
+  function estimateMessageHeight(msg: PlaintextMessage): number {
+    return measuredHeights.get(msg.id) ?? averageMessageHeight;
+  }
+
+  function markOffsetsDirty(): void {
+    offsetsDirty = true;
+  }
+
+  function rebuildEstimatedOffsets(): void {
+    const total = messages.length;
+    estimatedOffsets = new Array(total + 1);
+    estimatedOffsets[0] = 0;
+    messageIndexById.clear();
+
+    for (let i = 0; i < total; i += 1) {
+      const msg = messages[i];
+      messageIndexById.set(msg.id, i);
+      estimatedOffsets[i + 1] = estimatedOffsets[i] + estimateMessageHeight(msg);
+    }
+
+    offsetsDirty = false;
+  }
+
+  function ensureOffsets(): void {
+    if (!offsetsDirty) return;
+    rebuildEstimatedOffsets();
+  }
+
+  function estimateRangeHeight(start: number, end: number): number {
+    if (start >= end) return 0;
+    ensureOffsets();
+    const safeStart = Math.max(0, Math.min(start, messages.length));
+    const safeEnd = Math.max(safeStart, Math.min(end, messages.length));
+    return estimatedOffsets[safeEnd] - estimatedOffsets[safeStart];
+  }
+
+  function findIndexForOffset(offset: number): number {
+    ensureOffsets();
+
+    const total = messages.length;
+    if (total <= 0) return 0;
+
+    const maxOffset = estimatedOffsets[total] ?? 0;
+    const target = Math.max(0, Math.min(offset, maxOffset));
+
+    let lo = 0;
+    let hi = total;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((estimatedOffsets[mid + 1] ?? maxOffset) <= target) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+
+    return Math.max(0, Math.min(lo, total - 1));
+  }
+
+  function getTargetWindowSize(container?: HTMLElement | null): number {
+    const config = getVirtualizationConfig();
+    if (!container) return config.initialWindowSize;
+
+    return computeAdaptiveWindowSize({
+      containerHeight: container.clientHeight,
+      averageRowHeight: averageMessageHeight,
+      config,
+    });
+  }
+
+  function currentWindowSize(container?: HTMLElement | null): number {
+    const config = getVirtualizationConfig();
+    const existing = windowEnd - windowStart;
+    const fallback = getTargetWindowSize(container);
+    return Math.max(config.minWindowSize, Math.min(config.maxWindowSize, existing > 0 ? existing : fallback));
+  }
+
+  function resetWindowToLatest(total: number, container?: HTMLElement | null): void {
+    const size = Math.min(total, currentWindowSize(container));
+    windowEnd = total;
+    windowStart = Math.max(0, total - size);
+  }
+
+  function clampWindow(total: number): void {
+    if (total <= 0) {
+      windowStart = 0;
+      windowEnd = 0;
+      return;
+    }
+
+    const config = getVirtualizationConfig();
+
+    if (windowEnd <= 0) windowEnd = total;
+    windowEnd = Math.max(0, Math.min(windowEnd, total));
+    windowStart = Math.max(0, Math.min(windowStart, windowEnd));
+
+    // Keep at least a minimal adaptive window once list has enough rows.
+    const size = windowEnd - windowStart;
+    const minSize = Math.min(total, Math.max(config.initialWindowSize, config.minWindowSize));
+    if (size < minSize) {
+      const missing = minSize - size;
+      windowStart = Math.max(0, windowStart - Math.ceil(missing / 2));
+      windowEnd = Math.min(total, windowEnd + Math.floor(missing / 2));
+      if (windowEnd - windowStart < minSize) {
+        if (windowStart === 0) {
+          windowEnd = Math.min(total, minSize);
+        } else if (windowEnd === total) {
+          windowStart = Math.max(0, total - minSize);
+        }
+      }
+    }
+  }
+
+  function updateSpacerHeights(options: { preserveScroll?: boolean } = {}): void {
+    const prevTop = topSpacerHeight;
+    const nextTop = Math.max(0, Math.round(estimateRangeHeight(0, windowStart)));
+    const nextBottom = Math.max(0, Math.round(estimateRangeHeight(windowEnd, messages.length)));
+
+    topSpacerHeight = nextTop;
+    bottomSpacerHeight = nextBottom;
+
+    if (!options.preserveScroll) return;
+
+    const topDelta = nextTop - prevTop;
+    if (!shouldApplyTopSpacerCompensation(topDelta)) return;
+
+    const container = getContainer();
+    if (!container || shouldAutoStickToBottomNow()) return;
 
     requestAnimationFrame(() => {
-      const containerId = inThreadView ? 'thread-messages' : 'messages-list';
-      const container = document.getElementById(containerId);
+      container.scrollTop = Math.max(0, container.scrollTop + topDelta);
+      updateNearBottom(container);
+    });
+  }
+
+  function scheduleSpacerRefresh(preserveScroll = false): void {
+    spacerRefreshPreserveScroll = spacerRefreshPreserveScroll || preserveScroll;
+    if (spacerRefreshRaf !== null) return;
+
+    spacerRefreshRaf = requestAnimationFrame(() => {
+      spacerRefreshRaf = null;
+      const preserve = spacerRefreshPreserveScroll;
+      spacerRefreshPreserveScroll = false;
+      updateSpacerHeights({ preserveScroll: preserve });
+    });
+  }
+
+  function computeWindowForViewport(container: HTMLElement): { start: number; end: number } {
+    const total = messages.length;
+    if (total <= 0) return { start: 0, end: 0 };
+
+    const config = getVirtualizationConfig();
+    if (total <= config.initialWindowSize) {
+      return { start: 0, end: total };
+    }
+
+    const viewportTop = viewportOffsetFromContainerScroll(container);
+    const viewportBottom = viewportTop + container.clientHeight;
+
+    let start = findIndexForOffset(Math.max(0, viewportTop - config.viewportOverscanPx));
+    let end = Math.min(total, findIndexForOffset(viewportBottom + config.viewportOverscanPx) + 1);
+
+    const targetSize = Math.min(total, getTargetWindowSize(container));
+    if (end - start < targetSize) {
+      const center = Math.floor((start + end) / 2);
+      start = Math.max(0, center - Math.floor(targetSize / 2));
+      end = Math.min(total, start + targetSize);
+      start = Math.max(0, end - targetSize);
+    }
+
+    if (end - start > config.maxWindowSize) {
+      const centerIndex = findIndexForOffset(viewportTop + (container.clientHeight / 2));
+      start = Math.max(0, centerIndex - Math.floor(config.maxWindowSize / 2));
+      end = Math.min(total, start + config.maxWindowSize);
+      start = Math.max(0, end - config.maxWindowSize);
+    }
+
+    return { start, end };
+  }
+
+  function applyWindowRange(start: number, end: number): boolean {
+    const total = messages.length;
+    const nextStart = Math.max(0, Math.min(start, total));
+    const nextEnd = Math.max(nextStart, Math.min(end, total));
+    const changed = nextStart !== windowStart || nextEnd !== windowEnd;
+
+    windowStart = nextStart;
+    windowEnd = nextEnd;
+
+    return changed;
+  }
+
+  function scheduleWindowSync(container: HTMLElement): void {
+    if (scrollSyncRaf !== null) return;
+
+    scrollSyncRaf = requestAnimationFrame(() => {
+      scrollSyncRaf = null;
+      const prevTopSpacer = topSpacerHeight;
+      const prevScrollTop = container.scrollTop;
+      const next = computeWindowForViewport(container);
+
+      if (applyWindowRange(next.start, next.end)) {
+        updateSpacerHeights();
+
+        const topDelta = topSpacerHeight - prevTopSpacer;
+        if (shouldApplyTopSpacerCompensation(topDelta)) {
+          container.scrollTop = Math.max(0, prevScrollTop + topDelta);
+          updateNearBottom(container);
+        }
+      }
+    });
+  }
+
+  function recordMeasuredHeights(nodes: Iterable<HTMLElement>): void {
+    let observedTotal = 0;
+    let observedCount = 0;
+    let changed = false;
+
+    for (const node of nodes) {
+      const id = node.dataset.messageId;
+      if (!id) continue;
+
+      const measured = clampEstimatedHeight(node.getBoundingClientRect().height + MESSAGE_VERTICAL_GAP_PX);
+      if (!Number.isFinite(measured) || measured <= 0) continue;
+
+      observedTotal += measured;
+      observedCount += 1;
+
+      const prev = measuredHeights.get(id);
+      if (!prev || Math.abs(prev - measured) > 1) {
+        measuredHeights.set(id, measured);
+        changed = true;
+      }
+    }
+
+    if (observedCount > 0) {
+      const observedAvg = observedTotal / observedCount;
+      const blended = computeSmoothedAverageHeight({
+        previousAverage: averageMessageHeight,
+        observedAverage: observedAvg,
+        minHeight: MIN_ESTIMATED_HEIGHT,
+        maxHeight: MAX_ESTIMATED_HEIGHT,
+        blendWeight: 0.2,
+        maxStep: 2.5,
+      });
+      if (Math.abs(blended - averageMessageHeight) > 0.25) {
+        averageMessageHeight = blended;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      markOffsetsDirty();
+
+      const container = getContainer();
+      if (container && shouldAutoStickToBottomNow()) {
+        requestAnimationFrame(() => {
+          scrollToEnd(container);
+          updateNearBottom(container);
+        });
+      } else {
+        scheduleSpacerRefresh(true);
+      }
+    }
+  }
+
+  function scrollAndHighlightMessage(messageId: string, attempt = 0): void {
+    requestAnimationFrame(() => {
+      const container = getContainer();
       if (!container) return;
 
-      scrollToEnd(container);
+      const msgEl = container.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
+      if (!msgEl) {
+        if (attempt < 8) scrollAndHighlightMessage(messageId, attempt + 1);
+        return;
+      }
+
+      msgEl.classList.remove('highlight');
+      void msgEl.offsetWidth;
+      msgEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      msgEl.classList.add('highlight');
+      setTimeout(() => msgEl.classList.remove('highlight'), 2500);
     });
+  }
+
+  function resetHeightEstimates(): void {
+    measuredHeights.clear();
+    averageMessageHeight = DEFAULT_MESSAGE_HEIGHT;
+    topSpacerHeight = 0;
+    bottomSpacerHeight = 0;
+    estimatedOffsets = [0];
+    messageIndexById.clear();
+    offsetsDirty = true;
+  }
+
+  $effect(() => {
+    mounted = true;
+
+    return () => {
+      if (scrollSyncRaf !== null) cancelAnimationFrame(scrollSyncRaf);
+      if (spacerRefreshRaf !== null) cancelAnimationFrame(spacerRefreshRaf);
+      if (rowResizeObserver) {
+        rowResizeObserver.disconnect();
+        rowResizeObserver = null;
+      }
+    };
   });
 
-  // ResizeObserver: re-scroll when the container resizes (e.g., thread panel
-  // opens/closes causing width change → text reflows → height changes).
-  // Also handles image loads that change content height.
+  // Keep viewport behavior aligned with context/message changes.
   $effect(() => {
-    if (!mounted || inThreadView) return;
-    const container = document.getElementById('messages-list');
+    if (!mounted) return;
+
+    const total = messages.length;
+    const contextKey = inThreadView
+      ? `thread:${activeChannelId ?? ''}:${threadRoot?.id ?? ''}`
+      : `channel:${activeChannelId ?? ''}`;
+
+    const contextChanged = contextKey !== prevContextKey;
+    prevContextKey = contextKey;
+
+    if (contextChanged) {
+      prevMessageCount = total;
+      resetHeightEstimates();
+      resetWindowToLatest(total, getContainer());
+      markOffsetsDirty();
+      updateSpacerHeights();
+
+      requestAnimationFrame(() => {
+        const container = getContainer();
+        if (!container) return;
+        scrollToEnd(container);
+        updateNearBottom(container);
+        armBottomAnchor(900);
+      });
+      return;
+    }
+
+    if (total !== prevMessageCount) {
+      markOffsetsDirty();
+    }
+
+    clampWindow(total);
+
+    if (total > prevMessageCount) {
+      const wasShowingLatest = windowEnd >= prevMessageCount;
+      if (wasShowingLatest && shouldAutoStickToBottomNow()) {
+        const container = getContainer();
+        resetWindowToLatest(total, container);
+        requestAnimationFrame(() => {
+          if (!container) return;
+          scrollToEnd(container);
+          updateNearBottom(container);
+          armBottomAnchor(900);
+        });
+      }
+    } else if (total < prevMessageCount) {
+      clampWindow(total);
+    }
+
+    prevMessageCount = total;
+    updateSpacerHeights();
+  });
+
+  // Track rendered row heights continuously (handles async image/markdown growth).
+  $effect(() => {
+    if (!mounted) return;
+
+    // Depend on current rendered slice and message count.
+    windowStart;
+    windowEnd;
+    renderedMessages;
+    messages.length;
+
+    const container = getContainer();
     if (!container) return;
 
-    let wasAtBottom = true;
+    if (rowResizeObserver) {
+      rowResizeObserver.disconnect();
+      rowResizeObserver = null;
+    }
+
+    const nodes = Array.from(container.querySelectorAll<HTMLElement>('.message[data-message-id]'));
+    recordMeasuredHeights(nodes);
+
+    rowResizeObserver = new ResizeObserver((entries) => {
+      const changedNodes: HTMLElement[] = [];
+      for (const entry of entries) {
+        if (entry.target instanceof HTMLElement && entry.target.dataset.messageId) {
+          changedNodes.push(entry.target);
+        }
+      }
+      if (changedNodes.length > 0) {
+        recordMeasuredHeights(changedNodes);
+      }
+    });
+
+    for (const node of nodes) {
+      rowResizeObserver.observe(node);
+    }
+
+    return () => {
+      if (rowResizeObserver) {
+        rowResizeObserver.disconnect();
+        rowResizeObserver = null;
+      }
+    };
+  });
+
+  // Search/activity jump requests: ensure target enters current window.
+  $effect(() => {
+    const nonce = scrollTargetNonce ?? 0;
+    const messageId = scrollTargetMessageId ?? null;
+    if (!messageId || nonce <= 0 || nonce === lastHandledScrollNonce) return;
+
+    ensureOffsets();
+    let targetIndex = messageIndexById.get(messageId);
+    if (targetIndex === undefined) {
+      const fallback = messages.findIndex((m) => m.id === messageId);
+      if (fallback === -1) {
+        if (threadRoot?.id === messageId) {
+          lastHandledScrollNonce = nonce;
+          scrollAndHighlightMessage(messageId);
+        }
+        return;
+      }
+      targetIndex = fallback;
+    }
+
+    lastHandledScrollNonce = nonce;
+
+    if (scrollSyncRaf !== null) {
+      cancelAnimationFrame(scrollSyncRaf);
+      scrollSyncRaf = null;
+    }
+
+    const config = getVirtualizationConfig();
+    const targetWindowSize = Math.min(
+      messages.length,
+      Math.max(currentWindowSize(getContainer()), config.searchWindowSize)
+    );
+    const targetStart = Math.max(
+      0,
+      Math.min(targetIndex - Math.floor(targetWindowSize / 2), Math.max(0, messages.length - targetWindowSize))
+    );
+
+    applyWindowRange(targetStart, targetStart + targetWindowSize);
+    updateSpacerHeights();
+
+    const container = getContainer();
+    if (container) {
+      const anchorOffset = getVirtualAnchorOffset(container);
+      const estimatedTargetTop = anchorOffset + Math.max(0, estimateRangeHeight(0, targetIndex) - (container.clientHeight / 2));
+      suppressScrollVirtualizationUntil = performance.now() + 1200;
+      container.scrollTop = estimatedTargetTop;
+      updateNearBottom(container);
+    }
+
+    scrollAndHighlightMessage(messageId);
+  });
+
+  // Scroll-driven adaptive window sync.
+  $effect(() => {
+    if (!mounted) return;
+
+    const container = getContainer();
+    if (!container) return;
+
+    updateNearBottom(container);
+
+    const onScroll = () => {
+      updateNearBottom(container);
+      if (!isNearBottom) keepBottomAnchoredUntil = 0;
+      if (performance.now() < suppressScrollVirtualizationUntil) return;
+      scheduleWindowSync(container);
+    };
+
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => container.removeEventListener('scroll', onScroll);
+  });
+
+  // Keep bottom anchoring on resize only when user is already near bottom.
+  $effect(() => {
+    if (!mounted) return;
+
+    const container = getContainer();
+    if (!container) return;
+
     const ro = new ResizeObserver(() => {
-      // Only auto-scroll if user was already near the bottom
-      if (wasAtBottom) {
+      if (shouldAutoStickToBottomNow()) {
         scrollToEnd(container);
+        updateNearBottom(container);
+        armBottomAnchor(500);
+      } else {
+        scheduleWindowSync(container);
       }
     });
     ro.observe(container);
 
-    // Track if user is near bottom (within 50px) on scroll
-    const onScroll = () => {
-      wasAtBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 50;
-    };
-    container.addEventListener('scroll', onScroll);
-
-    return () => {
-      ro.disconnect();
-      container.removeEventListener('scroll', onScroll);
-    };
+    return () => ro.disconnect();
   });
 
   function getSenderName(msg: PlaintextMessage): string {
@@ -189,7 +716,14 @@
       />
       <div class="thread-root-separator"><span>Thread</span></div>
     {/if}
-    {#each messages as msg, i (msg.id)}
+
+    <div class="message-virtual-anchor" aria-hidden="true"></div>
+
+    {#if topSpacerHeight > 0}
+      <div class="message-spacer" style={`height:${topSpacerHeight}px;`} aria-hidden="true"></div>
+    {/if}
+
+    {#each renderedMessages as msg, i (msg.id)}
       <MessageItem
         id={msg.id}
         senderId={msg.senderId}
@@ -200,7 +734,7 @@
         isMine={msg.senderId === myPeerId}
         isBot={isBot(msg.senderId)}
         modelLabel={getModelLabel(msg)}
-        isGrouped={isGrouped(msg, i, messages)}
+        isGrouped={isGrouped(msg, i + visibleStartIndex, messages)}
         {inThreadView}
         isActiveThreadRoot={!inThreadView && !!activeThreadRootId && msg.id === activeThreadRootId}
         attachments={(msg as any).attachments}
@@ -219,5 +753,24 @@
         {resolveAttachmentImageUrl}
       />
     {/each}
+
+    {#if bottomSpacerHeight > 0}
+      <div class="message-spacer" style={`height:${bottomSpacerHeight}px;`} aria-hidden="true"></div>
+    {/if}
   {/if}
 </div>
+
+<style>
+  .message-virtual-anchor {
+    height: 0;
+    margin: 0;
+    padding: 0;
+    pointer-events: none;
+  }
+
+  .message-spacer {
+    flex: 0 0 auto;
+    width: 100%;
+    pointer-events: none;
+  }
+</style>
