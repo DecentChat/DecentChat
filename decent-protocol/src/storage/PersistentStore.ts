@@ -6,6 +6,21 @@
  */
 
 import { AtRestEncryption } from './AtRestEncryption';
+import type {
+  ChannelAccessPolicy,
+  DirectoryShardRef,
+  HistoryPageRef,
+  MemberDirectoryPage,
+  PresenceAggregate,
+  WorkspaceShell,
+} from '../workspace/types';
+import {
+  PUBLIC_WORKSPACE_STORES,
+  makeChannelPolicyKey,
+  makeDirectoryShardKey,
+  makeHistoryPageKey,
+  makeMemberDirectoryPageKey,
+} from './schema/PublicWorkspaceStores';
 
 export interface PersistentStoreConfig {
   dbName?: string;
@@ -21,7 +36,7 @@ export class PersistentStore {
 
   constructor(config: PersistentStoreConfig = {}) {
     this.dbName = config.dbName || 'decent-protocol';
-    this.version = config.version || 3;
+    this.version = config.version || 4;
   }
 
   async init(): Promise<void> {
@@ -79,6 +94,31 @@ export class PersistentStore {
           const dcStore = db.createObjectStore('directConversations', { keyPath: 'id' });
           dcStore.createIndex('contactPeerId', 'contactPeerId', { unique: true });
         }
+
+        // Public/adaptive workspace normalized stores
+        if (!db.objectStoreNames.contains(PUBLIC_WORKSPACE_STORES.workspaceShells)) {
+          db.createObjectStore(PUBLIC_WORKSPACE_STORES.workspaceShells, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(PUBLIC_WORKSPACE_STORES.memberDirectoryPages)) {
+          const store = db.createObjectStore(PUBLIC_WORKSPACE_STORES.memberDirectoryPages, { keyPath: 'key' });
+          store.createIndex('workspaceId', 'workspaceId', { unique: false });
+        }
+        if (!db.objectStoreNames.contains(PUBLIC_WORKSPACE_STORES.directoryShardRefs)) {
+          const store = db.createObjectStore(PUBLIC_WORKSPACE_STORES.directoryShardRefs, { keyPath: 'key' });
+          store.createIndex('workspaceId', 'workspaceId', { unique: false });
+        }
+        if (!db.objectStoreNames.contains(PUBLIC_WORKSPACE_STORES.channelPolicies)) {
+          const store = db.createObjectStore(PUBLIC_WORKSPACE_STORES.channelPolicies, { keyPath: 'key' });
+          store.createIndex('workspaceId', 'workspaceId', { unique: false });
+        }
+        if (!db.objectStoreNames.contains(PUBLIC_WORKSPACE_STORES.presenceAggregates)) {
+          db.createObjectStore(PUBLIC_WORKSPACE_STORES.presenceAggregates, { keyPath: 'workspaceId' });
+        }
+        if (!db.objectStoreNames.contains(PUBLIC_WORKSPACE_STORES.historyPages)) {
+          const store = db.createObjectStore(PUBLIC_WORKSPACE_STORES.historyPages, { keyPath: 'key' });
+          store.createIndex('workspaceId', 'workspaceId', { unique: false });
+          store.createIndex('channelId', 'channelId', { unique: false });
+        }
       };
 
       request.onsuccess = (event) => {
@@ -106,6 +146,78 @@ export class PersistentStore {
 
   async deleteWorkspace(id: string): Promise<void> {
     await this.delete('workspaces', id);
+  }
+
+  // === Public Workspace Normalized Stores ===
+
+  async saveWorkspaceShell(shell: WorkspaceShell): Promise<void> {
+    await this.put(PUBLIC_WORKSPACE_STORES.workspaceShells, shell);
+  }
+
+  async getWorkspaceShell(id: string): Promise<WorkspaceShell | undefined> {
+    return this.get(PUBLIC_WORKSPACE_STORES.workspaceShells, id);
+  }
+
+  async saveMemberDirectoryPage(page: MemberDirectoryPage): Promise<void> {
+    await this.put(PUBLIC_WORKSPACE_STORES.memberDirectoryPages, {
+      ...page,
+      key: makeMemberDirectoryPageKey(page.workspaceId, page.cursor),
+    });
+  }
+
+  async getMemberDirectoryPage(workspaceId: string, cursor?: string): Promise<MemberDirectoryPage | undefined> {
+    const result = await this.get(PUBLIC_WORKSPACE_STORES.memberDirectoryPages, makeMemberDirectoryPageKey(workspaceId, cursor));
+    if (!result) return undefined;
+    const { key, ...page } = result;
+    return page as MemberDirectoryPage;
+  }
+
+  async saveDirectoryShardRef(ref: DirectoryShardRef): Promise<void> {
+    await this.put(PUBLIC_WORKSPACE_STORES.directoryShardRefs, {
+      ...ref,
+      key: makeDirectoryShardKey(ref.workspaceId, ref.shardId),
+    });
+  }
+
+  async getDirectoryShardRefs(workspaceId: string): Promise<DirectoryShardRef[]> {
+    const records = await this.getAllByIndex(PUBLIC_WORKSPACE_STORES.directoryShardRefs, 'workspaceId', workspaceId);
+    return records.map(({ key, ...ref }) => ref as DirectoryShardRef);
+  }
+
+  async saveChannelPolicy(workspaceId: string, channelId: string, policy: ChannelAccessPolicy): Promise<void> {
+    await this.put(PUBLIC_WORKSPACE_STORES.channelPolicies, {
+      key: makeChannelPolicyKey(workspaceId, channelId),
+      workspaceId,
+      channelId,
+      policy,
+    });
+  }
+
+  async getChannelPolicy(workspaceId: string, channelId: string): Promise<ChannelAccessPolicy | undefined> {
+    const result = await this.get(PUBLIC_WORKSPACE_STORES.channelPolicies, makeChannelPolicyKey(workspaceId, channelId));
+    return result?.policy as ChannelAccessPolicy | undefined;
+  }
+
+  async savePresenceAggregate(aggregate: PresenceAggregate): Promise<void> {
+    await this.put(PUBLIC_WORKSPACE_STORES.presenceAggregates, aggregate);
+  }
+
+  async getPresenceAggregate(workspaceId: string): Promise<PresenceAggregate | undefined> {
+    return this.get(PUBLIC_WORKSPACE_STORES.presenceAggregates, workspaceId);
+  }
+
+  async saveHistoryPageRef(ref: HistoryPageRef): Promise<void> {
+    await this.put(PUBLIC_WORKSPACE_STORES.historyPages, {
+      ...ref,
+      key: makeHistoryPageKey(ref.workspaceId, ref.channelId, ref.pageId),
+    });
+  }
+
+  async getHistoryPageRef(workspaceId: string, channelId: string, pageId: string): Promise<HistoryPageRef | undefined> {
+    const result = await this.get(PUBLIC_WORKSPACE_STORES.historyPages, makeHistoryPageKey(workspaceId, channelId, pageId));
+    if (!result) return undefined;
+    const { key, ...ref } = result;
+    return ref as HistoryPageRef;
   }
 
   // === Messages ===
@@ -422,7 +534,23 @@ export class PersistentStore {
 
   async clearAll(): Promise<void> {
     const db = this.getDB();
-    const allStores = ['workspaces', 'messages', 'identity', 'peers', 'outbox', 'settings', 'ratchetStates', 'contacts', 'directConversations'];
+    const allStores = [
+      'workspaces',
+      'messages',
+      'identity',
+      'peers',
+      'outbox',
+      'settings',
+      'ratchetStates',
+      'contacts',
+      'directConversations',
+      PUBLIC_WORKSPACE_STORES.workspaceShells,
+      PUBLIC_WORKSPACE_STORES.memberDirectoryPages,
+      PUBLIC_WORKSPACE_STORES.directoryShardRefs,
+      PUBLIC_WORKSPACE_STORES.channelPolicies,
+      PUBLIC_WORKSPACE_STORES.presenceAggregates,
+      PUBLIC_WORKSPACE_STORES.historyPages,
+    ];
     const storeNames = allStores.filter(s => db.objectStoreNames.contains(s));
     const tx = db.transaction(storeNames, 'readwrite');
     for (const name of storeNames) {
@@ -468,6 +596,15 @@ export class PersistentStore {
     return new Promise((resolve, reject) => {
       const tx = this.getDB().transaction(storeName, 'readonly');
       const request = tx.objectStore(storeName).getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  private async getAllByIndex(storeName: string, indexName: string, key: any): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      const tx = this.getDB().transaction(storeName, 'readonly');
+      const request = tx.objectStore(storeName).index(indexName).getAll(key);
       request.onsuccess = () => resolve(request.result || []);
       request.onerror = () => reject(request.error);
     });

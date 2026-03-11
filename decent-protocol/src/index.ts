@@ -20,6 +20,7 @@ export { Negentropy } from './crdt/Negentropy';
 // ─── Workspace ──────────────────────────────────────────────────────────────
 export { WorkspaceManager } from './workspace/WorkspaceManager';
 export { SyncProtocol } from './workspace/SyncProtocol';
+export { WorkspaceDeltaProtocol } from './workspace/WorkspaceDeltaProtocol';
 export { ServerDiscovery } from './workspace/ServerDiscovery';
 export type { ServerStats } from './workspace/ServerDiscovery';
 
@@ -108,6 +109,8 @@ export type {
   WorkspaceInvite,
   WorkspacePermissions,
   SyncMessage,
+  WorkspaceDelta,
+  WorkspaceDeltaOp,
   PEXServer,
   WorkspaceShell,
   MemberSummary,

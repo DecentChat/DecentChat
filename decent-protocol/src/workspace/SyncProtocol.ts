@@ -7,6 +7,7 @@
  */
 
 import type { Workspace, WorkspaceMember, Channel, SyncMessage } from './types';
+import { WorkspaceDeltaProtocol } from './WorkspaceDeltaProtocol';
 import type { PlaintextMessage } from '../messages/types';
 import { WorkspaceManager } from './WorkspaceManager';
 import { MessageStore } from '../messages/MessageStore';
@@ -36,6 +37,7 @@ export class SyncProtocol {
   private onEvent: OnEvent;
   private myPeerId: string;
   private serverDiscovery?: ServerDiscovery; // DEP-002: Optional PEX support
+  private workspaceDelta: WorkspaceDeltaProtocol;
 
   constructor(
     workspaceManager: WorkspaceManager,
@@ -51,6 +53,7 @@ export class SyncProtocol {
     this.onEvent = onEvent;
     this.myPeerId = myPeerId;
     this.serverDiscovery = serverDiscovery;
+    this.workspaceDelta = new WorkspaceDeltaProtocol(this.workspaceManager);
   }
 
   /**
@@ -90,6 +93,17 @@ export class SyncProtocol {
         break;
       case 'sync-response':
         await this.handleSyncResponse(msg);
+        break;
+      case 'workspace-shell-request':
+        this.handleWorkspaceShellRequest(fromPeerId, msg);
+        break;
+      case 'workspace-shell-response':
+        this.handleWorkspaceShellResponse(msg);
+        break;
+      case 'workspace-delta':
+        this.handleWorkspaceDelta(fromPeerId, msg);
+        break;
+      case 'workspace-delta-ack':
         break;
       case 'peer-exchange':
         this.handlePeerExchange(msg);
@@ -166,6 +180,11 @@ export class SyncProtocol {
    */
   requestSync(targetPeerId: string, workspaceId: string): void {
     const msg: SyncMessage = { type: 'sync-request', workspaceId };
+    this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
+  }
+
+  requestWorkspaceShell(targetPeerId: string, workspaceId: string): void {
+    const msg: SyncMessage = { type: 'workspace-shell-request', workspaceId };
     this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
   }
 
@@ -253,6 +272,38 @@ export class SyncProtocol {
       workspace: msg.workspace,
       messageHistory: msg.messageHistory,
     });
+  }
+
+  private handleWorkspaceShellRequest(fromPeerId: string, msg: Extract<SyncMessage, { type: 'workspace-shell-request' }>): void {
+    const shell = this.workspaceDelta.buildWorkspaceShell(msg.workspaceId);
+    const workspace = this.workspaceManager.getWorkspace(msg.workspaceId);
+    if (!shell || !workspace) return;
+
+    const response: SyncMessage = {
+      type: 'workspace-shell-response',
+      shell,
+      inviteCode: workspace.inviteCode,
+    };
+    this.sendFn(fromPeerId, { type: 'workspace-sync', sync: response });
+  }
+
+  private handleWorkspaceShellResponse(msg: Extract<SyncMessage, { type: 'workspace-shell-response' }>): void {
+    this.workspaceDelta.applyWorkspaceShell(this.workspaceManager, msg.shell, msg.inviteCode);
+    this.onEvent({ type: 'sync-complete', workspaceId: msg.shell.id });
+  }
+
+  private handleWorkspaceDelta(fromPeerId: string, msg: Extract<SyncMessage, { type: 'workspace-delta' }>): void {
+    const result = this.workspaceDelta.applyDelta(this.workspaceManager, msg.delta);
+    if (result.applied) {
+      const ack: SyncMessage = {
+        type: 'workspace-delta-ack',
+        workspaceId: msg.delta.workspaceId,
+        version: msg.delta.version,
+        checkpointId: msg.delta.checkpointId,
+      };
+      this.sendFn(fromPeerId, { type: 'workspace-sync', sync: ack, workspaceId: msg.delta.workspaceId });
+      this.onEvent({ type: 'sync-complete', workspaceId: msg.delta.workspaceId });
+    }
   }
 
   private handleMemberJoined(msg: Extract<SyncMessage, { type: 'member-joined' }> & { workspaceId?: string }): void {

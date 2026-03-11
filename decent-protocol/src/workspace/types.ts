@@ -54,6 +54,8 @@ export interface Workspace {
   id: string;
   name: string;
   inviteCode: string;
+  /** Optional monotonic workspace version/checkpoint for scalable sync. */
+  version?: number;
   createdBy: string; // PeerId
   createdAt: number;
   members: WorkspaceMember[];
@@ -128,6 +130,23 @@ export interface PEXServer {
 }
 
 // P2P sync messages
+export interface WorkspaceDeltaOp {
+  op: 'upsert-channel' | 'remove-channel' | 'upsert-member' | 'remove-member' | 'update-shell';
+  channel?: Channel;
+  channelId?: string;
+  member?: WorkspaceMember;
+  peerId?: string;
+  shellPatch?: Partial<WorkspaceShell> & { description?: string; name?: string };
+}
+
+export interface WorkspaceDelta {
+  workspaceId: string;
+  baseVersion: number;
+  version: number;
+  checkpointId?: string;
+  ops: WorkspaceDeltaOp[];
+}
+
 export type SyncMessage =
   | { type: 'join-request'; inviteCode: string; member: WorkspaceMember; inviteId?: string; pexServers?: PEXServer[] }
   // `messageHistory` intentionally omits plaintext message content during sync.
@@ -145,6 +164,10 @@ export type SyncMessage =
   | { type: 'sync-request'; workspaceId: string }
   // `messageHistory` intentionally omits plaintext message content during sync.
   | { type: 'sync-response'; workspace: Workspace; messageHistory: Record<string, any[]> }
+  | { type: 'workspace-shell-request'; workspaceId: string }
+  | { type: 'workspace-shell-response'; shell: WorkspaceShell; inviteCode?: string }
+  | { type: 'workspace-delta'; delta: WorkspaceDelta }
+  | { type: 'workspace-delta-ack'; workspaceId: string; version: number; checkpointId?: string }
   | { type: 'peer-exchange'; servers: PEXServer[] }
   | { type: 'device-announce'; identityId: string; device: DeviceInfoSync; proof: DeviceProofSync }
   | { type: 'device-ack'; identityId: string; deviceId: string };
