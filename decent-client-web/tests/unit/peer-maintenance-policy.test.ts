@@ -24,6 +24,7 @@ function createPolicyController(overrides: Record<string, unknown> = {}): any {
     },
     getAllWorkspaces: () => [],
   };
+  ctrl.peerCapabilities = new Map<string, Set<string>>();
   ctrl.peerLastSeenAt = new Map<string, number>();
   ctrl.peerLastConnectAttemptAt = new Map<string, number>();
   ctrl.peerLastSuccessfulSyncAt = new Map<string, number>();
@@ -212,6 +213,95 @@ describe('ChatController peer maintenance policy helpers', () => {
     };
 
     expect(ctrl.scoreWorkspacePeer(strong, now)).toBeGreaterThan(ctrl.scoreWorkspacePeer(weak, now));
+  });
+
+  test('capability helpers parse handshake capabilities and advertise local peer capabilities', () => {
+    const ctrl = createPolicyController({
+      state: {
+        myPeerId: 'me-peer',
+        activeWorkspaceId: 'ws-1',
+        connectingPeers: new Set<string>(),
+        readyPeers: new Set<string>(),
+        connectedPeers: new Set<string>(),
+      },
+      workspaceManager: {
+        getWorkspace: (id: string) => id === 'ws-1' ? {
+          id,
+          peerCapabilities: {
+            'me-peer': {
+              directory: { shardPrefixes: ['aa', 'bb'] },
+              relay: { channels: ['general'] },
+              archive: { retentionDays: 30 },
+              presenceAggregator: true,
+            },
+          },
+        } : null,
+        getAllWorkspaces: () => [],
+      },
+    });
+
+    ctrl.peerCapabilities.set('peer-helper', new Set([
+      'negentropy-sync-v1',
+      'directory-shard:aa',
+      'directory-shard:bb',
+      'relay-channel:general',
+      'archive-history-v1',
+      'presence-aggregator-v1',
+    ]));
+
+    const parsed = ctrl.getPeerCapabilitySummary('peer-helper');
+    expect(parsed.directoryShardPrefixes).toEqual(['aa', 'bb']);
+    expect(parsed.relayChannels).toEqual(['general']);
+    expect(parsed.archiveCapable).toBe(true);
+    expect(parsed.presenceAggregator).toBe(true);
+
+    const advertised = ctrl.getAdvertisedControlCapabilities('ws-1');
+    expect(advertised).toContain('negentropy-sync-v1');
+    expect(advertised).toContain('directory-shard:aa');
+    expect(advertised).toContain('directory-shard:bb');
+    expect(advertised).toContain('relay-channel:general');
+    expect(advertised).toContain('archive-history-v1');
+    expect(advertised).toContain('presence-aggregator-v1');
+  });
+
+  test('scoreWorkspacePeer prefers helper-capable peers when health is otherwise equal', () => {
+    const now = Date.now();
+    const ctrl = createPolicyController();
+
+    const base = {
+      role: 'member',
+      joinedAt: now - 10_000,
+      connected: true,
+      connecting: false,
+      ready: true,
+      likelyOnline: true,
+      recentlySeenAt: now - 60_000,
+      sharedWorkspaceCount: 1,
+      connectedAt: now - (2 * 60 * 1000),
+      lastSyncAt: now - 60_000,
+      disconnectCount: 0,
+      lastExplorerAt: undefined,
+    };
+
+    const helper = {
+      peerId: 'peer-helper',
+      ...base,
+      directoryShardPrefixes: ['aa', 'bb'],
+      relayChannels: ['general'],
+      archiveCapable: true,
+      presenceAggregator: true,
+    };
+
+    const plain = {
+      peerId: 'peer-plain',
+      ...base,
+      directoryShardPrefixes: [],
+      relayChannels: [],
+      archiveCapable: false,
+      presenceAggregator: false,
+    };
+
+    expect(ctrl.scoreWorkspacePeer(helper, now)).toBeGreaterThan(ctrl.scoreWorkspacePeer(plain, now));
   });
 
   test('pickAnchorPeers prefers owner/admin anchors and selectDesiredPeers keeps explorers unique', () => {

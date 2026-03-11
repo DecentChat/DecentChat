@@ -77,6 +77,10 @@ import type { TopologyDebugSnapshot, TopologyMaintenanceEvent, TopologyPeerEvent
 
 const PROTOCOL_VERSION = 2;
 const NEGENTROPY_SYNC_CAPABILITY = 'negentropy-sync-v1';
+const DIRECTORY_SHARD_CAPABILITY_PREFIX = 'directory-shard:';
+const RELAY_CHANNEL_CAPABILITY_PREFIX = 'relay-channel:';
+const ARCHIVE_HISTORY_CAPABILITY = 'archive-history-v1';
+const PRESENCE_AGGREGATOR_CAPABILITY = 'presence-aggregator-v1';
 const NEGENTROPY_QUERY_TIMEOUT_MS = 8000;
 
 const DEV_SIGNAL_PORT = Number((import.meta as any).env?.VITE_SIGNAL_PORT || 9000);
@@ -147,6 +151,10 @@ interface WorkspacePeerCandidate {
   lastSyncAt?: number;
   disconnectCount: number;
   lastExplorerAt?: number;
+  directoryShardPrefixes?: string[];
+  relayChannels?: string[];
+  archiveCapable?: boolean;
+  presenceAggregator?: boolean;
 }
 
 interface DesiredPeerSelection {
@@ -543,7 +551,7 @@ export class ChatController {
         this.sendControlWithRetry(peerId, {
           type: 'handshake',
           ...handshake,
-          capabilities: [NEGENTROPY_SYNC_CAPABILITY],
+          capabilities: this.getAdvertisedControlCapabilities(this.state.activeWorkspaceId ?? undefined),
         }, { label: 'handshake' });
       } catch (err) {
         console.error('Handshake failed:', err);
@@ -2638,6 +2646,7 @@ export class ChatController {
           candidateWs.members.some((candidateMember) => candidateMember.peerId === peerId),
         ).length;
 
+        const capabilitySummary = this.getPeerCapabilitySummary(peerId);
         return {
           peerId,
           role: member.role,
@@ -2652,6 +2661,10 @@ export class ChatController {
           lastSyncAt: this.peerLastSuccessfulSyncAt.get(peerId),
           disconnectCount: this.peerDisconnectCount.get(peerId) ?? 0,
           lastExplorerAt: this.peerExplorerLastUsedAt.get(peerId),
+          directoryShardPrefixes: capabilitySummary.directoryShardPrefixes,
+          relayChannels: capabilitySummary.relayChannels,
+          archiveCapable: capabilitySummary.archiveCapable,
+          presenceAggregator: capabilitySummary.presenceAggregator,
         } satisfies WorkspacePeerCandidate;
       });
   }
@@ -2681,6 +2694,13 @@ export class ChatController {
     else if (candidate.role === 'admin') score += 10;
 
     score += Math.min(10, Math.max(0, candidate.sharedWorkspaceCount - 1) * 5);
+
+    // Prefer healthy peers that advertise useful large-workspace helper capabilities.
+    score += Math.min(8, candidate.directoryShardPrefixes?.length ?? 0) * 2;
+    score += Math.min(6, candidate.relayChannels?.length ?? 0) * 2;
+    if (candidate.archiveCapable) score += 8;
+    if (candidate.presenceAggregator) score += 5;
+
     score -= Math.min(30, candidate.disconnectCount * 10);
 
     return score;
@@ -5945,6 +5965,52 @@ export class ChatController {
 
   private peerSupportsCapability(peerId: string, capability: string): boolean {
     return this.peerCapabilities.get(peerId)?.has(capability) === true;
+  }
+
+  private getPeerCapabilitySummary(peerId: string): {
+    directoryShardPrefixes: string[];
+    relayChannels: string[];
+    archiveCapable: boolean;
+    presenceAggregator: boolean;
+  } {
+    const capabilities = this.peerCapabilities.get(peerId) ?? new Set<string>();
+    const directoryShardPrefixes = [...capabilities]
+      .filter((capability) => capability.startsWith(DIRECTORY_SHARD_CAPABILITY_PREFIX))
+      .flatMap((capability) => capability.slice(DIRECTORY_SHARD_CAPABILITY_PREFIX.length).split(','))
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const relayChannels = [...capabilities]
+      .filter((capability) => capability.startsWith(RELAY_CHANNEL_CAPABILITY_PREFIX))
+      .flatMap((capability) => capability.slice(RELAY_CHANNEL_CAPABILITY_PREFIX.length).split(','))
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    return {
+      directoryShardPrefixes: [...new Set(directoryShardPrefixes)],
+      relayChannels: [...new Set(relayChannels)],
+      archiveCapable: capabilities.has(ARCHIVE_HISTORY_CAPABILITY),
+      presenceAggregator: capabilities.has(PRESENCE_AGGREGATOR_CAPABILITY),
+    };
+  }
+
+  private getAdvertisedControlCapabilities(workspaceId?: string): string[] {
+    const capabilities = new Set<string>([NEGENTROPY_SYNC_CAPABILITY]);
+    if (!workspaceId) return [...capabilities];
+
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    const advertised = workspace?.peerCapabilities?.[this.state.myPeerId];
+    if (!advertised) return [...capabilities];
+
+    for (const shardPrefix of advertised.directory?.shardPrefixes ?? []) {
+      if (shardPrefix) capabilities.add(`${DIRECTORY_SHARD_CAPABILITY_PREFIX}${shardPrefix}`);
+    }
+    for (const channel of advertised.relay?.channels ?? []) {
+      if (channel) capabilities.add(`${RELAY_CHANNEL_CAPABILITY_PREFIX}${channel}`);
+    }
+    if (advertised.archive) capabilities.add(ARCHIVE_HISTORY_CAPABILITY);
+    if (advertised.presenceAggregator) capabilities.add(PRESENCE_AGGREGATOR_CAPABILITY);
+
+    return [...capabilities];
   }
 
   private async requestTimestampMessageSync(peerId: string): Promise<void> {
