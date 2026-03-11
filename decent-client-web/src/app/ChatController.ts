@@ -6904,6 +6904,27 @@ export class ChatController {
     };
   }
 
+  async loadMoreWorkspaceMemberDirectory(workspaceId: string): Promise<ReturnType<ChatController['getWorkspaceMemberDirectory']> | null> {
+    const initial = this.getWorkspaceMemberDirectory(workspaceId);
+    if (!initial.hasMore) return initial;
+
+    await this.prefetchWorkspaceMemberDirectory(workspaceId);
+
+    const timeoutMs = 1500;
+    const pollMs = 120;
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const next = this.getWorkspaceMemberDirectory(workspaceId);
+      if (next.loadedCount > initial.loadedCount || !next.hasMore) {
+        return next;
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+
+    return this.getWorkspaceMemberDirectory(workspaceId);
+  }
+
   async onWorkspaceActivated(workspaceId: string): Promise<void> {
     await this.prefetchWorkspaceMemberDirectory(workspaceId);
   }
