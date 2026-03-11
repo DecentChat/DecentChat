@@ -117,6 +117,7 @@ describe('adaptive public workspace types', () => {
       role: 'owner',
       joinedAt: 1,
       isBot: false,
+      allowWorkspaceDMs: false,
       presence: 'online',
     };
 
@@ -129,6 +130,7 @@ describe('adaptive public workspace types', () => {
     };
 
     expect(page.members[0].alias).toBe('Alice');
+    expect(page.members[0].allowWorkspaceDMs).toBe(false);
     expect(page.nextCursor).toBe('cursor-1');
   });
 });

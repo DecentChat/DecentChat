@@ -237,6 +237,7 @@ export class PublicWorkspaceController {
       joinedAt: member.joinedAt,
       identityId: member.identityId,
       isBot: member.isBot,
+      allowWorkspaceDMs: member.allowWorkspaceDMs,
     };
   }
 

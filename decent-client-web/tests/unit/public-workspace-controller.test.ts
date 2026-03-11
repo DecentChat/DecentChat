@@ -70,7 +70,7 @@ describe('PublicWorkspaceController', () => {
       workspaceId: 'ws-1',
       pageSize: 2,
       members: [
-        { peerId: 'a', alias: 'Alice', role: 'owner', joinedAt: 1 },
+        { peerId: 'a', alias: 'Alice', role: 'owner', joinedAt: 1, allowWorkspaceDMs: false },
         { peerId: 'b', alias: 'Bob', role: 'member', joinedAt: 2 },
       ],
       nextCursor: 'b',
@@ -81,6 +81,7 @@ describe('PublicWorkspaceController', () => {
     expect(snapshot.totalCount).toBe(3);
     expect(snapshot.hasMore).toBe(true);
     expect(snapshot.members.map((member) => member.alias)).toEqual(['Alice', 'Bob']);
+    expect(snapshot.members.find((member) => member.peerId === 'a')?.allowWorkspaceDMs).toBe(false);
   });
 
   test('builds deterministic pages from known member directory data', async () => {

@@ -17,6 +17,8 @@ export interface MemberSummary {
   joinedAt: number;
   identityId?: string;
   isBot?: boolean;
+  /** Privacy preference for workspace-origin DMs (missing/undefined = allow). */
+  allowWorkspaceDMs?: boolean;
   presence?: 'online' | 'offline' | 'away';
 }
 

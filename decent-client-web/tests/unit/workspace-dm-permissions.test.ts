@@ -44,6 +44,37 @@ describe('Workspace DM privacy — sender side', () => {
     expect((result as any).originWorkspaceId).toBeUndefined();
     expect(ctrl.directConversationStore.create).toHaveBeenCalledTimes(1);
   });
+
+  test('startDirectMessage blocks workspace-origin DM when directory-only target disallows', async () => {
+    const ctrl = Object.create(ChatController.prototype) as any;
+
+    ctrl.workspaceManager = {
+      getWorkspace: mock((_wsId: string) => ({
+        id: 'ws-1',
+        members: [],
+      })),
+    };
+    ctrl.getWorkspaceMemberDirectory = mock((_wsId: string) => ({
+      members: [
+        { peerId: 'target', allowWorkspaceDMs: false },
+      ],
+      loadedCount: 1,
+      totalCount: 1,
+      hasMore: false,
+    }));
+    ctrl.directConversationStore = {
+      create: mock(async () => ({ id: 'conv-1', contactPeerId: 'target', createdAt: Date.now(), lastMessageAt: 0 })),
+    };
+    ctrl.persistentStore = { saveDirectConversation: mock(async () => {}) };
+    ctrl.ui = { updateSidebar: mock(() => {}) };
+
+    await expect(
+      ChatController.prototype.startDirectMessage.call(ctrl, 'target', { sourceWorkspaceId: 'ws-1' }),
+    ).rejects.toThrow('disallows workspace DMs');
+
+    expect(ctrl.directConversationStore.create).not.toHaveBeenCalled();
+    expect(ctrl.persistentStore.saveDirectConversation).not.toHaveBeenCalled();
+  });
 });
 
 describe('Workspace DM privacy — direct envelope metadata', () => {

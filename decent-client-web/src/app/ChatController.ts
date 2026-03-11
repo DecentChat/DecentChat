@@ -5331,7 +5331,10 @@ export class ChatController {
     if (sourceWorkspaceId) {
       const ws = this.workspaceManager.getWorkspace(sourceWorkspaceId);
       const targetMember = ws?.members.find((m: any) => m.peerId === contactPeerId);
-      if (targetMember && targetMember.allowWorkspaceDMs === false) {
+      const targetDirectoryMember = targetMember
+        ? null
+        : this.getWorkspaceMemberDirectory(sourceWorkspaceId).members.find((m) => m.peerId === contactPeerId);
+      if (targetMember?.allowWorkspaceDMs === false || targetDirectoryMember?.allowWorkspaceDMs === false) {
         throw new Error('This member disallows workspace DMs.');
       }
     }
@@ -6889,7 +6892,7 @@ export class ChatController {
         isBot: member.isBot === true,
         isOnline,
         isYou,
-        allowWorkspaceDMs: localMember?.allowWorkspaceDMs !== false,
+        allowWorkspaceDMs: localMember?.allowWorkspaceDMs ?? member.allowWorkspaceDMs ?? true,
       };
     });
 
