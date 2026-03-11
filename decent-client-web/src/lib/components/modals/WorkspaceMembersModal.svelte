@@ -13,6 +13,14 @@
     isOnline: boolean;
     isYou: boolean;
     color: string;
+    isHydrated?: boolean;
+  }
+
+  interface WorkspaceMembersPagePayload {
+    members: WorkspaceMember[];
+    loadedCount: number;
+    totalCount: number;
+    hasMore: boolean;
   }
 
   interface WorkspaceMembersConfig {
@@ -28,6 +36,7 @@
     onDemote: (peerId: string) => Promise<{ success: boolean; error?: string }>;
     onToast: (message: string, type?: string) => void;
     onRefresh: () => void;
+    onLoadMore?: () => Promise<WorkspaceMembersPagePayload | null>;
   }
 
   export function showWorkspaceMembersModal(config: WorkspaceMembersConfig): void {
@@ -50,6 +59,24 @@
 </script>
 
 <script lang="ts">
+  interface WorkspaceMember {
+    peerId: string;
+    name: string;
+    role: string;
+    isBot: boolean;
+    isOnline: boolean;
+    isYou: boolean;
+    color: string;
+    isHydrated?: boolean;
+  }
+
+  interface WorkspaceMembersPagePayload {
+    members: WorkspaceMember[];
+    loadedCount: number;
+    totalCount: number;
+    hasMore: boolean;
+  }
+
   interface Props {
     members: WorkspaceMember[];
     loadedCount?: number;
@@ -63,6 +90,7 @@
     onDemote: (peerId: string) => Promise<{ success: boolean; error?: string }>;
     onToast: (message: string, type?: string) => void;
     onRefresh: () => void;
+    onLoadMore?: () => Promise<WorkspaceMembersPagePayload | null>;
     onClose: () => void;
   }
 
@@ -79,10 +107,12 @@
     onDemote,
     onToast,
     onRefresh,
+    onLoadMore,
     onClose,
   }: Props = $props();
 
   let members = $state(initialMembers);
+  let loadingMore = $state(false);
 
   function handleOverlayClick(e: MouseEvent) {
     if (e.target === e.currentTarget) onClose();
@@ -96,10 +126,22 @@
     return () => document.removeEventListener('keydown', handler);
   });
 
-  function roleBadge(role: string, isBot: boolean): string {
-    let badges = '';
-    if (isBot) badges += 'BOT';
-    return badges;
+  async function handleLoadMore() {
+    if (!onLoadMore || loadingMore || !hasMore) return;
+    loadingMore = true;
+    try {
+      const next = await onLoadMore();
+      if (!next) return;
+      members = next.members;
+      loadedCount = next.loadedCount;
+      totalCount = next.totalCount;
+      hasMore = next.hasMore;
+    } catch (err) {
+      console.error('[WorkspaceMembersModal] load more failed', err);
+      onToast('Failed to load more members', 'error');
+    } finally {
+      loadingMore = false;
+    }
   }
 
   async function handleRemove(peerId: string, name: string) {
@@ -156,10 +198,11 @@
       </div>
       <div class="members-list">
         {#each members as member (member.peerId)}
-          {@const canRemove = isAdminOrOwner && !member.isYou && member.role !== 'owner'}
-          {@const canBan = isAdminOrOwner && !member.isYou && member.role !== 'owner'}
-          {@const canPromote = isOwner && !member.isYou && member.role === 'member'}
-          {@const canDemote = isOwner && !member.isYou && member.role === 'admin'}
+          {@const hydratedMember = member.isHydrated !== false}
+          {@const canRemove = isAdminOrOwner && hydratedMember && !member.isYou && member.role !== 'owner'}
+          {@const canBan = isAdminOrOwner && hydratedMember && !member.isYou && member.role !== 'owner'}
+          {@const canPromote = isOwner && hydratedMember && !member.isYou && member.role === 'member'}
+          {@const canDemote = isOwner && hydratedMember && !member.isYou && member.role === 'admin'}
           <div class="member-row">
             <div class="member-info">
               <div class="member-avatar{member.isBot ? ' bot-avatar' : ''}" style="background:{member.color}">
@@ -196,6 +239,15 @@
         {/each}
       </div>
       <div class="modal-actions">
+        {#if hasMore && onLoadMore}
+          <button type="button" class="btn-secondary" onclick={handleLoadMore} disabled={loadingMore}>
+            {#if loadingMore}
+              Loading more…
+            {:else}
+              Load more members
+            {/if}
+          </button>
+        {/if}
         <button type="button" class="btn-secondary" onclick={onClose}>Close</button>
       </div>
     </form>

@@ -102,6 +102,7 @@ export interface UICallbacks {
   getAllWorkspaces?: () => Array<import('decent-protocol').Workspace>;
   getWorkspaceMemberDirectory?: (workspaceId: string) => WorkspaceMemberDirectoryView;
   prefetchWorkspaceMemberDirectory?: (workspaceId: string) => Promise<void>;
+  loadMoreWorkspaceMemberDirectory?: (workspaceId: string) => Promise<WorkspaceMemberDirectoryView | null>;
   onWorkspaceActivated?: (workspaceId: string) => void | Promise<void>;
   setWorkspaceAlias?: (wsId: string, alias: string) => void;
   getUnreadCount?: (channelId: string) => number;

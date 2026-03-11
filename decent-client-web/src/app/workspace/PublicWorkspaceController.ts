@@ -70,9 +70,17 @@ export class PublicWorkspaceController {
 
     if (workspace) {
       for (const member of workspace.members) {
-        if (!runtime.membersByPeerId.has(member.peerId)) {
-          runtime.membersByPeerId.set(member.peerId, this.toSummary(member));
-        }
+        const existing = runtime.membersByPeerId.get(member.peerId);
+        const next = this.toSummary(member);
+        runtime.membersByPeerId.set(member.peerId, {
+          ...existing,
+          ...next,
+          alias: next.alias || existing?.alias || member.peerId.slice(0, 8),
+          role: next.role || existing?.role || 'member',
+          joinedAt: next.joinedAt || existing?.joinedAt || 0,
+          isBot: next.isBot ?? existing?.isBot,
+          identityId: next.identityId || existing?.identityId,
+        });
       }
     }
 

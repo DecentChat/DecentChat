@@ -277,6 +277,10 @@ async function init(): Promise<void> {
     getAllWorkspaces: () => ctrl.workspaceManager.getAllWorkspaces(),
     getWorkspaceMemberDirectory: (workspaceId) => ctrl.getWorkspaceMemberDirectory(workspaceId),
     prefetchWorkspaceMemberDirectory: (workspaceId) => ctrl.prefetchWorkspaceMemberDirectory(workspaceId),
+    loadMoreWorkspaceMemberDirectory: async (workspaceId) => {
+      await ctrl.prefetchWorkspaceMemberDirectory(workspaceId);
+      return ctrl.getWorkspaceMemberDirectory(workspaceId);
+    },
     onWorkspaceActivated: (workspaceId) => ctrl.onWorkspaceActivated(workspaceId),
     setWorkspaceAlias: (wsId, alias) => ctrl.setWorkspaceAlias(wsId, alias),
     getUnreadCount: (channelId) => ctrl.notifications.getUnreadCount(channelId),

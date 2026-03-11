@@ -1,7 +1,7 @@
 import type { WorkspaceManager, InviteData, Contact, WorkspacePermissions } from 'decent-protocol';
 import { InviteURI } from 'decent-protocol';
 import type { AppState } from '../main';
-import type { UICallbacks, WorkspaceInviteItem, WorkspaceInviteLists } from './types';
+import type { UICallbacks, WorkspaceInviteItem, WorkspaceInviteLists, WorkspaceMemberDirectoryView } from './types';
 import { cachedData } from '../lib/stores/ui.svelte';
 import { shellData } from '../lib/stores/shell.svelte';
 import { showModal as svelteShowModal } from '../lib/components/shared/Modal.svelte';
@@ -306,39 +306,50 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     if (!ws) return;
 
     void callbacks.prefetchWorkspaceMemberDirectory?.(ws.id);
+
+    const mapDirectoryMembers = (members: WorkspaceMemberDirectoryView['members']) => {
+      const currentWorkspace = workspaceManager.getWorkspace(ws.id) || ws;
+      const hydratedPeerIds = new Set(currentWorkspace.members.map((member) => member.peerId));
+
+      return members.map((member) => ({
+        peerId: member.peerId,
+        name: member.alias || getPeerAlias(member.peerId),
+        role: member.role,
+        isBot: member.isBot,
+        isOnline: member.isOnline,
+        isYou: member.isYou,
+        color: member.isBot ? '#7c3aed' : peerColor(member.peerId),
+        // Moderation controls still require hydrated member records in workspace-state.
+        isHydrated: member.isYou || hydratedPeerIds.has(member.peerId),
+      }));
+    };
+
     const directoryView = callbacks.getWorkspaceMemberDirectory?.(ws.id);
-    const directoryMembers = directoryView?.members || [];
+    const mappedDirectoryMembers = mapDirectoryMembers(directoryView?.members || []);
+
+    const fallbackMembers = ws.members.map(member => ({
+      peerId: member.peerId,
+      name: getPeerAlias(member.peerId),
+      role: member.role,
+      isBot: !!member.isBot,
+      isOnline: state.connectedPeers.has(member.peerId) || member.peerId === state.myPeerId,
+      isYou: member.peerId === state.myPeerId,
+      color: member.isBot ? '#7c3aed' : peerColor(member.peerId),
+      isHydrated: true,
+    }));
+
+    const usingDirectoryState = mappedDirectoryMembers.length > 0 || (directoryView?.hasMore ?? false);
 
     const myMember = ws.members.find(m => m.peerId === state.myPeerId);
     const myRole = myMember?.role || 'member';
     const isOwner = myRole === 'owner' || ws.createdBy === state.myPeerId || workspaceManager.isOwner(ws.id, state.myPeerId);
     const isAdminOrOwner = isOwner || myRole === 'admin' || workspaceManager.isAdmin(ws.id, state.myPeerId);
 
-    const modalMembers = directoryMembers.length > 0
-      ? directoryMembers.map((member) => ({
-          peerId: member.peerId,
-          name: member.alias || getPeerAlias(member.peerId),
-          role: member.role,
-          isBot: member.isBot,
-          isOnline: member.isOnline,
-          isYou: member.isYou,
-          color: member.isBot ? '#7c3aed' : peerColor(member.peerId),
-        }))
-      : ws.members.map(member => ({
-          peerId: member.peerId,
-          name: getPeerAlias(member.peerId),
-          role: member.role,
-          isBot: !!member.isBot,
-          isOnline: state.connectedPeers.has(member.peerId) || member.peerId === state.myPeerId,
-          isYou: member.peerId === state.myPeerId,
-          color: member.isBot ? '#7c3aed' : peerColor(member.peerId),
-        }));
-
     svelteShowWorkspaceMembersModal({
-      members: modalMembers,
-      loadedCount: directoryView?.loadedCount ?? modalMembers.length,
-      totalCount: directoryView?.totalCount ?? modalMembers.length,
-      hasMore: directoryView?.hasMore ?? false,
+      members: usingDirectoryState ? mappedDirectoryMembers : fallbackMembers,
+      loadedCount: usingDirectoryState ? (directoryView?.loadedCount ?? mappedDirectoryMembers.length) : fallbackMembers.length,
+      totalCount: usingDirectoryState ? (directoryView?.totalCount ?? mappedDirectoryMembers.length) : fallbackMembers.length,
+      hasMore: usingDirectoryState ? (directoryView?.hasMore ?? false) : false,
       isOwner,
       isAdminOrOwner,
       onRemove: async (peerId: string) => {
@@ -358,6 +369,25 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
         if (!callbacks.demoteMember) return { success: false, error: 'Not available' };
         return callbacks.demoteMember(peerId);
       },
+      onLoadMore: usingDirectoryState
+        ? async () => {
+            const nextDirectoryView = callbacks.loadMoreWorkspaceMemberDirectory
+              ? await callbacks.loadMoreWorkspaceMemberDirectory(ws.id)
+              : await (async () => {
+                  await callbacks.prefetchWorkspaceMemberDirectory?.(ws.id);
+                  return callbacks.getWorkspaceMemberDirectory?.(ws.id) || null;
+                })();
+
+            if (!nextDirectoryView) return null;
+
+            return {
+              members: mapDirectoryMembers(nextDirectoryView.members),
+              loadedCount: nextDirectoryView.loadedCount,
+              totalCount: nextDirectoryView.totalCount,
+              hasMore: nextDirectoryView.hasMore,
+            };
+          }
+        : undefined,
       onToast: (msg: string, type?: string) => showToast(msg, type as any),
       onRefresh: () => { updateSidebar(); syncShellHeader(); },
     });

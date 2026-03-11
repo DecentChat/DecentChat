@@ -116,4 +116,44 @@ describe('PublicWorkspaceController', () => {
     expect(page2.members.map((member) => member.peerId)).toEqual(['p3']);
     expect(page2.nextCursor).toBeUndefined();
   });
+
+  test('prefers hydrated workspace-member updates over stale paged directory records', async () => {
+    const workspaceManager = new WorkspaceManager();
+    const store = new FakePersistentStore();
+    const controller = new PublicWorkspaceController(workspaceManager, store as any);
+
+    await controller.ingestWorkspaceShell({
+      id: 'ws-3',
+      name: 'Workspace',
+      createdBy: 'owner',
+      createdAt: 1,
+      version: 2,
+      memberCount: 2,
+      channelCount: 1,
+    });
+
+    await controller.ingestMemberPage({
+      workspaceId: 'ws-3',
+      pageSize: 2,
+      members: [
+        { peerId: 'p1', alias: 'Alice', role: 'member', joinedAt: 1 },
+        { peerId: 'p2', alias: 'Bob', role: 'member', joinedAt: 2 },
+      ],
+    });
+
+    const workspace = workspaceManager.getWorkspace('ws-3');
+    expect(workspace).toBeDefined();
+    workspace!.members = [
+      { peerId: 'p1', alias: 'Alicia', role: 'admin', joinedAt: 1, publicKey: 'pk-1' },
+      { peerId: 'p2', alias: 'Bob', role: 'member', joinedAt: 2, publicKey: 'pk-2', isBot: true },
+    ];
+
+    const snapshot = controller.getSnapshot('ws-3');
+    const hydratedAlice = snapshot.members.find((member) => member.peerId === 'p1');
+    const hydratedBob = snapshot.members.find((member) => member.peerId === 'p2');
+
+    expect(hydratedAlice?.alias).toBe('Alicia');
+    expect(hydratedAlice?.role).toBe('admin');
+    expect(hydratedBob?.isBot).toBe(true);
+  });
 });
