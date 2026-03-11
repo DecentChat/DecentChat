@@ -36,7 +36,7 @@ export class PersistentStore {
 
   constructor(config: PersistentStoreConfig = {}) {
     this.dbName = config.dbName || 'decent-protocol';
-    this.version = config.version || 4;
+    this.version = config.version || 5;
   }
 
   async init(): Promise<void> {
