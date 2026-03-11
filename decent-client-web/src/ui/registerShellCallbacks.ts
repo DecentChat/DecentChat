@@ -175,7 +175,13 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     onMemberClick: (peerId) => startMemberDM(peerId),
     onDirectConvClick: (convId) => switchToDirectConversation(convId),
     onAddChannel: () => modalActions.showCreateChannelModal(),
-    onStartDM: () => modalActions.showStartDirectMessageModal(),
+    onStartDM: () => {
+      if (state.activeWorkspaceId) {
+        modalActions.showStartWorkspaceMemberDMModal();
+        return;
+      }
+      modalActions.showStartDirectMessageModal();
+    },
     onAddContact: () => modalActions.showAddContactModal(),
     onConnectPeer: () => modalActions.showConnectPeerModal(),
     onCopyInvite: async () => {

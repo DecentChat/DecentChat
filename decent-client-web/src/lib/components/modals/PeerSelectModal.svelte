@@ -10,6 +10,7 @@
     name: string;
     statusClass: string;
     statusTitle: string;
+    disabled?: boolean;
   }
 
   interface PeerSelectConfig {
@@ -17,6 +18,9 @@
     label: string;
     peers: PeerOption[];
     onSelect: (peerId: string) => void;
+    searchPeers?: (query: string, limit: number) => Promise<PeerOption[]>;
+    searchPlaceholder?: string;
+    emptyStateText?: string;
   }
 
   export function showPeerSelectModal(config: PeerSelectConfig): void {
@@ -44,16 +48,80 @@
     label: string;
     peers: PeerOption[];
     onSelect: (peerId: string) => void;
+    searchPeers?: (query: string, limit: number) => Promise<PeerOption[]>;
+    searchPlaceholder?: string;
+    emptyStateText?: string;
     onClose: () => void;
   }
 
-  let { title, label, peers, onSelect, onClose }: Props = $props();
+  const SEARCH_LIMIT = 80;
+
+  let {
+    title,
+    label,
+    peers,
+    onSelect,
+    searchPeers,
+    searchPlaceholder = 'Search by name or peer ID…',
+    emptyStateText = 'No matches found',
+    onClose,
+  }: Props = $props();
 
   let selectedPeerId = $state('');
+  let searchQuery = $state('');
+  let visiblePeers = $state(peers);
+  let searching = $state(false);
+
+  let searchNonce = 0;
 
   function handleOverlayClick(e: MouseEvent) {
     if (e.target === e.currentTarget) onClose();
   }
+
+  function filterLocal(query: string): PeerOption[] {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return peers;
+
+    return peers.filter((peer) => (
+      peer.name.toLowerCase().includes(normalizedQuery)
+      || peer.peerId.toLowerCase().startsWith(normalizedQuery)
+    ));
+  }
+
+  $effect(() => {
+    const query = searchQuery.trim();
+
+    if (!searchPeers) {
+      visiblePeers = filterLocal(query);
+      searching = false;
+      return;
+    }
+
+    const currentNonce = ++searchNonce;
+    if (!query) {
+      visiblePeers = peers;
+    }
+    searching = true;
+
+    void (async () => {
+      try {
+        const matches = await searchPeers(query, SEARCH_LIMIT);
+        if (currentNonce !== searchNonce) return;
+        visiblePeers = matches;
+      } catch (err) {
+        console.error('[PeerSelectModal] search failed', err);
+        if (currentNonce !== searchNonce) return;
+        visiblePeers = [];
+      } finally {
+        if (currentNonce === searchNonce) searching = false;
+      }
+    })();
+  });
+
+  $effect(() => {
+    const selected = visiblePeers.find((peer) => peer.peerId === selectedPeerId);
+    if (!selected || selected.disabled) selectedPeerId = '';
+  });
 
   $effect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -65,13 +133,15 @@
 
   function handleSubmit(e: SubmitEvent) {
     e.preventDefault();
-    if (!selectedPeerId) return;
-    onSelect(selectedPeerId);
+    const selected = visiblePeers.find((peer) => peer.peerId === selectedPeerId);
+    if (!selected || selected.disabled) return;
+    onSelect(selected.peerId);
     onClose();
   }
 
-  function selectPeer(peerId: string) {
-    selectedPeerId = peerId;
+  function selectPeer(peer: PeerOption) {
+    if (peer.disabled) return;
+    selectedPeerId = peer.peerId;
   }
 </script>
 
@@ -83,17 +153,36 @@
     <form onsubmit={handleSubmit}>
       <div class="form-group">
         <label>{label}</label>
+        <input
+          type="text"
+          class="search-field"
+          placeholder={searchPlaceholder}
+          bind:value={searchQuery}
+          autocomplete="off"
+        />
+        {#if searching}
+          <div style="font-size:12px; color: var(--text-muted); margin-top: 6px;">Searching…</div>
+        {/if}
         <div class="member-select-list">
-          {#each peers as peer (peer.peerId)}
-            <div
-              class="sidebar-item"
-              style="background: var(--surface); margin: 4px 0; border-radius: 6px; color: var(--text); padding: 10px 12px; cursor: pointer; {selectedPeerId === peer.peerId ? 'border: 2px solid var(--accent);' : 'border: 2px solid transparent;'}"
-              onclick={() => selectPeer(peer.peerId)}
-            >
-              <span class="dm-status {peer.statusClass}" title={peer.statusTitle}></span>
-              {peer.name} ({peer.peerId.slice(0, 8)})
-            </div>
-          {/each}
+          {#if visiblePeers.length === 0}
+            <div class="sidebar-item" style="font-size: 12px; opacity: 0.6;">{emptyStateText}</div>
+          {:else}
+            {#each visiblePeers as peer (peer.peerId)}
+              {@const isSelected = selectedPeerId === peer.peerId}
+              {@const isDisabled = peer.disabled === true}
+              <div
+                class="sidebar-item {isDisabled ? 'dm-disallowed' : ''}"
+                style="background: var(--surface); margin: 4px 0; border-radius: 6px; color: var(--text); padding: 10px 12px; cursor: {isDisabled ? 'not-allowed' : 'pointer'}; opacity: {isDisabled ? 0.6 : 1}; {isSelected ? 'border: 2px solid var(--accent);' : 'border: 2px solid transparent;'}"
+                onclick={() => selectPeer(peer)}
+              >
+                <span class="dm-status {peer.statusClass}" title={peer.statusTitle}></span>
+                {peer.name} ({peer.peerId.slice(0, 8)})
+                {#if isDisabled}
+                  <span style="font-size:11px; opacity:0.7; margin-left: 6px;">DM disabled</span>
+                {/if}
+              </div>
+            {/each}
+          {/if}
         </div>
       </div>
       <div class="modal-actions">

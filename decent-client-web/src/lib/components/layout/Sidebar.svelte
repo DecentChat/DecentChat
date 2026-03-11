@@ -224,6 +224,10 @@
     </div>
 
     <div class="sidebar-section" id="workspace-members-section" data-testid="member-list">
+      <div class="sidebar-section-header">
+        Members
+        <button class="add-btn" id="workspace-member-dm-btn" title="Start DM with member" onclick={onStartDM}>+</button>
+      </div>
       {#if onlineMembers.length > 0}
         <div class="sidebar-section-header member-group-header">Online — {onlineMembers.length}</div>
         <div id="workspace-member-list-online">
@@ -251,6 +255,9 @@
             />
           {/each}
         </div>
+      {/if}
+      {#if members.length === 0}
+        <div class="sidebar-item" style="font-size:12px; opacity:0.5;">No members loaded yet</div>
       {/if}
     </div>
   {:else}

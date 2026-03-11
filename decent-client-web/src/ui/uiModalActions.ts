@@ -13,6 +13,7 @@ import { showJoinWorkspaceModal as svelteShowJoinWorkspaceModal } from '../lib/c
 import { showPeerSelectModal } from '../lib/components/modals/PeerSelectModal.svelte';
 import { showAddContactModal as svelteShowAddContactModal } from '../lib/components/modals/AddContactModal.svelte';
 import { showSettingsModal } from '../lib/components/modals/SettingsModal.svelte';
+import { filterMemberPickerPeers, searchMemberPickerPeers } from './memberPickerSearch';
 
 interface QRFlowLike {
   showMyQR: (data: { publicKey: string; displayName: string; peerId: string }) => Promise<void>;
@@ -49,6 +50,7 @@ export interface ModalActions {
   showCreateDMModal: () => void;
   showAddContactModal: () => void;
   showStartDirectMessageModal: () => void;
+  showStartWorkspaceMemberDMModal: () => void;
   showMessageInfo: (messageId: string) => void;
   showChannelMembersModal: () => void;
   showWorkspaceMembersModal: () => void;
@@ -79,6 +81,87 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     getPeerAlias,
     escapeHtml,
   } = ctx;
+
+  type MemberPickerOption = {
+    peerId: string;
+    name: string;
+    statusClass: string;
+    statusTitle: string;
+    disabled?: boolean;
+  };
+
+  const memberPickerLoadInFlight = new Map<string, Promise<void>>();
+
+  const mapDirectoryMemberPickerOptions = (members: WorkspaceMemberDirectoryView['members']): MemberPickerOption[] =>
+    members
+      .filter((member) => !member.isYou)
+      .map((member) => ({
+        peerId: member.peerId,
+        name: member.alias || getPeerAlias(member.peerId),
+        statusClass: peerStatusClass(member.peerId),
+        statusTitle: peerStatusTitle(member.peerId),
+        disabled: member.allowWorkspaceDMs === false,
+      }));
+
+  const getWorkspaceMemberPickerOptions = (workspaceId: string): MemberPickerOption[] => {
+    const ws = workspaceManager.getWorkspace(workspaceId);
+    if (!ws) return [];
+
+    const directoryView = callbacks.getWorkspaceMemberDirectory?.(workspaceId);
+    if (directoryView && (directoryView.members.length > 0 || directoryView.hasMore)) {
+      return mapDirectoryMemberPickerOptions(directoryView.members);
+    }
+
+    return ws.members
+      .filter((member: import('decent-protocol').WorkspaceMember) => member.peerId !== state.myPeerId)
+      .map((member: import('decent-protocol').WorkspaceMember) => ({
+        peerId: member.peerId,
+        name: member.alias,
+        statusClass: peerStatusClass(member.peerId),
+        statusTitle: peerStatusTitle(member.peerId),
+        disabled: member.allowWorkspaceDMs === false,
+      }));
+  };
+
+  const waitForDirectoryAdvance = async (workspaceId: string, loadedCountBaseline: number): Promise<void> => {
+    const timeoutMs = 1200;
+    const pollMs = 120;
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const snapshot = callbacks.getWorkspaceMemberDirectory?.(workspaceId);
+      if (!snapshot) return;
+      if (snapshot.loadedCount > loadedCountBaseline || !snapshot.hasMore) return;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  };
+
+  const loadNextDirectoryPageForMemberPicker = async (workspaceId: string): Promise<void> => {
+    const existing = memberPickerLoadInFlight.get(workspaceId);
+    if (existing) {
+      await existing;
+      return;
+    }
+
+    const initialSnapshot = callbacks.getWorkspaceMemberDirectory?.(workspaceId);
+    if (!initialSnapshot?.hasMore) return;
+
+    const run = (async () => {
+      if (callbacks.loadMoreWorkspaceMemberDirectory) {
+        await callbacks.loadMoreWorkspaceMemberDirectory(workspaceId);
+      } else {
+        await callbacks.prefetchWorkspaceMemberDirectory?.(workspaceId);
+      }
+      await waitForDirectoryAdvance(workspaceId, initialSnapshot.loadedCount);
+    })();
+
+    memberPickerLoadInFlight.set(workspaceId, run);
+    try {
+      await run;
+    } finally {
+      memberPickerLoadInFlight.delete(workspaceId);
+    }
+  };
 
   function showModal(
     title: string,
@@ -249,6 +332,62 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
         callbacks.startDirectMessage?.(peerId).then(async (conv) => {
           await refreshContactsCache();
           switchToDirectConversation(conv.id);
+        });
+      },
+    });
+  }
+
+  function showStartWorkspaceMemberDMModal(): void {
+    if (!state.activeWorkspaceId) {
+      showStartDirectMessageModal();
+      return;
+    }
+
+    const workspaceId = state.activeWorkspaceId;
+    const ws = workspaceManager.getWorkspace(workspaceId);
+    if (!ws) return;
+
+    void callbacks.prefetchWorkspaceMemberDirectory?.(workspaceId);
+
+    const initialPeers = getWorkspaceMemberPickerOptions(workspaceId);
+    const initialDirectoryView = callbacks.getWorkspaceMemberDirectory?.(workspaceId);
+    if (initialPeers.length === 0 && !(initialDirectoryView?.hasMore ?? false)) {
+      showToast('No other members in workspace yet. Invite someone first!', 'error');
+      return;
+    }
+
+    showPeerSelectModal({
+      title: 'Message Workspace Member',
+      label: 'Search workspace members',
+      peers: initialPeers,
+      searchPlaceholder: 'Search workspace members by name or peer ID…',
+      emptyStateText: 'No workspace members match your search',
+      searchPeers: async (query: string, limit: number) => {
+        const directoryView = callbacks.getWorkspaceMemberDirectory?.(workspaceId);
+        const usingDirectory = Boolean(directoryView && (directoryView.members.length > 0 || directoryView.hasMore));
+
+        if (!usingDirectory) {
+          return filterMemberPickerPeers(getWorkspaceMemberPickerOptions(workspaceId), query, limit);
+        }
+
+        return searchMemberPickerPeers(
+          {
+            getMembers: () => getWorkspaceMemberPickerOptions(workspaceId),
+            getLoadedCount: () => callbacks.getWorkspaceMemberDirectory?.(workspaceId)?.loadedCount ?? 0,
+            hasMore: () => Boolean(callbacks.getWorkspaceMemberDirectory?.(workspaceId)?.hasMore),
+            loadNextPage: () => loadNextDirectoryPageForMemberPicker(workspaceId),
+          },
+          query,
+          limit,
+        );
+      },
+      onSelect: (peerId: string) => {
+        callbacks.startDirectMessage?.(peerId, { sourceWorkspaceId: workspaceId }).then(async (conv) => {
+          await refreshContactsCache();
+          switchToDirectConversation(conv.id);
+        }).catch((err: any) => {
+          const message = err?.message || 'Could not start DM';
+          showToast(message, 'error');
         });
       },
     });
@@ -631,6 +770,7 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     showCreateDMModal,
     showAddContactModal,
     showStartDirectMessageModal,
+    showStartWorkspaceMemberDMModal,
     showMessageInfo,
     showChannelMembersModal,
     showWorkspaceMembersModal,
