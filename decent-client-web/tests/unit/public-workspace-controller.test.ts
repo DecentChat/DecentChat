@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { WorkspaceManager, type MemberDirectoryPage, type WorkspaceShell } from 'decent-protocol';
+import { DirectoryShardPlanner, WorkspaceManager, type MemberDirectoryPage, type WorkspaceShell } from 'decent-protocol';
 import { PublicWorkspaceController } from '../../src/app/workspace/PublicWorkspaceController';
 
 class FakePersistentStore {
@@ -116,6 +116,48 @@ describe('PublicWorkspaceController', () => {
     const page2 = controller.buildPageFromWorkspace('ws-2', { cursor: page1.nextCursor, pageSize: 2 });
     expect(page2.members.map((member) => member.peerId)).toEqual(['p3']);
     expect(page2.nextCursor).toBeUndefined();
+
+    const page3 = controller.buildPageFromWorkspace('ws-2', { cursor: 'c', pageSize: 2 });
+    expect(page3.members).toEqual([]);
+    expect(page3.nextCursor).toBeUndefined();
+  });
+
+  test('filters shard-scoped pages using deterministic shard prefixes', async () => {
+    const workspaceManager = new WorkspaceManager();
+    const store = new FakePersistentStore();
+    const controller = new PublicWorkspaceController(workspaceManager, store as any);
+    const planner = new DirectoryShardPlanner();
+
+    await controller.ingestWorkspaceShell({
+      id: 'ws-shards',
+      name: 'Workspace',
+      createdBy: 'owner',
+      createdAt: 1,
+      version: 2,
+      memberCount: 3,
+      channelCount: 1,
+    });
+
+    const members = [
+      { peerId: 'p1', alias: 'Alice', role: 'owner' as const, joinedAt: 1, identityId: 'alpha' },
+      { peerId: 'p2', alias: 'Bob', role: 'member' as const, joinedAt: 2, identityId: 'beta' },
+      { peerId: 'p3', alias: 'Cara', role: 'member' as const, joinedAt: 3, identityId: 'gamma' },
+    ];
+
+    await controller.ingestMemberPage({
+      workspaceId: 'ws-shards',
+      pageSize: 3,
+      members,
+    });
+
+    const target = members[0]!;
+    const shardPrefix = planner.getShardPrefixForMember(target);
+    const shardPage = controller.buildPageFromWorkspace('ws-shards', { pageSize: 50, shardPrefix });
+
+    expect(shardPage.members.length).toBeGreaterThan(0);
+    for (const member of shardPage.members) {
+      expect(planner.getShardPrefixForMember(member)).toBe(shardPrefix);
+    }
   });
 
   test('prefers hydrated workspace-member updates over stale paged directory records', async () => {

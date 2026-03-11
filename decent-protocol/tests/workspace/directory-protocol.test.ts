@@ -95,9 +95,37 @@ describe('DirectoryProtocol', () => {
     expect([...firstIds].some((id) => secondIds.has(id))).toBe(false);
   });
 
+  test('does not wrap back to the first page after the terminal cursor', () => {
+    const page = protocol.getMemberPage(workspaceId, { pageSize: 50 });
+    expect(page.nextCursor).toBeUndefined();
+
+    const last = page.members[page.members.length - 1]!;
+    const beyondEnd = protocol.getMemberPage(workspaceId, {
+      pageSize: 50,
+      cursor: `${last.identityId || last.peerId}`,
+    });
+
+    expect(beyondEnd.members).toHaveLength(0);
+    expect(beyondEnd.nextCursor).toBeUndefined();
+  });
+
   test('caps requested page size aggressively', () => {
     const page = protocol.getMemberPage(workspaceId, { pageSize: 9999 });
     expect(page.pageSize).toBe(200);
+  });
+
+  test('includes allowWorkspaceDMs in member summaries', () => {
+    wm.addMember(workspaceId, {
+      peerId: 'frank',
+      alias: 'Frank',
+      publicKey: 'frank-pk',
+      joinedAt: 20,
+      role: 'member',
+      allowWorkspaceDMs: false,
+    });
+
+    const page = protocol.getMemberPage(workspaceId, { pageSize: 200 });
+    expect(page.members.find((member) => member.peerId === 'frank')?.allowWorkspaceDMs).toBe(false);
   });
 
   test('supports shard-scoped page requests', () => {

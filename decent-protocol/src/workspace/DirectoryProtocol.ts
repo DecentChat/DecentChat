@@ -34,7 +34,10 @@ export class DirectoryProtocol {
 
     const cursor = opts.cursor;
     const startIndex = cursor
-      ? Math.max(0, members.findIndex((member) => this.memberCursor(member) > cursor))
+      ? (() => {
+          const idx = members.findIndex((member) => this.memberCursor(member) > cursor);
+          return idx >= 0 ? idx : members.length;
+        })()
       : 0;
     const pageMembers = members.slice(startIndex, startIndex + pageSize);
     const hasMore = startIndex + pageSize < members.length;
@@ -115,6 +118,7 @@ export class DirectoryProtocol {
       joinedAt: member.joinedAt,
       identityId: member.identityId,
       isBot: member.isBot,
+      allowWorkspaceDMs: member.allowWorkspaceDMs,
     };
   }
 

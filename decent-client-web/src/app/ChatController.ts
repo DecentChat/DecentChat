@@ -1820,6 +1820,12 @@ export class ChatController {
   private handleWorkspaceShellRequest(peerId: string, workspaceId: string): void {
     const ws = this.workspaceManager.getWorkspace(workspaceId);
     if (!ws) return;
+    if (this.workspaceManager.isBanned(workspaceId, peerId)) return;
+
+    const snapshot = this.publicWorkspaceController.getSnapshot(workspaceId);
+    const isKnownMember = ws.members.some((member) => member.peerId === peerId)
+      || snapshot.members.some((member) => member.peerId === peerId);
+    if (!isKnownMember) return;
 
     this.sendControlWithRetry(peerId, {
       type: 'workspace-sync',
@@ -1856,6 +1862,15 @@ export class ChatController {
   }
 
   private handleMemberPageRequest(peerId: string, sync: { workspaceId: string; cursor?: string; pageSize?: number; shardPrefix?: string }): void {
+    const ws = this.workspaceManager.getWorkspace(sync.workspaceId);
+    if (!ws) return;
+    if (this.workspaceManager.isBanned(sync.workspaceId, peerId)) return;
+
+    const snapshot = this.publicWorkspaceController.getSnapshot(sync.workspaceId);
+    const isKnownMember = ws.members.some((member) => member.peerId === peerId)
+      || snapshot.members.some((member) => member.peerId === peerId);
+    if (!isKnownMember) return;
+
     const page = this.publicWorkspaceController.buildPageFromWorkspace(sync.workspaceId, {
       cursor: sync.cursor,
       pageSize: sync.pageSize,
@@ -6877,13 +6892,22 @@ export class ChatController {
     hasMore: boolean;
   } {
     const snapshot = this.publicWorkspaceController.getSnapshot(workspaceId);
+    const identityState = new Map<string, { hasMe: boolean; hasOnline: boolean }>();
+
+    for (const member of snapshot.members) {
+      const identityKey = member.identityId || member.peerId;
+      const aggregate = identityState.get(identityKey) || { hasMe: false, hasOnline: false };
+      if (member.peerId === this.state.myPeerId) aggregate.hasMe = true;
+      if (this.state.readyPeers.has(member.peerId)) aggregate.hasOnline = true;
+      identityState.set(identityKey, aggregate);
+    }
+
     const members = snapshot.members.map((member) => {
       const localMember = this.workspaceManager.getMember(workspaceId, member.peerId);
-      const identityPeerIds = member.identityId
-        ? snapshot.members.filter((candidate) => candidate.identityId === member.identityId).map((candidate) => candidate.peerId)
-        : [member.peerId];
-      const isYou = identityPeerIds.includes(this.state.myPeerId);
-      const isOnline = isYou || identityPeerIds.some((peerId) => this.state.readyPeers.has(peerId));
+      const identityKey = member.identityId || member.peerId;
+      const aggregate = identityState.get(identityKey);
+      const isYou = aggregate?.hasMe === true;
+      const isOnline = isYou || aggregate?.hasOnline === true;
 
       return {
         peerId: member.peerId,

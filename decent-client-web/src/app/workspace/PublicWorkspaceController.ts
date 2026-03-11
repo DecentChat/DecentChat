@@ -1,4 +1,4 @@
-import { DEFAULT_WORKSPACE_PERMISSIONS } from 'decent-protocol';
+import { DEFAULT_WORKSPACE_PERMISSIONS, DirectoryShardPlanner } from 'decent-protocol';
 import type {
   MemberDirectoryPage,
   MemberSummary,
@@ -27,6 +27,7 @@ export interface WorkspaceDirectorySnapshot {
 
 export class PublicWorkspaceController {
   private readonly runtime = new Map<string, WorkspaceDirectoryRuntime>();
+  private readonly shardPlanner = new DirectoryShardPlanner();
 
   constructor(
     private readonly workspaceManager: WorkspaceManager,
@@ -140,16 +141,17 @@ export class PublicWorkspaceController {
     const pageSize = this.clampPageSize(options.pageSize);
 
     const filtered = snapshot.members
-      .filter((member) => {
-        if (!options.shardPrefix) return true;
-        const key = member.identityId || member.peerId;
-        return key.startsWith(options.shardPrefix);
-      })
+      .filter((member) => (
+        !options.shardPrefix || this.shardPlanner.getShardPrefixForMember(member) === options.shardPrefix
+      ))
       .sort((a, b) => this.memberCursor(a).localeCompare(this.memberCursor(b)));
 
     const cursor = options.cursor;
     const startIndex = cursor
-      ? Math.max(0, filtered.findIndex((member) => this.memberCursor(member) > cursor))
+      ? (() => {
+          const idx = filtered.findIndex((member) => this.memberCursor(member) > cursor);
+          return idx >= 0 ? idx : filtered.length;
+        })()
       : 0;
     const members = filtered.slice(startIndex, startIndex + pageSize);
     const hasMore = startIndex + pageSize < filtered.length;
