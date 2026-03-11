@@ -275,6 +275,9 @@ async function init(): Promise<void> {
     },
     getMyPublicKey: () => ctrl.myPublicKey,
     getAllWorkspaces: () => ctrl.workspaceManager.getAllWorkspaces(),
+    getWorkspaceMemberDirectory: (workspaceId) => ctrl.getWorkspaceMemberDirectory(workspaceId),
+    prefetchWorkspaceMemberDirectory: (workspaceId) => ctrl.prefetchWorkspaceMemberDirectory(workspaceId),
+    onWorkspaceActivated: (workspaceId) => ctrl.onWorkspaceActivated(workspaceId),
     setWorkspaceAlias: (wsId, alias) => ctrl.setWorkspaceAlias(wsId, alias),
     getUnreadCount: (channelId) => ctrl.notifications.getUnreadCount(channelId),
     getActivityItems: () => ctrl.getActivityItems(),
@@ -407,11 +410,13 @@ async function init(): Promise<void> {
 
       const settings = await ctrl.persistentStore.getSettings<AppSettings>(landingDefaults);
       const myAlias = await ctrl.persistentStore.getSetting('myAlias');
+      await ctrl.publicWorkspaceController.restoreFromStorage();
       const savedWorkspaces = await ctrl.persistentStore.getAllWorkspaces();
 
       for (const ws of savedWorkspaces) {
         try {
           ctrl.workspaceManager.importWorkspace(ws);
+          ctrl.publicWorkspaceController.ingestWorkspaceSnapshot(ws);
         } catch {
           // Ignore malformed workspace records on landing path.
         }
@@ -749,6 +754,7 @@ async function init(): Promise<void> {
         : null;
 
       state.activeWorkspaceId = restoredWorkspace?.id || allWorkspaces[0].id;
+      void ctrl.onWorkspaceActivated(state.activeWorkspaceId);
       const ws = ctrl.workspaceManager.getWorkspace(state.activeWorkspaceId!)!;
 
       const restoredChannel = lastView?.channelId

@@ -1,0 +1,119 @@
+import { describe, expect, test } from 'bun:test';
+import { WorkspaceManager, type MemberDirectoryPage, type WorkspaceShell } from 'decent-protocol';
+import { PublicWorkspaceController } from '../../src/app/workspace/PublicWorkspaceController';
+
+class FakePersistentStore {
+  shells: WorkspaceShell[] = [];
+  pagesByWorkspace = new Map<string, MemberDirectoryPage[]>();
+
+  async getAllWorkspaceShells(): Promise<WorkspaceShell[]> {
+    return this.shells;
+  }
+
+  async getMemberDirectoryPages(workspaceId: string): Promise<MemberDirectoryPage[]> {
+    return this.pagesByWorkspace.get(workspaceId) || [];
+  }
+
+  async saveWorkspaceShell(shell: WorkspaceShell): Promise<void> {
+    const idx = this.shells.findIndex((entry) => entry.id === shell.id);
+    if (idx >= 0) this.shells[idx] = shell;
+    else this.shells.push(shell);
+  }
+
+  async saveMemberDirectoryPage(page: MemberDirectoryPage): Promise<void> {
+    const pages = this.pagesByWorkspace.get(page.workspaceId) || [];
+    pages.push(page);
+    this.pagesByWorkspace.set(page.workspaceId, pages);
+  }
+}
+
+describe('PublicWorkspaceController', () => {
+  test('restores shell-first workspace placeholders from storage', async () => {
+    const workspaceManager = new WorkspaceManager();
+    const store = new FakePersistentStore();
+    store.shells.push({
+      id: 'ws-shell-only',
+      name: 'Big Public Workspace',
+      createdBy: 'owner-peer',
+      createdAt: 1,
+      version: 4,
+      memberCount: 5000,
+      channelCount: 12,
+    });
+
+    const controller = new PublicWorkspaceController(workspaceManager, store as any);
+    await controller.restoreFromStorage();
+
+    const restored = workspaceManager.getWorkspace('ws-shell-only');
+    expect(restored).toBeDefined();
+    expect(restored?.name).toBe('Big Public Workspace');
+    expect(restored?.members.length).toBe(0);
+    expect(restored?.shell?.memberCount).toBe(5000);
+  });
+
+  test('ingests member pages and exposes loaded vs total counts', async () => {
+    const workspaceManager = new WorkspaceManager();
+    const store = new FakePersistentStore();
+    const controller = new PublicWorkspaceController(workspaceManager, store as any);
+
+    await controller.ingestWorkspaceShell({
+      id: 'ws-1',
+      name: 'Workspace',
+      createdBy: 'owner',
+      createdAt: 1,
+      version: 2,
+      memberCount: 3,
+      channelCount: 1,
+    }, 'INVITE123');
+
+    await controller.ingestMemberPage({
+      workspaceId: 'ws-1',
+      pageSize: 2,
+      members: [
+        { peerId: 'a', alias: 'Alice', role: 'owner', joinedAt: 1 },
+        { peerId: 'b', alias: 'Bob', role: 'member', joinedAt: 2 },
+      ],
+      nextCursor: 'b',
+    });
+
+    const snapshot = controller.getSnapshot('ws-1');
+    expect(snapshot.loadedCount).toBe(2);
+    expect(snapshot.totalCount).toBe(3);
+    expect(snapshot.hasMore).toBe(true);
+    expect(snapshot.members.map((member) => member.alias)).toEqual(['Alice', 'Bob']);
+  });
+
+  test('builds deterministic pages from known member directory data', async () => {
+    const workspaceManager = new WorkspaceManager();
+    const store = new FakePersistentStore();
+    const controller = new PublicWorkspaceController(workspaceManager, store as any);
+
+    await controller.ingestWorkspaceShell({
+      id: 'ws-2',
+      name: 'Workspace',
+      createdBy: 'owner',
+      createdAt: 1,
+      version: 2,
+      memberCount: 3,
+      channelCount: 1,
+    });
+
+    await controller.ingestMemberPage({
+      workspaceId: 'ws-2',
+      pageSize: 3,
+      members: [
+        { peerId: 'p1', alias: 'Alice', role: 'owner', joinedAt: 1, identityId: 'a' },
+        { peerId: 'p2', alias: 'Bob', role: 'member', joinedAt: 2, identityId: 'b' },
+        { peerId: 'p3', alias: 'Cara', role: 'member', joinedAt: 3, identityId: 'c' },
+      ],
+    });
+
+    const page1 = controller.buildPageFromWorkspace('ws-2', { pageSize: 2 });
+    expect(page1.members.map((member) => member.peerId)).toEqual(['p1', 'p2']);
+    expect(page1.nextCursor).toBe('b');
+
+    const page2 = controller.buildPageFromWorkspace('ws-2', { cursor: page1.nextCursor, pageSize: 2 });
+    expect(page2.members.map((member) => member.peerId)).toEqual(['p3']);
+    expect(page2.nextCursor).toBeUndefined();
+  });
+});

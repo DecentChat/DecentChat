@@ -55,8 +55,24 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
       : null;
     const channels = ws ? workspaceManager.getChannels(ws.id) : [];
 
+    const directoryView = ws ? callbacks.getWorkspaceMemberDirectory?.(ws.id) : null;
+
     const memberData = ws
       ? (() => {
+          if (directoryView && directoryView.members.length > 0) {
+            return directoryView.members.map((member) => ({
+              peerId: member.peerId,
+              alias: member.alias || getPeerAlias(member.peerId),
+              isOnline: member.isOnline,
+              isMe: member.isYou,
+              role: member.role,
+              isBot: member.isBot,
+              allowWorkspaceDMs: member.allowWorkspaceDMs,
+              statusClass: peerStatusClass(member.peerId),
+              statusTitle: peerStatusTitle(member.peerId),
+            }));
+          }
+
           const seen = new Set<string>();
           return ws.members.filter((m: any) => {
             const key = m.identityId || m.peerId;
@@ -115,9 +131,14 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
     } else {
       const ws = state.activeWorkspaceId ? workspaceManager.getWorkspace(state.activeWorkspaceId) : null;
       const channel = state.activeChannelId && ws ? workspaceManager.getChannel(ws.id, state.activeChannelId) : null;
-      if (channel) {
+      if (ws && channel) {
         channelName = channel.type === 'dm' ? channel.name : `# ${channel.name}`;
-        memberCount = channel.members.length;
+        if (channel.type === 'channel' && channel.accessPolicy?.mode === 'public-workspace') {
+          const directoryView = callbacks.getWorkspaceMemberDirectory?.(ws.id);
+          memberCount = directoryView?.totalCount ?? ws.shell?.memberCount ?? ws.members.length;
+        } else {
+          memberCount = channel.members.length;
+        }
       }
     }
 

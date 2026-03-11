@@ -43,6 +43,7 @@ import type {
   TimeSyncRequest, TimeSyncResponse,
   NegentropyQuery, NegentropyResponse,
   Contact, DirectConversation,
+  WorkspaceShell, MemberDirectoryPage, MemberSummary,
 } from 'decent-protocol';
 import {
   buildWorkspaceInviteLists,
@@ -55,6 +56,7 @@ import type {
   WorkspaceInviteRegistry,
   WorkspaceInviteView,
 } from './inviteRegistry';
+import { PublicWorkspaceController } from './workspace/PublicWorkspaceController';
 
 import { PeerTransport, ICE_SERVERS_WITH_TURN } from 'decent-transport-webrtc';
 import { KeyStore } from '../crypto/KeyStore';
@@ -77,6 +79,8 @@ import type { TopologyDebugSnapshot, TopologyMaintenanceEvent, TopologyPeerEvent
 
 const PROTOCOL_VERSION = 2;
 const NEGENTROPY_SYNC_CAPABILITY = 'negentropy-sync-v1';
+const WORKSPACE_SHELL_CAPABILITY = 'workspace-shell-v1';
+const MEMBER_DIRECTORY_CAPABILITY = 'member-directory-v1';
 const DIRECTORY_SHARD_CAPABILITY_PREFIX = 'directory-shard:';
 const RELAY_CHANNEL_CAPABILITY_PREFIX = 'relay-channel:';
 const ARCHIVE_HISTORY_CAPABILITY = 'archive-history-v1';
@@ -197,6 +201,7 @@ export class ChatController {
   readonly messageStore: MessageStore;
   readonly workspaceManager: WorkspaceManager;
   readonly persistentStore: PersistentStore;
+  readonly publicWorkspaceController: PublicWorkspaceController;
   readonly offlineQueue: OfflineQueue;
   readonly messageCRDTs: Map<string, MessageCRDT> = new Map();
   readonly mediaStore: MediaStore;
@@ -345,6 +350,7 @@ export class ChatController {
     this.messageStore = new MessageStore();
     this.workspaceManager = new WorkspaceManager();
     this.persistentStore = new PersistentStore();
+    this.publicWorkspaceController = new PublicWorkspaceController(this.workspaceManager, this.persistentStore);
     this.offlineQueue = new OfflineQueue({ maxAgeMs: 7 * 24 * 60 * 60 * 1000 });
     this.blobStorage = new IndexedDBBlobStorage();
     this.mediaStore = new MediaStore(this.blobStorage);
@@ -906,6 +912,12 @@ export class ChatController {
 
           // Send workspace state to new peer (channels, members, name)
           this.sendWorkspaceState(peerId);
+
+          // Shell-first + paged directory sync path for scalable public workspaces.
+          if (this.state.activeWorkspaceId) {
+            this.requestWorkspaceShell(peerId, this.state.activeWorkspaceId);
+            void this.prefetchWorkspaceMemberDirectory(this.state.activeWorkspaceId, peerId);
+          }
 
           // Announce our display name for this workspace
           if (this.state.activeWorkspaceId) {
@@ -1733,7 +1745,195 @@ export class ChatController {
     }, { label: 'workspace-sync' });
   }
 
+  private buildWorkspaceShell(workspace: Workspace): WorkspaceShell {
+    return this.publicWorkspaceController.buildShell(workspace);
+  }
+
+  private selectWorkspaceSyncTargetPeer(workspaceId: string, capability: string, preferredPeerId?: string): string | null {
+    if (preferredPeerId && this.state.readyPeers.has(preferredPeerId) && this.peerSupportsCapability(preferredPeerId, capability)) {
+      return preferredPeerId;
+    }
+
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    const workspaceMembers = new Set((workspace?.members ?? []).map((member) => member.peerId));
+
+    for (const peerId of this.state.readyPeers) {
+      if (!this.peerSupportsCapability(peerId, capability)) continue;
+      if (workspaceMembers.size === 0 || workspaceMembers.has(peerId)) return peerId;
+    }
+
+    return null;
+  }
+
+  private requestWorkspaceShell(peerId: string, workspaceId: string): void {
+    if (!workspaceId) return;
+    if (!this.state.readyPeers.has(peerId)) return;
+    if (!this.peerSupportsCapability(peerId, WORKSPACE_SHELL_CAPABILITY)) return;
+
+    this.sendControlWithRetry(peerId, {
+      type: 'workspace-sync',
+      workspaceId,
+      sync: {
+        type: 'workspace-shell-request',
+        workspaceId,
+      },
+    }, { label: 'workspace-sync' });
+  }
+
+  async prefetchWorkspaceMemberDirectory(workspaceId: string, preferredPeerId?: string): Promise<void> {
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (!ws) return;
+
+    const snapshot = this.publicWorkspaceController.getSnapshot(workspaceId);
+    const shouldUsePagedDirectory = (ws.shell?.memberCount ?? snapshot.totalCount) > ws.members.length;
+    if (!shouldUsePagedDirectory) return;
+    if (!snapshot.hasMore && snapshot.loadedCount > 0) return;
+
+    const cursor = snapshot.nextCursor;
+    if (!this.publicWorkspaceController.beginPageRequest(workspaceId, cursor)) return;
+
+    const targetPeerId = this.selectWorkspaceSyncTargetPeer(
+      workspaceId,
+      MEMBER_DIRECTORY_CAPABILITY,
+      preferredPeerId,
+    );
+    if (!targetPeerId) {
+      this.publicWorkspaceController.endPageRequest(workspaceId, cursor);
+      return;
+    }
+
+    this.sendControlWithRetry(targetPeerId, {
+      type: 'workspace-sync',
+      workspaceId,
+      sync: {
+        type: 'member-page-request',
+        workspaceId,
+        cursor,
+        pageSize: 100,
+      },
+    }, { label: 'workspace-sync' });
+
+    // Fail-open timeout in case the peer never answers.
+    setTimeout(() => this.publicWorkspaceController.endPageRequest(workspaceId, cursor), 5000);
+  }
+
+  private handleWorkspaceShellRequest(peerId: string, workspaceId: string): void {
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (!ws) return;
+
+    this.sendControlWithRetry(peerId, {
+      type: 'workspace-sync',
+      workspaceId,
+      sync: {
+        type: 'workspace-shell-response',
+        shell: this.buildWorkspaceShell(ws),
+        inviteCode: ws.inviteCode,
+      },
+    }, { label: 'workspace-sync' });
+  }
+
+  private async handleWorkspaceShellResponse(peerId: string, shell: WorkspaceShell, inviteCode?: string): Promise<void> {
+    await this.publicWorkspaceController.ingestWorkspaceShell(shell, inviteCode);
+
+    const ws = this.workspaceManager.getWorkspace(shell.id);
+    if (ws) {
+      ws.shell = shell;
+      ws.version = shell.version;
+      await this.persistWorkspace(ws.id);
+    }
+
+    if (!this.state.activeWorkspaceId) {
+      this.state.activeWorkspaceId = shell.id;
+      this.state.activeChannelId = ws?.channels[0]?.id || this.state.activeChannelId;
+    }
+
+    if (this.state.activeWorkspaceId === shell.id) {
+      this.ui?.updateWorkspaceRail?.();
+      this.ui?.updateSidebar();
+    }
+
+    void this.prefetchWorkspaceMemberDirectory(shell.id, peerId);
+  }
+
+  private handleMemberPageRequest(peerId: string, sync: { workspaceId: string; cursor?: string; pageSize?: number; shardPrefix?: string }): void {
+    const page = this.publicWorkspaceController.buildPageFromWorkspace(sync.workspaceId, {
+      cursor: sync.cursor,
+      pageSize: sync.pageSize,
+      shardPrefix: sync.shardPrefix,
+    });
+
+    this.sendControlWithRetry(peerId, {
+      type: 'workspace-sync',
+      workspaceId: sync.workspaceId,
+      sync: {
+        type: 'member-page-response',
+        page,
+      },
+    }, { label: 'workspace-sync' });
+  }
+
+  private async handleMemberPageResponse(page: MemberDirectoryPage): Promise<void> {
+    await this.publicWorkspaceController.ingestMemberPage(page);
+    this.publicWorkspaceController.endPageRequest(page.workspaceId, page.cursor);
+
+    if (this.state.activeWorkspaceId === page.workspaceId) {
+      this.ui?.updateSidebar();
+    }
+  }
+
+  private async handleDirectoryShardAdvertisement(shard: { workspaceId: string; shardId: string; shardPrefix: string; replicaPeerIds: string[]; version?: number }): Promise<void> {
+    const ws = this.workspaceManager.getWorkspace(shard.workspaceId);
+    if (!ws) return;
+
+    const current = [...(ws.directoryShards ?? [])];
+    const idx = current.findIndex((entry) => entry.shardId === shard.shardId);
+    if (idx >= 0) {
+      const existing = current[idx]!;
+      const nextVersion = shard.version ?? 0;
+      const existingVersion = existing.version ?? 0;
+      if (nextVersion < existingVersion) return;
+      current[idx] = {
+        ...existing,
+        ...shard,
+        replicaPeerIds: [...new Set([...(existing.replicaPeerIds ?? []), ...(shard.replicaPeerIds ?? [])])].sort(),
+      };
+    } else {
+      current.push({
+        ...shard,
+        replicaPeerIds: [...new Set(shard.replicaPeerIds ?? [])].sort(),
+      });
+    }
+
+    ws.directoryShards = current.sort((a, b) => a.shardId.localeCompare(b.shardId));
+    await this.persistWorkspace(ws.id);
+  }
+
   private async handleSyncMessage(peerId: string, msg: any): Promise<void> {
+    if (msg.sync?.type === 'workspace-shell-request' && msg.sync.workspaceId) {
+      this.handleWorkspaceShellRequest(peerId, msg.sync.workspaceId);
+      return;
+    }
+
+    if (msg.sync?.type === 'workspace-shell-response' && msg.sync.shell) {
+      await this.handleWorkspaceShellResponse(peerId, msg.sync.shell, msg.sync.inviteCode);
+      return;
+    }
+
+    if (msg.sync?.type === 'member-page-request' && msg.sync.workspaceId) {
+      this.handleMemberPageRequest(peerId, msg.sync);
+      return;
+    }
+
+    if (msg.sync?.type === 'member-page-response' && msg.sync.page?.workspaceId) {
+      await this.handleMemberPageResponse(msg.sync.page);
+      return;
+    }
+
+    if (msg.sync?.type === 'directory-shard-advertisement' && msg.sync.shard?.workspaceId) {
+      await this.handleDirectoryShardAdvertisement(msg.sync.shard);
+      return;
+    }
+
     // Handle workspace state sync (channels, members, name)
     if (msg.sync?.type === 'workspace-state' && msg.workspaceId) {
       console.log('[Sync] Received workspace-state from', peerId.slice(0,8), 
@@ -2378,6 +2578,9 @@ export class ChatController {
         }, 4000);
       }
     }
+
+    localWs.shell = this.buildWorkspaceShell(localWs);
+    this.publicWorkspaceController.ingestWorkspaceSnapshot(localWs);
 
     // Persist updated workspace state
     await this.persistWorkspace(localWs.id);
@@ -3673,10 +3876,15 @@ export class ChatController {
     const rawInviteRegistry = await this.persistentStore.getSetting(ChatController.WORKSPACE_INVITES_SETTING_KEY);
     this.workspaceInviteRegistry = normalizeWorkspaceInviteRegistry(rawInviteRegistry);
 
-    const workspaces = await this.persistentStore.getAllWorkspaces();
-    console.log('[DecentChat] restoreFromStorage: found', workspaces.length, 'workspaces');
-    for (const ws of workspaces) {
+    // Shell-first boot path: restore lightweight workspace shells and any persisted
+    // member-directory pages before hydrating full legacy workspace blobs.
+    await this.publicWorkspaceController.restoreFromStorage();
+
+    const persistedWorkspaces = await this.persistentStore.getAllWorkspaces();
+    console.log('[DecentChat] restoreFromStorage: found', persistedWorkspaces.length, 'full workspaces');
+    for (const ws of persistedWorkspaces) {
       this.workspaceManager.importWorkspace(ws);
+      this.publicWorkspaceController.ingestWorkspaceSnapshot(ws);
 
       // DEP-002: Restore server discovery for this workspace
       await this.restoreServerDiscovery(ws.id, getDefaultSignalingServer());
@@ -3731,7 +3939,7 @@ export class ChatController {
     }
 
     // DEP-002: Start periodic PEX broadcasts
-    if (workspaces.length > 0) {
+    if (this.workspaceManager.getAllWorkspaces().length > 0) {
       this.startPEXBroadcasts();
       this.startPeerMaintenance();  // T2.5
       this.startQuotaChecks();      // T2.4
@@ -3745,6 +3953,7 @@ export class ChatController {
       await this.persistentStore.saveWorkspace(
         this.workspaceManager.exportWorkspace(workspaceId),
       );
+      await this.publicWorkspaceController.persistWorkspaceShell(ws);
     }
   }
 
@@ -4225,6 +4434,7 @@ export class ChatController {
     // Set as active workspace
     this.state.activeWorkspaceId = ws.id;
     this.state.activeChannelId = ws.channels[0]?.id || null;
+    void this.onWorkspaceActivated(ws.id);
 
     // Persist provisional workspace (will be rolled back if not validated by owner state).
     await this.persistWorkspace(ws.id);
@@ -5994,7 +6204,11 @@ export class ChatController {
   }
 
   private getAdvertisedControlCapabilities(workspaceId?: string): string[] {
-    const capabilities = new Set<string>([NEGENTROPY_SYNC_CAPABILITY]);
+    const capabilities = new Set<string>([
+      NEGENTROPY_SYNC_CAPABILITY,
+      WORKSPACE_SHELL_CAPABILITY,
+      MEMBER_DIRECTORY_CAPABILITY,
+    ]);
     if (!workspaceId) return [...capabilities];
 
     const workspace = this.workspaceManager.getWorkspace(workspaceId);
@@ -6613,6 +6827,8 @@ export class ChatController {
       if (ws.channels.some((ch: any) => ch.id === channelId)) {
         const member = ws.members.find((m: any) => m.peerId === peerId);
         if (member?.alias) return member.alias;
+        const directoryAlias = this.publicWorkspaceController.getMemberAlias(peerId, ws.id);
+        if (directoryAlias?.trim()) return directoryAlias;
       }
     }
     return peerId.slice(0, 8);
@@ -6635,8 +6851,58 @@ export class ChatController {
       if (member?.alias && member.alias.trim()) return member.alias;
     }
 
-    // 3. Truncated peer ID
+    // 3. Directory-page alias (shell-first / paged workspace sync path)
+    const pagedAlias = this.publicWorkspaceController.getMemberAlias(peerId);
+    if (pagedAlias?.trim()) return pagedAlias;
+
+    // 4. Truncated peer ID
     return peerId.slice(0, 8);
+  }
+
+  getWorkspaceMemberDirectory(workspaceId: string): {
+    members: Array<{
+      peerId: string;
+      alias: string;
+      role: MemberSummary['role'];
+      isBot: boolean;
+      isOnline: boolean;
+      isYou: boolean;
+      allowWorkspaceDMs: boolean;
+    }>;
+    loadedCount: number;
+    totalCount: number;
+    hasMore: boolean;
+  } {
+    const snapshot = this.publicWorkspaceController.getSnapshot(workspaceId);
+    const members = snapshot.members.map((member) => {
+      const localMember = this.workspaceManager.getMember(workspaceId, member.peerId);
+      const identityPeerIds = member.identityId
+        ? snapshot.members.filter((candidate) => candidate.identityId === member.identityId).map((candidate) => candidate.peerId)
+        : [member.peerId];
+      const isYou = identityPeerIds.includes(this.state.myPeerId);
+      const isOnline = isYou || identityPeerIds.some((peerId) => this.state.readyPeers.has(peerId));
+
+      return {
+        peerId: member.peerId,
+        alias: member.alias,
+        role: member.role,
+        isBot: member.isBot === true,
+        isOnline,
+        isYou,
+        allowWorkspaceDMs: localMember?.allowWorkspaceDMs !== false,
+      };
+    });
+
+    return {
+      members,
+      loadedCount: snapshot.loadedCount,
+      totalCount: snapshot.totalCount,
+      hasMore: snapshot.hasMore,
+    };
+  }
+
+  async onWorkspaceActivated(workspaceId: string): Promise<void> {
+    await this.prefetchWorkspaceMemberDirectory(workspaceId);
   }
 
   /** Returns display name for the given workspace, falling back to global alias or peer ID slice */

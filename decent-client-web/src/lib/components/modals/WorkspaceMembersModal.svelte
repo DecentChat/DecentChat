@@ -17,6 +17,9 @@
 
   interface WorkspaceMembersConfig {
     members: WorkspaceMember[];
+    loadedCount?: number;
+    totalCount?: number;
+    hasMore?: boolean;
     isOwner: boolean;
     isAdminOrOwner: boolean;
     onRemove: (peerId: string) => Promise<{ success: boolean; error?: string }>;
@@ -49,6 +52,9 @@
 <script lang="ts">
   interface Props {
     members: WorkspaceMember[];
+    loadedCount?: number;
+    totalCount?: number;
+    hasMore?: boolean;
     isOwner: boolean;
     isAdminOrOwner: boolean;
     onRemove: (peerId: string) => Promise<{ success: boolean; error?: string }>;
@@ -60,7 +66,21 @@
     onClose: () => void;
   }
 
-  let { members: initialMembers, isOwner, isAdminOrOwner, onRemove, onBan, onPromote, onDemote, onToast, onRefresh, onClose }: Props = $props();
+  let {
+    members: initialMembers,
+    loadedCount,
+    totalCount,
+    hasMore = false,
+    isOwner,
+    isAdminOrOwner,
+    onRemove,
+    onBan,
+    onPromote,
+    onDemote,
+    onToast,
+    onRefresh,
+    onClose,
+  }: Props = $props();
 
   let members = $state(initialMembers);
 
@@ -124,7 +144,15 @@
     <h2>Workspace Members</h2>
     <form onsubmit={(e) => { e.preventDefault(); onClose(); }}>
       <div class="form-group" style="margin-bottom: 8px;">
-        <div id="members-count-label" style="font-size: 13px; color: var(--text-muted);">{members.length} member{members.length === 1 ? '' : 's'}</div>
+        {@const visibleCount = members.length}
+        {@const totalMemberCount = totalCount ?? visibleCount}
+        <div id="members-count-label" style="font-size: 13px; color: var(--text-muted);">
+          {#if hasMore && totalMemberCount > visibleCount}
+            Showing {visibleCount} of {totalMemberCount} members
+          {:else}
+            {members.length} member{members.length === 1 ? '' : 's'}
+          {/if}
+        </div>
       </div>
       <div class="members-list">
         {#each members as member (member.peerId)}

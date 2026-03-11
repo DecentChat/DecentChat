@@ -207,6 +207,7 @@ export function createUIService(
     state.activeChannelId = ws.channels[0]?.id || null;
     closeThread();
     persistViewState();
+    void callbacks.onWorkspaceActivated?.(workspaceId);
     void refreshContactsCache();
     updateSidebar();
     syncShellRail();

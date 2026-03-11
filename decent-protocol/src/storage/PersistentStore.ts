@@ -158,6 +158,10 @@ export class PersistentStore {
     return this.get(PUBLIC_WORKSPACE_STORES.workspaceShells, id);
   }
 
+  async getAllWorkspaceShells(): Promise<WorkspaceShell[]> {
+    return this.getAll(PUBLIC_WORKSPACE_STORES.workspaceShells) as Promise<WorkspaceShell[]>;
+  }
+
   async saveMemberDirectoryPage(page: MemberDirectoryPage): Promise<void> {
     await this.put(PUBLIC_WORKSPACE_STORES.memberDirectoryPages, {
       ...page,
@@ -170,6 +174,19 @@ export class PersistentStore {
     if (!result) return undefined;
     const { key, ...page } = result;
     return page as MemberDirectoryPage;
+  }
+
+  async getMemberDirectoryPages(workspaceId: string): Promise<MemberDirectoryPage[]> {
+    const records = await this.getAllByIndex(PUBLIC_WORKSPACE_STORES.memberDirectoryPages, 'workspaceId', workspaceId);
+    const pages = records.map(({ key, ...page }) => page as MemberDirectoryPage);
+    return pages.sort((a, b) => {
+      const ac = a.cursor || '';
+      const bc = b.cursor || '';
+      if (ac === bc) return 0;
+      if (!ac) return -1;
+      if (!bc) return 1;
+      return ac.localeCompare(bc);
+    });
   }
 
   async saveDirectoryShardRef(ref: DirectoryShardRef): Promise<void> {

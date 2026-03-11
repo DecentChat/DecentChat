@@ -203,6 +203,17 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     getMembers: () => {
       const ws = state.activeWorkspaceId ? workspaceManager.getWorkspace(state.activeWorkspaceId) : null;
       if (!ws) return [];
+
+      const directoryView = callbacks.getWorkspaceMemberDirectory?.(ws.id);
+      if (directoryView && directoryView.members.length > 0) {
+        return directoryView.members
+          .filter((member) => !member.isYou)
+          .map((member) => ({
+            peerId: member.peerId,
+            name: member.alias || getPeerAlias(member.peerId),
+          }));
+      }
+
       return ws.members.filter((m: any) => m.peerId !== state.myPeerId).map((m: any) => ({
         peerId: m.peerId, name: getPeerAlias(m.peerId),
       }));

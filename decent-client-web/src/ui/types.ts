@@ -35,6 +35,21 @@ export interface WorkspaceInviteLists {
   revoked: WorkspaceInviteItem[];
 }
 
+export interface WorkspaceMemberDirectoryView {
+  members: Array<{
+    peerId: string;
+    alias: string;
+    role: 'owner' | 'admin' | 'member';
+    isBot: boolean;
+    isOnline: boolean;
+    isYou: boolean;
+    allowWorkspaceDMs: boolean;
+  }>;
+  loadedCount: number;
+  totalCount: number;
+  hasMore: boolean;
+}
+
 export interface UICallbacks {
   sendMessage: (content: string, threadId?: string) => Promise<void>;
   sendAttachment: (file: File, text?: string, threadId?: string) => Promise<void>;
@@ -85,6 +100,9 @@ export interface UICallbacks {
   startDirectMessage?: (contactPeerId: string, options?: { sourceWorkspaceId?: string }) => Promise<DirectConversation>;
   getDirectConversations?: () => Promise<DirectConversation[]>;
   getAllWorkspaces?: () => Array<import('decent-protocol').Workspace>;
+  getWorkspaceMemberDirectory?: (workspaceId: string) => WorkspaceMemberDirectoryView;
+  prefetchWorkspaceMemberDirectory?: (workspaceId: string) => Promise<void>;
+  onWorkspaceActivated?: (workspaceId: string) => void | Promise<void>;
   setWorkspaceAlias?: (wsId: string, alias: string) => void;
   getUnreadCount?: (channelId: string) => number;
   getActivityItems?: () => ActivityItem[];

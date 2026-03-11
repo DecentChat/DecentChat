@@ -266,15 +266,35 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     const channel = ws ? workspaceManager.getChannel(ws.id, state.activeChannelId) : null;
     if (!ws || !channel) return;
 
-    const channelMembers = ws.members.filter(m => channel.members.includes(m.peerId));
+    void callbacks.prefetchWorkspaceMemberDirectory?.(ws.id);
+    const directoryView = callbacks.getWorkspaceMemberDirectory?.(ws.id);
+
+    const channelMembers = channel.type === 'channel' && channel.accessPolicy?.mode === 'public-workspace'
+      ? (directoryView?.members || []).map((member) => ({
+          peerId: member.peerId,
+          alias: member.alias,
+          isBot: member.isBot,
+          isOnline: member.isOnline,
+          isYou: member.isYou,
+        }))
+      : ws.members
+          .filter(m => channel.members.includes(m.peerId))
+          .map(member => ({
+            peerId: member.peerId,
+            alias: getPeerAlias(member.peerId),
+            isBot: !!(member as any).isBot,
+            isOnline: state.connectedPeers.has(member.peerId) || member.peerId === state.myPeerId,
+            isYou: member.peerId === state.myPeerId,
+          }));
+
     svelteShowChannelMembersModal({
       channelName: channel.name,
       members: channelMembers.map(member => ({
         peerId: member.peerId,
-        name: getPeerAlias(member.peerId),
-        isOnline: state.connectedPeers.has(member.peerId) || member.peerId === state.myPeerId,
-        isYou: member.peerId === state.myPeerId,
-        isBot: !!(member as any).isBot,
+        name: member.alias,
+        isOnline: member.isOnline,
+        isYou: member.isYou,
+        isBot: member.isBot,
         color: peerColor(member.peerId),
       })),
     });
@@ -285,21 +305,40 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     const ws = workspaceManager.getWorkspace(state.activeWorkspaceId);
     if (!ws) return;
 
+    void callbacks.prefetchWorkspaceMemberDirectory?.(ws.id);
+    const directoryView = callbacks.getWorkspaceMemberDirectory?.(ws.id);
+    const directoryMembers = directoryView?.members || [];
+
     const myMember = ws.members.find(m => m.peerId === state.myPeerId);
     const myRole = myMember?.role || 'member';
     const isOwner = myRole === 'owner' || ws.createdBy === state.myPeerId || workspaceManager.isOwner(ws.id, state.myPeerId);
     const isAdminOrOwner = isOwner || myRole === 'admin' || workspaceManager.isAdmin(ws.id, state.myPeerId);
 
+    const modalMembers = directoryMembers.length > 0
+      ? directoryMembers.map((member) => ({
+          peerId: member.peerId,
+          name: member.alias || getPeerAlias(member.peerId),
+          role: member.role,
+          isBot: member.isBot,
+          isOnline: member.isOnline,
+          isYou: member.isYou,
+          color: member.isBot ? '#7c3aed' : peerColor(member.peerId),
+        }))
+      : ws.members.map(member => ({
+          peerId: member.peerId,
+          name: getPeerAlias(member.peerId),
+          role: member.role,
+          isBot: !!member.isBot,
+          isOnline: state.connectedPeers.has(member.peerId) || member.peerId === state.myPeerId,
+          isYou: member.peerId === state.myPeerId,
+          color: member.isBot ? '#7c3aed' : peerColor(member.peerId),
+        }));
+
     svelteShowWorkspaceMembersModal({
-      members: ws.members.map(member => ({
-        peerId: member.peerId,
-        name: getPeerAlias(member.peerId),
-        role: member.role,
-        isBot: !!member.isBot,
-        isOnline: state.connectedPeers.has(member.peerId) || member.peerId === state.myPeerId,
-        isYou: member.peerId === state.myPeerId,
-        color: member.isBot ? '#7c3aed' : peerColor(member.peerId),
-      })),
+      members: modalMembers,
+      loadedCount: directoryView?.loadedCount ?? modalMembers.length,
+      totalCount: directoryView?.totalCount ?? modalMembers.length,
+      hasMore: directoryView?.hasMore ?? false,
       isOwner,
       isAdminOrOwner,
       onRemove: async (peerId: string) => {
