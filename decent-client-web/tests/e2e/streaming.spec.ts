@@ -372,4 +372,54 @@ test.describe('Streaming Message Persistence on Refresh', () => {
 
     expect(count).toBe(1);
   });
+
+
+  test('sync repairs a truncated streamed message with the full content', async ({ page }) => {
+    const messageId = 'stream-msg-sync-repair';
+    const peerId = 'assistant-peer-sync-repair';
+    const partial = 'This message got cut halfway';
+    const full = 'This message got cut halfway because the last delta was missed, but sync repaired it.';
+
+    await injectStreamMessage(page, {
+      peerId,
+      messageId,
+      senderName: 'Assistant',
+      content: partial,
+    });
+    await finalizeStreamMessage(page, { peerId, messageId });
+
+    await page.evaluate(async ({ peerId, messageId, full }) => {
+      const ctrl = (window as any).__ctrl;
+      const state = (window as any).__state;
+      const ws = ctrl.workspaceManager.getWorkspace(state.activeWorkspaceId);
+      if (ws && !ws.members.some((m: any) => m.peerId === peerId)) {
+        ws.members.push({
+          peerId,
+          alias: 'Assistant',
+          publicKey: ctrl.myPublicKey,
+          joinedAt: Date.now(),
+          role: 'member',
+        });
+      }
+
+      await ctrl.transport.onMessage(peerId, {
+        type: 'message-sync-response',
+        workspaceId: state.activeWorkspaceId,
+        messages: [{
+          id: messageId,
+          channelId: state.activeChannelId,
+          senderId: peerId,
+          content: full,
+          timestamp: Date.now() + 1,
+          type: 'text',
+          vectorClock: {},
+        }],
+      });
+    }, { peerId, messageId, full });
+
+    await expect(page.locator(`.message[data-message-id="${messageId}"] .message-content`))
+      .toContainText(full);
+
+    await expect(page.locator(`.message[data-message-id="${messageId}"]`)).toHaveCount(1);
+  });
 });

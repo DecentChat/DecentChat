@@ -142,6 +142,7 @@ test('replaying the same thread reply does not resurrect a read activity badge',
     }];
 
     ctrl.ui.updateWorkspaceRail();
+    await ctrl.persistentStore.saveSetting('activityItems', (ctrl as any).activityItems);
 
     // Historical replay of the SAME reply should not flip the item back to unread.
     (ctrl as any).maybeRecordThreadActivity(firstReply, channelId);
@@ -149,6 +150,68 @@ test('replaying the same thread reply does not resurrect a read activity badge',
   }, { rootMsgId });
 
   await expect(page.locator('#activity-btn .activity-badge')).toHaveCount(0);
+});
+
+test('clicking an activity item marks it read and persists that state', async ({ page }) => {
+  test.setTimeout(45000);
+
+  await resetAndOpenApp(page);
+  await createWorkspace(page, 'Activity Read WS', 'Alice');
+
+  const rootMsgId = await sendRootMessage(page, `Root ${Date.now()}`);
+
+  await page.evaluate(async ({ rootMsgId }) => {
+    const state = (window as any).__state;
+    const ctrl = (window as any).__ctrl;
+    const wsId = state.activeWorkspaceId;
+    const channelId = state.activeChannelId;
+    const bobId = 'bob-clickread-peer';
+
+    const ws = ctrl.workspaceManager.getWorkspace(wsId);
+    if (!ws.members.some((m: any) => m.peerId === bobId)) {
+      ws.members.push({ peerId: bobId, alias: 'Bob', publicKey: '', joinedAt: Date.now(), role: 'member' });
+    }
+
+    const reply = await ctrl.messageStore.createMessage(channelId, bobId, `reply-${Date.now()}`, 'text', rootMsgId);
+    ctrl.messageStore.forceAdd(reply);
+
+    const threadActivityId = `thread:${wsId}:${channelId}:${rootMsgId}`;
+    (ctrl as any).activityItems = [{
+      id: threadActivityId,
+      type: 'thread-reply',
+      workspaceId: wsId,
+      channelId,
+      threadId: rootMsgId,
+      messageId: reply.id,
+      actorId: bobId,
+      snippet: reply.content,
+      timestamp: reply.timestamp,
+      read: false,
+    }];
+
+    ctrl.ui.updateWorkspaceRail();
+    await ctrl.persistentStore.saveSetting('activityItems', (ctrl as any).activityItems);
+  }, { rootMsgId });
+
+  await expect(page.locator('#activity-btn .activity-badge')).toHaveText('1');
+
+  await page.click('#activity-btn');
+  await page.locator('.activity-row').first().click();
+  await page.waitForSelector('#thread-panel:not(.hidden)', { timeout: 10000 });
+  await expect(page.locator('#activity-btn .activity-badge')).toHaveCount(0);
+
+  const persistedRead = await page.evaluate(async ({ rootMsgId }) => {
+    const state = (window as any).__state;
+    const ctrl = (window as any).__ctrl;
+    const wsId = state.activeWorkspaceId;
+    const channelId = state.activeChannelId;
+    const threadActivityId = `thread:${wsId}:${channelId}:${rootMsgId}`;
+    const saved = await ctrl.persistentStore.getSetting('activityItems');
+    const item = Array.isArray(saved) ? saved.find((i: any) => i.id === threadActivityId) : null;
+    return item?.read ?? null;
+  }, { rootMsgId });
+
+  expect(persistedRead).toBe(true);
 });
 
 test('mark all read updates bell immediately without refresh', async ({ page }) => {

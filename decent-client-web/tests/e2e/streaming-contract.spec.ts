@@ -79,6 +79,19 @@ test.describe('Streaming contract (real-time UI behavior)', () => {
     await expect(page.locator(`.message[data-message-id="${messageId}"].streaming`)).toHaveCount(0);
   });
 
+
+  test('stream-start does not render an empty visible message before first delta', async ({ page }) => {
+    const peerId = 'assistant-peer-contract-empty';
+    const messageId = 'stream-contract-empty';
+
+    await injectStart(page, peerId, messageId);
+    await expect(page.locator(`.message[data-message-id="${messageId}"]`)).toHaveCount(0);
+
+    await injectDelta(page, peerId, messageId, 'First real chunk');
+    await expect(page.locator(`.message[data-message-id="${messageId}"] .message-content`))
+      .toContainText('First real chunk');
+  });
+
   test('finalized stream persists across refresh', async ({ page }) => {
     const peerId = 'assistant-peer-contract-2';
     const messageId = 'stream-contract-2';

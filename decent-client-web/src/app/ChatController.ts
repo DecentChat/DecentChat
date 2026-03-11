@@ -701,37 +701,9 @@ export class ChatController {
             modelMeta: modelMeta as any,
           });
 
-          // === CREATE MESSAGE + DOM ELEMENT IN stream-start (not delta) ===
-          // This ensures exactly ONE element exists before any deltas arrive.
-          const msg = await this.messageStore.createMessage(
-            targetChannelId,
-            streamSenderId,
-            '',
-            'text',
-            streamThreadId,
-          );
-          msg.id = messageId;
-          (msg as any).senderName = senderName;
-          (msg as any).streaming = true;
-          if (modelMeta) {
-            (msg as any).metadata = { assistant: modelMeta };
-          }
-          await this.messageStore.addMessage(msg);
-          await this.persistMessage(msg); // Persist to IndexedDB immediately so it survives refresh
-
-          if (streamThreadId) {
-            // Auto-open thread panel (always, even if different channel is active)
-            // openThread internally calls renderThreadMessages, which will include our new empty msg.
-            this.ui?.openThread?.(streamThreadId);
-            // If thread was already open on this threadId, openThread might skip.
-            // Force re-render to include the new streaming message.
-            if (this.state.threadOpen && this.state.activeThreadId === streamThreadId) {
-              this.ui?.renderThreadMessages?.();
-            }
-            this.ui?.updateThreadIndicator?.(streamThreadId, targetChannelId);
-          } else if (targetChannelId === this.state.activeChannelId) {
-            this.ui?.appendMessageToDOM(msg, true);
-          }
+          // Do NOT create/render an empty message yet.
+          // We only materialize the message on first non-empty delta,
+          // otherwise the user sees a blank bubble that later fills in.
           return;
         }
         if (data?.type === 'stream-delta') {
@@ -743,14 +715,42 @@ export class ChatController {
           }
           const pending = this.pendingStreams.get(messageId);
           if (pending) {
-            // Update stored message content (element already created in stream-start)
-            const existing = this.findMessageById(messageId);
+            let existing = this.findMessageById(messageId);
+
+            // First visible chunk: create the message now so we never show an empty bubble.
+            if (!existing) {
+              const msg = await this.messageStore.createMessage(
+                pending.channelId,
+                pending.senderId,
+                normalizedContent,
+                'text',
+                pending.threadId,
+              );
+              msg.id = messageId;
+              (msg as any).senderName = pending.senderName;
+              (msg as any).streaming = true;
+              if (pending.modelMeta) {
+                (msg as any).metadata = { assistant: pending.modelMeta };
+              }
+              await this.messageStore.addMessage(msg);
+              existing = msg;
+
+              if (pending.threadId) {
+                this.ui?.openThread?.(pending.threadId);
+                if (this.state.threadOpen && this.state.activeThreadId === pending.threadId) {
+                  this.ui?.renderThreadMessages?.();
+                }
+                this.ui?.updateThreadIndicator?.(pending.threadId, pending.channelId);
+              }
+            }
+
             if (existing) {
               existing.content = normalizedContent;
               (existing as any).streaming = true;
               await this.persistMessage(existing); // Persist partial content so it survives refresh
             }
-            // Replace DOM element text with latest cumulative content
+
+            // Replace DOM element text with latest cumulative content / render on first delta.
             this.ui?.updateStreamingMessage?.(messageId, normalizedContent);
           }
           return;
@@ -4397,13 +4397,18 @@ export class ChatController {
     const existingIdx = this.activityItems.findIndex(i => i.id === threadActivityId);
 
     if (existingIdx >= 0) {
-      // Update existing entry with latest reply info and bump to top
+      // Ignore historical replay of the same (or older) reply so a previously
+      // read activity item does not get resurrected as unread after refresh/sync.
       const existing = this.activityItems[existingIdx];
+      const isSameOrOlderReply = existing.messageId === msg.id || msg.timestamp <= existing.timestamp;
+      if (isSameOrOlderReply) return;
+
+      // Update existing entry with latest reply info and bump to top
       existing.actorId = msg.senderId;
       existing.snippet = msg.content.slice(0, 140);
       existing.messageId = msg.id;
       existing.timestamp = msg.timestamp;
-      if (!isCurrentlyOpen) existing.read = false; // re-mark as unread
+      if (!isCurrentlyOpen) existing.read = false; // re-mark as unread only for newer replies
       // Move to top
       this.activityItems.splice(existingIdx, 1);
       this.activityItems.unshift(existing);
@@ -6178,10 +6183,11 @@ export class ChatController {
       if (messages.length === 0) return;
 
       const channelIds = new Set(ws.channels.map((ch: any) => ch.id));
-      // Pre-build dedup sets per channel — O(1) lookup instead of O(n) per message
-      const existingIds = new Map<string, Set<string>>();
+      // Pre-build lookup maps per channel so sync can both dedup and repair
+      // already-present partial streamed messages with the full synced content.
+      const existingById = new Map<string, Map<string, PlaintextMessage>>();
       for (const chId of channelIds) {
-        existingIds.set(chId, new Set(this.messageStore.getMessages(chId).map(m => m.id)));
+        existingById.set(chId, new Map(this.messageStore.getMessages(chId).map(m => [m.id, m] as const)));
       }
 
       // Build reverse channel mapping: if message has an unknown channelId,
@@ -6218,10 +6224,34 @@ export class ChatController {
             }
           }
         }
-        if (!existingIds.has(targetChannelId)) {
-          existingIds.set(targetChannelId, new Set(this.messageStore.getMessages(targetChannelId).map(m => m.id)));
+        if (!existingById.has(targetChannelId)) {
+          existingById.set(targetChannelId, new Map(this.messageStore.getMessages(targetChannelId).map(m => [m.id, m] as const)));
         }
-        if (existingIds.get(targetChannelId)!.has(msg.id)) continue;
+
+        const existing = existingById.get(targetChannelId)!.get(msg.id);
+        if (existing) {
+          const incomingContent = typeof msg.content === 'string' ? msg.content : '';
+          const existingContent = typeof existing.content === 'string' ? existing.content : '';
+          const shouldRepair = incomingContent !== existingContent && (
+            incomingContent.length > existingContent.length ||
+            Boolean((existing as any).streaming)
+          );
+
+          if (shouldRepair) {
+            existing.content = incomingContent;
+            existing.threadId = msg.threadId ?? existing.threadId;
+            existing.timestamp = Math.max(existing.timestamp, msg.timestamp || existing.timestamp);
+            existing.type = (msg.type || existing.type || 'text') as 'text' | 'file' | 'system';
+            existing.status = 'delivered';
+            (existing as any).streaming = false;
+            if (msg.vectorClock) {
+              (existing as any).vectorClock = msg.vectorClock;
+            }
+            toSync.push(existing);
+            if (targetChannelId === this.state.activeChannelId) touchedActiveChannel = true;
+          }
+          continue;
+        }
 
         const syncMsg = {
           id: msg.id,
@@ -6237,9 +6267,9 @@ export class ChatController {
         };
 
         toInsert.push(syncMsg);
-        existingIds.get(targetChannelId)!.add(msg.id);
+        existingById.get(targetChannelId)!.set(msg.id, syncMsg as PlaintextMessage);
         toSync.push(syncMsg);
-        if (msg.channelId === this.state.activeChannelId) touchedActiveChannel = true;
+        if (targetChannelId === this.state.activeChannelId) touchedActiveChannel = true;
       }
       this.messageStore.bulkAdd(toInsert);
 
