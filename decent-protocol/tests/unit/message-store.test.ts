@@ -6,6 +6,7 @@ import { describe, test, expect, beforeEach } from 'bun:test'
 import { MessageStore } from '../../src/messages/MessageStore'
 import { GENESIS_HASH } from '../../src/crypto/HashChain'
 import type { PlaintextMessage } from '../../src/messages/types'
+import { MAX_MESSAGE_CHARS } from '../../src/messages/messageLimits'
 
 describe('MessageStore - Basic Operations', () => {
   let store: MessageStore
@@ -444,13 +445,9 @@ describe('MessageStore - Edge Cases', () => {
     expect(msg.content).toBe('')
   })
 
-  test('handles very long content', async () => {
-    const longContent = 'x'.repeat(100000)
-    const msg = await store.createMessage('channel1', 'alice', longContent)
-    const result = await store.addMessage(msg)
-
-    expect(result.success).toBe(true)
-    expect(msg.content).toHaveLength(100000)
+  test('rejects over-limit content', async () => {
+    const longContent = 'x'.repeat(MAX_MESSAGE_CHARS + 1)
+    await expect(store.createMessage('channel1', 'alice', longContent)).rejects.toThrow(/too long/i)
   })
 
   test('handles unicode content', async () => {

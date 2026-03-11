@@ -4,6 +4,8 @@
 -->
 <script lang="ts">
   import { showEmojiPicker } from '../shared/EmojiPicker.svelte';
+  import { toast } from '../shared/Toast.svelte';
+  import { MAX_MESSAGE_CHARS, formatMessageCounter, shouldShowCounter } from '$lib/utils/messageDisplay';
 
   interface PendingAttachment {
     id: string;
@@ -57,13 +59,31 @@
   let mentionAtStart = $state(0); // cursor position of the @ char
 
   let typingTimeout: ReturnType<typeof setTimeout> | undefined;
+  let limitWarned = $state(false);
 
   // ── Derived ──
   let hasContent = $derived(inputValue.trim().length > 0 || pendingAttachments.length > 0);
   let showCommandAutocomplete = $derived(commandSuggestions.length > 0);
   let showMentionAutocomplete = $derived(mentionSuggestions.length > 0);
+  let messageLength = $derived(inputValue.length);
+  let showCounter = $derived(shouldShowCounter(messageLength));
+  let counterText = $derived(formatMessageCounter(messageLength));
 
   // ── Methods ──
+  function warnLimitReached() {
+    if (limitWarned) return;
+    limitWarned = true;
+    toast(`Message truncated to ${MAX_MESSAGE_CHARS.toLocaleString()} characters`, 'info');
+  }
+
+  function clampText(text: string): string {
+    if (text.length > MAX_MESSAGE_CHARS) {
+      warnLimitReached();
+      return text.slice(0, MAX_MESSAGE_CHARS);
+    }
+    return text;
+  }
+
   function autoResize() {
     if (!textareaEl) return;
     textareaEl.style.height = 'auto';
@@ -76,7 +96,7 @@
   }
 
   async function send() {
-    const text = inputValue.trim();
+    const text = clampText(inputValue).trim();
     if (!text && pendingAttachments.length === 0) return;
 
     const files = pendingAttachments.map(a => a.file);
@@ -133,7 +153,7 @@
   }
 
   function selectCommand(cmd: string) {
-    inputValue = cmd + ' ';
+    inputValue = clampText(cmd + ' ');
     commandSuggestions = [];
     textareaEl?.focus();
     // Move cursor to end
@@ -178,7 +198,7 @@
     const atStart = mentionMatch ? mentionMatch.index! + mentionMatch[1].length : mentionAtStart;
 
     const replacement = '@' + name.replace(/\s+/g, '-') + ' ';
-    inputValue = inputValue.slice(0, atStart) + replacement + inputValue.slice(cursorPos);
+    inputValue = clampText(inputValue.slice(0, atStart) + replacement + inputValue.slice(cursorPos));
     mentionSuggestions = [];
     
     requestAnimationFrame(() => {
@@ -248,7 +268,16 @@
     }
   }
 
-  function onInput() {
+  function onInput(e: Event) {
+    const inputEvent = e as InputEvent;
+    if (inputValue.length > MAX_MESSAGE_CHARS) {
+      inputValue = clampText(inputValue);
+    }
+    if (inputValue.length < MAX_MESSAGE_CHARS) {
+      limitWarned = false;
+    } else if (inputEvent?.inputType === 'insertFromPaste') {
+      warnLimitReached();
+    }
     autoResize();
     updateCommandAutocomplete();
     updateMentionAutocomplete();
@@ -262,7 +291,7 @@
   function onEmojiClick() {
     if (!emojiBtn) return;
     void showEmojiPicker(emojiBtn, (emoji: string) => {
-      inputValue += emoji;
+      inputValue = clampText(inputValue + emoji);
       textareaEl?.focus();
     });
   }
@@ -289,7 +318,7 @@
 
   export function setSlashPrefix() {
     if (textareaEl && !inputValue) {
-      inputValue = '/';
+      inputValue = clampText('/');
       updateCommandAutocomplete();
     }
     textareaEl?.focus();
@@ -411,11 +440,15 @@
         id={target === 'thread' ? 'thread-input' : 'compose-input'}
         {placeholder}
         rows="1"
+        maxlength={MAX_MESSAGE_CHARS}
         onkeydown={onKeydown}
         oninput={onInput}
         onblur={stopTypingNow}
         onpaste={onPaste}
       ></textarea>
+      {#if showCounter}
+        <div class="compose-char-counter">{counterText}</div>
+      {/if}
     </div>
     {#if target === 'main'}
       <button bind:this={emojiBtn} class="compose-emoji" id="emoji-btn" title="Emoji" onclick={onEmojiClick}>😊</button>
@@ -429,3 +462,16 @@
     >⬆</button>
   </div>
 </div>
+
+
+<style>
+  .compose-char-counter {
+    position: absolute;
+    right: 8px;
+    bottom: -18px;
+    font-size: 11px;
+    color: var(--text-light);
+    line-height: 1;
+    user-select: none;
+  }
+</style>

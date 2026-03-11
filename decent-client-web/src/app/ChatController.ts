@@ -1,3 +1,5 @@
+import { MAX_MESSAGE_CHARS } from '../lib/utils/messageDisplay';
+import { normalizeOutgoingMessageContent } from '../lib/utils/outgoingMessage';
 /**
  * ChatController — Business logic for the P2P Chat app.
  *
@@ -3897,12 +3899,20 @@ export class ChatController {
   // =========================================================================
 
   async sendMessage(content: string, threadId?: string): Promise<void> {
-    if (!content.trim() || !this.state.activeChannelId) return;
+    if (!this.state.activeChannelId) return;
+
+    const normalized = normalizeOutgoingMessageContent(content);
+    if (normalized.empty) return;
+    if (normalized.truncated) {
+      this.ui?.showToast(`Message was truncated to ${MAX_MESSAGE_CHARS.toLocaleString()} characters`, 'info');
+    }
+
+    const safeContent = normalized.text;
 
     const msg = await this.messageStore.createMessage(
       this.state.activeChannelId,
       this.state.myPeerId,
-      content.trim(),
+      safeContent,
       'text',
       threadId,
     );
@@ -3915,7 +3925,7 @@ export class ChatController {
     }
 
     const crdt = this.getOrCreateCRDT(this.state.activeChannelId);
-    const crdtMsg = crdt.createMessage(this.state.activeChannelId, content.trim(), 'text', threadId);
+    const crdtMsg = crdt.createMessage(this.state.activeChannelId, safeContent, 'text', threadId);
     (msg as any).vectorClock = crdtMsg.vectorClock;
 
     await this.persistMessage(msg);
@@ -3956,7 +3966,7 @@ export class ChatController {
           }
         }
 
-        const envelope = await this.messageProtocol!.encryptMessage(peerId, content.trim(), 'text');
+        const envelope = await this.messageProtocol!.encryptMessage(peerId, safeContent, 'text');
         (envelope as any).channelId = this.state.activeChannelId;
         (envelope as any).workspaceId = this.state.activeWorkspaceId;
         (envelope as any).threadId = threadId;
@@ -5110,7 +5120,13 @@ export class ChatController {
   }
 
   async sendDirectMessage(conversationId: string, content: string, threadId?: string): Promise<void> {
-    if (!content.trim()) return;
+    const normalized = normalizeOutgoingMessageContent(content);
+    if (normalized.empty) return;
+    if (normalized.truncated) {
+      this.ui?.showToast(`Message was truncated to ${MAX_MESSAGE_CHARS.toLocaleString()} characters`, 'info');
+    }
+
+    const safeContent = normalized.text;
 
     const conv = await this.directConversationStore.get(conversationId);
     if (!conv) return;
@@ -5118,7 +5134,7 @@ export class ChatController {
     const msg = await this.messageStore.createMessage(
       conversationId,
       this.state.myPeerId,
-      content.trim(),
+      safeContent,
       'text',
       threadId,
     );
@@ -5136,7 +5152,7 @@ export class ChatController {
     }
 
     const crdt = this.getOrCreateCRDT(conversationId);
-    const crdtMsg = crdt.createMessage(conversationId, content.trim(), 'text', threadId);
+    const crdtMsg = crdt.createMessage(conversationId, safeContent, 'text', threadId);
     (msg as any).vectorClock = crdtMsg.vectorClock;
 
     await this.persistMessage(msg);
@@ -5171,7 +5187,7 @@ export class ChatController {
     const peerId = conv.contactPeerId;
     let attemptedDispatch = false;
     try {
-      const envelope = await this.messageProtocol!.encryptMessage(peerId, content.trim(), 'text');
+      const envelope = await this.messageProtocol!.encryptMessage(peerId, safeContent, 'text');
       (envelope as any).channelId = conversationId;
       (envelope as any).threadId = threadId;
       (envelope as any).vectorClock = (msg as any).vectorClock;
@@ -5557,7 +5573,11 @@ export class ChatController {
     this.activeSenders.set(meta.id, new ChunkedSender(meta.id, arrayBuffer));
 
     // Send message with attachment metadata
-    const content = text || `📎 ${file.name}`;
+    const normalizedAttachmentText = normalizeOutgoingMessageContent(text || `📎 ${file.name}`);
+    if (normalizedAttachmentText.truncated) {
+      this.ui?.showToast(`Message was truncated to ${MAX_MESSAGE_CHARS.toLocaleString()} characters`, 'info');
+    }
+    const content = normalizedAttachmentText.text || `📎 ${file.name}`;
     const msg = await this.messageStore.createMessage(
       this.state.activeChannelId,
       this.state.myPeerId,

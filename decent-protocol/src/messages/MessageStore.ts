@@ -8,6 +8,7 @@
 import { HashChain, GENESIS_HASH } from '../crypto/HashChain';
 import type { HashableMessage } from '../crypto/HashChain';
 import type { PlaintextMessage } from './types';
+import { validateMessageContentLength } from './messageLimits';
 
 type ImportedMessage = Omit<PlaintextMessage, 'content'> & { content?: string | null };
 
@@ -33,6 +34,7 @@ export class MessageStore {
     type: PlaintextMessage['type'] = 'text',
     threadId?: string
   ): Promise<PlaintextMessage> {
+    validateMessageContentLength(content);
     const channelMessages = this.channels.get(channelId) || [];
     const lastMessage = channelMessages[channelMessages.length - 1];
 
@@ -64,6 +66,12 @@ export class MessageStore {
    */
   async addMessage(message: PlaintextMessage): Promise<{ success: boolean; error?: string }> {
     const channelMessages = this.channels.get(message.channelId) || [];
+
+    try {
+      validateMessageContentLength(message.content);
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
+    }
 
     // Verify hash chain
     if (channelMessages.length === 0) {
@@ -202,6 +210,12 @@ export class MessageStore {
     }));
 
     const hasOmittedContent = messages.some((message) => typeof message.content !== 'string');
+
+    try {
+      for (const message of normalized) validateMessageContentLength(message.content);
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
+    }
 
     // Full-chain verification requires message content; metadata-only sync intentionally omits it.
     if (!hasOmittedContent) {

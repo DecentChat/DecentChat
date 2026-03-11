@@ -7,6 +7,7 @@
   import { peerColor, escapeHtml } from '$lib/utils/peer';
   import { formatFileSize, formatTime } from '$lib/utils/format';
   import { renderMarkdown } from '../../../ui/renderMarkdown';
+  import { shouldCollapseMessage } from '$lib/utils/messageDisplay';
   import { showEmojiPicker } from '../shared/EmojiPicker.svelte';
 
   interface Attachment {
@@ -134,6 +135,8 @@
   );
 
   let renderedContent = $derived(renderMarkdown(content));
+  let canCollapse = $derived(!isSystem && shouldCollapseMessage(content));
+  let isExpanded = $state(false);
 
   // Always prefer full-quality attachment images in chat.
   // Do not render low-quality metadata thumbnails inline.
@@ -230,9 +233,16 @@
           {/if}
         {/if}
       </div>
-      <div class="message-content markdown-body">
-        {@html renderedContent}
+      <div class="message-content-wrap" class:is-collapsible={canCollapse} class:is-collapsed={canCollapse && !isExpanded}>
+        <div class="message-content markdown-body">
+          {@html renderedContent}
+        </div>
       </div>
+      {#if canCollapse}
+        <button class="message-expand-btn" onclick={() => { isExpanded = !isExpanded; }}>
+          {isExpanded ? 'Show less' : 'See more'}
+        </button>
+      {/if}
 
       {#if attachments.length > 0}
         {#each attachments as att (att.id)}
@@ -330,3 +340,42 @@
     </div>
   {/if}
 </div>
+
+
+<style>
+  .message-content-wrap.is-collapsible {
+    position: relative;
+  }
+
+  .message-content-wrap.is-collapsed {
+    max-height: 15.5rem;
+    overflow: hidden;
+  }
+
+  .message-content-wrap.is-collapsed::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3.5rem;
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--bg-secondary));
+    pointer-events: none;
+  }
+
+  .message-expand-btn {
+    margin-top: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .message-expand-btn:hover {
+    opacity: 0.85;
+    text-decoration: underline;
+  }
+</style>

@@ -13,6 +13,7 @@
  */
 
 import { VectorClock } from './VectorClock';
+import { validateMessageContentLength } from '../messages/messageLimits';
 
 export interface CRDTMessage {
   id: string;
@@ -44,6 +45,7 @@ export class MessageCRDT {
    * Create a new message (increments local clock)
    */
   createMessage(channelId: string, content: string, type: CRDTMessage['type'] = 'text', threadId?: string): CRDTMessage {
+    validateMessageContentLength(content);
     this.clock = this.clock.increment(this.peerId);
 
     const msg: CRDTMessage = {
@@ -66,6 +68,7 @@ export class MessageCRDT {
    * Add a received message (merges clock)
    */
   addMessage(msg: CRDTMessage): { added: boolean; duplicate: boolean } {
+    validateMessageContentLength(msg.content);
     if (this.messages.has(msg.id)) {
       return { added: false, duplicate: true };
     }
