@@ -48,6 +48,16 @@ export interface WorkspaceMemberDirectoryView {
   loadedCount: number;
   totalCount: number;
   hasMore: boolean;
+  presence?: {
+    onlineCount: number | null;
+    sampledOnlineCount: number;
+    sampledPeerCount: number;
+    hasMore: boolean;
+    nextCursor?: string;
+    loadedPages: number;
+    activeChannelId?: string;
+    updatedAt?: number;
+  };
 }
 
 export interface UICallbacks {
@@ -103,6 +113,26 @@ export interface UICallbacks {
   getWorkspaceMemberDirectory?: (workspaceId: string) => WorkspaceMemberDirectoryView;
   prefetchWorkspaceMemberDirectory?: (workspaceId: string) => Promise<void>;
   loadMoreWorkspaceMemberDirectory?: (workspaceId: string) => Promise<WorkspaceMemberDirectoryView | null>;
+  getPresenceScopeState?: (workspaceId: string, channelId?: string | null) => {
+    onlineCount: number | null;
+    sampledOnlineCount: number;
+    sampledPeerCount: number;
+    hasMore: boolean;
+    nextCursor?: string;
+    loadedPages: number;
+    activeChannelId?: string;
+    updatedAt?: number;
+  };
+  loadMorePresenceScope?: (workspaceId: string, channelId: string) => Promise<{
+    onlineCount: number | null;
+    sampledOnlineCount: number;
+    sampledPeerCount: number;
+    hasMore: boolean;
+    nextCursor?: string;
+    loadedPages: number;
+    activeChannelId?: string;
+    updatedAt?: number;
+  }>;
   onWorkspaceActivated?: (workspaceId: string) => void | Promise<void>;
   setWorkspaceAlias?: (wsId: string, alias: string) => void;
   getUnreadCount?: (channelId: string) => number;

@@ -49,6 +49,31 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
     shellData.rail.activityUnread = callbacks.getActivityUnreadCount?.() || 0;
   }
 
+  const buildPresenceSummary = (workspaceId?: string | null, channelId?: string | null) => {
+    if (!workspaceId || !callbacks.getPresenceScopeState) {
+      return {
+        onlineCount: null,
+        sampledOnlineCount: 0,
+        sampledPeerCount: 0,
+        hasMore: false,
+        loadedPages: 0,
+        activeChannelId: channelId || undefined,
+        updatedAt: undefined,
+      };
+    }
+
+    const scope = callbacks.getPresenceScopeState(workspaceId, channelId);
+    return {
+      onlineCount: scope?.onlineCount ?? null,
+      sampledOnlineCount: scope?.sampledOnlineCount ?? 0,
+      sampledPeerCount: scope?.sampledPeerCount ?? 0,
+      hasMore: scope?.hasMore ?? false,
+      loadedPages: scope?.loadedPages ?? 0,
+      activeChannelId: scope?.activeChannelId ?? channelId ?? undefined,
+      updatedAt: scope?.updatedAt,
+    };
+  };
+
   function syncShellSidebar(): void {
     const ws = state.activeWorkspaceId
       ? workspaceManager.getWorkspace(state.activeWorkspaceId)
@@ -118,6 +143,7 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
     shellData.sidebar.activeDirectConversationId = state.activeDirectConversationId;
     shellData.sidebar.myPeerId = state.myPeerId;
     shellData.sidebar.connectionBanner = connectionBanner;
+    shellData.sidebar.presence = buildPresenceSummary(state.activeWorkspaceId, state.activeChannelId);
   }
 
   function syncShellHeader(): void {
@@ -146,6 +172,7 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
     shellData.header.memberCount = memberCount;
     shellData.header.isDirectMessage = isDirectMessage;
     shellData.header.isHuddleActive = huddleUI.state === 'in-call' && huddleUI.channelId === state.activeChannelId;
+    shellData.header.presence = buildPresenceSummary(state.activeWorkspaceId, state.activeChannelId);
   }
 
   function getActiveChannelName(): string {

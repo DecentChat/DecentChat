@@ -43,6 +43,18 @@ export interface PresencePageResponse {
   updatedAt: number;
 }
 
+export interface PresencePageScopeSnapshot {
+  workspaceId: string;
+  channelId: string;
+  loadedPeerCount: number;
+  onlinePeerCount: number;
+  loadedPageCount: number;
+  hasMore: boolean;
+  nextCursor?: string;
+  updatedAt: number;
+  pageSize: number;
+}
+
 export interface TypingEvent {
   type: 'typing';
   channelId: string;
@@ -64,6 +76,15 @@ const TYPING_TIMEOUT_MS = 3000;
 /** How often to send typing updates */
 const TYPING_THROTTLE_MS = 2000;
 
+interface PresenceScopePageState {
+  peerIds: Set<string>;
+  seenCursorKeys: Set<string>;
+  loadedPageCount: number;
+  nextCursor?: string;
+  updatedAt: number;
+  pageSize: number;
+}
+
 export class PresenceManager {
   /** Who's currently typing in each scope: (workspaceId+channelId) → peerId → expiry */
   private typingState = new Map<string, Map<string, number>>();
@@ -81,6 +102,8 @@ export class PresenceManager {
   private aggregatesByWorkspace = new Map<string, PresenceAggregateSnapshot>();
   /** Sparse peer presence pages merged per workspace */
   private peerPresenceByWorkspace = new Map<string, Map<string, PresenceState>>();
+  /** Scope-level page snapshots for requester-side cursor advancement */
+  private pageStateByScope = new Map<string, PresenceScopePageState>();
   /** Callbacks */
   onTypingChanged?: (channelId: string, typingPeers: string[], workspaceId?: string) => void;
   onReadReceiptChanged?: (channelId: string, peerId: string, messageId: string) => void;
@@ -94,6 +117,7 @@ export class PresenceManager {
 
   destroy(): void {
     clearInterval(this.cleanupInterval);
+    this.pageStateByScope.clear();
   }
 
   /**
@@ -225,8 +249,31 @@ export class PresenceManager {
       this.peerPresenceByWorkspace.set(page.workspaceId, new Map());
     }
 
+    const scopeKey = this.buildScopeKey(page.channelId, page.workspaceId);
+    const isRootPage = !page.cursor;
+    let scopeState = this.pageStateByScope.get(scopeKey);
+
+    if (!scopeState || (isRootPage && page.updatedAt >= scopeState.updatedAt)) {
+      scopeState = {
+        peerIds: new Set<string>(),
+        seenCursorKeys: new Set<string>(),
+        loadedPageCount: 0,
+        nextCursor: undefined,
+        updatedAt: 0,
+        pageSize: page.pageSize,
+      };
+      this.pageStateByScope.set(scopeKey, scopeState);
+    }
+
+    const cursorKey = page.cursor || '__root__';
+    if (!scopeState.seenCursorKeys.has(cursorKey)) {
+      scopeState.seenCursorKeys.add(cursorKey);
+      scopeState.loadedPageCount += 1;
+    }
+
     const workspacePresence = this.peerPresenceByWorkspace.get(page.workspaceId)!;
     for (const peer of page.peers ?? []) {
+      scopeState.peerIds.add(peer.peerId);
       workspacePresence.set(peer.peerId, {
         peerId: peer.peerId,
         typing: peer.typing === true,
@@ -234,10 +281,41 @@ export class PresenceManager {
         lastSeen: peer.lastSeen ?? page.updatedAt,
       });
     }
+
+    scopeState.nextCursor = page.nextCursor;
+    scopeState.updatedAt = Math.max(scopeState.updatedAt, page.updatedAt);
+    scopeState.pageSize = page.pageSize || scopeState.pageSize;
   }
 
   getPeerPresence(workspaceId: string, peerId: string): PresenceState | undefined {
     return this.peerPresenceByWorkspace.get(workspaceId)?.get(peerId);
+  }
+
+  getPresencePageSnapshot(workspaceId: string, channelId: string): PresencePageScopeSnapshot | undefined {
+    const scopeState = this.pageStateByScope.get(this.buildScopeKey(channelId, workspaceId));
+    if (!scopeState) return undefined;
+
+    const workspacePresence = this.peerPresenceByWorkspace.get(workspaceId);
+    let onlinePeerCount = 0;
+    for (const peerId of scopeState.peerIds) {
+      if (workspacePresence?.get(peerId)?.online) onlinePeerCount += 1;
+    }
+
+    return {
+      workspaceId,
+      channelId,
+      loadedPeerCount: scopeState.peerIds.size,
+      onlinePeerCount,
+      loadedPageCount: scopeState.loadedPageCount,
+      hasMore: Boolean(scopeState.nextCursor),
+      nextCursor: scopeState.nextCursor,
+      updatedAt: scopeState.updatedAt,
+      pageSize: scopeState.pageSize,
+    };
+  }
+
+  resetPresencePageSnapshot(workspaceId: string, channelId: string): void {
+    this.pageStateByScope.delete(this.buildScopeKey(channelId, workspaceId));
   }
 
   /**

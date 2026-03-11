@@ -27,6 +27,7 @@
     loadedCount?: number;
     totalCount?: number;
     hasMore?: boolean;
+    presenceSummaryText?: string;
     onLoadMore?: () => Promise<ChannelMembersPagePayload | null>;
     onToast?: (message: string, type?: string) => void;
   }
@@ -73,6 +74,7 @@
     loadedCount?: number;
     totalCount?: number;
     hasMore?: boolean;
+    presenceSummaryText?: string;
     onLoadMore?: () => Promise<ChannelMembersPagePayload | null>;
     onToast?: (message: string, type?: string) => void;
     onClose: () => void;
@@ -84,6 +86,7 @@
     loadedCount,
     totalCount,
     hasMore = false,
+    presenceSummaryText,
     onLoadMore,
     onToast,
     onClose,
@@ -139,6 +142,11 @@
             {members.length} member{members.length === 1 ? '' : 's'}
           {/if}
         </div>
+        {#if presenceSummaryText}
+          <div style="font-size: 12px; color: var(--text-muted); opacity: 0.85; margin-top: 4px;">
+            {presenceSummaryText}
+          </div>
+        {/if}
       </div>
       <div class="members-list">
         {#each members as member (member.peerId)}

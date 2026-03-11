@@ -87,6 +87,63 @@ describe('presence slices', () => {
     presence.destroy();
   });
 
+  test('presence page responses auto-advance cursor for active scope when sample is partial', () => {
+    const presence = new PresenceManager();
+    presence.setActiveScope('ws-1', 'chan-a');
+    presence.handlePresenceAggregate({
+      workspaceId: 'ws-1',
+      onlineCount: 4,
+      updatedAt: 100,
+      activeChannelId: 'chan-a',
+    });
+
+    const sendControlWithRetry = mock(() => true);
+
+    const ctrl = Object.create(ChatController.prototype) as any;
+    ctrl.state = {
+      myPeerId: 'me',
+      activeWorkspaceId: 'ws-1',
+      activeChannelId: 'chan-a',
+      readyPeers: new Set(['peer-a']),
+    };
+    ctrl.presence = presence;
+    ctrl.presenceProtocol = new PresenceProtocol();
+    ctrl.presencePageRequestsByScope = new Map();
+    ctrl.workspaceManager = {
+      getWorkspace: mock(() => ({
+        id: 'ws-1',
+        members: [{ peerId: 'peer-a' }, { peerId: 'me' }],
+      })),
+    };
+    ctrl.selectWorkspaceSyncTargetPeer = mock(() => 'peer-a');
+    ctrl.getWorkspaceRecipientPeerIds = mock(() => ['peer-a']);
+    ctrl.sendControlWithRetry = sendControlWithRetry;
+    ctrl.ui = { updateSidebar: mock(() => {}), updateChannelHeader: mock(() => {}) };
+
+    ChatController.prototype.handlePresencePageResponse.call(ctrl, 'peer-a', {
+      type: 'presence-page-response',
+      workspaceId: 'ws-1',
+      channelId: 'chan-a',
+      cursor: undefined,
+      nextCursor: 'peer-c',
+      pageSize: 2,
+      peers: [
+        { peerId: 'peer-a', status: 'online' },
+        { peerId: 'peer-b', status: 'offline' },
+      ],
+      updatedAt: 120,
+    });
+
+    const followUp = sendControlWithRetry.mock.calls[0]?.[1];
+    expect(followUp).toBeTruthy();
+    expect(followUp.type).toBe('presence-subscribe');
+    expect(followUp.workspaceId).toBe('ws-1');
+    expect(followUp.channelId).toBe('chan-a');
+    expect(followUp.pageCursor).toBe('peer-c');
+
+    presence.destroy();
+  });
+
   test('presence aggregates ignore stale updates', () => {
     const presence = new PresenceManager();
 

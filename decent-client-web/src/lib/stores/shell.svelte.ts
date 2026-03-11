@@ -51,6 +51,16 @@ export interface SidebarConnectionBanner {
   detail?: string;
 }
 
+export interface PresenceSliceSummary {
+  onlineCount: number | null;
+  sampledOnlineCount: number;
+  sampledPeerCount: number;
+  hasMore: boolean;
+  loadedPages: number;
+  activeChannelId?: string;
+  updatedAt?: number;
+}
+
 // ── Reactive data store (UIRenderer writes, AppShell reads) ──
 
 export const shellData = $state({
@@ -84,6 +94,13 @@ export const shellData = $state({
       level: 'info',
       message: '',
     } as SidebarConnectionBanner,
+    presence: {
+      onlineCount: null,
+      sampledOnlineCount: 0,
+      sampledPeerCount: 0,
+      hasMore: false,
+      loadedPages: 0,
+    } as PresenceSliceSummary,
   },
 
   // Channel header
@@ -92,6 +109,13 @@ export const shellData = $state({
     memberCount: 0,
     isDirectMessage: false,
     isHuddleActive: false,
+    presence: {
+      onlineCount: null,
+      sampledOnlineCount: 0,
+      sampledPeerCount: 0,
+      hasMore: false,
+      loadedPages: 0,
+    } as PresenceSliceSummary,
   },
 
   // Message list

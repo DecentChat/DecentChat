@@ -92,6 +92,8 @@ const RELAY_CHANNEL_CAPABILITY_PREFIX = 'relay-channel:';
 const ARCHIVE_HISTORY_CAPABILITY = 'archive-history-v1';
 const PRESENCE_AGGREGATOR_CAPABILITY = 'presence-aggregator-v1';
 const NEGENTROPY_QUERY_TIMEOUT_MS = 8000;
+const PRESENCE_PAGE_REQUEST_TIMEOUT_MS = 5000;
+const PRESENCE_AUTO_ADVANCE_PAGE_TARGET = 150;
 
 const DEV_SIGNAL_PORT = Number((import.meta as any).env?.VITE_SIGNAL_PORT || 9000);
 const DEV_SIGNAL_WS = `ws://localhost:${DEV_SIGNAL_PORT}`;
@@ -271,10 +273,6 @@ export class ChatController {
   private static readonly COLD_PEER_RETRY_MS = 5 * 60 * 1000;
   /** Join validation timeout: provisional join workspace must be confirmed by owner workspace-state. */
   private static readonly JOIN_VALIDATION_TIMEOUT_MS = 5000;
-  private static readonly WORKSPACE_INVITES_SETTING_KEY = 'workspaceInvites';
-  private static readonly LIKELY_PEER_WINDOW_MS = 6 * 60 * 60 * 1000;
-  private static readonly INITIAL_LIKELY_BOOTSTRAP_MS = 2 * 60 * 1000;
-  private static readonly COLD_PEER_RETRY_MS = 5 * 60 * 1000;
   private static readonly PARTIAL_MESH_ENABLED = true;
   private static readonly PARTIAL_MESH_DESKTOP_TARGET = 8;
   private static readonly PARTIAL_MESH_MOBILE_TARGET = 5;
@@ -332,10 +330,7 @@ export class ChatController {
   private reactionsPersistTimer: ReturnType<typeof setTimeout> | null = null;
   private channelViewInFlight = new Map<string, Promise<void>>();
   private pendingReadReceiptKeys = new Set<string>();
-  private workspaceInviteRegistry: WorkspaceInviteRegistry = {};
-  private readonly peerLastSeenAt = new Map<string, number>();
-  private readonly peerLastConnectAttemptAt = new Map<string, number>();
-  private readonly startedAt = Date.now();
+  private presencePageRequestsByScope = new Map<string, Set<string>>();
   /** Provisional joined workspaces awaiting authoritative owner workspace-state. */
   private pendingJoinValidationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private workspaceInviteRegistry: WorkspaceInviteRegistry = {};
@@ -5572,6 +5567,115 @@ export class ChatController {
     return (this as any).presenceProtocol as PresenceProtocol;
   }
 
+  private getPresenceScopeKey(workspaceId: string, channelId: string): string {
+    return `${workspaceId}::${channelId}`;
+  }
+
+  private getPresenceCursorKey(cursor?: string): string {
+    return cursor || '__root__';
+  }
+
+  private beginPresencePageRequest(workspaceId: string, channelId: string, cursor?: string): boolean {
+    if (!this.presencePageRequestsByScope) {
+      this.presencePageRequestsByScope = new Map<string, Set<string>>();
+    }
+
+    const scopeKey = this.getPresenceScopeKey(workspaceId, channelId);
+    const cursorKey = this.getPresenceCursorKey(cursor);
+    let inFlight = this.presencePageRequestsByScope.get(scopeKey);
+    if (!inFlight) {
+      inFlight = new Set<string>();
+      this.presencePageRequestsByScope.set(scopeKey, inFlight);
+    }
+
+    if (inFlight.has(cursorKey)) return false;
+    inFlight.add(cursorKey);
+    return true;
+  }
+
+  private endPresencePageRequest(workspaceId: string, channelId: string, cursor?: string): void {
+    if (!this.presencePageRequestsByScope) return;
+
+    const scopeKey = this.getPresenceScopeKey(workspaceId, channelId);
+    const cursorKey = this.getPresenceCursorKey(cursor);
+    const inFlight = this.presencePageRequestsByScope.get(scopeKey);
+    if (!inFlight) return;
+
+    inFlight.delete(cursorKey);
+    if (inFlight.size === 0) {
+      this.presencePageRequestsByScope.delete(scopeKey);
+    }
+  }
+
+  private resetPresencePageRequests(workspaceId: string, channelId: string): void {
+    this.presencePageRequestsByScope?.delete(this.getPresenceScopeKey(workspaceId, channelId));
+  }
+
+  private requestPresencePage(
+    workspaceId: string,
+    channelId: string,
+    options: { cursor?: string; pageSize?: number; preferredPeerId?: string } = {},
+  ): boolean {
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (!ws) return false;
+
+    const cursor = options.cursor;
+    if (!this.beginPresencePageRequest(workspaceId, channelId, cursor)) return false;
+
+    const targetPeer = this.selectWorkspaceSyncTargetPeer(
+      workspaceId,
+      PRESENCE_AGGREGATOR_CAPABILITY,
+      options.preferredPeerId,
+    ) || this.getWorkspaceRecipientPeerIds(workspaceId).find((peerId) => this.state.readyPeers.has(peerId));
+
+    if (!targetPeer || !this.state.readyPeers.has(targetPeer)) {
+      this.endPresencePageRequest(workspaceId, channelId, cursor);
+      return false;
+    }
+
+    const subscribe = this.getPresenceProtocol().buildSubscribeMessage(workspaceId, channelId, {
+      pageCursor: cursor,
+      pageSize: options.pageSize,
+    });
+
+    this.sendControlWithRetry(targetPeer, subscribe, { label: 'presence-subscribe' });
+    setTimeout(
+      () => this.endPresencePageRequest(workspaceId, channelId, cursor),
+      PRESENCE_PAGE_REQUEST_TIMEOUT_MS,
+    );
+    return true;
+  }
+
+  private maybeRequestNextPresencePage(
+    peerId: string,
+    msg: PresencePageResponseMessage,
+  ): void {
+    if (!msg.nextCursor) return;
+    if (typeof (this.presence as any).getActiveScope !== 'function') return;
+    if (typeof (this.presence as any).getPresencePageSnapshot !== 'function') return;
+    if (typeof (this.presence as any).getPresenceAggregate !== 'function') return;
+
+    const activeScope = this.presence.getActiveScope();
+    if (!activeScope) return;
+    if (activeScope.workspaceId !== msg.workspaceId || activeScope.channelId !== msg.channelId) return;
+
+    const pageSnapshot = this.presence.getPresencePageSnapshot(msg.workspaceId, msg.channelId);
+    if (!pageSnapshot || !pageSnapshot.hasMore) return;
+
+    const aggregate = this.presence.getPresenceAggregate(msg.workspaceId);
+    const aggregateOnline = aggregate?.onlineCount ?? 0;
+    const expectedOnline = Math.max(pageSnapshot.onlinePeerCount, aggregateOnline);
+    const targetOnline = Math.min(expectedOnline, PRESENCE_AUTO_ADVANCE_PAGE_TARGET);
+
+    if (targetOnline > 0 && pageSnapshot.onlinePeerCount >= targetOnline) return;
+
+    this.requestPresencePage(msg.workspaceId, msg.channelId, {
+      cursor: msg.nextCursor,
+      pageSize: msg.pageSize,
+      preferredPeerId: peerId,
+    });
+  }
+
   private sendCurrentPresenceSubscription(peerId: string): void {
     if (!this.state.readyPeers.has(peerId)) return;
     if (!this.presence || typeof (this.presence as any).getActiveScope !== 'function') return;
@@ -5592,8 +5696,13 @@ export class ChatController {
 
     if (transition.unsubscribe) {
       this.fanoutPresenceScopeTransition('unsubscribe', transition.unsubscribe);
+      this.resetPresencePageRequests(transition.unsubscribe.workspaceId, transition.unsubscribe.channelId);
     }
     if (transition.subscribe) {
+      if (typeof (this.presence as any).resetPresencePageSnapshot === 'function') {
+        this.presence.resetPresencePageSnapshot(transition.subscribe.workspaceId, transition.subscribe.channelId);
+      }
+      this.resetPresencePageRequests(transition.subscribe.workspaceId, transition.subscribe.channelId);
       this.fanoutPresenceScopeTransition('subscribe', transition.subscribe);
     }
   }
@@ -5643,11 +5752,18 @@ export class ChatController {
     if (msg.aggregate.workspaceId !== msg.workspaceId) return;
 
     this.presence.handlePresenceAggregate(msg.aggregate);
+
+    if (this.state.activeWorkspaceId === msg.workspaceId) {
+      this.ui?.updateSidebar();
+      this.ui?.updateChannelHeader();
+    }
   }
 
   private handlePresencePageResponse(peerId: string, msg: PresencePageResponseMessage): void {
     if (!msg.workspaceId || !msg.channelId) return;
     if (!this.isWorkspaceMember(peerId, msg.workspaceId)) return;
+
+    this.endPresencePageRequest(msg.workspaceId, msg.channelId, msg.cursor);
 
     this.presence.handlePresencePageResponse({
       type: 'presence-page-response',
@@ -5659,6 +5775,13 @@ export class ChatController {
       peers: msg.peers,
       updatedAt: msg.updatedAt,
     });
+
+    if (this.state.activeWorkspaceId === msg.workspaceId) {
+      this.ui?.updateSidebar();
+      this.ui?.updateChannelHeader();
+    }
+
+    this.maybeRequestNextPresencePage(peerId, msg);
   }
 
   private sendPresenceSnapshot(
@@ -7090,15 +7213,42 @@ export class ChatController {
     loadedCount: number;
     totalCount: number;
     hasMore: boolean;
+    presence?: {
+      onlineCount: number | null;
+      sampledOnlineCount: number;
+      sampledPeerCount: number;
+      hasMore: boolean;
+      nextCursor?: string;
+      loadedPages: number;
+      activeChannelId?: string;
+      updatedAt?: number;
+    };
   } {
     const snapshot = this.publicWorkspaceController.getSnapshot(workspaceId);
+    const aggregatePresence = typeof (this.presence as any).getPresenceAggregate === 'function'
+      ? this.presence.getPresenceAggregate(workspaceId)
+      : undefined;
+    const activePresenceChannelId = this.state.activeWorkspaceId === workspaceId
+      ? this.state.activeChannelId || undefined
+      : aggregatePresence?.activeChannelId;
+    const pagePresence = activePresenceChannelId && typeof (this.presence as any).getPresencePageSnapshot === 'function'
+      ? this.presence.getPresencePageSnapshot(workspaceId, activePresenceChannelId)
+      : undefined;
+
     const identityState = new Map<string, { hasMe: boolean; hasOnline: boolean }>();
 
     for (const member of snapshot.members) {
       const identityKey = member.identityId || member.peerId;
       const aggregate = identityState.get(identityKey) || { hasMe: false, hasOnline: false };
       if (member.peerId === this.state.myPeerId) aggregate.hasMe = true;
-      if (this.state.readyPeers.has(member.peerId)) aggregate.hasOnline = true;
+
+      const peerPresence = typeof (this.presence as any).getPeerPresence === 'function'
+        ? this.presence.getPeerPresence(workspaceId, member.peerId)
+        : undefined;
+      if (this.state.readyPeers.has(member.peerId) || peerPresence?.online === true) {
+        aggregate.hasOnline = true;
+      }
+
       identityState.set(identityKey, aggregate);
     }
 
@@ -7125,6 +7275,16 @@ export class ChatController {
       loadedCount: snapshot.loadedCount,
       totalCount: snapshot.totalCount,
       hasMore: snapshot.hasMore,
+      presence: {
+        onlineCount: aggregatePresence?.onlineCount ?? null,
+        sampledOnlineCount: pagePresence?.onlinePeerCount ?? 0,
+        sampledPeerCount: pagePresence?.loadedPeerCount ?? 0,
+        hasMore: pagePresence?.hasMore ?? false,
+        nextCursor: pagePresence?.nextCursor,
+        loadedPages: pagePresence?.loadedPageCount ?? 0,
+        activeChannelId: activePresenceChannelId,
+        updatedAt: pagePresence?.updatedAt ?? aggregatePresence?.updatedAt,
+      },
     };
   }
 
@@ -7147,6 +7307,64 @@ export class ChatController {
     }
 
     return this.getWorkspaceMemberDirectory(workspaceId);
+  }
+
+  getPresenceScopeState(workspaceId: string, channelId?: string | null): {
+    onlineCount: number | null;
+    sampledOnlineCount: number;
+    sampledPeerCount: number;
+    hasMore: boolean;
+    nextCursor?: string;
+    loadedPages: number;
+    activeChannelId?: string;
+    updatedAt?: number;
+  } {
+    const aggregate = typeof (this.presence as any).getPresenceAggregate === 'function'
+      ? this.presence.getPresenceAggregate(workspaceId)
+      : undefined;
+    const effectiveChannelId = channelId || aggregate?.activeChannelId || undefined;
+    const page = effectiveChannelId && typeof (this.presence as any).getPresencePageSnapshot === 'function'
+      ? this.presence.getPresencePageSnapshot(workspaceId, effectiveChannelId)
+      : undefined;
+
+    return {
+      onlineCount: aggregate?.onlineCount ?? null,
+      sampledOnlineCount: page?.onlinePeerCount ?? 0,
+      sampledPeerCount: page?.loadedPeerCount ?? 0,
+      hasMore: page?.hasMore ?? false,
+      nextCursor: page?.nextCursor,
+      loadedPages: page?.loadedPageCount ?? 0,
+      activeChannelId: effectiveChannelId,
+      updatedAt: page?.updatedAt ?? aggregate?.updatedAt,
+    };
+  }
+
+  async loadMorePresenceScope(workspaceId: string, channelId: string): Promise<ReturnType<ChatController['getPresenceScopeState']>> {
+    const initial = this.getPresenceScopeState(workspaceId, channelId);
+    if (!initial.hasMore || !initial.nextCursor) return initial;
+
+    const requested = this.requestPresencePage(workspaceId, channelId, {
+      cursor: initial.nextCursor,
+    });
+    if (!requested) return this.getPresenceScopeState(workspaceId, channelId);
+
+    const timeoutMs = 1500;
+    const pollMs = 120;
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const next = this.getPresenceScopeState(workspaceId, channelId);
+      if (
+        next.sampledPeerCount > initial.sampledPeerCount
+        || next.loadedPages > initial.loadedPages
+        || !next.hasMore
+      ) {
+        return next;
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+
+    return this.getPresenceScopeState(workspaceId, channelId);
   }
 
   async onWorkspaceActivated(workspaceId: string): Promise<void> {
@@ -7217,6 +7435,15 @@ export class ChatController {
 
   async onChannelViewed(channelId: string): Promise<void> {
     this.syncPresenceScopeForActiveChannel(channelId);
+
+    if (this.state.activeWorkspaceId) {
+      const scope = this.getPresenceScopeState(this.state.activeWorkspaceId, channelId);
+      if (scope.hasMore && scope.nextCursor) {
+        this.requestPresencePage(this.state.activeWorkspaceId, channelId, {
+          cursor: scope.nextCursor,
+        });
+      }
+    }
 
     if (!this.channelViewInFlight) this.channelViewInFlight = new Map<string, Promise<void>>();
     if (!this.pendingReadReceiptKeys) this.pendingReadReceiptKeys = new Set<string>();

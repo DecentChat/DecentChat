@@ -399,6 +399,36 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     showMessageInfoModal(info);
   }
 
+  const formatPresenceSummary = (
+    workspaceId: string,
+    channelId?: string | null,
+    directoryView?: WorkspaceMemberDirectoryView,
+  ): string | undefined => {
+    if (!callbacks.getPresenceScopeState) return undefined;
+    const presence = callbacks.getPresenceScopeState(workspaceId, channelId);
+    if (!presence) return undefined;
+
+    const parts: string[] = [];
+    if (presence.onlineCount !== null) {
+      parts.push(`${presence.onlineCount} online`);
+    }
+
+    if (presence.sampledPeerCount > 0) {
+      const sampled = `${presence.sampledPeerCount}${presence.hasMore ? '+' : ''}`;
+      parts.push(`${sampled} sampled`);
+      if (presence.loadedPages > 0) {
+        parts.push(`${presence.loadedPages} page${presence.loadedPages === 1 ? '' : 's'}`);
+      }
+    }
+
+    if (directoryView && directoryView.loadedCount > 0) {
+      const roster = `${directoryView.loadedCount}${directoryView.hasMore ? '+' : ''}`;
+      parts.push(`${roster} roster loaded`);
+    }
+
+    return parts.length > 0 ? `Presence: ${parts.join(' · ')}` : undefined;
+  };
+
   function showChannelMembersModal(): void {
     if (!state.activeWorkspaceId || !state.activeChannelId) return;
     const ws = workspaceManager.getWorkspace(state.activeWorkspaceId);
@@ -419,6 +449,7 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
       }));
 
     const directoryView = callbacks.getWorkspaceMemberDirectory?.(ws.id);
+    const presenceSummaryText = formatPresenceSummary(ws.id, state.activeChannelId, directoryView);
 
     const fallbackMembers = ws.members
       .filter((member) => channel.members.includes(member.peerId))
@@ -441,6 +472,7 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
       loadedCount: usingDirectoryState ? (directoryView?.loadedCount ?? 0) : fallbackMembers.length,
       totalCount: usingDirectoryState ? (directoryView?.totalCount ?? fallbackMembers.length) : fallbackMembers.length,
       hasMore: usingDirectoryState ? (directoryView?.hasMore ?? false) : false,
+      presenceSummaryText,
       onLoadMore: usingDirectoryState
         ? async () => {
             const nextDirectoryView = callbacks.loadMoreWorkspaceMemberDirectory
@@ -451,6 +483,10 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
                 })();
 
             if (!nextDirectoryView) return null;
+
+            if (callbacks.loadMorePresenceScope) {
+              void callbacks.loadMorePresenceScope(ws.id, channel.id);
+            }
 
             return {
               members: mapDirectoryMembers(nextDirectoryView.members),
@@ -489,6 +525,7 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     };
 
     const directoryView = callbacks.getWorkspaceMemberDirectory?.(ws.id);
+    const presenceSummaryText = formatPresenceSummary(ws.id, state.activeChannelId, directoryView);
     const mappedDirectoryMembers = mapDirectoryMembers(directoryView?.members || []);
 
     const fallbackMembers = ws.members.map(member => ({
@@ -514,6 +551,7 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
       loadedCount: usingDirectoryState ? (directoryView?.loadedCount ?? mappedDirectoryMembers.length) : fallbackMembers.length,
       totalCount: usingDirectoryState ? (directoryView?.totalCount ?? mappedDirectoryMembers.length) : fallbackMembers.length,
       hasMore: usingDirectoryState ? (directoryView?.hasMore ?? false) : false,
+      presenceSummaryText,
       isOwner,
       isAdminOrOwner,
       onRemove: async (peerId: string) => {
@@ -543,6 +581,10 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
                 })();
 
             if (!nextDirectoryView) return null;
+
+            if (callbacks.loadMorePresenceScope && state.activeChannelId) {
+              void callbacks.loadMorePresenceScope(ws.id, state.activeChannelId);
+            }
 
             return {
               members: mapDirectoryMembers(nextDirectoryView.members),

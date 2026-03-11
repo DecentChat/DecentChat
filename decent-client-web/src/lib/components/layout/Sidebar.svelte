@@ -43,6 +43,16 @@
   }
   }
 
+  interface PresenceSummary {
+    onlineCount: number | null;
+    sampledOnlineCount: number;
+    sampledPeerCount: number;
+    hasMore: boolean;
+    loadedPages: number;
+    activeChannelId?: string;
+    updatedAt?: number;
+  }
+
   interface Props {
     workspaceName: string | null;
     workspaces: WorkspaceInfo[];
@@ -54,6 +64,7 @@
     activeDirectConversationId: string | null;
     myPeerId: string;
     connectionBanner: ConnectionBanner;
+    presence: PresenceSummary;
     getUnreadCount: (id: string) => number;
     getPeerAlias: (peerId: string) => string;
     getPeerStatusClass: (peerId: string) => string;
@@ -89,6 +100,7 @@
     activeDirectConversationId,
     myPeerId,
     connectionBanner,
+    presence,
     getUnreadCount,
     getPeerAlias,
     getPeerStatusClass,
@@ -122,6 +134,11 @@
     directConversations.slice().sort((a, b) => b.lastMessageAt - a.lastMessageAt)
   );
   let workspaceMenuOpen = $state(false);
+  let sampledPresenceLabel = $derived(
+    presence.sampledPeerCount > 0
+      ? `${presence.sampledPeerCount}${presence.hasMore ? '+' : ''} sampled`
+      : null,
+  );
 
   function toggleWorkspaceMenu() {
     workspaceMenuOpen = !workspaceMenuOpen;
@@ -224,10 +241,22 @@
     </div>
 
     <div class="sidebar-section" id="workspace-members-section" data-testid="member-list">
-      <div class="sidebar-section-header">
-        Members
-        <button class="add-btn" id="workspace-member-dm-btn" title="Start DM with member" onclick={onStartDM}>+</button>
+      <div class="sidebar-section-header members-header-main">
+        <span>Members</span>
+        <div class="members-header-actions">
+          {#if presence.onlineCount !== null}
+            <span class="presence-pill" title={sampledPresenceLabel ? `Presence sampled from ${sampledPresenceLabel}` : 'Presence aggregate'}>
+              🟢 {presence.onlineCount}
+            </span>
+          {/if}
+          <button class="add-btn" id="workspace-member-dm-btn" title="Start DM with member" onclick={onStartDM}>+</button>
+        </div>
       </div>
+      {#if sampledPresenceLabel}
+        <div class="sidebar-section-header member-group-header presence-sampled-label">
+          Presence sample — {sampledPresenceLabel}
+        </div>
+      {/if}
       {#if onlineMembers.length > 0}
         <div class="sidebar-section-header member-group-header">Online — {onlineMembers.length}</div>
         <div id="workspace-member-list-online">

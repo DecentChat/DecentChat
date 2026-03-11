@@ -169,6 +169,7 @@
           activeDirectConversationId={shellData.sidebar.activeDirectConversationId}
           myPeerId={shellData.sidebar.myPeerId}
           connectionBanner={shellData.sidebar.connectionBanner}
+          presence={shellData.sidebar.presence}
           getUnreadCount={cb.getUnreadCount}
           getPeerAlias={cb.getPeerAlias}
           getPeerStatusClass={cb.getPeerStatusClass}
@@ -210,6 +211,7 @@
           <ChannelHeader
             channelName={shellData.header.channelName}
             memberCount={shellData.header.memberCount}
+            presence={shellData.header.presence}
             isDirectMessage={shellData.header.isDirectMessage}
             isHuddleActive={shellData.header.isHuddleActive}
             onHamburger={cb.onHamburger}

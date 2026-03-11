@@ -3,10 +3,21 @@
   Renders the channel header with name, member count, and action buttons.
 -->
 <script lang="ts">
+  interface PresenceSummary {
+    onlineCount: number | null;
+    sampledOnlineCount: number;
+    sampledPeerCount: number;
+    hasMore: boolean;
+    loadedPages: number;
+    activeChannelId?: string;
+    updatedAt?: number;
+  }
+
   interface Props {
     // Content
     channelName: string;
     memberCount: number;
+    presence: PresenceSummary;
     isDirectMessage: boolean;
     isHuddleActive: boolean;
     // Callbacks
@@ -23,6 +34,7 @@
   let {
     channelName,
     memberCount,
+    presence,
     isDirectMessage,
     isHuddleActive,
     onHamburger,
@@ -41,8 +53,18 @@
     <button class="icon-btn hamburger" id="hamburger-btn" onclick={onHamburger}>☰</button>
     <h2>{channelName}</h2>
     {#if !isDirectMessage && memberCount > 0}
-      <button class="member-count" id="channel-members-btn" title="View channel members" onclick={onChannelMembers}>
+      <button
+        class="member-count"
+        id="channel-members-btn"
+        title={presence.sampledPeerCount > 0
+          ? `View channel members • sampled presence: ${presence.sampledPeerCount}${presence.hasMore ? '+' : ''}`
+          : 'View channel members'}
+        onclick={onChannelMembers}
+      >
         👥 {memberCount}
+        {#if presence.onlineCount !== null}
+          <span class="member-presence-inline">· 🟢 {presence.onlineCount}</span>
+        {/if}
       </button>
     {/if}
   </div>

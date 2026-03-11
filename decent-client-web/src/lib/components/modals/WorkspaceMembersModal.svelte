@@ -28,6 +28,7 @@
     loadedCount?: number;
     totalCount?: number;
     hasMore?: boolean;
+    presenceSummaryText?: string;
     isOwner: boolean;
     isAdminOrOwner: boolean;
     onRemove: (peerId: string) => Promise<{ success: boolean; error?: string }>;
@@ -82,6 +83,7 @@
     loadedCount?: number;
     totalCount?: number;
     hasMore?: boolean;
+    presenceSummaryText?: string;
     isOwner: boolean;
     isAdminOrOwner: boolean;
     onRemove: (peerId: string) => Promise<{ success: boolean; error?: string }>;
@@ -99,6 +101,7 @@
     loadedCount,
     totalCount,
     hasMore = false,
+    presenceSummaryText,
     isOwner,
     isAdminOrOwner,
     onRemove,
@@ -195,6 +198,11 @@
             {members.length} member{members.length === 1 ? '' : 's'}
           {/if}
         </div>
+        {#if presenceSummaryText}
+          <div style="font-size: 12px; color: var(--text-muted); opacity: 0.85; margin-top: 4px;">
+            {presenceSummaryText}
+          </div>
+        {/if}
       </div>
       <div class="members-list">
         {#each members as member (member.peerId)}
