@@ -24,6 +24,7 @@ export { WorkspaceDeltaProtocol } from './workspace/WorkspaceDeltaProtocol';
 export { DirectoryProtocol } from './workspace/DirectoryProtocol';
 export { DirectoryShardPlanner } from './workspace/DirectoryShardPlanner';
 export { PresenceProtocol } from './workspace/PresenceProtocol';
+export { HistoryPageProtocol } from './history/HistoryPageProtocol';
 export { ServerDiscovery } from './workspace/ServerDiscovery';
 export type { ServerStats } from './workspace/ServerDiscovery';
 
@@ -122,6 +123,10 @@ export type {
   ChannelAccessPolicy,
   PresenceAggregate,
   HistoryPageRef,
+  HistoryPageSnapshot,
+  HistoryPageDirection,
+  HistoryReplicaTier,
+  HistoryReplicaHint,
   PeerCapabilities,
 } from './workspace/types';
 export type {

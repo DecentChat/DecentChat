@@ -9,6 +9,10 @@ import type {
   ChannelAccessPolicy,
   PresenceAggregate,
   HistoryPageRef,
+  HistoryPageSnapshot,
+  HistoryPageDirection,
+  HistoryReplicaTier,
+  HistoryReplicaHint,
   PeerCapabilities,
 } from './DirectoryTypes';
 
@@ -20,6 +24,10 @@ export type {
   ChannelAccessPolicy,
   PresenceAggregate,
   HistoryPageRef,
+  HistoryPageSnapshot,
+  HistoryPageDirection,
+  HistoryReplicaTier,
+  HistoryReplicaHint,
   PeerCapabilities,
 } from './DirectoryTypes';
 
@@ -149,9 +157,22 @@ export interface WorkspaceDelta {
 }
 
 export type SyncMessage =
-  | { type: 'join-request'; inviteCode: string; member: WorkspaceMember; inviteId?: string; pexServers?: PEXServer[] }
+  | {
+      type: 'join-request';
+      inviteCode: string;
+      member: WorkspaceMember;
+      inviteId?: string;
+      pexServers?: PEXServer[];
+      historySyncMode?: 'legacy' | 'paged';
+    }
   // `messageHistory` intentionally omits plaintext message content during sync.
-  | { type: 'join-accepted'; workspace: Workspace; messageHistory: Record<string, any[]>; pexServers?: PEXServer[] }
+  | {
+      type: 'join-accepted';
+      workspace: Workspace;
+      messageHistory: Record<string, any[]>;
+      pexServers?: PEXServer[];
+      historyReplicaHints?: HistoryReplicaHint[];
+    }
   | { type: 'join-rejected'; reason: string }
   | { type: 'member-joined'; member: WorkspaceMember }
   | { type: 'member-left'; peerId: string }
@@ -162,15 +183,37 @@ export type SyncMessage =
   | { type: 'channel-removed'; channelId: string; removedBy: string }
   | { type: 'workspace-deleted'; workspaceId: string; deletedBy: string }
   | { type: 'channel-message'; channelId: string; message: any }
-  | { type: 'sync-request'; workspaceId: string }
+  | { type: 'sync-request'; workspaceId: string; historySyncMode?: 'legacy' | 'paged' }
   // `messageHistory` intentionally omits plaintext message content during sync.
-  | { type: 'sync-response'; workspace: Workspace; messageHistory: Record<string, any[]> }
+  | {
+      type: 'sync-response';
+      workspace: Workspace;
+      messageHistory: Record<string, any[]>;
+      historyReplicaHints?: HistoryReplicaHint[];
+    }
   | { type: 'workspace-shell-request'; workspaceId: string }
   | { type: 'workspace-shell-response'; shell: WorkspaceShell; inviteCode?: string }
   | { type: 'workspace-delta'; delta: WorkspaceDelta }
   | { type: 'workspace-delta-ack'; workspaceId: string; version: number; checkpointId?: string }
   | { type: 'member-page-request'; workspaceId: string; cursor?: string; pageSize?: number; shardPrefix?: string }
   | { type: 'member-page-response'; page: MemberDirectoryPage }
+  | {
+      type: 'history-page-request';
+      workspaceId: string;
+      channelId: string;
+      cursor?: string;
+      pageSize?: number;
+      direction?: HistoryPageDirection;
+      tier?: HistoryReplicaTier;
+    }
+  | {
+      type: 'history-page-response';
+      workspaceId: string;
+      channelId: string;
+      page: HistoryPageSnapshot;
+      historyReplicaHints?: HistoryReplicaHint[];
+    }
+  | { type: 'history-replica-hints'; workspaceId: string; hints: HistoryReplicaHint[] }
   | { type: 'directory-shard-advertisement'; shard: DirectoryShardRef }
   | { type: 'directory-shard-repair'; workspaceId: string; shardId: string; requestedBy: string; targetReplicaPeerIds?: string[] }
   | { type: 'peer-exchange'; servers: PEXServer[] }

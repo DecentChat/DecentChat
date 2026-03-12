@@ -13,9 +13,12 @@ import type {
   SyncMessage,
   MemberDirectoryPage,
   DirectoryShardRef,
+  HistoryPageSnapshot,
+  HistoryReplicaHint,
 } from './types';
 import { WorkspaceDeltaProtocol } from './WorkspaceDeltaProtocol';
 import { DirectoryProtocol } from './DirectoryProtocol';
+import { HistoryPageProtocol } from '../history/HistoryPageProtocol';
 import type { PlaintextMessage } from '../messages/types';
 import { WorkspaceManager } from './WorkspaceManager';
 import { MessageStore } from '../messages/MessageStore';
@@ -33,9 +36,16 @@ export type SyncEvent =
   | { type: 'channel-removed'; workspaceId: string; channelId: string }
   | { type: 'workspace-deleted'; workspaceId: string; deletedBy: string }
   | { type: 'member-page-received'; workspaceId: string; page: MemberDirectoryPage }
+  | { type: 'history-page-received'; workspaceId: string; channelId: string; page: HistoryPageSnapshot }
+  | { type: 'history-replica-hints'; workspaceId: string; hints: HistoryReplicaHint[] }
   | { type: 'directory-shards-updated'; workspaceId: string; shards: DirectoryShardRef[] }
   // Message history sent during sync intentionally omits plaintext `content`.
-  | { type: 'workspace-joined'; workspace: Workspace; messageHistory: Record<string, SyncedHistoryMessage[]> }
+  | {
+      type: 'workspace-joined';
+      workspace: Workspace;
+      messageHistory: Record<string, SyncedHistoryMessage[]>;
+      historyReplicaHints?: HistoryReplicaHint[];
+    }
   | { type: 'join-rejected'; reason: string }
   | { type: 'message-received'; channelId: string; message: PlaintextMessage }
   | { type: 'sync-complete'; workspaceId: string };
@@ -49,6 +59,7 @@ export class SyncProtocol {
   private serverDiscovery?: ServerDiscovery; // DEP-002: Optional PEX support
   private workspaceDelta: WorkspaceDeltaProtocol;
   private directoryProtocol: DirectoryProtocol;
+  private historyPageProtocol: HistoryPageProtocol;
 
   constructor(
     workspaceManager: WorkspaceManager,
@@ -66,6 +77,7 @@ export class SyncProtocol {
     this.serverDiscovery = serverDiscovery;
     this.workspaceDelta = new WorkspaceDeltaProtocol(this.workspaceManager);
     this.directoryProtocol = new DirectoryProtocol(this.workspaceManager);
+    this.historyPageProtocol = new HistoryPageProtocol(this.messageStore, this.workspaceManager);
   }
 
   /**
@@ -123,6 +135,15 @@ export class SyncProtocol {
       case 'member-page-response':
         this.handleMemberPageResponse(msg);
         break;
+      case 'history-page-request':
+        this.handleHistoryPageRequest(fromPeerId, msg);
+        break;
+      case 'history-page-response':
+        this.handleHistoryPageResponse(msg);
+        break;
+      case 'history-replica-hints':
+        this.handleHistoryReplicaHints(msg);
+        break;
       case 'directory-shard-advertisement':
         this.handleDirectoryShardAdvertisement(msg);
         break;
@@ -140,13 +161,20 @@ export class SyncProtocol {
   /**
    * Send a join request to a peer (I want to join their workspace)
    */
-  requestJoin(targetPeerId: string, inviteCode: string, myMember: WorkspaceMember, inviteId?: string): void {
+  requestJoin(
+    targetPeerId: string,
+    inviteCode: string,
+    myMember: WorkspaceMember,
+    inviteId?: string,
+    options: { historySyncMode?: 'legacy' | 'paged' } = {},
+  ): void {
     const msg: SyncMessage = {
       type: 'join-request',
       inviteCode,
       member: myMember,
       inviteId,
       pexServers: this.serverDiscovery?.getHandshakeServers(),
+      historySyncMode: options.historySyncMode,
     };
     this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
   }
@@ -202,8 +230,8 @@ export class SyncProtocol {
   /**
    * Request full workspace sync from a peer
    */
-  requestSync(targetPeerId: string, workspaceId: string): void {
-    const msg: SyncMessage = { type: 'sync-request', workspaceId };
+  requestSync(targetPeerId: string, workspaceId: string, options: { historySyncMode?: 'legacy' | 'paged' } = {}): void {
+    const msg: SyncMessage = { type: 'sync-request', workspaceId, historySyncMode: options.historySyncMode };
     this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
   }
 
@@ -223,6 +251,29 @@ export class SyncProtocol {
       cursor: options.cursor,
       pageSize: options.pageSize,
       shardPrefix: options.shardPrefix,
+    };
+    this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
+  }
+
+  requestHistoryPage(
+    targetPeerId: string,
+    workspaceId: string,
+    channelId: string,
+    options: {
+      cursor?: string;
+      pageSize?: number;
+      direction?: 'older' | 'newer';
+      tier?: 'recent' | 'archive';
+    } = {},
+  ): void {
+    const msg: SyncMessage = {
+      type: 'history-page-request',
+      workspaceId,
+      channelId,
+      cursor: options.cursor,
+      pageSize: options.pageSize,
+      direction: options.direction,
+      tier: options.tier,
     };
     this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
   }
@@ -266,24 +317,18 @@ export class SyncProtocol {
       return;
     }
 
-    // Send full workspace state + message history
-    // Sync history intentionally excludes plaintext content; encrypted payloads are sent separately.
-    const messageHistory: Record<string, SyncedHistoryMessage[]> = {};
-    for (const channel of workspace.channels) {
-      const msgs = this.messageStore.getMessages(channel.id);
-      if (msgs.length > 0) {
-        messageHistory[channel.id] = msgs.map((msg) => {
-          const { content, ...safeMsg } = msg;
-          return safeMsg;
-        });
-      }
-    }
+    const shouldUsePagedHistory = msg.historySyncMode === 'paged';
+
+    // Legacy clients still receive metadata-only full history during join.
+    // Paged clients fetch history windows on demand via history-page-request.
+    const messageHistory = shouldUsePagedHistory ? {} : this.buildLegacyMessageHistory(workspace.id);
 
     const acceptMsg: SyncMessage = {
       type: 'join-accepted',
       workspace: this.workspaceManager.exportWorkspace(workspace.id)!,
       messageHistory,
       pexServers: this.serverDiscovery?.getHandshakeServers(),
+      historyReplicaHints: shouldUsePagedHistory ? this.historyPageProtocol.buildReplicaHints(workspace.id) : undefined,
     };
 
     this.sendFn(fromPeerId, { type: 'workspace-sync', sync: acceptMsg });
@@ -302,15 +347,24 @@ export class SyncProtocol {
     this.workspaceManager.importWorkspace(msg.workspace);
 
     // Import message histories (with chain verification)
-    for (const [channelId, messages] of Object.entries(msg.messageHistory)) {
+    for (const [channelId, messages] of Object.entries(msg.messageHistory || {})) {
       await this.messageStore.importMessages(channelId, messages as SyncedHistoryMessage[]);
     }
 
     this.onEvent({
       type: 'workspace-joined',
       workspace: msg.workspace,
-      messageHistory: msg.messageHistory,
+      messageHistory: msg.messageHistory || {},
+      historyReplicaHints: msg.historyReplicaHints,
     });
+
+    if (msg.historyReplicaHints?.length) {
+      this.onEvent({
+        type: 'history-replica-hints',
+        workspaceId: msg.workspace.id,
+        hints: msg.historyReplicaHints,
+      });
+    }
   }
 
   private handleWorkspaceShellRequest(fromPeerId: string, msg: Extract<SyncMessage, { type: 'workspace-shell-request' }>): void {
@@ -359,6 +413,52 @@ export class SyncProtocol {
       type: 'member-page-received',
       workspaceId: msg.page.workspaceId,
       page: msg.page,
+    });
+  }
+
+  private handleHistoryPageRequest(fromPeerId: string, msg: Extract<SyncMessage, { type: 'history-page-request' }>): void {
+    const response = this.historyPageProtocol.buildHistoryPageResponse(msg.workspaceId, msg.channelId, {
+      cursor: msg.cursor,
+      pageSize: msg.pageSize,
+      direction: msg.direction,
+      tier: msg.tier,
+    });
+    this.sendFn(fromPeerId, {
+      type: 'workspace-sync',
+      sync: response,
+      workspaceId: msg.workspaceId,
+    });
+  }
+
+  private handleHistoryPageResponse(msg: Extract<SyncMessage, { type: 'history-page-response' }>): void {
+    const normalized = msg.page.messages.map((message) => ({
+      ...message,
+      content: typeof message.content === 'string' ? message.content : '',
+    })) as PlaintextMessage[];
+
+    this.messageStore.bulkAdd(normalized);
+
+    this.onEvent({
+      type: 'history-page-received',
+      workspaceId: msg.workspaceId,
+      channelId: msg.channelId,
+      page: msg.page,
+    });
+
+    if (msg.historyReplicaHints?.length) {
+      this.onEvent({
+        type: 'history-replica-hints',
+        workspaceId: msg.workspaceId,
+        hints: msg.historyReplicaHints,
+      });
+    }
+  }
+
+  private handleHistoryReplicaHints(msg: Extract<SyncMessage, { type: 'history-replica-hints' }>): void {
+    this.onEvent({
+      type: 'history-replica-hints',
+      workspaceId: msg.workspaceId,
+      hints: msg.hints,
     });
   }
 
@@ -488,22 +588,14 @@ export class SyncProtocol {
     const workspace = this.workspaceManager.getWorkspace(msg.workspaceId);
     if (!workspace) return;
 
-    // Sync history intentionally excludes plaintext content; encrypted payloads are sent separately.
-    const messageHistory: Record<string, SyncedHistoryMessage[]> = {};
-    for (const channel of workspace.channels) {
-      const msgs = this.messageStore.getMessages(channel.id);
-      if (msgs.length > 0) {
-        messageHistory[channel.id] = msgs.map((msg) => {
-          const { content, ...safeMsg } = msg;
-          return safeMsg;
-        });
-      }
-    }
+    const usePagedHistory = msg.historySyncMode === 'paged';
+    const messageHistory = usePagedHistory ? {} : this.buildLegacyMessageHistory(msg.workspaceId);
 
     const response: SyncMessage = {
       type: 'sync-response',
       workspace,
       messageHistory,
+      historyReplicaHints: usePagedHistory ? this.historyPageProtocol.buildReplicaHints(msg.workspaceId) : undefined,
     };
 
     this.sendFn(fromPeerId, { type: 'workspace-sync', sync: response });
@@ -514,11 +606,38 @@ export class SyncProtocol {
     this.workspaceManager.importWorkspace(msg.workspace);
 
     // Import verified message histories
-    for (const [channelId, messages] of Object.entries(msg.messageHistory)) {
+    for (const [channelId, messages] of Object.entries(msg.messageHistory || {})) {
       await this.messageStore.importMessages(channelId, messages as SyncedHistoryMessage[]);
     }
 
+    if (msg.historyReplicaHints?.length) {
+      this.onEvent({
+        type: 'history-replica-hints',
+        workspaceId: msg.workspace.id,
+        hints: msg.historyReplicaHints,
+      });
+    }
+
     this.onEvent({ type: 'sync-complete', workspaceId: msg.workspace.id });
+  }
+
+  private buildLegacyMessageHistory(workspaceId: string): Record<string, SyncedHistoryMessage[]> {
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) return {};
+
+    // Sync history intentionally excludes plaintext content; encrypted payloads are sent separately.
+    const messageHistory: Record<string, SyncedHistoryMessage[]> = {};
+    for (const channel of workspace.channels) {
+      const messages = this.messageStore.getMessages(channel.id);
+      if (messages.length > 0) {
+        messageHistory[channel.id] = messages.map((message) => {
+          const { content, ...safeMessage } = message;
+          return safeMessage;
+        });
+      }
+    }
+
+    return messageHistory;
   }
 
   /**

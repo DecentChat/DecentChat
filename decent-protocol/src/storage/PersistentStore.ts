@@ -10,6 +10,7 @@ import type {
   ChannelAccessPolicy,
   DirectoryShardRef,
   HistoryPageRef,
+  HistoryPageSnapshot,
   MemberDirectoryPage,
   PresenceAggregate,
   WorkspaceShell,
@@ -224,9 +225,12 @@ export class PersistentStore {
   }
 
   async saveHistoryPageRef(ref: HistoryPageRef): Promise<void> {
+    const key = makeHistoryPageKey(ref.workspaceId, ref.channelId, ref.pageId);
+    const existing = await this.get(PUBLIC_WORKSPACE_STORES.historyPages, key);
     await this.put(PUBLIC_WORKSPACE_STORES.historyPages, {
+      ...existing,
       ...ref,
-      key: makeHistoryPageKey(ref.workspaceId, ref.channelId, ref.pageId),
+      key,
     });
   }
 
@@ -235,6 +239,31 @@ export class PersistentStore {
     if (!result) return undefined;
     const { key, ...ref } = result;
     return ref as HistoryPageRef;
+  }
+
+  async saveHistoryPage(page: HistoryPageSnapshot): Promise<void> {
+    const key = makeHistoryPageKey(page.workspaceId, page.channelId, page.pageId);
+    const existing = await this.get(PUBLIC_WORKSPACE_STORES.historyPages, key);
+    await this.put(PUBLIC_WORKSPACE_STORES.historyPages, {
+      ...existing,
+      ...page,
+      key,
+    });
+  }
+
+  async getHistoryPage(workspaceId: string, channelId: string, pageId: string): Promise<HistoryPageSnapshot | undefined> {
+    const result = await this.get(PUBLIC_WORKSPACE_STORES.historyPages, makeHistoryPageKey(workspaceId, channelId, pageId));
+    if (!result) return undefined;
+    const { key, ...page } = result;
+    return page as HistoryPageSnapshot;
+  }
+
+  async getHistoryPages(workspaceId: string, channelId: string): Promise<HistoryPageSnapshot[]> {
+    const records = await this.getAllByIndex(PUBLIC_WORKSPACE_STORES.historyPages, 'channelId', channelId);
+    return records
+      .filter((record) => record.workspaceId === workspaceId)
+      .map(({ key, ...page }) => page as HistoryPageSnapshot)
+      .sort((a, b) => (a.generatedAt || 0) - (b.generatedAt || 0));
   }
 
   // === Messages ===
