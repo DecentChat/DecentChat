@@ -68,7 +68,7 @@ describe('workspace directory sync guards', () => {
     expect(sendControlWithRetry).toHaveBeenCalledTimes(0);
   });
 
-  test('does not answer workspace-shell requests for legacy workspaces', () => {
+  test('answers workspace-shell requests even for legacy workspaces (to enable rollback propagation)', () => {
     const sendControlWithRetry = mock(() => {});
     const ctrl = Object.create(ChatController.prototype) as any;
     ctrl.workspaceManager = {
@@ -88,6 +88,15 @@ describe('workspace directory sync guards', () => {
 
     ctrl.handleWorkspaceShellRequest('member-1', 'ws-1');
 
-    expect(sendControlWithRetry).toHaveBeenCalledTimes(0);
+    expect(sendControlWithRetry).toHaveBeenCalledTimes(1);
+    expect(sendControlWithRetry).toHaveBeenCalledWith(
+      'member-1',
+      expect.objectContaining({
+        type: 'workspace-sync',
+        workspaceId: 'ws-1',
+        sync: expect.objectContaining({ type: 'workspace-shell-response' }),
+      }),
+      { label: 'workspace-sync' },
+    );
   });
 });

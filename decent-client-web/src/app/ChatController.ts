@@ -1924,7 +1924,6 @@ export class ChatController {
   private handleWorkspaceShellRequest(peerId: string, workspaceId: string): void {
     const ws = this.workspaceManager.getWorkspace(workspaceId);
     if (!ws) return;
-    if (!this.workspaceHasLargeWorkspaceCapability(ws)) return;
     if (this.workspaceManager.isBanned(workspaceId, peerId)) return;
 
     const snapshot = this.publicWorkspaceController.getSnapshot(workspaceId);
