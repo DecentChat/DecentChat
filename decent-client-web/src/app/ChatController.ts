@@ -94,6 +94,10 @@ const PRESENCE_AGGREGATOR_CAPABILITY = 'presence-aggregator-v1';
 const NEGENTROPY_QUERY_TIMEOUT_MS = 8000;
 const PRESENCE_PAGE_REQUEST_TIMEOUT_MS = 5000;
 const PRESENCE_AUTO_ADVANCE_PAGE_TARGET = 150;
+const DIRECTORY_REQUEST_FAILOVER_TIMEOUT_MS = 1200;
+const MEDIUM_WORKSPACE_MEMBER_THRESHOLD = 100;
+const IMPORTANT_SHARD_MIN_REPLICAS = 2;
+const IMPORTANT_SHARD_PREFERRED_REPLICAS = 3;
 
 const DEV_SIGNAL_PORT = Number((import.meta as any).env?.VITE_SIGNAL_PORT || 9000);
 const DEV_SIGNAL_WS = `ws://localhost:${DEV_SIGNAL_PORT}`;
@@ -238,6 +242,7 @@ export class ChatController {
     }
   >();
   private lastMessageSyncRequestAt = new Map<string, number>();
+  private directoryRequestFailoverTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   /** DEP-002: Peer Exchange for signaling server discovery */
   readonly storageQuota: StorageQuotaManager = new StorageQuotaManager();
@@ -1779,20 +1784,81 @@ export class ChatController {
     return this.publicWorkspaceController.buildShell(workspace);
   }
 
-  private selectWorkspaceSyncTargetPeer(workspaceId: string, capability: string, preferredPeerId?: string): string | null {
-    if (preferredPeerId && this.state.readyPeers.has(preferredPeerId) && this.peerSupportsCapability(preferredPeerId, capability)) {
-      return preferredPeerId;
-    }
-
+  private selectWorkspaceSyncTargetPeers(workspaceId: string, capability: string, preferredPeerId?: string): string[] {
     const workspace = this.workspaceManager.getWorkspace(workspaceId);
     const workspaceMembers = new Set((workspace?.members ?? []).map((member) => member.peerId));
 
+    const targets: string[] = [];
+    const seen = new Set<string>();
+    const pushIfEligible = (peerId?: string): void => {
+      if (!peerId || seen.has(peerId)) return;
+      if (!this.state.readyPeers.has(peerId)) return;
+      if (!this.peerSupportsCapability(peerId, capability)) return;
+      if (workspaceMembers.size > 0 && !workspaceMembers.has(peerId)) return;
+      seen.add(peerId);
+      targets.push(peerId);
+    };
+
+    pushIfEligible(preferredPeerId);
     for (const peerId of this.state.readyPeers) {
-      if (!this.peerSupportsCapability(peerId, capability)) continue;
-      if (workspaceMembers.size === 0 || workspaceMembers.has(peerId)) return peerId;
+      pushIfEligible(peerId);
     }
 
-    return null;
+    return targets;
+  }
+
+  private selectWorkspaceSyncTargetPeer(workspaceId: string, capability: string, preferredPeerId?: string): string | null {
+    return this.selectWorkspaceSyncTargetPeers(workspaceId, capability, preferredPeerId)[0] ?? null;
+  }
+
+  private getDirectoryRequestKey(workspaceId: string, cursor?: string): string {
+    return `${workspaceId}::${cursor || '__root__'}`;
+  }
+
+  private clearDirectoryRequestFailoverTimer(workspaceId: string, cursor?: string): void {
+    const key = this.getDirectoryRequestKey(workspaceId, cursor);
+    const timer = this.directoryRequestFailoverTimers.get(key);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.directoryRequestFailoverTimers.delete(key);
+  }
+
+  private requestMemberDirectoryPageWithFallback(
+    workspaceId: string,
+    cursor: string | undefined,
+    targetPeerIds: string[],
+    targetIndex: number,
+  ): void {
+    const targetPeerId = targetPeerIds[targetIndex];
+    if (!targetPeerId) {
+      this.clearDirectoryRequestFailoverTimer(workspaceId, cursor);
+      this.publicWorkspaceController.endPageRequest(workspaceId, cursor);
+      return;
+    }
+
+    if (!this.state.readyPeers.has(targetPeerId)) {
+      this.requestMemberDirectoryPageWithFallback(workspaceId, cursor, targetPeerIds, targetIndex + 1);
+      return;
+    }
+
+    this.sendControlWithRetry(targetPeerId, {
+      type: 'workspace-sync',
+      workspaceId,
+      sync: {
+        type: 'member-page-request',
+        workspaceId,
+        cursor,
+        pageSize: 100,
+      },
+    }, { label: 'workspace-sync' });
+
+    const key = this.getDirectoryRequestKey(workspaceId, cursor);
+    this.clearDirectoryRequestFailoverTimer(workspaceId, cursor);
+    const timer = setTimeout(() => {
+      if (this.directoryRequestFailoverTimers.get(key) !== timer) return;
+      this.requestMemberDirectoryPageWithFallback(workspaceId, cursor, targetPeerIds, targetIndex + 1);
+    }, DIRECTORY_REQUEST_FAILOVER_TIMEOUT_MS);
+    this.directoryRequestFailoverTimers.set(key, timer);
   }
 
   private requestWorkspaceShell(peerId: string, workspaceId: string): void {
@@ -1822,29 +1888,17 @@ export class ChatController {
     const cursor = snapshot.nextCursor;
     if (!this.publicWorkspaceController.beginPageRequest(workspaceId, cursor)) return;
 
-    const targetPeerId = this.selectWorkspaceSyncTargetPeer(
+    const targetPeerIds = this.selectWorkspaceSyncTargetPeers(
       workspaceId,
       MEMBER_DIRECTORY_CAPABILITY,
       preferredPeerId,
     );
-    if (!targetPeerId) {
+    if (!targetPeerIds.length) {
       this.publicWorkspaceController.endPageRequest(workspaceId, cursor);
       return;
     }
 
-    this.sendControlWithRetry(targetPeerId, {
-      type: 'workspace-sync',
-      workspaceId,
-      sync: {
-        type: 'member-page-request',
-        workspaceId,
-        cursor,
-        pageSize: 100,
-      },
-    }, { label: 'workspace-sync' });
-
-    // Fail-open timeout in case the peer never answers.
-    setTimeout(() => this.publicWorkspaceController.endPageRequest(workspaceId, cursor), 5000);
+    this.requestMemberDirectoryPageWithFallback(workspaceId, cursor, targetPeerIds, 0);
   }
 
   private handleWorkspaceShellRequest(peerId: string, workspaceId: string): void {
@@ -1917,13 +1971,59 @@ export class ChatController {
     }, { label: 'workspace-sync' });
   }
 
-  private async handleMemberPageResponse(page: MemberDirectoryPage): Promise<void> {
+  private async handleMemberPageResponse(_peerId: string, page: MemberDirectoryPage): Promise<void> {
+    this.clearDirectoryRequestFailoverTimer(page.workspaceId, page.cursor);
     await this.publicWorkspaceController.ingestMemberPage(page);
     this.publicWorkspaceController.endPageRequest(page.workspaceId, page.cursor);
 
     if (this.state.activeWorkspaceId === page.workspaceId) {
       this.ui?.updateSidebar();
     }
+  }
+
+  private getWorkspaceDirectoryReplicaCandidates(workspaceId: string, shardPrefix: string): string[] {
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) return [];
+
+    const workspaceMembers = new Set(workspace.members.map((member) => member.peerId));
+    const capability = `${DIRECTORY_SHARD_CAPABILITY_PREFIX}${shardPrefix}`;
+
+    const candidates: string[] = [];
+    for (const peerId of this.state.readyPeers) {
+      if (!workspaceMembers.has(peerId)) continue;
+      if (!this.peerSupportsCapability(peerId, capability)) continue;
+      candidates.push(peerId);
+    }
+
+    return candidates;
+  }
+
+  private normalizeDirectoryShardReplicaPeerIds(
+    workspace: Workspace,
+    shardPrefix: string,
+    replicaPeerIds: string[],
+  ): string[] {
+    const merged = [...new Set([
+      ...replicaPeerIds,
+      ...this.getWorkspaceDirectoryReplicaCandidates(workspace.id, shardPrefix),
+    ])]
+      .filter((peerId) => typeof peerId === 'string' && peerId.length > 0)
+      .sort();
+
+    if ((workspace.shell?.memberCount ?? workspace.members.length) < MEDIUM_WORKSPACE_MEMBER_THRESHOLD) {
+      return merged;
+    }
+
+    if (merged.length <= IMPORTANT_SHARD_MIN_REPLICAS) {
+      return merged;
+    }
+
+    const targetReplicaCount = Math.min(
+      IMPORTANT_SHARD_PREFERRED_REPLICAS,
+      Math.max(IMPORTANT_SHARD_MIN_REPLICAS, merged.length),
+    );
+
+    return merged.slice(0, targetReplicaCount);
   }
 
   private async handleDirectoryShardAdvertisement(shard: { workspaceId: string; shardId: string; shardPrefix: string; replicaPeerIds: string[]; version?: number }): Promise<void> {
@@ -1940,12 +2040,16 @@ export class ChatController {
       current[idx] = {
         ...existing,
         ...shard,
-        replicaPeerIds: [...new Set([...(existing.replicaPeerIds ?? []), ...(shard.replicaPeerIds ?? [])])].sort(),
+        replicaPeerIds: this.normalizeDirectoryShardReplicaPeerIds(
+          ws,
+          shard.shardPrefix,
+          [...(existing.replicaPeerIds ?? []), ...(shard.replicaPeerIds ?? [])],
+        ),
       };
     } else {
       current.push({
         ...shard,
-        replicaPeerIds: [...new Set(shard.replicaPeerIds ?? [])].sort(),
+        replicaPeerIds: this.normalizeDirectoryShardReplicaPeerIds(ws, shard.shardPrefix, shard.replicaPeerIds ?? []),
       });
     }
 
@@ -1970,7 +2074,7 @@ export class ChatController {
     }
 
     if (msg.sync?.type === 'member-page-response' && msg.sync.page?.workspaceId) {
-      await this.handleMemberPageResponse(msg.sync.page);
+      await this.handleMemberPageResponse(peerId, msg.sync.page);
       return;
     }
 
@@ -7299,6 +7403,66 @@ export class ChatController {
 
     // 4. Truncated peer ID
     return peerId.slice(0, 8);
+  }
+
+  getWorkspaceReliabilityState(workspaceId: string): {
+    chatContinues: boolean;
+    discoverySlower: boolean;
+    deeperHistoryDelayed: boolean;
+    directorySearchPartial: boolean;
+    relayFallbackActive: boolean;
+    underReplicatedShardCount: number;
+  } {
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (!ws) {
+      return {
+        chatContinues: false,
+        discoverySlower: true,
+        deeperHistoryDelayed: true,
+        directorySearchPartial: true,
+        relayFallbackActive: true,
+        underReplicatedShardCount: 0,
+      };
+    }
+
+    const workspaceMemberIds = new Set((ws.members ?? []).map((member) => member.peerId));
+    const readyWorkspacePeers = this.getWorkspaceRecipientPeerIds(workspaceId)
+      .filter((peerId) => this.state.readyPeers.has(peerId));
+    const chatContinues = readyWorkspacePeers.length > 0;
+
+    let relayHelperCount = 0;
+    let archiveHelperCount = 0;
+    for (const peerId of this.state.readyPeers) {
+      if (!workspaceMemberIds.has(peerId)) continue;
+      const summary = this.getPeerCapabilitySummary(peerId);
+      if (summary.relayChannels.length > 0) relayHelperCount += 1;
+      if (summary.archiveCapable) archiveHelperCount += 1;
+    }
+
+    const mediumWorkspace = (ws.shell?.memberCount ?? ws.members.length) >= MEDIUM_WORKSPACE_MEMBER_THRESHOLD;
+    const requiredReplicaCount = mediumWorkspace ? IMPORTANT_SHARD_MIN_REPLICAS : 1;
+
+    const underReplicatedShardCount = (ws.directoryShards ?? []).filter((shard) => {
+      const liveReplicas = [...new Set((shard.replicaPeerIds ?? []).filter((peerId) => this.state.readyPeers.has(peerId)))];
+      return liveReplicas.length < requiredReplicaCount;
+    }).length;
+
+    const directoryHelperCount = this.selectWorkspaceSyncTargetPeers(workspaceId, MEMBER_DIRECTORY_CAPABILITY).length;
+    const discoverySlower = directoryHelperCount < requiredReplicaCount || underReplicatedShardCount > 0;
+
+    const snapshot = this.publicWorkspaceController.getSnapshot(workspaceId);
+    const directorySearchPartial = snapshot.hasMore && discoverySlower;
+    const deeperHistoryDelayed = archiveHelperCount === 0;
+    const relayFallbackActive = relayHelperCount < requiredReplicaCount;
+
+    return {
+      chatContinues,
+      discoverySlower,
+      deeperHistoryDelayed,
+      directorySearchPartial,
+      relayFallbackActive,
+      underReplicatedShardCount,
+    };
   }
 
   getWorkspaceMemberDirectory(workspaceId: string): {

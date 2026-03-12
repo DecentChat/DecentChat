@@ -15,6 +15,10 @@ export interface MemberPageRequestOptions {
 }
 
 export class DirectoryProtocol {
+  private static readonly MEDIUM_WORKSPACE_MEMBER_THRESHOLD = 100;
+  private static readonly IMPORTANT_SHARD_MIN_REPLICAS = 2;
+  private static readonly IMPORTANT_SHARD_PREFERRED_REPLICAS = 3;
+
   constructor(
     private readonly workspaceManager: WorkspaceManager,
     private readonly shardPlanner = new DirectoryShardPlanner(),
@@ -73,7 +77,9 @@ export class DirectoryProtocol {
     replicaPeerIds: string[],
     version = 1,
   ): Array<Extract<SyncMessage, { type: 'directory-shard-advertisement' }>> {
-    return this.shardPlanner.planShardRefs(workspaceId, members, replicaPeerIds, version).map((shard) => ({
+    const normalizedReplicaPeerIds = this.normalizeReplicaPeerIds(replicaPeerIds, members.length);
+
+    return this.shardPlanner.planShardRefs(workspaceId, members, normalizedReplicaPeerIds, version).map((shard) => ({
       type: 'directory-shard-advertisement',
       shard,
     }));
@@ -103,6 +109,25 @@ export class DirectoryProtocol {
         replicaPeerIds: [],
         version: 1,
       };
+  }
+
+  private normalizeReplicaPeerIds(replicaPeerIds: string[], memberCount: number): string[] {
+    const uniqueReplicaPeerIds = [...new Set(replicaPeerIds.filter(Boolean))].sort();
+
+    if (memberCount < DirectoryProtocol.MEDIUM_WORKSPACE_MEMBER_THRESHOLD) {
+      return uniqueReplicaPeerIds;
+    }
+
+    if (uniqueReplicaPeerIds.length <= DirectoryProtocol.IMPORTANT_SHARD_MIN_REPLICAS) {
+      return uniqueReplicaPeerIds;
+    }
+
+    const targetReplicaCount = Math.min(
+      DirectoryProtocol.IMPORTANT_SHARD_PREFERRED_REPLICAS,
+      Math.max(DirectoryProtocol.IMPORTANT_SHARD_MIN_REPLICAS, uniqueReplicaPeerIds.length),
+    );
+
+    return uniqueReplicaPeerIds.slice(0, targetReplicaCount);
   }
 
   private clampPageSize(pageSize?: number): number {

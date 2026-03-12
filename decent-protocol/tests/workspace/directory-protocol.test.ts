@@ -150,6 +150,36 @@ describe('DirectoryProtocol', () => {
     expect(repair.shardId).toBe('aa');
     expect(repair.requestedBy).toBe('peer-1');
   });
+
+  test('enforces medium-workspace shard replica minimum 2 and preferred 3 when available', () => {
+    const mediumMembers = Array.from({ length: 140 }, (_, idx) => member(`member-${idx + 1}`));
+
+    const advertisements = protocol.buildShardAdvertisement(
+      workspaceId,
+      mediumMembers,
+      ['replica-4', 'replica-2', 'replica-1', 'replica-3', 'replica-2'],
+    );
+
+    expect(advertisements.length).toBeGreaterThan(0);
+    for (const entry of advertisements) {
+      expect(entry.shard.replicaPeerIds).toEqual(['replica-1', 'replica-2', 'replica-3']);
+    }
+  });
+
+  test('keeps two replicas for medium-workspace shards when exactly two are available', () => {
+    const mediumMembers = Array.from({ length: 140 }, (_, idx) => member(`member-${idx + 1}`));
+
+    const advertisements = protocol.buildShardAdvertisement(
+      workspaceId,
+      mediumMembers,
+      ['replica-b', 'replica-a'],
+    );
+
+    expect(advertisements.length).toBeGreaterThan(0);
+    for (const entry of advertisements) {
+      expect(entry.shard.replicaPeerIds).toEqual(['replica-a', 'replica-b']);
+    }
+  });
 });
 
 describe('SyncProtocol directory messages', () => {
