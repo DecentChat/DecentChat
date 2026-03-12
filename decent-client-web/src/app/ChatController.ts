@@ -4221,7 +4221,10 @@ export class ChatController {
 
     // Deliver to workspace peers (or queue if offline)
     // Snapshot recipients at send-time for deterministic group ACK semantics.
-    const recipientPeerIds = this.getWorkspaceRecipientPeerIds();
+    const recipientPeerIds = this.getChannelDeliveryPeerIds(
+      this.state.activeChannelId ?? undefined,
+      this.state.activeWorkspaceId ?? undefined,
+    );
     (msg as any).recipientPeerIds = recipientPeerIds;
     (msg as any).ackedBy = [] as string[];
     (msg as any).ackedAt = {} as Record<string, number>;
@@ -6158,7 +6161,10 @@ export class ChatController {
     );
     if (this.myIdentityId) (msg as any).senderIdentityId = this.myIdentityId;
     (msg as any).attachments = [meta];
-    const recipientPeerIds = this.getWorkspaceRecipientPeerIds();
+    const recipientPeerIds = this.getChannelDeliveryPeerIds(
+      this.state.activeChannelId ?? undefined,
+      this.state.activeWorkspaceId ?? undefined,
+    );
     (msg as any).recipientPeerIds = recipientPeerIds;
     (msg as any).ackedBy = [] as string[];
     (msg as any).ackedAt = {} as Record<string, number>;
@@ -7086,6 +7092,101 @@ export class ChatController {
         }
       }, hitBackpressure ? 250 : 1_500);
     }
+  }
+
+  private isPublicWorkspaceDeliveryChannel(workspaceId?: string, channelId?: string): boolean {
+    if (!workspaceId || !channelId) return false;
+    if (!this.workspaceManager || typeof (this.workspaceManager as any).getWorkspace !== 'function') return false;
+
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (!ws) return false;
+
+    const channel = ws.channels.find((candidate) => candidate.id === channelId);
+    if (!channel) return false;
+
+    const manager = this.workspaceManager as any;
+    if (typeof manager.isPublicWorkspaceChannel === 'function') {
+      return manager.isPublicWorkspaceChannel(channel) === true;
+    }
+
+    return channel.type === 'channel' && channel.accessPolicy?.mode === 'public-workspace';
+  }
+
+  /**
+   * DEP-015: public-workspace channels use bounded sender fanout.
+   *
+   * First rollout keeps pairwise-encrypted envelopes but limits sender fanout to
+   * a bounded relay set derived from the existing partial-mesh topology. Network-wide
+   * delivery is completed via the existing gossip relay path (T3.2), not sender→all.
+   */
+  private getChannelDeliveryPeerIds(
+    channelId = this.state.activeChannelId ?? undefined,
+    workspaceId = this.state.activeWorkspaceId ?? undefined,
+  ): string[] {
+    const allWorkspaceRecipients = this.getWorkspaceRecipientPeerIds(workspaceId);
+    if (!workspaceId || !channelId) return allWorkspaceRecipients;
+
+    if (!this.isPublicWorkspaceDeliveryChannel(workspaceId, channelId)) {
+      // Backward compatibility: explicit/small/private channels keep legacy direct fanout.
+      return allWorkspaceRecipients;
+    }
+
+    const uniqueKnownRecipients = Array.from(new Set(
+      allWorkspaceRecipients.filter((peerId) => typeof peerId === 'string' && peerId.length > 0 && peerId !== this.state.myPeerId),
+    ));
+    if (uniqueKnownRecipients.length === 0) return [];
+    const knownRecipientSet = new Set(uniqueKnownRecipients);
+
+    const connectedPeers = new Set<string>(
+      typeof this.transport?.getConnectedPeers === 'function'
+        ? (this.transport.getConnectedPeers() as string[])
+        : [],
+    );
+
+    const selected: string[] = [];
+    const selectedSet = new Set<string>();
+    const hardCap = Math.max(1, this.computeHardCap());
+    const minSafe = Math.min(ChatController.PARTIAL_MESH_MIN_SAFE_PEERS, uniqueKnownRecipients.length);
+
+    const pick = (peerId: string): void => {
+      if (!peerId || selectedSet.has(peerId)) return;
+      if (!knownRecipientSet.has(peerId)) return;
+      if (selected.length >= hardCap) return;
+      selectedSet.add(peerId);
+      selected.push(peerId);
+    };
+
+    const desiredSelection = this.selectDesiredPeers(workspaceId, Date.now());
+    const desiredPeers = Array.isArray(desiredSelection?.desiredPeerIds)
+      ? desiredSelection.desiredPeerIds
+      : [];
+
+    // 1) Prefer currently ready desired peers.
+    for (const peerId of desiredPeers) {
+      if (this.state.readyPeers.has(peerId)) pick(peerId);
+    }
+
+    // 2) Then any connected desired peers.
+    for (const peerId of desiredPeers) {
+      if (connectedPeers.has(peerId)) pick(peerId);
+    }
+
+    // 3) Keep a bounded fallback using currently ready/connected workspace peers.
+    for (const peerId of uniqueKnownRecipients) {
+      if (this.state.readyPeers.has(peerId)) pick(peerId);
+    }
+    for (const peerId of uniqueKnownRecipients) {
+      if (connectedPeers.has(peerId)) pick(peerId);
+    }
+
+    // 4) If online candidates are empty, queue a bounded desired/known subset.
+    for (const peerId of desiredPeers) pick(peerId);
+    for (const peerId of uniqueKnownRecipients) {
+      if (selected.length >= minSafe) break;
+      pick(peerId);
+    }
+
+    return selected;
   }
 
   private getWorkspaceRecipientPeerIds(workspaceId = this.state.activeWorkspaceId ?? undefined): string[] {

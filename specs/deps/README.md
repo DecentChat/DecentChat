@@ -19,6 +19,7 @@ DEPs are design documents that describe new features, protocol changes, or proce
 | [012](DEP-012-reliable-multi-recipient-delivery.md) | Reliable Multi-Recipient Delivery & Reconnect Replay | Core | Draft |
 | [013](DEP-013-workspace-dm-privacy.md) | Workspace DM Privacy Preference (Invite-Time Allow/Disallow) | Application | Draft |
 | [014](DEP-014-adaptive-public-workspaces.md) | Adaptive P2P Public Workspaces | Core | Draft |
+| [015](DEP-015-public-channel-delivery.md) | Public-Channel Delivery Contracts for Bounded Fanout | Core | Draft |
 
 ## How to Submit a DEP
 
