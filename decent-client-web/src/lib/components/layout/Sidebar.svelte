@@ -87,6 +87,7 @@
     onWorkspaceInvite: () => void;
     onWorkspaceNotifications: () => void;
     onRetryReconnect: () => Promise<void>;
+    onLoadMorePresence: () => Promise<void>;
   }
 
   let {
@@ -123,9 +124,11 @@
     onWorkspaceInvite,
     onWorkspaceNotifications,
     onRetryReconnect,
+    onLoadMorePresence,
   }: Props = $props();
 
   let retrying = $state(false);
+  let loadingMorePresence = $state(false);
 
   let isInWorkspace = $derived(workspaceName !== null);
   let onlineMembers = $derived(members.filter(m => m.isOnline));
@@ -151,6 +154,16 @@
       await onRetryReconnect();
     } finally {
       retrying = false;
+    }
+  }
+
+  async function loadMorePresenceSample() {
+    if (loadingMorePresence || !presence.hasMore) return;
+    loadingMorePresence = true;
+    try {
+      await onLoadMorePresence();
+    } finally {
+      loadingMorePresence = false;
     }
   }
 
@@ -254,7 +267,18 @@
       </div>
       {#if sampledPresenceLabel}
         <div class="sidebar-section-header member-group-header presence-sampled-label">
-          Presence sample — {sampledPresenceLabel}
+          <span>Presence sample — {sampledPresenceLabel}</span>
+          {#if presence.hasMore}
+            <button
+              class="presence-load-more-btn"
+              id="sidebar-presence-load-more-btn"
+              title="Load more presence samples"
+              onclick={loadMorePresenceSample}
+              disabled={loadingMorePresence}
+            >
+              {loadingMorePresence ? 'Loading…' : 'Load more'}
+            </button>
+          {/if}
         </div>
       {/if}
       {#if onlineMembers.length > 0}

@@ -144,6 +144,109 @@ describe('presence slices', () => {
     presence.destroy();
   });
 
+  test('getPresenceScopeState returns aggregate + sampled page summary for sidebar/header consumers', () => {
+    const presence = new PresenceManager();
+    presence.handlePresenceAggregate({
+      workspaceId: 'ws-1',
+      onlineCount: 9,
+      updatedAt: 200,
+      activeChannelId: 'chan-a',
+    });
+    presence.handlePresencePageResponse({
+      type: 'presence-page-response',
+      workspaceId: 'ws-1',
+      channelId: 'chan-a',
+      cursor: undefined,
+      nextCursor: 'peer-z',
+      pageSize: 3,
+      peers: [
+        { peerId: 'peer-a', status: 'online' },
+        { peerId: 'peer-b', status: 'offline' },
+        { peerId: 'peer-c', status: 'online' },
+      ],
+      updatedAt: 210,
+    });
+
+    const ctrl = Object.create(ChatController.prototype) as any;
+    ctrl.presence = presence;
+
+    const scope = ChatController.prototype.getPresenceScopeState.call(ctrl, 'ws-1', 'chan-a');
+
+    expect(scope).toEqual({
+      onlineCount: 9,
+      sampledOnlineCount: 2,
+      sampledPeerCount: 3,
+      hasMore: true,
+      nextCursor: 'peer-z',
+      loadedPages: 1,
+      activeChannelId: 'chan-a',
+      updatedAt: 210,
+    });
+
+    presence.destroy();
+  });
+
+  test('loadMorePresenceScope requests next cursor so manual UI affordances can fetch more samples', async () => {
+    const presence = new PresenceManager();
+    presence.handlePresenceAggregate({
+      workspaceId: 'ws-1',
+      onlineCount: 4,
+      updatedAt: 100,
+      activeChannelId: 'chan-a',
+    });
+    presence.handlePresencePageResponse({
+      type: 'presence-page-response',
+      workspaceId: 'ws-1',
+      channelId: 'chan-a',
+      cursor: undefined,
+      nextCursor: 'peer-c',
+      pageSize: 2,
+      peers: [
+        { peerId: 'peer-a', status: 'online' },
+        { peerId: 'peer-b', status: 'offline' },
+      ],
+      updatedAt: 110,
+    });
+
+    const ctrl = Object.create(ChatController.prototype) as any;
+    ctrl.presence = presence;
+    ctrl.getPresenceScopeState = (workspaceId: string, channelId: string) =>
+      ChatController.prototype.getPresenceScopeState.call(ctrl, workspaceId, channelId);
+
+    ctrl.requestPresencePage = mock((workspaceId: string, channelId: string, opts: { cursor?: string }) => {
+      expect(workspaceId).toBe('ws-1');
+      expect(channelId).toBe('chan-a');
+      expect(opts.cursor).toBe('peer-c');
+
+      setTimeout(() => {
+        presence.handlePresencePageResponse({
+          type: 'presence-page-response',
+          workspaceId: 'ws-1',
+          channelId: 'chan-a',
+          cursor: 'peer-c',
+          nextCursor: undefined,
+          pageSize: 2,
+          peers: [
+            { peerId: 'peer-d', status: 'online' },
+            { peerId: 'peer-e', status: 'offline' },
+          ],
+          updatedAt: 120,
+        });
+      }, 20);
+
+      return true;
+    });
+
+    const nextScope = await ChatController.prototype.loadMorePresenceScope.call(ctrl, 'ws-1', 'chan-a');
+
+    expect(ctrl.requestPresencePage).toHaveBeenCalledTimes(1);
+    expect(nextScope.sampledPeerCount).toBe(4);
+    expect(nextScope.loadedPages).toBe(2);
+    expect(nextScope.hasMore).toBe(false);
+
+    presence.destroy();
+  });
+
   test('presence aggregates ignore stale updates', () => {
     const presence = new PresenceManager();
 

@@ -4275,9 +4275,40 @@ html, body {
 }
 
 .presence-sampled-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding-top: 4px !important;
   color: var(--sidebar-text) !important;
   opacity: 0.7;
+}
+
+.presence-load-more-btn {
+  border: 1px solid color-mix(in srgb, var(--sidebar-text) 24%, transparent);
+  background: color-mix(in srgb, var(--sidebar-bg, #1f232b) 88%, white 12%);
+  color: var(--sidebar-text);
+  border-radius: 10px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.presence-load-more-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--sidebar-bg, #1f232b) 80%, white 20%);
+}
+
+.presence-load-more-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.presence-load-more-btn.compact {
+  margin-left: 6px;
+  min-width: 22px;
+  padding: 1px 6px;
+  line-height: 1.2;
 }
 
 .members-offline .member-name-text {

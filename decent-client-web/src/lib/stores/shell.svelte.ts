@@ -210,6 +210,7 @@ export interface ShellCallbacks {
   onWorkspaceInvite: () => void;
   onWorkspaceNotifications: () => void;
   onRetryReconnect: () => Promise<void>;
+  onLoadMorePresence: () => Promise<void>;
   getUnreadCount: (id: string) => number;
   getPeerAlias: (peerId: string) => string;
   getPeerStatusClass: (peerId: string) => string;

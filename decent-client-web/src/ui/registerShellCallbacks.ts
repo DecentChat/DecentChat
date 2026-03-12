@@ -212,6 +212,12 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
         syncShellSidebar();
       }
     },
+    onLoadMorePresence: async () => {
+      if (!state.activeWorkspaceId || !state.activeChannelId || !callbacks.loadMorePresenceScope) return;
+      await callbacks.loadMorePresenceScope(state.activeWorkspaceId, state.activeChannelId);
+      syncShellSidebar();
+      syncShellHeader();
+    },
     getUnreadCount: (id) => callbacks.getUnreadCount?.(id) || 0,
     getPeerAlias: (peerId) => getPeerAlias(peerId),
     getPeerStatusClass: (peerId) => peerStatusClass(peerId),

@@ -29,6 +29,7 @@
     onInvite: () => void;
     onSettings: () => void;
     onChannelMembers: () => void;
+    onLoadMorePresence: () => Promise<void>;
   }
 
   let {
@@ -45,7 +46,20 @@
     onInvite,
     onSettings,
     onChannelMembers,
+    onLoadMorePresence,
   }: Props = $props();
+
+  let loadingMorePresence = $state(false);
+
+  async function loadMorePresenceSample() {
+    if (loadingMorePresence || !presence.hasMore) return;
+    loadingMorePresence = true;
+    try {
+      await onLoadMorePresence();
+    } finally {
+      loadingMorePresence = false;
+    }
+  }
 </script>
 
 <div class="channel-header" data-testid="channel-header">
@@ -66,6 +80,17 @@
           <span class="member-presence-inline">· 🟢 {presence.onlineCount}</span>
         {/if}
       </button>
+      {#if presence.hasMore}
+        <button
+          class="presence-load-more-btn compact"
+          id="header-presence-load-more-btn"
+          title="Load more presence samples"
+          onclick={loadMorePresenceSample}
+          disabled={loadingMorePresence}
+        >
+          {loadingMorePresence ? '…' : '+'}
+        </button>
+      {/if}
     {/if}
   </div>
   <div class="channel-header-right">

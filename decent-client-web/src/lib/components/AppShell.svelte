@@ -192,6 +192,7 @@
           onWorkspaceInvite={cb.onWorkspaceInvite}
           onWorkspaceNotifications={cb.onWorkspaceNotifications}
           onRetryReconnect={cb.onRetryReconnect}
+          onLoadMorePresence={cb.onLoadMorePresence}
         />
       {:else if cb && shellData.activity.panelOpen}
         <ActivityPanel
@@ -222,6 +223,7 @@
             onInvite={cb.onInvite}
             onSettings={cb.onSettings}
             onChannelMembers={cb.onChannelMembers}
+            onLoadMorePresence={cb.onLoadMorePresence}
           />
         {/if}
       </div>
