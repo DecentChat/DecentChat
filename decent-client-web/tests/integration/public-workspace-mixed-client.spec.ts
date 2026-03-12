@@ -36,6 +36,43 @@ function makeWorkspace(options: {
 }
 
 describe('public-workspace mixed-client rollout guardrails', () => {
+  test('shell bootstrap still queries shell-capable peers before local capability is hydrated', () => {
+    const sendControlWithRetry = mock(() => true);
+    const workspace = makeWorkspace({
+      capabilityFlags: undefined,
+      peerIds: ['me', 'shell-peer'],
+    });
+    delete (workspace as any).shell;
+
+    const ctrl = Object.create(ChatController.prototype) as any;
+    ctrl.state = {
+      myPeerId: 'me',
+      readyPeers: new Set(['shell-peer']),
+      connectedPeers: new Set(['shell-peer']),
+      connectingPeers: new Set<string>(),
+    };
+    ctrl.workspaceManager = {
+      getWorkspace: (workspaceId: string) => workspaceId === 'ws-1' ? workspace : null,
+    };
+    ctrl.peerCapabilities = new Map<string, Set<string>>([
+      ['shell-peer', new Set(['workspace-shell-v1'])],
+    ]);
+    ctrl.sendControlWithRetry = sendControlWithRetry;
+
+    ChatController.prototype.requestWorkspaceShell.call(ctrl, 'shell-peer', 'ws-1');
+
+    expect(sendControlWithRetry).toHaveBeenCalledTimes(1);
+    expect(sendControlWithRetry).toHaveBeenCalledWith(
+      'shell-peer',
+      expect.objectContaining({
+        type: 'workspace-sync',
+        workspaceId: 'ws-1',
+        sync: expect.objectContaining({ type: 'workspace-shell-request' }),
+      }),
+      { label: 'workspace-sync' },
+    );
+  });
+
   test('shell/delta capable peers are used while legacy snapshot peers are ignored', () => {
     const sendControlWithRetry = mock(() => true);
     const workspace = makeWorkspace({
@@ -74,7 +111,7 @@ describe('public-workspace mixed-client rollout guardrails', () => {
     );
   });
 
-  test('workspace capability bit gates large-workspace capability advertisement', () => {
+  test('workspace capability bit gates workspace-scoped helper advertisement', () => {
     const workspace = makeWorkspace({ capabilityFlags: [] });
     workspace.peerCapabilities = {
       me: {
@@ -93,10 +130,13 @@ describe('public-workspace mixed-client rollout guardrails', () => {
 
     const advertised = ChatController.prototype.getAdvertisedControlCapabilities.call(ctrl, 'ws-1');
 
-    expect(advertised).toEqual(['negentropy-sync-v1']);
-    expect(advertised).not.toContain('workspace-shell-v1');
-    expect(advertised).not.toContain('member-directory-v1');
+    expect(advertised).toContain('negentropy-sync-v1');
+    expect(advertised).toContain('workspace-shell-v1');
+    expect(advertised).toContain('member-directory-v1');
     expect(advertised).not.toContain('directory-shard:aa');
+    expect(advertised).not.toContain('relay-channel:general');
+    expect(advertised).not.toContain('archive-history-v1');
+    expect(advertised).not.toContain('presence-aggregator-v1');
   });
 
   test('safe downgrade hides paged directory load-more when only legacy peers are available', async () => {

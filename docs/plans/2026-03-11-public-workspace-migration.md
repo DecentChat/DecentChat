@@ -11,7 +11,7 @@ Ship adaptive public-workspace behavior without breaking mixed-client rooms duri
 
 ### 1) Workspace capability gate (authoritative)
 
-Large-workspace behavior is enabled only when the workspace shell advertises:
+Large-workspace behavior is enabled when the workspace shell advertises either the canonical gate or legacy compatibility aliases:
 
 - `large-workspace-v1` in `workspace.shell.capabilityFlags`
 
@@ -23,6 +23,8 @@ Compatibility aliases are still recognized for already-migrated shells that pred
 - `history-pages-v1`
 
 If none of the above are present, clients stay on legacy snapshot semantics.
+
+Note: alias support is transitional compatibility for already-migrated shells that predate `large-workspace-v1`.
 
 ### 2) Peer capability negotiation (transport-level)
 
@@ -71,4 +73,4 @@ Before enabling `large-workspace-v1` in production workspaces:
 4. Enable capability bit per workspace
 5. Monitor degraded fallback indicators (no directory-capable peers, relay fallback active)
 
-Rollback is safe: clear the workspace capability bit and clients automatically remain on snapshot-compatible behavior.
+Rollback is safe: clear `large-workspace-v1` and any legacy alias flags (`shell-delta-v1`, `member-directory-v1`, `presence-slices-v1`, `history-pages-v1`) so clients remain on snapshot-compatible behavior.

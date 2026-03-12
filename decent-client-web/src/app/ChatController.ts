@@ -1799,10 +1799,6 @@ export class ChatController {
     return LEGACY_LARGE_WORKSPACE_CAPABILITY_FLAGS.some((flag) => flags.includes(flag));
   }
 
-  private workspaceSupportsLargeWorkspaceFeatures(workspaceId: string): boolean {
-    return this.workspaceHasLargeWorkspaceCapability(this.workspaceManager.getWorkspace(workspaceId));
-  }
-
   private canUsePagedMemberDirectory(workspace: Workspace, snapshot: { totalCount: number }): boolean {
     if (!this.workspaceHasLargeWorkspaceCapability(workspace)) return false;
     return (workspace.shell?.memberCount ?? snapshot.totalCount) > workspace.members.length;
@@ -1888,7 +1884,6 @@ export class ChatController {
   private requestWorkspaceShell(peerId: string, workspaceId: string): void {
     if (!workspaceId) return;
     if (!this.state.readyPeers.has(peerId)) return;
-    if (!this.workspaceSupportsLargeWorkspaceFeatures(workspaceId)) return;
     if (!this.peerSupportsCapability(peerId, WORKSPACE_SHELL_CAPABILITY)) return;
 
     this.sendControlWithRetry(peerId, {
@@ -1929,6 +1924,7 @@ export class ChatController {
   private handleWorkspaceShellRequest(peerId: string, workspaceId: string): void {
     const ws = this.workspaceManager.getWorkspace(workspaceId);
     if (!ws) return;
+    if (!this.workspaceHasLargeWorkspaceCapability(ws)) return;
     if (this.workspaceManager.isBanned(workspaceId, peerId)) return;
 
     const snapshot = this.publicWorkspaceController.getSnapshot(workspaceId);
@@ -6681,18 +6677,20 @@ export class ChatController {
   }
 
   private getAdvertisedControlCapabilities(workspaceId?: string): string[] {
-    const capabilities = new Set<string>([NEGENTROPY_SYNC_CAPABILITY]);
+    const capabilities = new Set<string>([
+      NEGENTROPY_SYNC_CAPABILITY,
+      WORKSPACE_SHELL_CAPABILITY,
+      MEMBER_DIRECTORY_CAPABILITY,
+    ]);
     if (!workspaceId) return [...capabilities];
 
     const workspace = this.workspaceManager.getWorkspace(workspaceId);
-    const workspaceSupportsLargeFeatures = this.workspaceHasLargeWorkspaceCapability(workspace);
-    if (!workspaceSupportsLargeFeatures) return [...capabilities];
-
-    capabilities.add(WORKSPACE_SHELL_CAPABILITY);
-    capabilities.add(MEMBER_DIRECTORY_CAPABILITY);
-
     const advertised = workspace?.peerCapabilities?.[this.state.myPeerId];
     if (!advertised) return [...capabilities];
+
+    // Workspace-scoped helper capabilities are only advertised for workspaces that
+    // are explicitly large-workspace capable.
+    if (!this.workspaceHasLargeWorkspaceCapability(workspace)) return [...capabilities];
 
     for (const shardPrefix of advertised.directory?.shardPrefixes ?? []) {
       if (shardPrefix) capabilities.add(`${DIRECTORY_SHARD_CAPABILITY_PREFIX}${shardPrefix}`);

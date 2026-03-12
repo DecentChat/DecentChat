@@ -39,7 +39,7 @@ Status labels used in these pages:
 
 Large-workspace protocol behavior is guarded by workspace capability flags.
 
-- Workspace gate: `large-workspace-v1` in `WorkspaceShell.capabilityFlags`
+- Workspace gate: `large-workspace-v1` in `WorkspaceShell.capabilityFlags` (legacy aliases are still recognized for backward compatibility during migration)
 - Peer gates: `workspace-shell-v1`, `member-directory-v1` (plus helper capabilities)
 - Downgrade rule: when workspace or peer gates are missing, clients must stay on legacy snapshot/workspace-state sync paths.
 

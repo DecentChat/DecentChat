@@ -53,6 +53,7 @@ describe('workspace directory sync guards', () => {
         id: 'ws-1',
         inviteCode: 'INVITE123',
         members: [{ peerId: 'member-1' }],
+        shell: { capabilityFlags: ['large-workspace-v1'] },
       } : null,
       isBanned: () => false,
     };
@@ -63,6 +64,29 @@ describe('workspace directory sync guards', () => {
     ctrl.sendControlWithRetry = sendControlWithRetry;
 
     ctrl.handleWorkspaceShellRequest('outsider', 'ws-1');
+
+    expect(sendControlWithRetry).toHaveBeenCalledTimes(0);
+  });
+
+  test('does not answer workspace-shell requests for legacy workspaces', () => {
+    const sendControlWithRetry = mock(() => {});
+    const ctrl = Object.create(ChatController.prototype) as any;
+    ctrl.workspaceManager = {
+      getWorkspace: (workspaceId: string) => workspaceId === 'ws-1' ? {
+        id: 'ws-1',
+        inviteCode: 'INVITE123',
+        members: [{ peerId: 'member-1' }],
+        shell: { capabilityFlags: [] },
+      } : null,
+      isBanned: () => false,
+    };
+    ctrl.publicWorkspaceController = {
+      getSnapshot: () => ({ members: [{ peerId: 'member-1' }] }),
+    };
+    ctrl.buildWorkspaceShell = () => ({ id: 'ws-1', name: 'Workspace', createdBy: 'owner', createdAt: 1, version: 1, memberCount: 1, channelCount: 1 });
+    ctrl.sendControlWithRetry = sendControlWithRetry;
+
+    ctrl.handleWorkspaceShellRequest('member-1', 'ws-1');
 
     expect(sendControlWithRetry).toHaveBeenCalledTimes(0);
   });

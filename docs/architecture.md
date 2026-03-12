@@ -49,7 +49,7 @@ This prevents duplicate peer ID contention in multi-tab scenarios.
 
 Large-workspace mechanics (shell/delta sync, member-directory paging, helper capabilities) are opt-in per workspace:
 
-- workspace gate: `large-workspace-v1` capability flag in workspace shell
+- workspace gate: `large-workspace-v1` capability flag in workspace shell (with temporary legacy-alias compatibility during migration)
 - peer gate: only use scalable flows with peers advertising matching capabilities
 - mixed-client fallback: if gates are absent, remain on legacy workspace-state snapshot sync
 
