@@ -55,6 +55,9 @@ export type SyncEvent =
 
 export class SyncProtocol {
   private static readonly HISTORY_PAGING_CAPABILITY = 'history-pages-v1';
+  private static readonly HISTORY_BOOTSTRAP_PAGE_SIZE = 25;
+  private static readonly HISTORY_BOOTSTRAP_CHANNEL_LIMIT = 6;
+  private static readonly HISTORY_BOOTSTRAP_TTL_MS = 15_000;
 
   private workspaceManager: WorkspaceManager;
   private messageStore: MessageStore;
@@ -65,6 +68,7 @@ export class SyncProtocol {
   private workspaceDelta: WorkspaceDeltaProtocol;
   private directoryProtocol: DirectoryProtocol;
   private historyPageProtocol: HistoryPageProtocol;
+  private historyBootstrapPendingUntil = new Map<string, number>();
 
   constructor(
     workspaceManager: WorkspaceManager,
@@ -94,7 +98,7 @@ export class SyncProtocol {
         this.handleJoinRequest(fromPeerId, msg);
         break;
       case 'join-accepted':
-        await this.handleJoinAccepted(msg);
+        await this.handleJoinAccepted(fromPeerId, msg);
         break;
       case 'join-rejected':
         this.onEvent({ type: 'join-rejected', reason: msg.reason });
@@ -121,7 +125,7 @@ export class SyncProtocol {
         this.handleSyncRequest(fromPeerId, msg);
         break;
       case 'sync-response':
-        await this.handleSyncResponse(msg);
+        await this.handleSyncResponse(fromPeerId, msg);
         break;
       case 'workspace-shell-request':
         this.handleWorkspaceShellRequest(fromPeerId, msg);
@@ -411,6 +415,7 @@ export class SyncProtocol {
       messageHistory,
       pexServers: this.serverDiscovery?.getHandshakeServers(),
       historyReplicaHints,
+      historyCapabilities: shouldUsePagedHistory ? this.defaultHistoryCapabilities() : undefined,
     };
 
     this.sendFn(fromPeerId, { type: 'workspace-sync', sync: acceptMsg });
@@ -419,7 +424,10 @@ export class SyncProtocol {
     this.onEvent({ type: 'member-joined', workspaceId: workspace.id, member: msg.member });
   }
 
-  private async handleJoinAccepted(msg: Extract<SyncMessage, { type: 'join-accepted' }>): Promise<void> {
+  private async handleJoinAccepted(
+    fromPeerId: string,
+    msg: Extract<SyncMessage, { type: 'join-accepted' }>,
+  ): Promise<void> {
     // DEP-002: Merge received PEX servers
     if (msg.pexServers && this.serverDiscovery) {
       this.serverDiscovery.mergeReceivedServers(msg.pexServers);
@@ -451,6 +459,8 @@ export class SyncProtocol {
         hints: msg.historyReplicaHints,
       });
     }
+
+    this.maybeBootstrapRecentHistory(fromPeerId, msg.workspace.id, msg.messageHistory || {}, msg.historyCapabilities);
   }
 
   private handleWorkspaceShellRequest(fromPeerId: string, msg: Extract<SyncMessage, { type: 'workspace-shell-request' }>): void {
@@ -524,6 +534,7 @@ export class SyncProtocol {
 
     this.messageStore.bulkAdd(normalized);
     this.upsertHistoryPageRef(msg.workspaceId, msg.channelId, msg.page);
+    this.clearPendingHistoryBootstrap(msg.workspaceId, msg.channelId);
 
     if (msg.historyReplicaHints?.length) {
       this.applyHistoryReplicaHints(msg.workspaceId, msg.historyReplicaHints);
@@ -689,12 +700,16 @@ export class SyncProtocol {
       workspace,
       messageHistory,
       historyReplicaHints: usePagedHistory ? this.historyPageProtocol.buildReplicaHints(msg.workspaceId) : undefined,
+      historyCapabilities: usePagedHistory ? this.defaultHistoryCapabilities() : undefined,
     };
 
     this.sendFn(fromPeerId, { type: 'workspace-sync', sync: response });
   }
 
-  private async handleSyncResponse(msg: Extract<SyncMessage, { type: 'sync-response' }>): Promise<void> {
+  private async handleSyncResponse(
+    fromPeerId: string,
+    msg: Extract<SyncMessage, { type: 'sync-response' }>,
+  ): Promise<void> {
     // Update workspace
     this.workspaceManager.importWorkspace(msg.workspace);
 
@@ -712,7 +727,80 @@ export class SyncProtocol {
       });
     }
 
+    this.maybeBootstrapRecentHistory(fromPeerId, msg.workspace.id, msg.messageHistory || {}, msg.historyCapabilities);
     this.onEvent({ type: 'sync-complete', workspaceId: msg.workspace.id });
+  }
+
+  private maybeBootstrapRecentHistory(
+    fromPeerId: string,
+    workspaceId: string,
+    messageHistory: Record<string, SyncedHistoryMessage[]>,
+    historyCapabilities?: HistorySyncCapabilities,
+  ): void {
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) return;
+    if (!this.shouldAutoBootstrapRecentHistory(workspace, messageHistory, historyCapabilities)) return;
+
+    const channels = workspace.channels
+      .filter((channel) => channel.type === 'channel')
+      .filter((channel) => this.messageStore.getMessages(channel.id).length === 0)
+      .slice(0, SyncProtocol.HISTORY_BOOTSTRAP_CHANNEL_LIMIT);
+
+    for (const channel of channels) {
+      if (!this.markPendingHistoryBootstrap(workspace.id, channel.id)) continue;
+
+      const selectedPeer = this.selectHistoryPageSource(workspace.id, channel.id, 'recent');
+      const targetPeerId = selectedPeer && selectedPeer !== this.myPeerId
+        ? selectedPeer
+        : fromPeerId !== this.myPeerId
+          ? fromPeerId
+          : undefined;
+
+      if (!targetPeerId) {
+        this.clearPendingHistoryBootstrap(workspace.id, channel.id);
+        continue;
+      }
+
+      this.requestHistoryPage(targetPeerId, workspace.id, channel.id, {
+        direction: 'older',
+        tier: 'recent',
+        pageSize: SyncProtocol.HISTORY_BOOTSTRAP_PAGE_SIZE,
+      });
+    }
+  }
+
+  private shouldAutoBootstrapRecentHistory(
+    workspace: Workspace,
+    messageHistory: Record<string, SyncedHistoryMessage[]>,
+    historyCapabilities?: HistorySyncCapabilities,
+  ): boolean {
+    if (Object.keys(messageHistory).length > 0) return false;
+    if (historyCapabilities?.supportsPaged === false) return false;
+    if (historyCapabilities?.supportedTiers && !historyCapabilities.supportedTiers.includes('recent')) return false;
+
+    const hasReplicaHints = workspace.channels.some(
+      (channel) => (channel.historyReplicaHint?.recentReplicaPeerIds?.length ?? 0) > 0,
+    );
+
+    if (!this.workspaceSupportsPagedHistory(workspace) && historyCapabilities?.supportsPaged !== true && !hasReplicaHints) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private markPendingHistoryBootstrap(workspaceId: string, channelId: string): boolean {
+    const key = `${workspaceId}:${channelId}`;
+    const now = Date.now();
+    const pendingUntil = this.historyBootstrapPendingUntil.get(key) ?? 0;
+    if (pendingUntil > now) return false;
+
+    this.historyBootstrapPendingUntil.set(key, now + SyncProtocol.HISTORY_BOOTSTRAP_TTL_MS);
+    return true;
+  }
+
+  private clearPendingHistoryBootstrap(workspaceId: string, channelId: string): void {
+    this.historyBootstrapPendingUntil.delete(`${workspaceId}:${channelId}`);
   }
 
   private resolveHistorySyncMode(

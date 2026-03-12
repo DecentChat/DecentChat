@@ -178,6 +178,7 @@ export type SyncMessage =
       messageHistory: Record<string, any[]>;
       pexServers?: PEXServer[];
       historyReplicaHints?: HistoryReplicaHint[];
+      historyCapabilities?: HistorySyncCapabilities;
     }
   | { type: 'join-rejected'; reason: string }
   | { type: 'member-joined'; member: WorkspaceMember }
@@ -201,6 +202,7 @@ export type SyncMessage =
       workspace: Workspace;
       messageHistory: Record<string, any[]>;
       historyReplicaHints?: HistoryReplicaHint[];
+      historyCapabilities?: HistorySyncCapabilities;
     }
   | { type: 'workspace-shell-request'; workspaceId: string }
   | { type: 'workspace-shell-response'; shell: WorkspaceShell; inviteCode?: string }

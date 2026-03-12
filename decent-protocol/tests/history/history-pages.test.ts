@@ -120,7 +120,7 @@ describe('HistoryPageProtocol', () => {
 });
 
 describe('SyncProtocol history paging', () => {
-  test('joins in paged mode and fetches history windows on demand', async () => {
+  test('joins in paged mode and auto-bootstraps recent history windows', async () => {
     const alice = createPeer('alice');
     const bob = createPeer('bob');
 
@@ -155,7 +155,11 @@ describe('SyncProtocol history paging', () => {
     expect(joinedEvent).toBeDefined();
     expect((joinedEvent as Extract<SyncEvent, { type: 'workspace-joined' }>).messageHistory).toEqual({});
 
-    bob.sync.requestHistoryPage('alice', ws.id, channelId, { pageSize: 2, direction: 'older' });
+    const bootstrapRequest = bob.outbox.find((packet) => packet.to === 'alice' && packet.data.sync?.type === 'history-page-request');
+    expect(bootstrapRequest).toBeDefined();
+    expect(bootstrapRequest?.data.sync.channelId).toBe(channelId);
+    expect(bootstrapRequest?.data.sync.tier).toBe('recent');
+
     await deliver(bob, alice);
     await deliver(alice, bob);
 
@@ -163,11 +167,11 @@ describe('SyncProtocol history paging', () => {
     expect(historyEvent).toBeDefined();
 
     const page = (historyEvent as Extract<SyncEvent, { type: 'history-page-received' }>).page;
-    expect(page.messages).toHaveLength(2);
+    expect(page.messages.length).toBeGreaterThan(0);
     expect(page.messages.every((message) => message.content === undefined)).toBe(true);
     expect(page.selectionPolicy).toBeDefined();
     expect(page.selectedReplicaPeerIds?.length).toBeGreaterThan(0);
-    expect(bob.ms.getMessages(channelId)).toHaveLength(2);
+    expect(bob.ms.getMessages(channelId).length).toBeGreaterThan(0);
 
     const bobChannel = bob.wm.getWorkspace(ws.id)?.channels.find((channel) => channel.id === channelId);
     const cachedRef = bobChannel?.historyPages?.find((entry) => entry.pageId === page.pageId);
@@ -218,6 +222,164 @@ describe('SyncProtocol history paging', () => {
     >;
     expect(joinedEvent.messageHistory).toEqual({});
     expect(bob.ms.getMessages(channelId)).toHaveLength(0);
+    expect(
+      bob.outbox.some((packet) => packet.to === 'alice' && packet.data.sync?.type === 'history-page-request'),
+    ).toBe(true);
+  });
+
+  test('bootstraps from sync source when paged response omits replica hints', async () => {
+    const alice = createPeer('alice');
+    const bob = createPeer('bob');
+
+    const ws = alice.wm.createWorkspace('Hint Fallback', 'alice', 'Alice', 'alice-key');
+    ws.shell = {
+      id: ws.id,
+      name: ws.name,
+      createdBy: ws.createdBy,
+      createdAt: ws.createdAt,
+      version: 1,
+      memberCount: ws.members.length,
+      channelCount: ws.channels.length,
+      capabilityFlags: ['history-pages-v1'],
+    };
+
+    const channelId = ws.channels[0]!.id;
+    await seedMessages(alice.ms, channelId, 'alice', 3);
+
+    bob.sync.requestJoin('alice', ws.inviteCode, {
+      peerId: 'bob',
+      alias: 'Bob',
+      publicKey: 'bob-key',
+      joinedAt: Date.now(),
+      role: 'member',
+    });
+
+    await deliver(bob, alice);
+
+    const joinPacket = alice.outbox.find((packet) => packet.to === 'bob' && packet.data.sync?.type === 'join-accepted');
+    expect(joinPacket).toBeDefined();
+    joinPacket!.data.sync.historyReplicaHints = undefined;
+
+    await deliver(alice, bob);
+
+    const bootstrapRequest = bob.outbox.find((packet) => packet.to === 'alice' && packet.data.sync?.type === 'history-page-request');
+    expect(bootstrapRequest).toBeDefined();
+    expect(bootstrapRequest?.data.sync.channelId).toBe(channelId);
+
+    await deliver(bob, alice);
+    await deliver(alice, bob);
+
+    expect(bob.ms.getMessages(channelId).length).toBeGreaterThan(0);
+  });
+
+  test('does not bootstrap recent history when paged capabilities do not include recent tier', async () => {
+    const alice = createPeer('alice');
+    const bob = createPeer('bob');
+
+    const ws = alice.wm.createWorkspace('Archive Only', 'alice', 'Alice', 'alice-key');
+    ws.shell = {
+      id: ws.id,
+      name: ws.name,
+      createdBy: ws.createdBy,
+      createdAt: ws.createdAt,
+      version: 1,
+      memberCount: ws.members.length,
+      channelCount: ws.channels.length,
+      capabilityFlags: ['history-pages-v1'],
+    };
+
+    await seedMessages(alice.ms, ws.channels[0]!.id, 'alice', 3);
+
+    bob.sync.requestJoin('alice', ws.inviteCode, {
+      peerId: 'bob',
+      alias: 'Bob',
+      publicKey: 'bob-key',
+      joinedAt: Date.now(),
+      role: 'member',
+    });
+
+    await deliver(bob, alice);
+
+    const joinPacket = alice.outbox.find((packet) => packet.to === 'bob' && packet.data.sync?.type === 'join-accepted');
+    expect(joinPacket).toBeDefined();
+    joinPacket!.data.sync.historyCapabilities = { supportsPaged: true, supportedTiers: ['archive'] };
+
+    await deliver(alice, bob);
+
+    expect(
+      bob.outbox.some((packet) => packet.to === 'alice' && packet.data.sync?.type === 'history-page-request'),
+    ).toBe(false);
+  });
+
+  test('auto-bootstraps recent history after paged sync responses', async () => {
+    const alice = createPeer('alice');
+    const bob = createPeer('bob');
+
+    const ws = alice.wm.createWorkspace('Sync Bootstrap', 'alice', 'Alice', 'alice-key');
+    ws.shell = {
+      id: ws.id,
+      name: ws.name,
+      createdBy: ws.createdBy,
+      createdAt: ws.createdAt,
+      version: 1,
+      memberCount: ws.members.length,
+      channelCount: ws.channels.length,
+      capabilityFlags: ['history-pages-v1'],
+    };
+
+    const channelId = ws.channels[0]!.id;
+    await seedMessages(alice.ms, channelId, 'alice', 4);
+
+    bob.wm.importWorkspace(structuredClone(alice.wm.exportWorkspace(ws.id)!));
+
+    bob.sync.requestSync('alice', ws.id, { historySyncMode: 'paged' });
+
+    await deliver(bob, alice);
+    await deliver(alice, bob);
+
+    expect(
+      bob.outbox.some((packet) => packet.to === 'alice' && packet.data.sync?.type === 'history-page-request'),
+    ).toBe(true);
+
+    await deliver(bob, alice);
+    await deliver(alice, bob);
+
+    expect(bob.ms.getMessages(channelId).length).toBeGreaterThan(0);
+  });
+
+  test('skips automatic bootstrap when hot-window messages already exist locally', async () => {
+    const alice = createPeer('alice');
+    const bob = createPeer('bob');
+
+    const ws = alice.wm.createWorkspace('Hot Window Repair', 'alice', 'Alice', 'alice-key');
+    ws.shell = {
+      id: ws.id,
+      name: ws.name,
+      createdBy: ws.createdBy,
+      createdAt: ws.createdAt,
+      version: 1,
+      memberCount: ws.members.length,
+      channelCount: ws.channels.length,
+      capabilityFlags: ['history-pages-v1'],
+    };
+
+    const channelId = ws.channels[0]!.id;
+    await seedMessages(alice.ms, channelId, 'alice', 4);
+
+    bob.wm.importWorkspace(structuredClone(alice.wm.exportWorkspace(ws.id)!));
+    const existing = await bob.ms.createMessage(channelId, 'bob', 'already-synced');
+    existing.timestamp = 10_000;
+    await bob.ms.addMessage(existing);
+
+    bob.sync.requestSync('alice', ws.id, { historySyncMode: 'paged' });
+
+    await deliver(bob, alice);
+    await deliver(alice, bob);
+
+    expect(bob.ms.getMessages(channelId)).toHaveLength(1);
+    expect(
+      bob.outbox.some((packet) => packet.to === 'alice' && packet.data.sync?.type === 'history-page-request'),
+    ).toBe(false);
   });
 
   test('falls back to legacy history map when requester cannot page', async () => {
