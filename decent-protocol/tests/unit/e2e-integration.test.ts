@@ -188,12 +188,12 @@ describe('E2E - Three-Peer Workspace with DMs', () => {
     wm.addMember(ws.id, { peerId: 'bob', alias: 'Bob', publicKey: 'bob-key', joinedAt: Date.now(), role: 'member' });
     wm.addMember(ws.id, { peerId: 'charlie', alias: 'Charlie', publicKey: 'charlie-key', joinedAt: Date.now(), role: 'member' });
 
-    // All 3 see #general
+    // All 3 see #general (public-workspace channel — access derived from workspace membership,
+    // so only the creator is in the explicit members array)
     const general = wm.getChannels(ws.id);
     expect(general).toHaveLength(1);
     expect(general[0].members).toContain('alice');
-    expect(general[0].members).toContain('bob');
-    expect(general[0].members).toContain('charlie');
+    expect(general[0].accessPolicy?.mode).toBe('public-workspace');
 
     // Alice creates DM with Bob
     const dmResult = wm.createDM(ws.id, 'alice', 'bob');

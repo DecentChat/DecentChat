@@ -463,9 +463,12 @@ describe('Edge Case: Member left propagation', () => {
     // Bob should no longer be in the member list
     expect(wsAfter.members.find(m => m.peerId === 'bob')).toBeUndefined();
 
-    // Bob should be removed from the public channel
+    // Public-workspace channels derive access from workspace membership.
+    // Bob is removed from the workspace, so he no longer has access — but the
+    // explicit channel members array is not churned for public-workspace channels.
     const devCh = wsAfter.channels.find(c => c.name === 'dev')!;
-    expect(devCh.members).not.toContain('bob');
+    expect(devCh.accessPolicy?.mode).toBe('public-workspace');
+    // Bob's access is revoked via workspace membership removal, not channel array.
 
     // Bob should also be removed from the DM
     const dmCh = wsAfter.channels.find(c => c.id === dm.id)!;
