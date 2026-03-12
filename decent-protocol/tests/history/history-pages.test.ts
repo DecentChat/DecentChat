@@ -60,6 +60,8 @@ describe('HistoryPageProtocol', () => {
     expect(firstPage.messages.every((message) => message.content === undefined)).toBe(true);
     expect(firstPage.hasMore).toBe(true);
     expect(firstPage.nextCursor).toBeDefined();
+    expect(firstPage.selectionPolicy).toBe('recent-primary');
+    expect(firstPage.selectedReplicaPeerIds).toContain('alice');
 
     const secondPage = protocol.getHistoryPage(ws.id, channelId, {
       pageSize: 2,
@@ -93,6 +95,27 @@ describe('HistoryPageProtocol', () => {
     expect(channelHint?.recentReplicaPeerIds).toContain('relay-peer');
     expect(channelHint?.archiveReplicaPeerIds).toContain('archive-peer');
     expect(channelHint?.updatedAt).toBe(99);
+  });
+
+  test('falls back to recent replicas when archive tier is requested without archive peers', async () => {
+    const wm = new WorkspaceManager();
+    const ms = new MessageStore();
+    const ws = wm.createWorkspace('Archive Fallback', 'alice', 'Alice', 'alice-key');
+    const channelId = ws.channels[0]!.id;
+
+    ws.peerCapabilities = {
+      'relay-peer': { relay: { channels: [channelId] } },
+    };
+
+    await seedMessages(ms, channelId, 'alice', 4);
+
+    const protocol = new HistoryPageProtocol(ms, wm, () => 7);
+    const page = protocol.getHistoryPage(ws.id, channelId, { pageSize: 2, tier: 'archive' });
+
+    expect(page.selectionPolicy).toBe('fallback-to-recent');
+    expect(page.selectedReplicaPeerIds).toContain('relay-peer');
+    expect(page.selectedReplicaPeerIds).toContain('alice');
+    expect(page.replicaPeerIds).toEqual(page.selectedReplicaPeerIds);
   });
 });
 
@@ -142,10 +165,122 @@ describe('SyncProtocol history paging', () => {
     const page = (historyEvent as Extract<SyncEvent, { type: 'history-page-received' }>).page;
     expect(page.messages).toHaveLength(2);
     expect(page.messages.every((message) => message.content === undefined)).toBe(true);
+    expect(page.selectionPolicy).toBeDefined();
+    expect(page.selectedReplicaPeerIds?.length).toBeGreaterThan(0);
     expect(bob.ms.getMessages(channelId)).toHaveLength(2);
+
+    const bobChannel = bob.wm.getWorkspace(ws.id)?.channels.find((channel) => channel.id === channelId);
+    const cachedRef = bobChannel?.historyPages?.find((entry) => entry.pageId === page.pageId);
+    expect(cachedRef?.selectionPolicy).toBe(page.selectionPolicy);
+    expect(cachedRef?.selectedReplicaPeerIds).toEqual(page.selectedReplicaPeerIds);
 
     const replicaHintEvent = bob.events.find((event) => event.type === 'history-replica-hints');
     expect(replicaHintEvent).toBeDefined();
+  });
+
+  test('defaults to paged join sync when workspace and requester capabilities allow', async () => {
+    const alice = createPeer('alice');
+    const bob = createPeer('bob');
+
+    const ws = alice.wm.createWorkspace('Adaptive History', 'alice', 'Alice', 'alice-key');
+    ws.shell = {
+      id: ws.id,
+      name: ws.name,
+      createdBy: ws.createdBy,
+      createdAt: ws.createdAt,
+      version: 1,
+      memberCount: ws.members.length,
+      channelCount: ws.channels.length,
+      capabilityFlags: ['history-pages-v1'],
+    };
+    const channelId = ws.channels[0]!.id;
+    await seedMessages(alice.ms, channelId, 'alice', 3);
+
+    bob.sync.requestJoin('alice', ws.inviteCode, {
+      peerId: 'bob',
+      alias: 'Bob',
+      publicKey: 'bob-key',
+      joinedAt: Date.now(),
+      role: 'member',
+    });
+
+    await deliver(bob, alice);
+
+    const joinAccepted = alice.outbox.find((packet) => packet.to === 'bob')?.data.sync;
+    expect(joinAccepted.type).toBe('join-accepted');
+    expect(joinAccepted.messageHistory).toEqual({});
+    expect(joinAccepted.historyReplicaHints.length).toBeGreaterThan(0);
+
+    await deliver(alice, bob);
+    const joinedEvent = bob.events.find((event) => event.type === 'workspace-joined') as Extract<
+      SyncEvent,
+      { type: 'workspace-joined' }
+    >;
+    expect(joinedEvent.messageHistory).toEqual({});
+    expect(bob.ms.getMessages(channelId)).toHaveLength(0);
+  });
+
+  test('falls back to legacy history map when requester cannot page', async () => {
+    const alice = createPeer('alice');
+    const bob = createPeer('bob');
+
+    const ws = alice.wm.createWorkspace('Legacy Fallback', 'alice', 'Alice', 'alice-key');
+    ws.shell = {
+      id: ws.id,
+      name: ws.name,
+      createdBy: ws.createdBy,
+      createdAt: ws.createdAt,
+      version: 1,
+      memberCount: ws.members.length,
+      channelCount: ws.channels.length,
+      capabilityFlags: ['history-pages-v1'],
+    };
+    const channelId = ws.channels[0]!.id;
+    await seedMessages(alice.ms, channelId, 'alice', 3);
+
+    bob.sync.requestJoin(
+      'alice',
+      ws.inviteCode,
+      {
+        peerId: 'bob',
+        alias: 'Bob',
+        publicKey: 'bob-key',
+        joinedAt: Date.now(),
+        role: 'member',
+      },
+      undefined,
+      { historyCapabilities: { supportsPaged: false } },
+    );
+
+    await deliver(bob, alice);
+
+    const joinAccepted = alice.outbox.find((packet) => packet.to === 'bob')?.data.sync;
+    expect(joinAccepted.type).toBe('join-accepted');
+    expect(Object.keys(joinAccepted.messageHistory)).toContain(channelId);
+    expect(joinAccepted.historyReplicaHints).toBeUndefined();
+
+    await deliver(alice, bob);
+    expect(bob.ms.getMessages(channelId)).toHaveLength(3);
+  });
+
+  test('selects archive sources with fallback to available recent replicas', () => {
+    const peer = createPeer('peer-a');
+    const ws = peer.wm.createWorkspace('Source Selection', 'peer-a', 'Peer A', 'peer-a-key');
+    const channel = ws.channels[0]!;
+
+    channel.historyReplicaHint = {
+      workspaceId: ws.id,
+      channelId: channel.id,
+      recentReplicaPeerIds: ['recent-1', 'recent-2'],
+      archiveReplicaPeerIds: ['archive-1'],
+      updatedAt: Date.now(),
+    };
+
+    const preferredArchive = peer.sync.selectHistoryPageSource(ws.id, channel.id, 'archive', ['archive-1', 'recent-1']);
+    const fallbackArchive = peer.sync.selectHistoryPageSource(ws.id, channel.id, 'archive', ['recent-2']);
+
+    expect(preferredArchive).toBe('archive-1');
+    expect(fallbackArchive).toBe('recent-2');
   });
 });
 
@@ -176,6 +311,10 @@ describe('PersistentStore history page caching', () => {
       hasMore: true,
       generatedAt: 123,
       replicaPeerIds: ['peer-a'],
+      recentReplicaPeerIds: ['peer-a', 'peer-b'],
+      archiveReplicaPeerIds: ['archive-peer'],
+      selectedReplicaPeerIds: ['peer-a', 'peer-b'],
+      selectionPolicy: 'recent-primary' as const,
       messages: [
         {
           id: 'msg-0',
@@ -194,9 +333,14 @@ describe('PersistentStore history page caching', () => {
       workspaceId: page.workspaceId,
       channelId: page.channelId,
       pageId: page.pageId,
+      tier: page.tier,
       startCursor: page.startCursor,
       endCursor: page.endCursor,
       replicaPeerIds: ['peer-a', 'peer-b'],
+      recentReplicaPeerIds: ['peer-a', 'peer-b'],
+      archiveReplicaPeerIds: ['archive-peer'],
+      selectedReplicaPeerIds: ['peer-a', 'peer-b'],
+      selectionPolicy: 'recent-primary',
     });
 
     const loadedPage = await store.getHistoryPage(page.workspaceId, page.channelId, page.pageId);
@@ -205,7 +349,10 @@ describe('PersistentStore history page caching', () => {
 
     expect(loadedPage?.messages).toHaveLength(1);
     expect(loadedPage?.nextCursor).toBe('0001:msg-1');
+    expect(loadedPage?.selectionPolicy).toBe('recent-primary');
     expect(loadedRef?.replicaPeerIds).toEqual(['peer-a', 'peer-b']);
+    expect(loadedRef?.selectedReplicaPeerIds).toEqual(['peer-a', 'peer-b']);
+    expect(loadedRef?.archiveReplicaPeerIds).toEqual(['archive-peer']);
     expect(loadedPages).toHaveLength(1);
   });
 });

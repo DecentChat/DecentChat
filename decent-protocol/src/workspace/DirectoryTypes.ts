@@ -58,13 +58,33 @@ export interface HistoryPageRef {
   workspaceId: string;
   channelId: string;
   pageId: string;
+  tier?: HistoryReplicaTier;
   startCursor?: string;
   endCursor?: string;
+  /** Legacy alias retained for backward compatibility (maps to selectedReplicaPeerIds). */
   replicaPeerIds?: string[];
+  /** Tier-specific candidates advertised for this page reference. */
+  recentReplicaPeerIds?: string[];
+  archiveReplicaPeerIds?: string[];
+  /** Selected ordering after applying tier policy and fallback rules. */
+  selectedReplicaPeerIds?: string[];
+  /** How selectedReplicaPeerIds were derived for this ref. */
+  selectionPolicy?: HistoryReplicaSelectionPolicy;
 }
 
 export type HistoryPageDirection = 'older' | 'newer';
 export type HistoryReplicaTier = 'recent' | 'archive';
+export type HistoryReplicaSelectionPolicy =
+  | 'recent-primary'
+  | 'archive-primary'
+  | 'fallback-to-recent'
+  | 'fallback-to-archive'
+  | 'no-replicas';
+
+export interface HistorySyncCapabilities {
+  supportsPaged?: boolean;
+  supportedTiers?: HistoryReplicaTier[];
+}
 
 export interface HistoryPageSnapshotMessage {
   id: string;
@@ -99,7 +119,12 @@ export interface HistoryPageSnapshot {
   endCursor?: string;
   hasMore?: boolean;
   generatedAt: number;
+  /** Legacy alias retained for backward compatibility (maps to selectedReplicaPeerIds). */
   replicaPeerIds?: string[];
+  recentReplicaPeerIds?: string[];
+  archiveReplicaPeerIds?: string[];
+  selectedReplicaPeerIds?: string[];
+  selectionPolicy?: HistoryReplicaSelectionPolicy;
   messages: HistoryPageSnapshotMessage[];
 }
 

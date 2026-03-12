@@ -126,7 +126,9 @@ export type {
   HistoryPageSnapshot,
   HistoryPageDirection,
   HistoryReplicaTier,
+  HistoryReplicaSelectionPolicy,
   HistoryReplicaHint,
+  HistorySyncCapabilities,
   PeerCapabilities,
 } from './workspace/types';
 export type {

@@ -13,8 +13,11 @@ import type {
   SyncMessage,
   MemberDirectoryPage,
   DirectoryShardRef,
+  HistoryPageRef,
   HistoryPageSnapshot,
   HistoryReplicaHint,
+  HistoryReplicaTier,
+  HistorySyncCapabilities,
 } from './types';
 import { WorkspaceDeltaProtocol } from './WorkspaceDeltaProtocol';
 import { DirectoryProtocol } from './DirectoryProtocol';
@@ -51,6 +54,8 @@ export type SyncEvent =
   | { type: 'sync-complete'; workspaceId: string };
 
 export class SyncProtocol {
+  private static readonly HISTORY_PAGING_CAPABILITY = 'history-pages-v1';
+
   private workspaceManager: WorkspaceManager;
   private messageStore: MessageStore;
   private sendFn: SendFn;
@@ -166,7 +171,10 @@ export class SyncProtocol {
     inviteCode: string,
     myMember: WorkspaceMember,
     inviteId?: string,
-    options: { historySyncMode?: 'legacy' | 'paged' } = {},
+    options: {
+      historySyncMode?: 'legacy' | 'paged';
+      historyCapabilities?: HistorySyncCapabilities;
+    } = {},
   ): void {
     const msg: SyncMessage = {
       type: 'join-request',
@@ -175,6 +183,7 @@ export class SyncProtocol {
       inviteId,
       pexServers: this.serverDiscovery?.getHandshakeServers(),
       historySyncMode: options.historySyncMode,
+      historyCapabilities: options.historyCapabilities ?? this.defaultHistoryCapabilities(),
     };
     this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
   }
@@ -230,8 +239,20 @@ export class SyncProtocol {
   /**
    * Request full workspace sync from a peer
    */
-  requestSync(targetPeerId: string, workspaceId: string, options: { historySyncMode?: 'legacy' | 'paged' } = {}): void {
-    const msg: SyncMessage = { type: 'sync-request', workspaceId, historySyncMode: options.historySyncMode };
+  requestSync(
+    targetPeerId: string,
+    workspaceId: string,
+    options: {
+      historySyncMode?: 'legacy' | 'paged';
+      historyCapabilities?: HistorySyncCapabilities;
+    } = {},
+  ): void {
+    const msg: SyncMessage = {
+      type: 'sync-request',
+      workspaceId,
+      historySyncMode: options.historySyncMode,
+      historyCapabilities: options.historyCapabilities ?? this.defaultHistoryCapabilities(),
+    };
     this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
   }
 
@@ -278,6 +299,62 @@ export class SyncProtocol {
     this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
   }
 
+  selectHistoryPageSource(
+    workspaceId: string,
+    channelId: string,
+    tier: HistoryReplicaTier = 'recent',
+    availablePeerIds: string[] = [],
+  ): string | undefined {
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) return undefined;
+
+    const channel = workspace.channels.find((candidate) => candidate.id === channelId);
+    if (!channel) return undefined;
+
+    const availableSet = availablePeerIds.length > 0 ? new Set(availablePeerIds) : undefined;
+
+    const refs = [...(channel.historyPages ?? [])];
+    const latestMatchingRef = refs
+      .reverse()
+      .find((ref) => ref.tier === tier || ref.tier === undefined);
+
+    const fallbackHint = channel.historyReplicaHint;
+
+    const recentCandidates = this.uniqueOrderedPeers([
+      ...(latestMatchingRef?.recentReplicaPeerIds ?? []),
+      ...(latestMatchingRef?.selectionPolicy === 'fallback-to-recent'
+        ? latestMatchingRef.selectedReplicaPeerIds ?? []
+        : []),
+      ...(fallbackHint?.recentReplicaPeerIds ?? []),
+    ]);
+
+    const archiveCandidates = this.uniqueOrderedPeers([
+      ...(latestMatchingRef?.archiveReplicaPeerIds ?? []),
+      ...(latestMatchingRef?.selectionPolicy === 'fallback-to-archive'
+        ? latestMatchingRef.selectedReplicaPeerIds ?? []
+        : []),
+      ...(fallbackHint?.archiveReplicaPeerIds ?? []),
+    ]);
+
+    const selectionOrder = tier === 'archive'
+      ? this.uniqueOrderedPeers([
+          ...(latestMatchingRef?.selectedReplicaPeerIds ?? []),
+          ...archiveCandidates,
+          ...recentCandidates,
+        ])
+      : this.uniqueOrderedPeers([
+          ...(latestMatchingRef?.selectedReplicaPeerIds ?? []),
+          ...recentCandidates,
+          ...archiveCandidates,
+        ]);
+
+    return selectionOrder.find((peerId) => {
+      if (peerId === this.myPeerId) return false;
+      if (!availableSet) return true;
+      return availableSet.has(peerId);
+    });
+  }
+
   // === Incoming Handlers ===
 
   private handleJoinRequest(fromPeerId: string, msg: Extract<SyncMessage, { type: 'join-request' }>): void {
@@ -317,18 +394,23 @@ export class SyncProtocol {
       return;
     }
 
-    const shouldUsePagedHistory = msg.historySyncMode === 'paged';
+    const historySyncMode = this.resolveHistorySyncMode(msg, workspace);
+    const shouldUsePagedHistory = historySyncMode === 'paged';
 
     // Legacy clients still receive metadata-only full history during join.
-    // Paged clients fetch history windows on demand via history-page-request.
+    // Paged-capable clients fetch history windows on demand via history-page-request.
     const messageHistory = shouldUsePagedHistory ? {} : this.buildLegacyMessageHistory(workspace.id);
+
+    const historyReplicaHints = shouldUsePagedHistory
+      ? this.historyPageProtocol.buildReplicaHints(workspace.id)
+      : undefined;
 
     const acceptMsg: SyncMessage = {
       type: 'join-accepted',
       workspace: this.workspaceManager.exportWorkspace(workspace.id)!,
       messageHistory,
       pexServers: this.serverDiscovery?.getHandshakeServers(),
-      historyReplicaHints: shouldUsePagedHistory ? this.historyPageProtocol.buildReplicaHints(workspace.id) : undefined,
+      historyReplicaHints,
     };
 
     this.sendFn(fromPeerId, { type: 'workspace-sync', sync: acceptMsg });
@@ -349,6 +431,10 @@ export class SyncProtocol {
     // Import message histories (with chain verification)
     for (const [channelId, messages] of Object.entries(msg.messageHistory || {})) {
       await this.messageStore.importMessages(channelId, messages as SyncedHistoryMessage[]);
+    }
+
+    if (msg.historyReplicaHints?.length) {
+      this.applyHistoryReplicaHints(msg.workspace.id, msg.historyReplicaHints);
     }
 
     this.onEvent({
@@ -437,6 +523,11 @@ export class SyncProtocol {
     })) as PlaintextMessage[];
 
     this.messageStore.bulkAdd(normalized);
+    this.upsertHistoryPageRef(msg.workspaceId, msg.channelId, msg.page);
+
+    if (msg.historyReplicaHints?.length) {
+      this.applyHistoryReplicaHints(msg.workspaceId, msg.historyReplicaHints);
+    }
 
     this.onEvent({
       type: 'history-page-received',
@@ -455,6 +546,7 @@ export class SyncProtocol {
   }
 
   private handleHistoryReplicaHints(msg: Extract<SyncMessage, { type: 'history-replica-hints' }>): void {
+    this.applyHistoryReplicaHints(msg.workspaceId, msg.hints);
     this.onEvent({
       type: 'history-replica-hints',
       workspaceId: msg.workspaceId,
@@ -588,7 +680,8 @@ export class SyncProtocol {
     const workspace = this.workspaceManager.getWorkspace(msg.workspaceId);
     if (!workspace) return;
 
-    const usePagedHistory = msg.historySyncMode === 'paged';
+    const historySyncMode = this.resolveHistorySyncMode(msg, workspace);
+    const usePagedHistory = historySyncMode === 'paged';
     const messageHistory = usePagedHistory ? {} : this.buildLegacyMessageHistory(msg.workspaceId);
 
     const response: SyncMessage = {
@@ -611,6 +704,7 @@ export class SyncProtocol {
     }
 
     if (msg.historyReplicaHints?.length) {
+      this.applyHistoryReplicaHints(msg.workspace.id, msg.historyReplicaHints);
       this.onEvent({
         type: 'history-replica-hints',
         workspaceId: msg.workspace.id,
@@ -619,6 +713,129 @@ export class SyncProtocol {
     }
 
     this.onEvent({ type: 'sync-complete', workspaceId: msg.workspace.id });
+  }
+
+  private resolveHistorySyncMode(
+    msg:
+      | Extract<SyncMessage, { type: 'join-request' }>
+      | Extract<SyncMessage, { type: 'sync-request' }>,
+    workspace: Workspace,
+  ): 'legacy' | 'paged' {
+    if (msg.historySyncMode === 'legacy') return 'legacy';
+    if (msg.historySyncMode === 'paged') return 'paged';
+
+    const supportsPagedHistory = msg.historyCapabilities?.supportsPaged === true;
+    if (supportsPagedHistory && this.workspaceSupportsPagedHistory(workspace)) {
+      return 'paged';
+    }
+
+    return 'legacy';
+  }
+
+  private workspaceSupportsPagedHistory(workspace: Workspace): boolean {
+    return workspace.shell?.capabilityFlags?.includes(SyncProtocol.HISTORY_PAGING_CAPABILITY) === true;
+  }
+
+  private defaultHistoryCapabilities(): HistorySyncCapabilities {
+    return {
+      supportsPaged: true,
+      supportedTiers: ['recent', 'archive'],
+    };
+  }
+
+  private applyHistoryReplicaHints(workspaceId: string, hints: HistoryReplicaHint[]): void {
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace || hints.length === 0) return;
+
+    let changed = false;
+
+    for (const hint of hints) {
+      const channel = workspace.channels.find((entry) => entry.id === hint.channelId);
+      if (!channel) continue;
+
+      const prev = channel.historyReplicaHint;
+      const mergedHint: HistoryReplicaHint = {
+        workspaceId: hint.workspaceId,
+        channelId: hint.channelId,
+        recentReplicaPeerIds: this.uniqueOrderedPeers([
+          ...(hint.recentReplicaPeerIds ?? []),
+          ...(prev?.recentReplicaPeerIds ?? []),
+        ]),
+        archiveReplicaPeerIds: this.uniqueOrderedPeers([
+          ...(hint.archiveReplicaPeerIds ?? []),
+          ...(prev?.archiveReplicaPeerIds ?? []),
+        ]),
+        updatedAt: Math.max(prev?.updatedAt ?? 0, hint.updatedAt ?? 0),
+      };
+
+      channel.historyReplicaHint = mergedHint;
+      changed = true;
+    }
+
+    if (changed) {
+      this.workspaceManager.importWorkspace(structuredClone(workspace));
+    }
+  }
+
+  private upsertHistoryPageRef(workspaceId: string, channelId: string, page: HistoryPageSnapshot): void {
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) return;
+
+    const channel = workspace.channels.find((entry) => entry.id === channelId);
+    if (!channel) return;
+
+    const refs = [...(channel.historyPages ?? [])];
+    const nextRef: HistoryPageRef = {
+      workspaceId,
+      channelId,
+      pageId: page.pageId,
+      tier: page.tier,
+      startCursor: page.startCursor,
+      endCursor: page.endCursor,
+      replicaPeerIds: this.uniqueOrderedPeers(page.replicaPeerIds ?? page.selectedReplicaPeerIds ?? []),
+      recentReplicaPeerIds: this.uniqueOrderedPeers(page.recentReplicaPeerIds ?? []),
+      archiveReplicaPeerIds: this.uniqueOrderedPeers(page.archiveReplicaPeerIds ?? []),
+      selectedReplicaPeerIds: this.uniqueOrderedPeers(page.selectedReplicaPeerIds ?? page.replicaPeerIds ?? []),
+      selectionPolicy: page.selectionPolicy,
+    };
+
+    const existingIndex = refs.findIndex((ref) => ref.pageId === page.pageId);
+    if (existingIndex >= 0) {
+      refs[existingIndex] = this.mergeHistoryPageRefs(refs[existingIndex]!, nextRef);
+    } else {
+      refs.push(nextRef);
+    }
+
+    channel.historyPages = refs;
+    this.workspaceManager.importWorkspace(structuredClone(workspace));
+  }
+
+  private mergeHistoryPageRefs(current: HistoryPageRef, incoming: HistoryPageRef): HistoryPageRef {
+    return {
+      ...current,
+      ...incoming,
+      replicaPeerIds: this.uniqueOrderedPeers([...(incoming.replicaPeerIds ?? []), ...(current.replicaPeerIds ?? [])]),
+      recentReplicaPeerIds: this.uniqueOrderedPeers([
+        ...(incoming.recentReplicaPeerIds ?? []),
+        ...(current.recentReplicaPeerIds ?? []),
+      ]),
+      archiveReplicaPeerIds: this.uniqueOrderedPeers([
+        ...(incoming.archiveReplicaPeerIds ?? []),
+        ...(current.archiveReplicaPeerIds ?? []),
+      ]),
+      selectedReplicaPeerIds: this.uniqueOrderedPeers([
+        ...(incoming.selectedReplicaPeerIds ?? incoming.replicaPeerIds ?? []),
+        ...(current.selectedReplicaPeerIds ?? current.replicaPeerIds ?? []),
+      ]),
+      selectionPolicy: incoming.selectionPolicy ?? current.selectionPolicy,
+      tier: incoming.tier ?? current.tier,
+      startCursor: incoming.startCursor ?? current.startCursor,
+      endCursor: incoming.endCursor ?? current.endCursor,
+    };
+  }
+
+  private uniqueOrderedPeers(peerIds: Array<string | undefined>): string[] {
+    return [...new Set(peerIds.filter((peerId): peerId is string => Boolean(peerId)))];
   }
 
   private buildLegacyMessageHistory(workspaceId: string): Record<string, SyncedHistoryMessage[]> {

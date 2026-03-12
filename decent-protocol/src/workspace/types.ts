@@ -13,6 +13,7 @@ import type {
   HistoryPageDirection,
   HistoryReplicaTier,
   HistoryReplicaHint,
+  HistorySyncCapabilities,
   PeerCapabilities,
 } from './DirectoryTypes';
 
@@ -27,7 +28,9 @@ export type {
   HistoryPageSnapshot,
   HistoryPageDirection,
   HistoryReplicaTier,
+  HistoryReplicaSelectionPolicy,
   HistoryReplicaHint,
+  HistorySyncCapabilities,
   PeerCapabilities,
 } from './DirectoryTypes';
 
@@ -117,6 +120,8 @@ export interface Channel {
   accessPolicy?: ChannelAccessPolicy;
   /** Optional lightweight history pagination hints for scalable clients. */
   historyPages?: HistoryPageRef[];
+  /** Latest replica hint metadata for this channel, used by adaptive page source selection. */
+  historyReplicaHint?: HistoryReplicaHint;
   createdBy: string;
   createdAt: number;
 }
@@ -164,6 +169,7 @@ export type SyncMessage =
       inviteId?: string;
       pexServers?: PEXServer[];
       historySyncMode?: 'legacy' | 'paged';
+      historyCapabilities?: HistorySyncCapabilities;
     }
   // `messageHistory` intentionally omits plaintext message content during sync.
   | {
@@ -183,7 +189,12 @@ export type SyncMessage =
   | { type: 'channel-removed'; channelId: string; removedBy: string }
   | { type: 'workspace-deleted'; workspaceId: string; deletedBy: string }
   | { type: 'channel-message'; channelId: string; message: any }
-  | { type: 'sync-request'; workspaceId: string; historySyncMode?: 'legacy' | 'paged' }
+  | {
+      type: 'sync-request';
+      workspaceId: string;
+      historySyncMode?: 'legacy' | 'paged';
+      historyCapabilities?: HistorySyncCapabilities;
+    }
   // `messageHistory` intentionally omits plaintext message content during sync.
   | {
       type: 'sync-response';

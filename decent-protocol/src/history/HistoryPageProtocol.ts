@@ -4,6 +4,7 @@ import type {
   HistoryPageDirection,
   HistoryPageSnapshot,
   HistoryReplicaHint,
+  HistoryReplicaSelectionPolicy,
   HistoryReplicaTier,
   PeerCapabilities,
   SyncMessage,
@@ -80,9 +81,7 @@ export class HistoryPageProtocol {
       : undefined;
 
     const replicaHint = this.buildReplicaHints(workspaceId).find((hint) => hint.channelId === channelId);
-    const replicaPeerIds = tier === 'archive'
-      ? (replicaHint?.archiveReplicaPeerIds ?? replicaHint?.recentReplicaPeerIds)
-      : replicaHint?.recentReplicaPeerIds;
+    const selection = this.selectReplicaPeers(replicaHint, tier);
 
     return {
       workspaceId,
@@ -97,7 +96,11 @@ export class HistoryPageProtocol {
       endCursor,
       hasMore,
       generatedAt: this.now(),
-      replicaPeerIds,
+      replicaPeerIds: selection.selectedReplicaPeerIds,
+      recentReplicaPeerIds: selection.recentReplicaPeerIds,
+      archiveReplicaPeerIds: selection.archiveReplicaPeerIds,
+      selectedReplicaPeerIds: selection.selectedReplicaPeerIds,
+      selectionPolicy: selection.selectionPolicy,
       messages: pageMessages,
     };
   }
@@ -120,38 +123,59 @@ export class HistoryPageProtocol {
     const workspace = this.workspaceManager.getWorkspace(workspaceId);
     if (!workspace) return [];
 
-    const archivePeers = this.sortedUniquePeers(
-      Object.entries(workspace.peerCapabilities ?? {})
-        .filter(([, capabilities]) => capabilities?.archive)
-        .map(([peerId]) => peerId),
+    const capabilityEntries = Object.entries(workspace.peerCapabilities ?? {});
+    const archiveCapabilityEntries = capabilityEntries
+      .filter(([, capabilities]) => capabilities?.archive)
+      .map(([peerId, capabilities]) => ({
+        peerId,
+        retentionDays: capabilities?.archive?.retentionDays,
+      }));
+
+    const archivePeers = this.sortedUniquePeers(archiveCapabilityEntries.map((entry) => entry.peerId));
+    const deepArchivePeers = this.sortedUniquePeers(
+      archiveCapabilityEntries
+        .filter((entry) => (entry.retentionDays ?? Number.POSITIVE_INFINITY) >= 30)
+        .map((entry) => entry.peerId),
+    );
+    const shortArchivePeers = this.sortedUniquePeers(
+      archiveCapabilityEntries
+        .filter((entry) => (entry.retentionDays ?? Number.POSITIVE_INFINITY) < 30)
+        .map((entry) => entry.peerId),
     );
 
     return workspace.channels
       .filter((channel) => channel.type === 'channel')
       .map((channel) => {
         const recentRelayPeers = this.sortedUniquePeers(
-          Object.entries(workspace.peerCapabilities ?? {})
+          capabilityEntries
             .filter(([, capabilities]) => this.isRelayForChannel(capabilities, channel.id))
             .map(([peerId]) => peerId),
         );
 
+        const reservedPeers = new Set<string>([
+          this.workspaceCreator(workspace),
+          ...recentRelayPeers,
+          ...archivePeers,
+        ]);
+
         const fallbackMembers = workspace.members
           .map((member) => member.peerId)
-          .filter((peerId) => peerId !== this.workspaceCreator(workspace))
+          .filter((peerId) => !reservedPeers.has(peerId))
           .sort()
           .slice(0, 3);
 
         const recentReplicaPeerIds = this.sortedUniquePeers([
           this.workspaceCreator(workspace),
           ...recentRelayPeers,
-          ...archivePeers,
+          ...shortArchivePeers,
+          ...deepArchivePeers,
           ...fallbackMembers,
         ]);
 
+        const archivePrimaryPeers = deepArchivePeers.length > 0 ? deepArchivePeers : archivePeers;
         const archiveReplicaPeerIds = this.sortedUniquePeers([
-          ...archivePeers,
-          ...recentRelayPeers,
-          this.workspaceCreator(workspace),
+          ...archivePrimaryPeers,
+          ...recentRelayPeers.filter((peerId) => archivePeers.includes(peerId)),
         ]);
 
         return {
@@ -169,6 +193,62 @@ export class HistoryPageProtocol {
       type: 'history-replica-hints',
       workspaceId,
       hints: this.buildReplicaHints(workspaceId),
+    };
+  }
+
+  private selectReplicaPeers(
+    hint: HistoryReplicaHint | undefined,
+    tier: HistoryReplicaTier,
+  ): {
+    recentReplicaPeerIds?: string[];
+    archiveReplicaPeerIds?: string[];
+    selectedReplicaPeerIds?: string[];
+    selectionPolicy: HistoryReplicaSelectionPolicy;
+  } {
+    const recentReplicaPeerIds = this.sortedUniquePeers(hint?.recentReplicaPeerIds ?? []);
+    const archiveReplicaPeerIds = this.sortedUniquePeers(hint?.archiveReplicaPeerIds ?? []);
+
+    if (tier === 'archive') {
+      if (archiveReplicaPeerIds.length > 0) {
+        return {
+          recentReplicaPeerIds,
+          archiveReplicaPeerIds,
+          selectedReplicaPeerIds: archiveReplicaPeerIds,
+          selectionPolicy: 'archive-primary',
+        };
+      }
+      if (recentReplicaPeerIds.length > 0) {
+        return {
+          recentReplicaPeerIds,
+          archiveReplicaPeerIds,
+          selectedReplicaPeerIds: recentReplicaPeerIds,
+          selectionPolicy: 'fallback-to-recent',
+        };
+      }
+    } else {
+      if (recentReplicaPeerIds.length > 0) {
+        return {
+          recentReplicaPeerIds,
+          archiveReplicaPeerIds,
+          selectedReplicaPeerIds: recentReplicaPeerIds,
+          selectionPolicy: 'recent-primary',
+        };
+      }
+      if (archiveReplicaPeerIds.length > 0) {
+        return {
+          recentReplicaPeerIds,
+          archiveReplicaPeerIds,
+          selectedReplicaPeerIds: archiveReplicaPeerIds,
+          selectionPolicy: 'fallback-to-archive',
+        };
+      }
+    }
+
+    return {
+      recentReplicaPeerIds,
+      archiveReplicaPeerIds,
+      selectedReplicaPeerIds: undefined,
+      selectionPolicy: 'no-replicas',
     };
   }
 
