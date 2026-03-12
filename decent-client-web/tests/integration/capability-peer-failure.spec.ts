@@ -140,6 +140,7 @@ describe('capability peer failure fallbacks', () => {
         version: 2,
         memberCount: 120,
         channelCount: 0,
+        capabilityFlags: ['large-workspace-v1'],
       },
     };
 
@@ -240,6 +241,7 @@ describe('capability peer failure fallbacks', () => {
         version: 3,
         memberCount: 150,
         channelCount: 1,
+        capabilityFlags: ['large-workspace-v1'],
       },
     };
 

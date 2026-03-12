@@ -30,7 +30,7 @@ describe('presence directory consumption', () => {
       myPeerId: 'me',
       activeWorkspaceId: 'ws-1',
       activeChannelId: 'chan-a',
-      readyPeers: new Set<string>(),
+      readyPeers: new Set<string>(['dir-1']),
     };
     ctrl.presence = presence;
     ctrl.publicWorkspaceController = {
@@ -49,7 +49,19 @@ describe('presence directory consumption', () => {
         hasMore: true,
       }),
     };
+    ctrl.peerCapabilities = new Map<string, Set<string>>([
+      ['dir-1', new Set(['member-directory-v1'])],
+    ]);
     ctrl.workspaceManager = {
+      getWorkspace: (workspaceId: string) => workspaceId === 'ws-1' ? {
+        id: 'ws-1',
+        members: [
+          { peerId: 'me' },
+          { peerId: 'dir-1' },
+          { peerId: 'peer-1' },
+        ],
+        shell: { capabilityFlags: ['large-workspace-v1'] },
+      } : null,
       getMember: () => undefined,
     };
 

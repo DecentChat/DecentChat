@@ -30,6 +30,7 @@ describe('workspace directory sync guards', () => {
       getWorkspace: (workspaceId: string) => workspaceId === 'ws-1' ? {
         id: 'ws-1',
         members: [{ peerId: 'member-1' }],
+        shell: { capabilityFlags: ['large-workspace-v1'] },
       } : null,
       isBanned: () => false,
     };

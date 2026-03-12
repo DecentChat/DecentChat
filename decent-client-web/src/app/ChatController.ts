@@ -87,6 +87,13 @@ const PROTOCOL_VERSION = 2;
 const NEGENTROPY_SYNC_CAPABILITY = 'negentropy-sync-v1';
 const WORKSPACE_SHELL_CAPABILITY = 'workspace-shell-v1';
 const MEMBER_DIRECTORY_CAPABILITY = 'member-directory-v1';
+const LARGE_WORKSPACE_CAPABILITY = 'large-workspace-v1';
+const LEGACY_LARGE_WORKSPACE_CAPABILITY_FLAGS = [
+  'shell-delta-v1',
+  MEMBER_DIRECTORY_CAPABILITY,
+  'presence-slices-v1',
+  'history-pages-v1',
+];
 const DIRECTORY_SHARD_CAPABILITY_PREFIX = 'directory-shard:';
 const RELAY_CHANNEL_CAPABILITY_PREFIX = 'relay-channel:';
 const ARCHIVE_HISTORY_CAPABILITY = 'archive-history-v1';
@@ -1784,6 +1791,23 @@ export class ChatController {
     return this.publicWorkspaceController.buildShell(workspace);
   }
 
+  private workspaceHasLargeWorkspaceCapability(workspace: Workspace | null | undefined): boolean {
+    const flags = workspace?.shell?.capabilityFlags;
+    if (!flags?.length) return false;
+
+    if (flags.includes(LARGE_WORKSPACE_CAPABILITY)) return true;
+    return LEGACY_LARGE_WORKSPACE_CAPABILITY_FLAGS.some((flag) => flags.includes(flag));
+  }
+
+  private workspaceSupportsLargeWorkspaceFeatures(workspaceId: string): boolean {
+    return this.workspaceHasLargeWorkspaceCapability(this.workspaceManager.getWorkspace(workspaceId));
+  }
+
+  private canUsePagedMemberDirectory(workspace: Workspace, snapshot: { totalCount: number }): boolean {
+    if (!this.workspaceHasLargeWorkspaceCapability(workspace)) return false;
+    return (workspace.shell?.memberCount ?? snapshot.totalCount) > workspace.members.length;
+  }
+
   private selectWorkspaceSyncTargetPeers(workspaceId: string, capability: string, preferredPeerId?: string): string[] {
     const workspace = this.workspaceManager.getWorkspace(workspaceId);
     const workspaceMembers = new Set((workspace?.members ?? []).map((member) => member.peerId));
@@ -1864,6 +1888,7 @@ export class ChatController {
   private requestWorkspaceShell(peerId: string, workspaceId: string): void {
     if (!workspaceId) return;
     if (!this.state.readyPeers.has(peerId)) return;
+    if (!this.workspaceSupportsLargeWorkspaceFeatures(workspaceId)) return;
     if (!this.peerSupportsCapability(peerId, WORKSPACE_SHELL_CAPABILITY)) return;
 
     this.sendControlWithRetry(peerId, {
@@ -1881,7 +1906,7 @@ export class ChatController {
     if (!ws) return;
 
     const snapshot = this.publicWorkspaceController.getSnapshot(workspaceId);
-    const shouldUsePagedDirectory = (ws.shell?.memberCount ?? snapshot.totalCount) > ws.members.length;
+    const shouldUsePagedDirectory = this.canUsePagedMemberDirectory(ws, snapshot);
     if (!shouldUsePagedDirectory) return;
     if (!snapshot.hasMore && snapshot.loadedCount > 0) return;
 
@@ -1948,6 +1973,7 @@ export class ChatController {
   private handleMemberPageRequest(peerId: string, sync: { workspaceId: string; cursor?: string; pageSize?: number; shardPrefix?: string }): void {
     const ws = this.workspaceManager.getWorkspace(sync.workspaceId);
     if (!ws) return;
+    if (!this.workspaceHasLargeWorkspaceCapability(ws)) return;
     if (this.workspaceManager.isBanned(sync.workspaceId, peerId)) return;
 
     const snapshot = this.publicWorkspaceController.getSnapshot(sync.workspaceId);
@@ -6655,14 +6681,16 @@ export class ChatController {
   }
 
   private getAdvertisedControlCapabilities(workspaceId?: string): string[] {
-    const capabilities = new Set<string>([
-      NEGENTROPY_SYNC_CAPABILITY,
-      WORKSPACE_SHELL_CAPABILITY,
-      MEMBER_DIRECTORY_CAPABILITY,
-    ]);
+    const capabilities = new Set<string>([NEGENTROPY_SYNC_CAPABILITY]);
     if (!workspaceId) return [...capabilities];
 
     const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    const workspaceSupportsLargeFeatures = this.workspaceHasLargeWorkspaceCapability(workspace);
+    if (!workspaceSupportsLargeFeatures) return [...capabilities];
+
+    capabilities.add(WORKSPACE_SHELL_CAPABILITY);
+    capabilities.add(MEMBER_DIRECTORY_CAPABILITY);
+
     const advertised = workspace?.peerCapabilities?.[this.state.myPeerId];
     if (!advertised) return [...capabilities];
 
@@ -7439,21 +7467,29 @@ export class ChatController {
       if (summary.archiveCapable) archiveHelperCount += 1;
     }
 
-    const mediumWorkspace = (ws.shell?.memberCount ?? ws.members.length) >= MEDIUM_WORKSPACE_MEMBER_THRESHOLD;
+    const largeWorkspaceEnabled = this.workspaceHasLargeWorkspaceCapability(ws);
+    const mediumWorkspace = largeWorkspaceEnabled
+      && (ws.shell?.memberCount ?? ws.members.length) >= MEDIUM_WORKSPACE_MEMBER_THRESHOLD;
     const requiredReplicaCount = mediumWorkspace ? IMPORTANT_SHARD_MIN_REPLICAS : 1;
 
-    const underReplicatedShardCount = (ws.directoryShards ?? []).filter((shard) => {
-      const liveReplicas = [...new Set((shard.replicaPeerIds ?? []).filter((peerId) => this.state.readyPeers.has(peerId)))];
-      return liveReplicas.length < requiredReplicaCount;
-    }).length;
+    const underReplicatedShardCount = largeWorkspaceEnabled
+      ? (ws.directoryShards ?? []).filter((shard) => {
+          const liveReplicas = [...new Set((shard.replicaPeerIds ?? []).filter((peerId) => this.state.readyPeers.has(peerId)))];
+          return liveReplicas.length < requiredReplicaCount;
+        }).length
+      : 0;
 
-    const directoryHelperCount = this.selectWorkspaceSyncTargetPeers(workspaceId, MEMBER_DIRECTORY_CAPABILITY).length;
-    const discoverySlower = directoryHelperCount < requiredReplicaCount || underReplicatedShardCount > 0;
+    const directoryHelperCount = largeWorkspaceEnabled
+      ? this.selectWorkspaceSyncTargetPeers(workspaceId, MEMBER_DIRECTORY_CAPABILITY).length
+      : readyWorkspacePeers.length;
+    const discoverySlower = largeWorkspaceEnabled
+      ? directoryHelperCount < requiredReplicaCount || underReplicatedShardCount > 0
+      : false;
 
     const snapshot = this.publicWorkspaceController.getSnapshot(workspaceId);
-    const directorySearchPartial = snapshot.hasMore && discoverySlower;
-    const deeperHistoryDelayed = archiveHelperCount === 0;
-    const relayFallbackActive = relayHelperCount < requiredReplicaCount;
+    const directorySearchPartial = largeWorkspaceEnabled && snapshot.hasMore && discoverySlower;
+    const deeperHistoryDelayed = largeWorkspaceEnabled ? archiveHelperCount === 0 : false;
+    const relayFallbackActive = largeWorkspaceEnabled ? relayHelperCount < requiredReplicaCount : false;
 
     return {
       chatContinues,
@@ -7490,6 +7526,11 @@ export class ChatController {
     };
   } {
     const snapshot = this.publicWorkspaceController.getSnapshot(workspaceId);
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    const largeWorkspaceEnabled = this.workspaceHasLargeWorkspaceCapability(workspace);
+    const hasDirectoryCapablePeer = this.selectWorkspaceSyncTargetPeers(workspaceId, MEMBER_DIRECTORY_CAPABILITY).length > 0;
+    const canPageDirectory = largeWorkspaceEnabled && hasDirectoryCapablePeer;
+
     const aggregatePresence = typeof (this.presence as any).getPresenceAggregate === 'function'
       ? this.presence.getPresenceAggregate(workspaceId)
       : undefined;
@@ -7538,8 +7579,8 @@ export class ChatController {
     return {
       members,
       loadedCount: snapshot.loadedCount,
-      totalCount: snapshot.totalCount,
-      hasMore: snapshot.hasMore,
+      totalCount: canPageDirectory ? snapshot.totalCount : snapshot.loadedCount,
+      hasMore: canPageDirectory ? snapshot.hasMore : false,
       presence: {
         onlineCount: aggregatePresence?.onlineCount ?? null,
         sampledOnlineCount: pagePresence?.onlinePeerCount ?? 0,

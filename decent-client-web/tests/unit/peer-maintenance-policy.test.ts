@@ -227,6 +227,7 @@ describe('ChatController peer maintenance policy helpers', () => {
       workspaceManager: {
         getWorkspace: (id: string) => id === 'ws-1' ? {
           id,
+          shell: { capabilityFlags: ['large-workspace-v1'] },
           peerCapabilities: {
             'me-peer': {
               directory: { shardPrefixes: ['aa', 'bb'] },

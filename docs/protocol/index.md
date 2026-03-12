@@ -21,6 +21,7 @@ Status labels used in these pages:
 | Delivery ACK | Partially implemented |
 | At-rest encryption | Partially implemented |
 | Invites | Partially implemented |
+| Adaptive public workspace sync (shell/delta/pages) | Partially implemented (gated) |
 
 ## Protocol feature pages
 
@@ -33,6 +34,16 @@ Status labels used in these pages:
 - [Delivery ACK](./delivery-ack)
 - [At-rest encryption](./at-rest-encryption)
 - [Invites](./invites)
+
+## Adaptive public-workspace rollout notes
+
+Large-workspace protocol behavior is guarded by workspace capability flags.
+
+- Workspace gate: `large-workspace-v1` in `WorkspaceShell.capabilityFlags`
+- Peer gates: `workspace-shell-v1`, `member-directory-v1` (plus helper capabilities)
+- Downgrade rule: when workspace or peer gates are missing, clients must stay on legacy snapshot/workspace-state sync paths.
+
+Migration playbook: `docs/plans/2026-03-11-public-workspace-migration.md`
 
 ## Specs and references
 
