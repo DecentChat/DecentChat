@@ -23,7 +23,7 @@ test('many messages: scrollbar and messages visible with thread open', async ({ 
     localStorage.clear();
   });
   await page.reload();
-  await page.waitForFunction(() => { const l = document.getElementById('loading'); return !l || l.style.opacity === '0'; }, { timeout: 15000 });
+  await page.waitForFunction(() => { const l = document.getElementById('loading'); return !l || l.style.opacity === '0'; }, undefined, { timeout: 15000 });
   const openBtn = page.getByRole('button', { name: /open app/i });
   if (await openBtn.isVisible({ timeout: 2000 }).catch(() => false)) await openBtn.click();
   await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });

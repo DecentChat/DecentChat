@@ -45,7 +45,7 @@ test('check transport state and attempt P2P connect', async ({ browser }) => {
 
     expect(connectResult).toBe('SUCCESS');
 
-    await u1.page.waitForFunction(() => ((window as any).__transport?.getConnectedPeers?.() ?? []).length > 0, { timeout: 10000 });
+    await u1.page.waitForFunction(() => ((window as any).__transport?.getConnectedPeers?.() ?? []).length > 0, undefined, { timeout: 10000 });
 
     const p1Peers = await u1.page.evaluate(() => (window as any).__transport.getConnectedPeers());
     const p2Peers = await u2.page.evaluate(() => (window as any).__transport.getConnectedPeers());

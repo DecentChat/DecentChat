@@ -36,7 +36,7 @@ test('P2P works with localhost-only ICE (no STUN)', async ({ browser }) => {
       t.send(targetId, { type: 'ping', payload: 'ping' });
     }, p1Id);
 
-    await u1.page.waitForFunction(() => (window as any).__data.length > 0, { timeout: 10000 });
+    await u1.page.waitForFunction(() => (window as any).__data.length > 0, undefined, { timeout: 10000 });
     const p1Data = await u1.page.evaluate(() => (window as any).__data);
     expect(p1Data).toContain('ping');
 
@@ -44,7 +44,7 @@ test('P2P works with localhost-only ICE (no STUN)', async ({ browser }) => {
       (window as any).__transport.send(targetId, { type: 'pong', payload: 'pong' });
     }, p2Id);
 
-    await u2.page.waitForFunction(() => (window as any).__data.length > 0, { timeout: 10000 });
+    await u2.page.waitForFunction(() => (window as any).__data.length > 0, undefined, { timeout: 10000 });
     const p2Data = await u2.page.evaluate(() => (window as any).__data);
     expect(p2Data).toContain('pong');
   } finally {

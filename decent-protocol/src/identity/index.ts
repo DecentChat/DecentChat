@@ -3,6 +3,7 @@ export { DeviceManager } from './DeviceManager';
 export { SeedPhraseManager } from './SeedPhrase';
 export { HDKeyDerivation, HDPurpose } from './HDKeyDerivation';
 export { WORDLIST } from './wordlist';
+export { RecoveryURI } from './RecoveryURI';
 export type {
   DecentIdentity,
   IdentityBundle,
@@ -22,3 +23,6 @@ export type {
   DeviceAnnouncement,
   DeviceAck,
 } from './DeviceManager';
+export type {
+  RecoveryURIData,
+} from './RecoveryURI';

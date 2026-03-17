@@ -42,6 +42,7 @@ export { SeedPhraseManager } from './identity/SeedPhrase';
 export { HDKeyDerivation, HDPurpose } from './identity/HDKeyDerivation';
 export { WORDLIST } from './identity/wordlist';
 export { DeviceManager } from './identity/DeviceManager';
+export { RecoveryURI } from './identity/RecoveryURI';
 
 // ─── Media ──────────────────────────────────────────────────────────────────
 export {
@@ -150,3 +151,4 @@ export type {
 export type { SeedPhraseResult, DerivedKeys } from './identity/SeedPhrase';
 export type { HDDerivedKeys } from './identity/HDKeyDerivation';
 export type { DeviceInfo, DeviceProof, DeviceAnnouncement, DeviceAck } from './identity/DeviceManager';
+export type { RecoveryURIData } from './identity/RecoveryURI';

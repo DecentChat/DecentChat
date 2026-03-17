@@ -176,6 +176,8 @@ export class PeerTransport implements Transport {
   public onDisconnect: ((peerId: string) => void) | null = null;
   public onMessage: ((peerId: string, data: unknown) => void) | null = null;
   public onError: ((error: Error) => void) | null = null;
+  /** Notifies UI/controller when signaling connectivity changes. */
+  public onSignalingStateChange: ((status: { url: string; label: string; connected: boolean }[]) => void) | null = null;
 
   constructor(config: PeerTransportConfig = {}) {
     this.config = config;
@@ -666,6 +668,10 @@ export class PeerTransport implements Transport {
     }));
   }
 
+  private _emitSignalingStateChange(): void {
+    this.onSignalingStateChange?.(this.getSignalingStatus());
+  }
+
   /** Number of connected signaling servers */
   getConnectedServerCount(): number {
     return this.signalingInstances.filter(i => i.connected).length;
@@ -882,6 +888,7 @@ export class PeerTransport implements Transport {
         };
         this.signalingInstances.push(instance);
         this._setupPeerEvents(instance);
+        this._emitSignalingStateChange();
 
         resolve(assignedId);
       });
@@ -900,6 +907,7 @@ export class PeerTransport implements Transport {
       console.log(`[DecentChat] Connected to signaling: ${instance.label}`);
       // Reset reconnect backoff on successful connection
       this._cancelSignalingReconnect(instance);
+      this._emitSignalingStateChange();
     });
 
     instance.peer.on('disconnected', () => {
@@ -908,10 +916,20 @@ export class PeerTransport implements Transport {
 
       // Auto-reconnect with exponential backoff retry loop
       this._scheduleSignalingReconnect(instance);
+      this._emitSignalingStateChange();
     });
 
     instance.peer.on('close', () => {
       instance.connected = false;
+      console.log(`[DecentChat] Signaling closed: ${instance.label}`);
+
+      // Some PeerJS failure modes (including peer-ID collisions / server-side
+      // session replacement) surface as `close` instead of `disconnected`.
+      // Treat unexpected close as a recoverable signaling loss.
+      if (!this._destroyed && !instance.peer.destroyed) {
+        this._scheduleSignalingReconnect(instance);
+      }
+      this._emitSignalingStateChange();
     });
 
     // Post-init error handler: report but NEVER destroy the peer.

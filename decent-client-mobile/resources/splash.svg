@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2732 2732" width="2732" height="2732">
+  <!-- Background -->
+  <rect width="2732" height="2732" fill="#0b141a"/>
+
+  <!-- Chat bubble icon (centered, above text) -->
+  <g transform="translate(1366, 1150)">
+    <!-- Bubble body -->
+    <path d="M-180 -120 Q-180 -160 -140 -160 L140 -160 Q180 -160 180 -120 L180 40 Q180 80 140 80 L40 80 L0 130 L-40 80 L-140 80 Q-180 80 -180 40 Z" fill="#00a884"/>
+    <!-- "DC" text in bubble -->
+    <text x="0" y="-18"
+          font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"
+          font-size="110"
+          font-weight="700"
+          fill="#0b141a"
+          text-anchor="middle"
+          dominant-baseline="middle">DC</text>
+  </g>
+
+  <!-- "DecentChat" wordmark -->
+  <text x="1366" y="1420"
+        font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"
+        font-size="160"
+        font-weight="600"
+        fill="#ffffff"
+        text-anchor="middle"
+        dominant-baseline="middle">DecentChat</text>
+</svg>

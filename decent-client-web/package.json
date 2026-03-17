@@ -1,7 +1,7 @@
 {
   "name": "decent-client-web",
   "version": "0.1.0",
-  "description": "Reference web client for decent-protocol — serverless P2P chat PWA",
+  "description": "Reference web client for decent-protocol \u2014 serverless P2P chat PWA",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,17 +11,19 @@
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",
-    "test:integration": "playwright test tests/integration/ --project=chromium",
-    "test:integration:all": "playwright test tests/integration/",
-    "test:integration:headed": "playwright test tests/integration/ --project=chromium --headed",
+    "test:integration": "bun run test:integration:bun && playwright test tests/integration/ --project=chromium",
+    "test:integration:all": "bun run test:integration:bun && playwright test tests/integration/",
+    "test:integration:headed": "bun run test:integration:bun && playwright test tests/integration/ --project=chromium --headed",
     "test:integration:migration": "PW_ENABLE_SIGNALING=0 playwright test tests/integration/migration-sync-convergence.spec.ts",
     "test:unit": "bun test tests/unit/",
-    "test:e2e:live-smoke": "playwright test -c playwright.live-smoke.config.ts"
+    "test:e2e:live-smoke": "playwright test -c playwright.live-smoke.config.ts",
+    "test:integration:bun": "bun test tests/integration/capability-peer-failure.spec.ts tests/integration/presence-slices.spec.ts tests/integration/public-channel-fanout.spec.ts tests/integration/public-workspace-mixed-client.spec.ts"
   },
   "license": "MIT",
   "dependencies": {
     "@floating-ui/dom": "^1.7.5",
     "@sveltejs/vite-plugin-svelte": "4",
+    "decent-client-core": "workspace:*",
     "decent-protocol": "workspace:*",
     "decent-transport-webrtc": "workspace:*",
     "dompurify": "^3.3.1",

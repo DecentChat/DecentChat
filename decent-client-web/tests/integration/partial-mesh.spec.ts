@@ -42,7 +42,7 @@ test('partial mesh maintenance prunes conservatively and reports desired-topolog
     await openAppBtn.click();
   }
 
-  await page.waitForFunction(() => !!(window as any).__ctrl, { timeout: 20_000 });
+  await page.waitForFunction(() => !!(window as any).__ctrl, undefined, { timeout: 20_000 });
 
   const result = await page.evaluate(() => {
     const ctrl = (window as any).__ctrl;

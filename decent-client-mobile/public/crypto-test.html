@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crypto Test</title>
+<style>
+body{font:14px/1.6 system-ui;background:#0f0f23;color:#e2e4e9;padding:16px;max-width:500px;margin:0 auto}
+.ok{color:#00b894}.fail{color:#ff6b6b}pre{font-size:11px;white-space:pre-wrap;color:#ff9891;margin:4px 0 12px}
+button{background:#6c5ce7;color:#fff;border:none;padding:12px 24px;border-radius:8px;font-size:16px;width:100%;margin-top:16px}
+</style></head><body>
+<h2>Safari Crypto Diagnostics</h2>
+<div id="log"></div>
+<button onclick="runAll()">Run Tests</button>
+<script>
+const log = document.getElementById('log');
+function ok(name) { log.innerHTML += `<p class="ok">✅ ${name}</p>`; }
+function fail(name, err) { log.innerHTML += `<p class="fail">❌ ${name}</p><pre>${err.stack || err.message || err}</pre>`; }
+
+async function runAll() {
+  log.innerHTML = '<p>Running...</p>';
+
+  // 1. PBKDF2 import
+  try {
+    const seed = new Uint8Array(16);
+    crypto.getRandomValues(seed);
+    const km = await crypto.subtle.importKey('raw', seed.buffer, 'PBKDF2', false, ['deriveBits']);
+    ok('1. PBKDF2 importKey (string alg)');
+  } catch(e) { fail('1. PBKDF2 importKey (string alg)', e); }
+
+  // 1b. PBKDF2 import with object alg
+  try {
+    const seed = new Uint8Array(16);
+    crypto.getRandomValues(seed);
+    const km = await crypto.subtle.importKey('raw', seed.buffer, { name: 'PBKDF2' }, false, ['deriveBits']);
+    ok('1b. PBKDF2 importKey (object alg)');
+  } catch(e) { fail('1b. PBKDF2 importKey (object alg)', e); }
+
+  // 2. PBKDF2 deriveBits SHA-512
+  try {
+    const seed = new Uint8Array(16);
+    crypto.getRandomValues(seed);
+    const km = await crypto.subtle.importKey('raw', seed, { name: 'PBKDF2' }, false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({
+      name: 'PBKDF2', salt: new TextEncoder().encode('test'), iterations: 100000, hash: 'SHA-512'
+    }, km, 512);
+    ok('2. PBKDF2 deriveBits SHA-512 (' + bits.byteLength + ' bytes)');
+  } catch(e) { fail('2. PBKDF2 deriveBits SHA-512', e); }
+
+  // 3. HMAC-SHA512 import + sign
+  try {
+    const keyData = new Uint8Array(64);
+    crypto.getRandomValues(keyData);
+    const hmacKey = await crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-512' }, false, ['sign']);
+    const sig = await crypto.subtle.sign('HMAC', hmacKey, new TextEncoder().encode('test'));
+    ok('3. HMAC-SHA512 (' + sig.byteLength + ' bytes)');
+  } catch(e) { fail('3. HMAC-SHA512', e); }
+
+  // 4a. HKDF with empty salt
+  try {
+    const ikm = new Uint8Array(64);
+    crypto.getRandomValues(ikm);
+    const key = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({
+      name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: new TextEncoder().encode('test')
+    }, key, 256);
+    ok('4a. HKDF empty salt (' + bits.byteLength + ' bytes)');
+  } catch(e) { fail('4a. HKDF empty salt', e); }
+
+  // 4b. HKDF with 32-byte zero salt
+  try {
+    const ikm = new Uint8Array(64);
+    crypto.getRandomValues(ikm);
+    const key = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({
+      name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: new TextEncoder().encode('test')
+    }, key, 256);
+    ok('4b. HKDF 32-byte zero salt (' + bits.byteLength + ' bytes)');
+  } catch(e) { fail('4b. HKDF 32-byte zero salt', e); }
+
+  // 4c. HKDF with object alg
+  try {
+    const ikm = new Uint8Array(64);
+    crypto.getRandomValues(ikm);
+    const key = await crypto.subtle.importKey('raw', ikm, { name: 'HKDF' }, false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({
+      name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: new TextEncoder().encode('test')
+    }, key, 256);
+    ok('4c. HKDF object alg + 32-byte salt (' + bits.byteLength + ' bytes)');
+  } catch(e) { fail('4c. HKDF object alg', e); }
+
+  // 5. P-256 PKCS#8 import (WITH curve params - our fix)
+  try {
+    const d = new Uint8Array(32);
+    crypto.getRandomValues(d);
+    d[0] &= 0x7F; // clamp
+    if (d.every(b => b === 0)) d[31] = 1;
+
+    // Build PKCS#8 WITH params0 (Safari fix)
+    function derOctet(data) {
+      const len = data.length < 128 ? [data.length] : [0x81, data.length];
+      return new Uint8Array([0x04, ...len, ...data]);
+    }
+    function derSeq(items) {
+      const totalLen = items.reduce((a,i) => a + i.length, 0);
+      const len = totalLen < 128 ? [totalLen] : totalLen < 256 ? [0x81, totalLen] : [0x82, (totalLen>>8)&0xff, totalLen&0xff];
+      const r = new Uint8Array(1 + len.length + totalLen);
+      r[0] = 0x30; r.set(len, 1);
+      let off = 1 + len.length;
+      for (const i of items) { r.set(i, off); off += i.length; }
+      return r;
+    }
+    const ecVer = new Uint8Array([0x02, 0x01, 0x01]);
+    const dOct = derOctet(d);
+    const p256Oid = new Uint8Array([0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]);
+    const params0 = new Uint8Array([0xa0, p256Oid.length, ...p256Oid]);
+    const ecPrivKey = derSeq([ecVer, dOct, params0]);
+    const algOid = new Uint8Array([0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01]);
+    const algId = derSeq([algOid, p256Oid]);
+    const ver = new Uint8Array([0x02, 0x01, 0x00]);
+    const privOct = derOctet(ecPrivKey);
+    const pkcs8 = derSeq([ver, algId, privOct]);
+
+    const privKey = await crypto.subtle.importKey('pkcs8', pkcs8.buffer, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey', 'deriveBits']);
+    ok('5a. P-256 ECDH PKCS#8 import (with params)');
+
+    const jwk = await crypto.subtle.exportKey('jwk', privKey);
+    ok('5b. P-256 exportKey JWK (x=' + (jwk.x ? 'yes' : 'NO') + ', y=' + (jwk.y ? 'yes' : 'NO') + ')');
+
+    const pubJwk = { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y, key_ops: [], ext: true };
+    const pubKey = await crypto.subtle.importKey('jwk', pubJwk, { name: 'ECDH', namedCurve: 'P-256' }, true, []);
+    ok('5c. P-256 public key reimport');
+  } catch(e) { fail('5. P-256 PKCS#8', e); }
+
+  // 6. Full chain: PBKDF2 → HMAC → HKDF → raw scalar
+  try {
+    const seed = new Uint8Array(16);
+    crypto.getRandomValues(seed);
+
+    const km = await crypto.subtle.importKey('raw', seed, { name: 'PBKDF2' }, false, ['deriveBits']);
+    const master = await crypto.subtle.deriveBits({
+      name: 'PBKDF2', salt: new TextEncoder().encode('decent-hd-master-v1'), iterations: 100000, hash: 'SHA-512'
+    }, km, 512);
+
+    const hmacKey = await crypto.subtle.importKey('raw', master, { name: 'HMAC', hash: 'SHA-512' }, false, ['sign']);
+    const intermediate = await crypto.subtle.sign('HMAC', hmacKey, new TextEncoder().encode('decent-hd-purpose/0'));
+
+    const hkdfKey = await crypto.subtle.importKey('raw', new Uint8Array(intermediate), { name: 'HKDF' }, false, ['deriveBits']);
+    const ecdhRaw = new Uint8Array(await crypto.subtle.deriveBits({
+      name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: new TextEncoder().encode('decent-hd-ecdh/0')
+    }, hkdfKey, 256));
+
+    ecdhRaw[0] &= 0x7F;
+    if (ecdhRaw.every(b => b === 0)) ecdhRaw[31] = 1;
+
+    ok('6. Full derivation chain to raw scalar passed');
+  } catch(e) { fail('6. Full chain', e); }
+
+  // 7. P-256 JWK import using precomputed valid point for d=0x01..0x20
+  try {
+    const privateJwk = {
+      kty: 'EC',
+      crv: 'P-256',
+      d: 'AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA',
+      x: 'UVw9brnjlrkE0_7Kf1T9zQzB6Ze_N13KUVrQpsO0A18',
+      y: 'RTa-OlDzGPv5pUdZAqIhUCvvDVfgjFOyzApW8X2fk1Q',
+      ext: true,
+    };
+
+    const priv = await crypto.subtle.importKey(
+      'jwk',
+      privateJwk,
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      ['deriveKey', 'deriveBits']
+    );
+    ok('7a. P-256 ECDH JWK private import');
+
+    const pub = await crypto.subtle.importKey(
+      'jwk',
+      { kty: 'EC', crv: 'P-256', x: privateJwk.x, y: privateJwk.y, ext: true },
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      []
+    );
+    ok('7b. P-256 ECDH JWK public import');
+
+    const bits = await crypto.subtle.deriveBits({ name: 'ECDH', public: pub }, priv, 256);
+    ok('7c. P-256 ECDH deriveBits via JWK (' + bits.byteLength + ' bytes)');
+
+    const signPriv = await crypto.subtle.importKey(
+      'jwk',
+      privateJwk,
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true,
+      ['sign']
+    );
+    ok('7d. P-256 ECDSA JWK private import');
+
+    const signPub = await crypto.subtle.importKey(
+      'jwk',
+      { kty: 'EC', crv: 'P-256', x: privateJwk.x, y: privateJwk.y, ext: true },
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true,
+      ['verify']
+    );
+    ok('7e. P-256 ECDSA JWK public import');
+
+    const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, signPriv, new TextEncoder().encode('test'));
+    const valid = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, signPub, sig, new TextEncoder().encode('test'));
+    ok('7f. P-256 ECDSA sign/verify via JWK (' + valid + ')');
+  } catch(e) { fail('7. P-256 JWK import', e); }
+
+  log.innerHTML += '<p style="color:#6c5ce7;font-weight:bold">Done.</p>';
+}
+</script></body></html>

@@ -20,16 +20,16 @@ let browser: Browser;
 
 beforeAll(async () => {
   browser = await chromium.launch({
-    headless: false,
+    headless: true,
     args: [
       '--use-fake-ui-for-media-stream',
       '--use-fake-device-for-media-stream',
       '--autoplay-policy=no-user-gesture-required',
     ],
   });
-});
+}, 120000);
 
-afterAll(async () => { await browser?.close(); });
+afterAll(async () => { await browser?.close(); }, 120000);
 
 // ── Signal Router ────────────────────────────────────────────────────────────
 // Routes huddle signals between bot (Node) and 2 browser pages.

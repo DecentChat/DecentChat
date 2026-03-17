@@ -1,3 +1,11 @@
+export type DecentChatCompanySimConfig = {
+  enabled?: boolean;
+  manifestPath?: string;
+  companyId?: string;
+  employeeId?: string;
+  roleFilesDir?: string;
+};
+
 export type DecentChatChannelConfig = {
   enabled?: boolean;
   dmPolicy?: string;
@@ -30,6 +38,9 @@ export type DecentChatChannelConfig = {
     vadSilenceMs?: number;
     vadThreshold?: number;
   };
+  companySim?: DecentChatCompanySimConfig;
+  defaultAccount?: string;
+  accounts?: Record<string, Omit<DecentChatChannelConfig, 'accounts'>>;
 };
 
 export type ResolvedDecentChatAccount = {
@@ -64,5 +75,12 @@ export type ResolvedDecentChatAccount = {
     ttsVoice?: string;
     vadSilenceMs?: number;
     vadThreshold?: number;
+  };
+  companySim?: {
+    enabled: boolean;
+    manifestPath?: string;
+    companyId?: string;
+    employeeId?: string;
+    roleFilesDir?: string;
   };
 };

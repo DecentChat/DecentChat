@@ -411,6 +411,7 @@ export class ChatController {
   private _buildTransport(): PeerTransport | any {
     const MockT = typeof window !== 'undefined' && (window as any).__MockTransport;
     return MockT ? new MockT() : new PeerTransport({
+      signalingServer: getDefaultSignalingServer(),
       iceServers: this.getIceServersFromEnv(),
     });
   }
@@ -434,6 +435,54 @@ export class ChatController {
     this.setupTransportHandlers();
     console.log(`[Reconnect] Recreated transport (${reason})`);
     return assignedId;
+  }
+
+  async migrateLocalPeerId(oldPeerId: string | null | undefined, newPeerId: string): Promise<void> {
+    const previous = oldPeerId?.trim();
+    const current = newPeerId.trim();
+    if (!previous || !current || previous === current) return;
+
+    let changed = false;
+    const workspaces = this.workspaceManager.getAllWorkspaces();
+    for (const ws of workspaces) {
+      let wsChanged = false;
+
+      if (ws.createdBy === previous) {
+        ws.createdBy = current;
+        wsChanged = true;
+      }
+
+      const existingCurrent = ws.members.find((m: any) => m.peerId === current);
+      const existingPrevious = ws.members.find((m: any) => m.peerId === previous);
+
+      if (existingPrevious && existingCurrent) {
+        // Merge stale local member into the current peer entry.
+        existingCurrent.role = existingCurrent.role || existingPrevious.role;
+        existingCurrent.alias = existingCurrent.alias || existingPrevious.alias;
+        existingCurrent.allowWorkspaceDMs = existingCurrent.allowWorkspaceDMs ?? existingPrevious.allowWorkspaceDMs;
+        if (this.myIdentityId && !existingCurrent.identityId) existingCurrent.identityId = this.myIdentityId;
+        ws.members = ws.members.filter((m: any) => m.peerId !== previous);
+        wsChanged = true;
+      } else if (existingPrevious) {
+        existingPrevious.peerId = current;
+        existingPrevious.alias = this.state.myAlias || existingPrevious.alias;
+        if (this.myPublicKey) existingPrevious.publicKey = this.myPublicKey;
+        if (this.myIdentityId && !existingPrevious.identityId) existingPrevious.identityId = this.myIdentityId;
+        wsChanged = true;
+      }
+
+      if (wsChanged) {
+        changed = true;
+        this.publicWorkspaceController.ingestWorkspaceSnapshot(ws);
+        await this.persistWorkspace(ws.id);
+      }
+    }
+
+    if (changed) {
+      console.log(`[Identity] Migrated stored workspace membership ${previous.slice(0, 8)} → ${current.slice(0, 8)}`);
+      this.ui?.updateSidebar();
+      this.ui?.renderMessages();
+    }
   }
 
   // =========================================================================
@@ -549,6 +598,10 @@ export class ChatController {
   }
 
   setupTransportHandlers(): void {
+    this.transport.onSignalingStateChange = () => {
+      this.ui?.updateSidebar();
+    };
+
     this.transport.onConnect = async (peerId: string) => {
       this.state.connectedPeers.add(peerId);
       this.state.connectingPeers.delete(peerId);
@@ -596,8 +649,8 @@ export class ChatController {
         disconnectCount: this.peerDisconnectCount.get(peerId) ?? 0,
       });
       this.messageProtocol?.clearSharedSecret(peerId);
-      this.peerCapabilities.delete(peerId);
-      this.presence.clearPeerSubscriptions(peerId);
+      this.peerCapabilities?.delete(peerId);
+      this.presence?.clearPeerSubscriptions?.(peerId);
       this.authenticatedPeers.delete(peerId);
       this.pendingAuthChallenges.delete(peerId);
       for (const [requestId, pending] of this.pendingNegentropyQueries) {
@@ -825,6 +878,12 @@ export class ChatController {
           return;
         }
 
+        // --- Direct 1:1 call signaling (mobile ↔ web interop) ---
+        if (data?.type === 'call-ring' || data?.type === 'call-accept' || data?.type === 'call-decline' || data?.type === 'call-busy') {
+          await this.handleDirectCallSignal(peerId, data);
+          return;
+        }
+
         // --- Huddle signaling (voice calls) ---
         if (data?.type?.startsWith('huddle-')) {
           await this.huddle?.handleSignal(peerId, data);
@@ -926,8 +985,12 @@ export class ChatController {
           await this.flushOfflineQueue(peerId);
           this.requestMessageSync(peerId).catch(err => console.warn('[Sync] Message sync request failed:', err));
 
-          // Send workspace state to new peer (channels, members, name)
-          this.sendWorkspaceState(peerId);
+          // Send workspace state to new peer.
+          // Use forceInclude so the peer receives state even if not yet in
+          // the member list (e.g. a restored device joining via invite — the
+          // invite adds membership on the joiner's side, but the host hasn't
+          // seen the join yet).
+          this.sendWorkspaceState(peerId, undefined, { forceInclude: true });
 
           // Shell-first + paged directory sync path for scalable public workspaces.
           if (this.state.activeWorkspaceId) {
@@ -1492,11 +1555,11 @@ export class ChatController {
 
         // Multi-device dedup: if same message arrives from multiple device connections
         // of the same sender, skip duplicates. Uses messageId for dedup.
-        if (msg.id && this.multiDeviceDedup.isDuplicate(msg.id)) {
+        if (msg.id && this.multiDeviceDedup?.isDuplicate(msg.id)) {
           console.log(`[MultiDevice] Dedup: skipping duplicate message ${msg.id.slice(0, 8)} from ${peerId.slice(0, 8)}`);
           return;
         }
-        if (msg.id) this.multiDeviceDedup.markSeen(msg.id);
+        if (msg.id) this.multiDeviceDedup?.markSeen(msg.id);
 
         const result = await this.messageStore.addMessage(msg);
 
@@ -1612,9 +1675,13 @@ export class ChatController {
       // 'unavailable-id' is a transient race on page reload — PeerTransport retries silently.
       if ((error as any).type === 'unavailable-id' || error.message?.includes('is taken')) return;
       // Signaling server briefly dropped — PeerTransport auto-reconnects with backoff.
+      // Also kick the stuck-transport guard in case PeerJS ended up in a dead state.
       if (error.message?.includes('disconnecting from server') ||
           error.message?.includes('disconnected from server') ||
-          error.message?.includes('Lost connection to server')) return;
+          error.message?.includes('Lost connection to server')) {
+        void this.reinitializeTransportIfStuck('signaling-error');
+        return;
+      }
       // Peer is simply offline — expected, no need to disturb the user.
       if (error.message?.includes('Could not connect to peer') ||
           error.message?.includes('Failed to connect to') ||
@@ -1707,7 +1774,7 @@ export class ChatController {
     this.ui?.updateSidebar();
   }
 
-  private sendWorkspaceState(peerId: string, workspaceId?: string): void {
+  private sendWorkspaceState(peerId: string, workspaceId?: string, options?: { forceInclude?: boolean }): void {
     // Find workspace to sync:
     // - explicit ID if provided
     // - otherwise first workspace where peer is currently a member
@@ -1751,9 +1818,12 @@ export class ChatController {
     }
 
     const isPeerMember = ws.members.some(m => m.peerId === peerId);
-    if (!isPeerMember) {
+    if (!isPeerMember && !options?.forceInclude) {
       console.log(`[Sync] Peer ${peerId.slice(0, 8)} is not a member of workspace ${ws.id.slice(0, 8)}, skipping state sync`);
       return;
+    }
+    if (!isPeerMember && options?.forceInclude) {
+      console.log(`[Sync] Peer ${peerId.slice(0, 8)} not yet a member of workspace ${ws.id.slice(0, 8)}, but forceInclude=true — sending state`);
     }
 
     console.log(`[Sync] Sending workspace state to ${peerId.slice(0, 8)}:`, {
@@ -3504,8 +3574,9 @@ export class ChatController {
         const signalingStatus = typeof this.transport.getSignalingStatus === 'function'
           ? this.transport.getSignalingStatus()
           : [];
+        const noSignalingInstances = signalingStatus.length === 0;
         const allSignalingDown = signalingStatus.length > 0 && signalingStatus.every((s: any) => !s.connected);
-        if (!allSignalingDown) return false;
+        if (!noSignalingInstances && !allSignalingDown) return false;
 
         console.warn(`[Reconnect] Reinitializing transport (${reason})`);
         await this.recreateTransportAndInit(this.state.myPeerId || undefined, `stuck:${reason}`);
@@ -3620,10 +3691,26 @@ export class ChatController {
    * Converts ws:// → http:// and wss:// → https://.
    */
   private getSignalingHttpBase(): string {
-    const wsUrl = getDefaultSignalingServer();
+    const signalingStatus = typeof this.transport.getSignalingStatus === 'function'
+      ? this.transport.getSignalingStatus()
+      : [];
+    const wsUrl = signalingStatus[0]?.url || getDefaultSignalingServer();
     const httpUrl = wsUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
     // Strip trailing /peerjs path and trailing slashes
     return httpUrl.replace(/\/peerjs\/?$/, '').replace(/\/+$/, '');
+  }
+
+  /**
+   * PeerJS cloud (0.peerjs.com) does not expose the custom workspace registry
+   * endpoints with CORS, so skip registry calls there.
+   */
+  private canUseWorkspaceRegistry(base: string): boolean {
+    try {
+      const host = new URL(base).hostname.toLowerCase();
+      return host !== '0.peerjs.com';
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -3634,6 +3721,7 @@ export class ChatController {
   async registerWorkspacePeer(workspaceId: string): Promise<void> {
     if (!this.state.myPeerId) return;
     const base = this.getSignalingHttpBase();
+    if (!this.canUseWorkspaceRegistry(base)) return;
     try {
       await fetch(`${base}/workspace/${encodeURIComponent(workspaceId)}/register`, {
         method: 'POST',
@@ -3663,6 +3751,7 @@ export class ChatController {
    */
   async discoverWorkspacePeers(workspaceId: string): Promise<string[]> {
     const base = this.getSignalingHttpBase();
+    if (!this.canUseWorkspaceRegistry(base)) return [];
     try {
       const res = await fetch(`${base}/workspace/${encodeURIComponent(workspaceId)}/peers`);
       if (!res.ok) return [];
@@ -4216,8 +4305,13 @@ export class ChatController {
    * even if the parent is later compacted from the channel.
    */
   private async ensureThreadRoot(threadId: string, channelId: string): Promise<PlaintextMessage | undefined> {
-    if (this.messageStore.getThreadRoot(threadId)) {
-      return this.messageStore.getThreadRoot(threadId);
+    const getThreadRoot = (this.messageStore as any).getThreadRoot as ((id: string) => PlaintextMessage | undefined) | undefined;
+    const setThreadRoot = (this.messageStore as any).setThreadRoot as ((id: string, value: PlaintextMessage) => void) | undefined;
+    if (typeof getThreadRoot !== 'function' || typeof setThreadRoot !== 'function') return undefined;
+
+    const existingRoot = getThreadRoot.call(this.messageStore, threadId);
+    if (existingRoot) {
+      return existingRoot;
     }
 
     const allMsgs = this.messageStore.getMessages(channelId);
@@ -4241,7 +4335,7 @@ export class ChatController {
       (snapshot as any).attachments = (parent as any).attachments;
     }
 
-    this.messageStore.setThreadRoot(threadId, snapshot);
+    setThreadRoot.call(this.messageStore, threadId, snapshot);
     await this.persistThreadRoots();
     return snapshot;
   }
@@ -4255,7 +4349,11 @@ export class ChatController {
     channelId: string,
     snapshot: { senderId?: string; senderIdentityId?: string; content?: string; timestamp?: number; attachments?: any[] },
   ): Promise<void> {
-    if (this.messageStore.getThreadRoot(threadId)) return;
+    const getThreadRoot = (this.messageStore as any).getThreadRoot as ((id: string) => PlaintextMessage | undefined) | undefined;
+    const setThreadRoot = (this.messageStore as any).setThreadRoot as ((id: string, value: PlaintextMessage) => void) | undefined;
+    if (typeof getThreadRoot !== 'function' || typeof setThreadRoot !== 'function') return;
+
+    if (getThreadRoot.call(this.messageStore, threadId)) return;
 
     // Try local parent first
     const allMsgs = this.messageStore.getMessages(channelId);
@@ -4279,18 +4377,22 @@ export class ChatController {
     if (snapshot.senderIdentityId) (root as any).senderIdentityId = snapshot.senderIdentityId;
     if (snapshot.attachments) (root as any).attachments = snapshot.attachments;
 
-    this.messageStore.setThreadRoot(threadId, root);
+    setThreadRoot.call(this.messageStore, threadId, root);
     await this.persistThreadRoots();
   }
 
   /** Persist all thread roots to IndexedDB. */
   private async persistThreadRoots(): Promise<void> {
-    const roots = this.messageStore.getAllThreadRoots();
+    const getAllThreadRoots = (this.messageStore as any).getAllThreadRoots as (() => Iterable<[string, PlaintextMessage]>) | undefined;
+    const saveSetting = (this.persistentStore as any)?.saveSetting as ((key: string, value: unknown) => Promise<void>) | undefined;
+    if (typeof getAllThreadRoots !== 'function' || typeof saveSetting !== 'function') return;
+
+    const roots = getAllThreadRoots.call(this.messageStore);
     const obj: Record<string, any> = {};
     for (const [id, snapshot] of roots) {
       obj[id] = snapshot;
     }
-    await this.persistentStore.saveSetting('threadRoots', obj);
+    await saveSetting.call(this.persistentStore, 'threadRoots', obj);
   }
 
   // =========================================================================
@@ -4599,7 +4701,11 @@ export class ChatController {
     this.workspaceManager.addMember(ws.id, {
       peerId,
       alias: peerId.slice(0, 8),
-      publicKey: inviteData?.publicKey || '',
+      // Invite publicKey currently carries inviter's signature-verification key,
+      // not the transport handshake key. Storing it as member.publicKey causes
+      // false handshake mismatch rejections before authoritative workspace sync lands.
+      publicKey: '',
+      signingPublicKey: inviteData?.publicKey || undefined,
       joinedAt: Date.now(),
       role: 'owner',
     });
@@ -4847,7 +4953,9 @@ export class ChatController {
 
   /** Persist activity items to IndexedDB so they survive page refresh. */
   private persistActivity(): void {
-    this.persistentStore.saveSetting('activityItems', this.activityItems).catch(() => {});
+    const saveSetting = (this.persistentStore as any)?.saveSetting as ((key: string, value: unknown) => Promise<void>) | undefined;
+    if (typeof saveSetting !== 'function') return;
+    saveSetting.call(this.persistentStore, 'activityItems', this.activityItems).catch(() => {});
   }
 
   async removeChannel(channelId: string): Promise<{ success: boolean; error?: string }> {
@@ -6019,6 +6127,18 @@ export class ChatController {
     // Prefer desired/healthy peers first, then connected fallbacks, then known members.
     const additionalPeers = this.getInviteAdditionalPeerIds(workspaceId, 3);
 
+    // Signed invites must embed the SIGNING public key (ECDSA), not the
+    // transport/encryption public key. Otherwise signature verification fails
+    // on the receiving side and valid invites are rejected as tampered.
+    let inviteVerificationPublicKey: string | undefined = this.myPublicKey || undefined;
+    if (this.signingKeyPair?.publicKey) {
+      try {
+        inviteVerificationPublicKey = await this.cryptoManager.exportPublicKey(this.signingKeyPair.publicKey);
+      } catch (err) {
+        console.warn('[DecentChat] Failed to export signing public key for invite verification, falling back:', err);
+      }
+    }
+
     // Build InviteData with security fields
     const inviteData: InviteData = {
       host,
@@ -6030,7 +6150,7 @@ export class ChatController {
       turnServers: [],
       peerId: this.state.myPeerId,
       peers: additionalPeers.length > 0 ? additionalPeers : undefined,
-      publicKey: this.myPublicKey || undefined,
+      publicKey: inviteVerificationPublicKey,
       workspaceName: ws.name || undefined,
       workspaceId: ws.id,
       // Invite security: 7-day expiration by default, unlimited uses, signed by inviter
@@ -6198,6 +6318,76 @@ export class ChatController {
 
   toggleHuddleMute(): boolean {
     return this.huddle?.toggleMute() ?? false;
+  }
+
+  private async handleDirectCallSignal(peerId: string, data: { type?: string; channelId?: string }): Promise<void> {
+    const type = data?.type;
+    if (!type) return;
+
+    const myPeerId = this.state.myPeerId;
+    if (!myPeerId) return;
+
+    const callerName = this.getDisplayNameForPeer(peerId);
+    const channelId = typeof data.channelId === 'string' && data.channelId.trim().length > 0
+      ? data.channelId.trim()
+      : undefined;
+
+    const respond = (responseType: 'call-accept' | 'call-decline' | 'call-busy') => {
+      this.sendControlWithRetry(peerId, {
+        type: responseType,
+        channelId,
+        fromPeerId: myPeerId,
+        peerId: myPeerId,
+      }, { label: responseType });
+    };
+
+    if (type === 'call-ring') {
+      if (!channelId || !this.huddle) {
+        respond('call-busy');
+        return;
+      }
+
+      if (this.huddle.getState() === 'in-call') {
+        respond('call-busy');
+        this.ui?.showToast(`${callerName} is calling, but you're already in a call.`, 'info');
+        return;
+      }
+
+      await this.huddle.joinHuddle(channelId);
+
+      const joined = this.huddle.getState() === 'in-call' && this.huddle.getActiveChannelId() === channelId;
+      if (!joined) {
+        respond('call-decline');
+        this.ui?.showToast(`Missed call from ${callerName}.`, 'error');
+        return;
+      }
+
+      const wsForCall = this.findWorkspaceByChannelId(channelId);
+      if (wsForCall) {
+        this.state.activeWorkspaceId = wsForCall.id;
+        this.state.activeChannelId = channelId;
+        this.ui?.updateSidebar();
+        this.ui?.renderMessages();
+      }
+
+      respond('call-accept');
+      this.ui?.showToast(`Connected call with ${callerName}.`, 'success');
+      return;
+    }
+
+    if (type === 'call-accept') {
+      this.ui?.showToast(`${callerName} accepted the call.`, 'success');
+      return;
+    }
+
+    if (type === 'call-decline') {
+      this.ui?.showToast(`${callerName} declined the call.`, 'info');
+      return;
+    }
+
+    if (type === 'call-busy') {
+      this.ui?.showToast(`${callerName} is busy right now.`, 'info');
+    }
   }
 
   /** Send read receipt for a message */
@@ -6617,10 +6807,16 @@ export class ChatController {
     try {
       // Use Negentropy (set reconciliation) when peer supports it — efficient
       // for reconnects where both sides have mostly the same data.
-      // Falls back to timestamp sync for peers without Negentropy support.
+      // If Negentropy fails/times out, gracefully fall back to timestamp sync
+      // instead of failing the entire sync for freshly joined/restored peers.
       if (this.peerSupportsCapability(peerId, NEGENTROPY_SYNC_CAPABILITY)) {
         console.log(`[Sync] Using Negentropy sync with ${peerId.slice(0, 8)}`);
-        await this.requestNegentropyMessageSync(peerId);
+        try {
+          await this.requestNegentropyMessageSync(peerId);
+        } catch (error) {
+          console.warn(`[Sync] Negentropy failed for ${peerId.slice(0, 8)}, falling back to timestamp sync:`, error);
+          await this.requestTimestampMessageSync(peerId);
+        }
       } else {
         console.log(`[Sync] Peer ${peerId.slice(0, 8)} lacks Negentropy, falling back to timestamp sync`);
         await this.requestTimestampMessageSync(peerId);
@@ -6646,7 +6842,7 @@ export class ChatController {
   }
 
   private peerSupportsCapability(peerId: string, capability: string): boolean {
-    return this.peerCapabilities.get(peerId)?.has(capability) === true;
+    return this.peerCapabilities?.get(peerId)?.has(capability) === true;
   }
 
   private getPeerCapabilitySummary(peerId: string): {
@@ -6655,7 +6851,7 @@ export class ChatController {
     archiveCapable: boolean;
     presenceAggregator: boolean;
   } {
-    const capabilities = this.peerCapabilities.get(peerId) ?? new Set<string>();
+    const capabilities = this.peerCapabilities?.get(peerId) ?? new Set<string>();
     const directoryShardPrefixes = [...capabilities]
       .filter((capability) => capability.startsWith(DIRECTORY_SHARD_CAPABILITY_PREFIX))
       .flatMap((capability) => capability.slice(DIRECTORY_SHARD_CAPABILITY_PREFIX.length).split(','))
@@ -7398,7 +7594,7 @@ export class ChatController {
       if (ws.channels.some((ch: any) => ch.id === channelId)) {
         const member = ws.members.find((m: any) => m.peerId === peerId);
         if (member?.alias) return member.alias;
-        const directoryAlias = this.publicWorkspaceController.getMemberAlias(peerId, ws.id);
+        const directoryAlias = this.publicWorkspaceController?.getMemberAlias?.(peerId, ws.id);
         if (directoryAlias?.trim()) return directoryAlias;
       }
     }
@@ -7423,7 +7619,7 @@ export class ChatController {
     }
 
     // 3. Directory-page alias (shell-first / paged workspace sync path)
-    const pagedAlias = this.publicWorkspaceController.getMemberAlias(peerId);
+    const pagedAlias = this.publicWorkspaceController?.getMemberAlias?.(peerId);
     if (pagedAlias?.trim()) return pagedAlias;
 
     // 4. Truncated peer ID
@@ -7539,27 +7735,60 @@ export class ChatController {
       : undefined;
 
     const identityState = new Map<string, { hasMe: boolean; hasOnline: boolean }>();
+    const myKnownPeerIds = new Set<string>([this.state.myPeerId]);
+    if (this.myIdentityId) {
+      for (const peerId of this.deviceRegistry.getAllPeerIds(this.myIdentityId)) {
+        if (peerId) myKnownPeerIds.add(peerId);
+      }
+    }
 
     for (const member of snapshot.members) {
       const identityKey = member.identityId || member.peerId;
       const aggregate = identityState.get(identityKey) || { hasMe: false, hasOnline: false };
-      if (member.peerId === this.state.myPeerId) aggregate.hasMe = true;
+      const localMember = this.workspaceManager.getMember(workspaceId, member.peerId);
 
-      const peerPresence = typeof (this.presence as any).getPeerPresence === 'function'
-        ? this.presence.getPeerPresence(workspaceId, member.peerId)
-        : undefined;
-      if (this.state.readyPeers.has(member.peerId) || peerPresence?.online === true) {
+      // Aggregate online/me status across all known device peer IDs for this identity.
+      const identityPeerIds = new Set<string>([member.peerId]);
+      if (member.identityId) {
+        for (const devicePeerId of this.deviceRegistry.getAllPeerIds(member.identityId)) {
+          if (devicePeerId) identityPeerIds.add(devicePeerId);
+        }
+      }
+      if (Array.isArray(localMember?.devices)) {
+        for (const device of localMember.devices) {
+          if (device?.peerId) identityPeerIds.add(device.peerId);
+        }
+      }
+
+      if (
+        [...identityPeerIds].some((peerId) => myKnownPeerIds.has(peerId)) ||
+        (this.myIdentityId && (member.identityId === this.myIdentityId || localMember?.identityId === this.myIdentityId))
+      ) {
+        aggregate.hasMe = true;
+      }
+
+      const hasReadyPeerForIdentity = [...identityPeerIds].some((peerId) => this.state.readyPeers.has(peerId));
+      const hasPresencePeerForIdentity = typeof (this.presence as any).getPeerPresence === 'function'
+        ? [...identityPeerIds].some((peerId) => this.presence.getPeerPresence(workspaceId, peerId)?.online === true)
+        : false;
+
+      if (hasReadyPeerForIdentity || hasPresencePeerForIdentity) {
         aggregate.hasOnline = true;
       }
 
       identityState.set(identityKey, aggregate);
     }
 
-    const members = snapshot.members.map((member) => {
+    let members = snapshot.members.map((member) => {
       const localMember = this.workspaceManager.getMember(workspaceId, member.peerId);
       const identityKey = member.identityId || member.peerId;
       const aggregate = identityState.get(identityKey);
-      const isYou = aggregate?.hasMe === true;
+      const localLooksLikeMe = (
+        member.peerId === this.state.myPeerId
+        || Boolean(this.myIdentityId && localMember?.identityId === this.myIdentityId)
+        || Boolean(this.myPublicKey && localMember?.publicKey && localMember.publicKey === this.myPublicKey)
+      );
+      const isYou = aggregate?.hasMe === true || localLooksLikeMe;
       const isOnline = isYou || aggregate?.hasOnline === true;
 
       return {
@@ -7573,10 +7802,48 @@ export class ChatController {
       };
     });
 
+    // If multiple entries resolve as self (multi-device migration edge case),
+    // keep only one "you" badge — prefer current peerId, then an online one.
+    const selfIndexes = members
+      .map((member, index) => ({ member, index }))
+      .filter(({ member }) => member.isYou);
+    if (selfIndexes.length > 1) {
+      const preferred = selfIndexes.find(({ member }) => member.peerId === this.state.myPeerId)
+        || selfIndexes.find(({ member }) => member.isOnline)
+        || selfIndexes[0];
+      members = members.map((member, index) => (
+        member.isYou && index !== preferred.index
+          ? { ...member, isYou: false }
+          : member
+      ));
+    }
+
+    // Multi-device migration safety net:
+    // if this workspace snapshot doesn't include the current device peer yet,
+    // still show a local "you" row so presence doesn't look offline/stuck.
+    if (!members.some((member) => member.isYou)) {
+      const localSelfMember = this.workspaceManager.getMember(workspaceId, this.state.myPeerId);
+      members.push({
+        peerId: this.state.myPeerId,
+        alias: this.getMyAliasForWorkspace(workspaceId),
+        role: localSelfMember?.role || 'member',
+        isBot: false,
+        isOnline: true,
+        isYou: true,
+        allowWorkspaceDMs: true,
+      });
+    }
+
+    const effectiveLoadedCount = Math.max(snapshot.loadedCount, members.length);
+    const effectiveTotalCount = Math.max(
+      canPageDirectory ? snapshot.totalCount : snapshot.loadedCount,
+      members.length,
+    );
+
     return {
       members,
-      loadedCount: snapshot.loadedCount,
-      totalCount: canPageDirectory ? snapshot.totalCount : snapshot.loadedCount,
+      loadedCount: effectiveLoadedCount,
+      totalCount: effectiveTotalCount,
       hasMore: canPageDirectory ? snapshot.hasMore : false,
       presence: {
         onlineCount: aggregatePresence?.onlineCount ?? null,

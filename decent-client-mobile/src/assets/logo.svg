@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7c6cf0"/>
+      <stop offset="100%" stop-color="#5a4bd1"/>
+    </linearGradient>
+    <linearGradient id="body" x1="30" y1="25" x2="90" y2="95" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#e2d8ff" stop-opacity="0.9"/>
+    </linearGradient>
+    <linearGradient id="tentacle" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#c4b5fd" stop-opacity="0.7"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect width="120" height="120" rx="28" fill="url(#bg)"/>
+
+  <!-- Octopus tentacles (8 curving paths) -->
+  <!-- Left tentacles -->
+  <path d="M32 68 C28 78, 22 88, 18 96 Q16 100, 20 98 C26 94, 30 84, 34 74" stroke="url(#tentacle)" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M38 72 C32 82, 28 92, 26 100 Q24 104, 28 102 C34 98, 36 88, 40 78" stroke="url(#tentacle)" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M44 74 C40 84, 38 94, 38 102 Q37 106, 41 103 C44 98, 44 88, 46 80" stroke="url(#tentacle)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+
+  <!-- Right tentacles -->
+  <path d="M88 68 C92 78, 98 88, 102 96 Q104 100, 100 98 C94 94, 90 84, 86 74" stroke="url(#tentacle)" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M82 72 C88 82, 92 92, 94 100 Q96 104, 92 102 C86 98, 84 88, 80 78" stroke="url(#tentacle)" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M76 74 C80 84, 82 94, 82 102 Q83 106, 79 103 C76 98, 76 88, 74 80" stroke="url(#tentacle)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+
+  <!-- Center front tentacles -->
+  <path d="M52 76 C50 86, 48 94, 50 102 Q51 105, 53 102 C54 96, 54 88, 54 80" stroke="url(#tentacle)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  <path d="M68 76 C70 86, 72 94, 70 102 Q69 105, 67 102 C66 96, 66 88, 66 80" stroke="url(#tentacle)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+
+  <!-- Octopus body/head (rounded blob) -->
+  <ellipse cx="60" cy="50" rx="30" ry="28" fill="url(#body)"/>
+
+  <!-- Eyes -->
+  <ellipse cx="48" cy="48" rx="6" ry="7" fill="#3b2d8a"/>
+  <ellipse cx="72" cy="48" rx="6" ry="7" fill="#3b2d8a"/>
+  <ellipse cx="49" cy="46" rx="2.5" ry="3" fill="#ffffff"/>
+  <ellipse cx="73" cy="46" rx="2.5" ry="3" fill="#ffffff"/>
+
+  <!-- Subtle smile -->
+  <path d="M52 58 Q60 64, 68 58" stroke="#5a4bd1" stroke-width="2" stroke-linecap="round" fill="none"/>
+
+  <!-- DC letters on body -->
+  <text x="60" y="42" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif" font-size="14" font-weight="800" fill="#5a4bd1" opacity="0.35" letter-spacing="-0.5">DC</text>
+</svg>

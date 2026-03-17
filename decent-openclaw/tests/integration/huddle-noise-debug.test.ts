@@ -18,7 +18,7 @@ let page: Page;
 
 beforeAll(async () => {
   browser = await chromium.launch({
-    headless: false,
+    headless: true,
     args: [
       '--use-fake-ui-for-media-stream',
       '--use-fake-device-for-media-stream',
@@ -30,9 +30,9 @@ beforeAll(async () => {
   await page.setContent(`<html><body><h1>Huddle Noise Debug</h1><script>
     window.diag = { ontrackFired: false, trackMuted: null, playOk: false, connState: null, maxAmp: 0, ampSamples: [] };
   </script></body></html>`);
-});
+}, 120000);
 
-afterAll(async () => { await browser?.close(); });
+afterAll(async () => { await browser?.close(); }, 120000);
 
 async function setupWebRTC(track: ndc.Track) {
   const botPc = (track as any).__pc;

@@ -39,7 +39,8 @@ async function addContactViaURI(page: Page, name: string, peerId: string): Promi
   // Open DM picker and verify the contact is selectable there.
   await page.click('#start-dm-btn');
   await page.waitForSelector('.modal', { timeout: 5000 });
-  await expect(page.locator(`#contact-list [data-peer-id="${peerId}"]`)).toBeVisible();
+  const modalContact = page.locator('.modal .member-select-list .sidebar-item').filter({ hasText: name }).first();
+  await expect(modalContact).toBeVisible();
   await page.keyboard.press('Escape');
 }
 
@@ -47,19 +48,13 @@ async function startDM(page: Page, name: string, peerId: string): Promise<void> 
   await page.click('#start-dm-btn');
   await page.waitForSelector('.modal', { timeout: 5000 });
 
-  const contactItem = page.locator(`#contact-list [data-peer-id="${peerId}"]`);
+  const contactItem = page.locator('.modal .member-select-list .sidebar-item').filter({ hasText: name }).first();
+  await expect(contactItem).toBeVisible({ timeout: 5000 });
   await contactItem.click();
 
-  // Selection handler is attached asynchronously in UI; wait until hidden field is populated.
-  await page.waitForFunction((id) => {
-    const el = document.getElementById('dm-contact-select') as HTMLInputElement | null;
-    return !!el && el.value === id;
-  }, peerId, { timeout: 3000 });
-
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: 'networkidle', timeout: 10000 }).catch(() => {}),
-    page.click('.modal .btn-primary'),
-  ]);
+  const confirmBtn = page.locator('.modal .btn-primary');
+  await expect(confirmBtn).toBeEnabled({ timeout: 3000 });
+  await confirmBtn.click();
   await page.waitForSelector('.modal-overlay', { state: 'detached', timeout: 5000 }).catch(() => {});
 
   const convoItem = page.locator('[data-testid="direct-conversation-item"]').filter({ hasText: name }).first();

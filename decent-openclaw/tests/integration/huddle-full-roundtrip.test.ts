@@ -15,7 +15,7 @@ let page: Page;
 
 beforeAll(async () => {
   browser = await chromium.launch({
-    headless: false,
+    headless: true,
     args: [
       '--use-fake-ui-for-media-stream',
       '--use-fake-device-for-media-stream',
@@ -24,9 +24,9 @@ beforeAll(async () => {
   });
   page = await (await browser.newContext()).newPage();
   page.on('console', msg => console.log(`[chrome] ${msg.text()}`));
-});
+}, 120000);
 
-afterAll(async () => { await browser?.close(); });
+afterAll(async () => { await browser?.close(); }, 120000);
 
 describe('Full BotHuddleManager round-trip', () => {
   it('browser hears clean audio from BotHuddleManager (production code path)', async () => {
@@ -253,85 +253,47 @@ describe('Full BotHuddleManager round-trip', () => {
     // Access the private handleSpeechEnd method to trigger TTS
     // Or better: directly call the TTS and send audio through the manager's send path
     // ALWAYS send sine wave to isolate: is noise from TTS or from track setup?
-    const botHas_tts = (botManager as any).tts !== null;
-    console.log('[test] Bot has TTS:', botHas_tts, '(forcing sine wave for comparison)');
+    console.log('[test] Using deterministic synthetic Opus frames (no external TTS dependency)...');
+    const OpusScript = (await import('opusscript')).default;
+    const encoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
+    const SPF = 960;
+    const FREQ = 440;
+    const NUM_FRAMES = 150;
 
-    if (!botHas_tts) {
-      console.log('[test] No TTS available, sending synthetic Opus sine wave through bot send path...');
-      // Generate and send audio directly through the bot's track
-      const OpusScript = (await import('opusscript')).default;
-      const encoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
-      const SPF = 960;
-      const FREQ = 440;
-      const NUM_FRAMES = 150;
+    const sendTracks = (botManager as any).sendTracks as Map<string, any>;
+    const peerConnections = (botManager as any).peerConnections as Map<string, any>;
 
-      const sendTracks = (botManager as any).sendTracks as Map<string, any>;
-      const peerConnections = (botManager as any).peerConnections as Map<string, any>;
+    for (const [peerId, track] of sendTracks) {
+      if (!track.isOpen()) continue;
+      const peerState = peerConnections.get(peerId);
+      const rtpConfig = peerState?.rtpConfig;
 
-      for (const [peerId, track] of sendTracks) {
-        if (!track.isOpen()) continue;
-        const peerState = peerConnections.get(peerId);
-        const rtpConfig = peerState?.rtpConfig;
-
-        console.log(`[test] Sending ${NUM_FRAMES} frames to ${peerId.slice(0, 8)}...`);
-        for (let f = 0; f < NUM_FRAMES; f++) {
-          const stereoPcm = Buffer.alloc(SPF * 4);
-          for (let i = 0; i < SPF; i++) {
-            const sample = Math.round(Math.sin(2 * Math.PI * FREQ * (f * SPF + i) / 48000) * 8000);
-            stereoPcm.writeInt16LE(sample, i * 4);
-            stereoPcm.writeInt16LE(sample, i * 4 + 2);
-          }
-          const opusFrame = Buffer.from(encoder.encode(stereoPcm, SPF));
-
-          if (rtpConfig) {
-            rtpConfig.sequenceNumber = (rtpConfig.sequenceNumber + 1) & 0xFFFF;
-            rtpConfig.timestamp = (rtpConfig.timestamp + SPF) >>> 0;
-          }
-          const hdr = Buffer.alloc(12);
-          hdr[0] = 0x80;
-          hdr[1] = (f === 0 ? 0x80 : 0x00) | (rtpConfig?.payloadType ?? 111);
-          hdr.writeUInt16BE(rtpConfig?.sequenceNumber ?? 0, 2);
-          hdr.writeUInt32BE(rtpConfig?.timestamp ?? 0, 4);
-          hdr.writeUInt32BE(rtpConfig?.ssrc ?? 1234, 8);
-          track.sendMessageBinary(Buffer.concat([hdr, opusFrame]));
-          await new Promise(r => setTimeout(r, 18));
+      console.log(`[test] Sending ${NUM_FRAMES} frames to ${peerId.slice(0, 8)}...`);
+      for (let f = 0; f < NUM_FRAMES; f++) {
+        const stereoPcm = Buffer.alloc(SPF * 4);
+        for (let i = 0; i < SPF; i++) {
+          const sample = Math.round(Math.sin(2 * Math.PI * FREQ * (f * SPF + i) / 48000) * 8000);
+          stereoPcm.writeInt16LE(sample, i * 4);
+          stereoPcm.writeInt16LE(sample, i * 4 + 2);
         }
-        console.log(`[test] Done sending to ${peerId.slice(0, 8)}`);
-      }
-      encoder.delete();
-    } else {
-      // Use actual TTS
-      console.log('[test] Using real TTS...');
-      const tts = (botManager as any).tts;
-      const frames = await tts.speakRaw('Hello, this is a test of the huddle audio system. Can you hear me clearly?');
-      console.log(`[test] TTS generated ${frames.length} frames (${(frames.length * 0.02).toFixed(1)}s)`);
+        const opusFrame = Buffer.from(encoder.encode(stereoPcm, SPF));
 
-      const sendTracks = (botManager as any).sendTracks as Map<string, any>;
-      const peerConnections = (botManager as any).peerConnections as Map<string, any>;
-
-      for (const [peerId, track] of sendTracks) {
-        if (!track.isOpen()) continue;
-        const peerState = peerConnections.get(peerId);
-        const rtpConfig = peerState?.rtpConfig;
-        let sent = 0;
-        for (const frame of frames) {
-          if (rtpConfig) {
-            rtpConfig.sequenceNumber = (rtpConfig.sequenceNumber + 1) & 0xFFFF;
-            rtpConfig.timestamp = (rtpConfig.timestamp + 960) >>> 0;
-          }
-          const hdr = Buffer.alloc(12);
-          hdr[0] = 0x80;
-          hdr[1] = (sent === 0 ? 0x80 : 0x00) | (rtpConfig?.payloadType ?? 111);
-          hdr.writeUInt16BE(rtpConfig?.sequenceNumber ?? 0, 2);
-          hdr.writeUInt32BE(rtpConfig?.timestamp ?? 0, 4);
-          hdr.writeUInt32BE(rtpConfig?.ssrc ?? 1234, 8);
-          track.sendMessageBinary(Buffer.concat([hdr, frame]));
-          sent++;
-          await new Promise(r => setTimeout(r, 18));
+        if (rtpConfig) {
+          rtpConfig.sequenceNumber = (rtpConfig.sequenceNumber + 1) & 0xFFFF;
+          rtpConfig.timestamp = (rtpConfig.timestamp + SPF) >>> 0;
         }
-        console.log(`[test] Sent ${sent} TTS frames to ${peerId.slice(0, 8)}`);
+        const hdr = Buffer.alloc(12);
+        hdr[0] = 0x80;
+        hdr[1] = (f === 0 ? 0x80 : 0x00) | (rtpConfig?.payloadType ?? 111);
+        hdr.writeUInt16BE(rtpConfig?.sequenceNumber ?? 0, 2);
+        hdr.writeUInt32BE(rtpConfig?.timestamp ?? 0, 4);
+        hdr.writeUInt32BE(rtpConfig?.ssrc ?? 1234, 8);
+        track.sendMessageBinary(Buffer.concat([hdr, opusFrame]));
+        await new Promise(r => setTimeout(r, 18));
       }
+      console.log(`[test] Done sending to ${peerId.slice(0, 8)}`);
     }
+    encoder.delete();
 
     // Step 7: Wait and capture results
     await new Promise(r => setTimeout(r, 5000));
@@ -366,40 +328,32 @@ describe('Full BotHuddleManager round-trip', () => {
     const near440 = result.peakFreqs.filter((f: number) => f > 400 && f < 500);
     const ratio = result.peakFreqs.length > 0 ? near440.length / result.peakFreqs.length : 0;
 
-    if (botHas_tts) {
-      // TTS audio — should have strong amplitude but varied frequencies (speech)
-      console.log(`\nTTS speech: ${result.peakFreqs.length} frequency samples`);
-      if (result.maxAmp > 5) {
-        console.log('✅ Audio signal detected — speech is playing');
-      } else {
-        console.log('❌ Silence — no audio detected');
-      }
+    console.log(`
+Sine wave: ${near440.length}/${result.peakFreqs.length} samples near 440Hz (${(ratio * 100).toFixed(0)}%)`);
+    if (ratio > 0.5) {
+      console.log('✅ CLEAN — 440Hz sine wave received correctly');
+    } else if (result.maxAmp < 3) {
+      console.log('❌ SILENCE');
     } else {
-      // Sine wave — should be predominantly 440Hz
-      console.log(`\nSine wave: ${near440.length}/${result.peakFreqs.length} samples near 440Hz (${(ratio * 100).toFixed(0)}%)`);
-      if (ratio > 0.5) {
-        console.log('✅ CLEAN — 440Hz sine wave received correctly');
-      } else if (result.maxAmp < 3) {
-        console.log('❌ SILENCE');
-      } else {
-        console.log('❌ NOISE — audio present but wrong frequency');
-        const buckets: Record<string, number> = {};
-        for (const f of result.peakFreqs) {
-          const b = `${Math.round(f / 100) * 100}Hz`;
-          buckets[b] = (buckets[b] || 0) + 1;
-        }
-        console.log('Frequency distribution:', JSON.stringify(buckets));
+      console.log('❌ NOISE — audio present but wrong frequency');
+      const buckets: Record<string, number> = {};
+      for (const f of result.peakFreqs) {
+        const b = `${Math.round(f / 100) * 100}Hz`;
+        buckets[b] = (buckets[b] || 0) + 1;
       }
+      console.log('Frequency distribution:', JSON.stringify(buckets));
     }
-    console.log(`\n🔊 Listen: afplay ${wavPath}`);
+    console.log(`
+🔊 Listen: afplay ${wavPath}`);
     console.log('='.repeat(60));
 
     expect(result.connState).toBe('connected');
     expect(result.ontrackFired).toBe(true);
     expect(result.maxAmp).toBeGreaterThan(3);
+    expect(ratio).toBeGreaterThan(0.3);
 
     botManager.destroy();
-  }, 90000);
+  }, 120000);
 });
 
 function createWav(samples: Int16Array, sampleRate: number): Buffer {

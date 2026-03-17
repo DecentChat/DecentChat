@@ -18,7 +18,7 @@ import { filterMemberPickerPeers, searchMemberPickerPeers } from './memberPicker
 interface QRFlowLike {
   showMyQR: (data: { publicKey: string; displayName: string; peerId: string }) => Promise<void>;
   showScanQR: () => Promise<void>;
-  showSeedQR: (mnemonic: string) => Promise<void>;
+  showSeedQR: (mnemonic: string, options?: { sourcePeerId?: string }) => Promise<void>;
   showRestoreSeed: () => Promise<void>;
 }
 
@@ -796,8 +796,11 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
           await callbacks.onSettingsAction?.(action);
         } else if (action === 'seed-transfer') {
           const seed = await callbacks.getCurrentSeed?.();
-          if (seed) { await qrFlow.showSeedQR(seed); }
-          else { showToast('No seed phrase found — generate one in Settings first', 'error'); }
+          if (seed) {
+            await qrFlow.showSeedQR(seed, { sourcePeerId: state.myPeerId || undefined });
+          } else {
+            showToast('No seed phrase found — generate one in Settings first', 'error');
+          }
         }
       },
     });

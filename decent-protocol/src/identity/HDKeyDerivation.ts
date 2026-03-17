@@ -1,3 +1,5 @@
+import { p256 } from '@noble/curves/nist.js';
+
 /**
  * HDKeyDerivation — Hierarchical Deterministic key derivation for DecentChat
  *
@@ -38,9 +40,12 @@ export class HDKeyDerivation {
    * Uses PBKDF2 with a domain-separated salt to produce a 64-byte master key.
    */
   async deriveMasterKey(seed: Uint8Array): Promise<ArrayBuffer> {
+    // Use a clean copy to avoid subarray aliasing issues on Safari
+    const cleanSeed = new Uint8Array(seed).buffer as ArrayBuffer;
+
     const keyMaterial = await crypto.subtle.importKey(
       'raw',
-      seed.buffer as ArrayBuffer,
+      cleanSeed,
       'PBKDF2',
       false,
       ['deriveBits']
@@ -149,9 +154,11 @@ export class HDKeyDerivation {
    * This creates domain separation between different key purposes.
    */
   private async deriveIntermediate(masterKey: ArrayBuffer, purpose: HDPurpose): Promise<ArrayBuffer> {
+    const cleanKey = new Uint8Array(new Uint8Array(masterKey)).buffer as ArrayBuffer;
+
     const hmacKey = await crypto.subtle.importKey(
       'raw',
-      masterKey,
+      cleanKey,
       { name: 'HMAC', hash: 'SHA-512' },
       false,
       ['sign']
@@ -166,19 +173,25 @@ export class HDKeyDerivation {
    * HKDF derivation: intermediate key + info string → derived bytes.
    */
   private async hkdfDerive(ikm: ArrayBuffer, info: string, length: number): Promise<ArrayBuffer> {
+    // Safari requires a clean ArrayBuffer for HKDF import — ensure no subarray aliasing
+    const cleanIkm = new Uint8Array(new Uint8Array(ikm)).buffer as ArrayBuffer;
+
     const key = await crypto.subtle.importKey(
       'raw',
-      ikm,
+      cleanIkm,
       'HKDF',
       false,
       ['deriveBits']
     );
 
+    // Safari does not accept a zero-length salt for HKDF.
+    // Per RFC 5869, an empty salt is equivalent to HashLen zero bytes.
+    // Use 32 zero bytes (SHA-256 hash length) for cross-browser compatibility.
     return crypto.subtle.deriveBits(
       {
         name: 'HKDF',
         hash: 'SHA-256',
-        salt: new Uint8Array(0),
+        salt: new Uint8Array(32),
         info: new TextEncoder().encode(info),
       },
       key,
@@ -201,40 +214,59 @@ export class HDKeyDerivation {
    * Builds PKCS#8 DER, imports via Web Crypto, extracts public key via JWK roundtrip.
    */
   private async importP256PrivateKey(privateKeyBytes: Uint8Array, algorithm: 'ECDH' | 'ECDSA'): Promise<CryptoKeyPair> {
-    const pkcs8 = this.buildP256Pkcs8(privateKeyBytes);
+    // Compute the public point from the private scalar using @noble/curves.
+    // This avoids PKCS#8 DER encoding entirely — Safari rejects PKCS#8 P-256 imports.
+    const d = new Uint8Array(privateKeyBytes);
+    const uncompressedPub = p256.getPublicKey(d, false); // 65 bytes: [0x04, x(32), y(32)]
+    const x = uncompressedPub.slice(1, 33);
+    const y = uncompressedPub.slice(33, 65);
+
+    const privateJwk: JsonWebKey = {
+      kty: 'EC',
+      crv: 'P-256',
+      x: this.bytesToBase64Url(x),
+      y: this.bytesToBase64Url(y),
+      d: this.bytesToBase64Url(d),
+      ext: true,
+    };
 
     const usages: KeyUsage[] = algorithm === 'ECDH'
       ? ['deriveKey', 'deriveBits']
       : ['sign'];
 
     const privateKey = await crypto.subtle.importKey(
-      'pkcs8',
-      pkcs8,
+      'jwk',
+      privateJwk,
       { name: algorithm, namedCurve: 'P-256' },
       true,
       usages
     );
 
-    // Extract public key via JWK roundtrip
-    const jwk = await crypto.subtle.exportKey('jwk', privateKey);
-    const pubJwk: JsonWebKey = {
-      kty: jwk.kty,
-      crv: jwk.crv,
-      x: jwk.x,
-      y: jwk.y,
-      key_ops: algorithm === 'ECDH' ? [] : ['verify'],
+    const publicJwk: JsonWebKey = {
+      kty: 'EC',
+      crv: 'P-256',
+      x: this.bytesToBase64Url(x),
+      y: this.bytesToBase64Url(y),
       ext: true,
     };
 
     const publicKey = await crypto.subtle.importKey(
       'jwk',
-      pubJwk,
+      publicJwk,
       { name: algorithm, namedCurve: 'P-256' },
       true,
       algorithm === 'ECDH' ? [] : ['verify']
     );
 
     return { privateKey, publicKey };
+  }
+
+  private bytesToBase64Url(bytes: Uint8Array): string {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
 
   private validateIndex(index: number): void {
@@ -245,47 +277,5 @@ export class HDKeyDerivation {
 
   // === DER encoding helpers ===
 
-  private buildP256Pkcs8(d: Uint8Array): ArrayBuffer {
-    const ecVersion = new Uint8Array([0x02, 0x01, 0x01]);
-    const dOctet = this.derOctetString(d);
-    const ecPrivKey = this.derSequence([ecVersion, dOctet]);
-
-    const ecPubOid = new Uint8Array([0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01]);
-    const p256Oid = new Uint8Array([0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]);
-    const algId = this.derSequence([ecPubOid, p256Oid]);
-
-    const version = new Uint8Array([0x02, 0x01, 0x00]);
-    const privKeyOctet = this.derOctetString(ecPrivKey);
-
-    return this.derSequence([version, algId, privKeyOctet]).buffer as ArrayBuffer;
-  }
-
-  private derSequence(items: Uint8Array[]): Uint8Array {
-    const totalLen = items.reduce((acc, item) => acc + item.length, 0);
-    const lenBytes = this.encodeDerLength(totalLen);
-    const result = new Uint8Array(1 + lenBytes.length + totalLen);
-    result[0] = 0x30;
-    result.set(lenBytes, 1);
-    let offset = 1 + lenBytes.length;
-    for (const item of items) {
-      result.set(item, offset);
-      offset += item.length;
-    }
-    return result;
-  }
-
-  private derOctetString(data: Uint8Array): Uint8Array {
-    const lenBytes = this.encodeDerLength(data.length);
-    const result = new Uint8Array(1 + lenBytes.length + data.length);
-    result[0] = 0x04;
-    result.set(lenBytes, 1);
-    result.set(data, 1 + lenBytes.length);
-    return result;
-  }
-
-  private encodeDerLength(length: number): Uint8Array {
-    if (length < 128) return new Uint8Array([length]);
-    if (length < 256) return new Uint8Array([0x81, length]);
-    return new Uint8Array([0x82, (length >> 8) & 0xff, length & 0xff]);
-  }
+  
 }

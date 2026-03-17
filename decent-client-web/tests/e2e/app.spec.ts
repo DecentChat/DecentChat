@@ -349,10 +349,12 @@ test.describe('DecentChat E2E', () => {
   test('compact mode toggles body class', async ({ page }) => {
     await createWorkspace(page);
     await openSettings(page);
-    await page.locator('input[data-key="compactMode"]').check();
+    const compactToggle = page.locator('.settings-modal input[data-key="compactMode"]').first();
+    await compactToggle.setChecked(true);
 
-    const hasClass = await page.evaluate(() => document.body.classList.contains('compact'));
-    expect(hasClass).toBe(true);
+    await expect.poll(async () => {
+      return await page.evaluate(() => document.body.classList.contains('compact'));
+    }).toBe(true);
   });
 
   // ─── Invite Link ──────────────────────────────────────────────────────

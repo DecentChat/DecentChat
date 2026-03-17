@@ -41,7 +41,7 @@ async function bootController(page: any) {
     await openAppBtn.click();
   }
 
-  await page.waitForFunction(() => !!(window as any).__ctrl, { timeout: 20_000 });
+  await page.waitForFunction(() => !!(window as any).__ctrl, undefined, { timeout: 20_000 });
 }
 
 test('topology debug snapshot is populated, structured maintenance logs are emitted, and overlap peers survive prune', async ({ page }) => {

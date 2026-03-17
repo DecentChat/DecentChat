@@ -14,7 +14,7 @@ let page: Page;
 
 beforeAll(async () => {
   browser = await chromium.launch({
-    headless: false,
+    headless: true,
     args: [
       '--use-fake-ui-for-media-stream',
       '--use-fake-device-for-media-stream',
@@ -23,9 +23,9 @@ beforeAll(async () => {
   });
   page = await (await browser.newContext()).newPage();
   page.on('console', msg => console.log(`[chrome] ${msg.text()}`));
-});
+}, 120000);
 
-afterAll(async () => { await browser?.close(); });
+afterAll(async () => { await browser?.close(); }, 120000);
 
 describe('Huddle audio capture & analysis', () => {
   it('captures Chrome audio output and saves as WAV for analysis', async () => {

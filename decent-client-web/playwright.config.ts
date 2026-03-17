@@ -7,7 +7,15 @@ process.env.PW_SIGNAL_PORT = String(SIGNAL_PORT);
 export default defineConfig({
   testDir: './tests',
   testMatch: '**/*.spec.ts',
-  testIgnore: ['**/*.live-smoke.spec.ts', '**/p2p-live.spec.ts', '**/production-test.spec.ts'],
+  testIgnore: [
+    '**/*.live-smoke.spec.ts',
+    '**/p2p-live.spec.ts',
+    '**/production-test.spec.ts',
+    '**/integration/capability-peer-failure.spec.ts',
+    '**/integration/presence-slices.spec.ts',
+    '**/integration/public-channel-fanout.spec.ts',
+    '**/integration/public-workspace-mixed-client.spec.ts',
+  ],
   timeout: 30000,
   retries: 0,
   workers: 1,

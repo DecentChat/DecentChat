@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Background -->
+  <rect width="1024" height="1024" rx="224" fill="#0b141a"/>
+
+  <!-- Chat bubble body -->
+  <path d="M200 280 Q200 220 260 220 L764 220 Q824 220 824 280 L824 600 Q824 660 764 660 L560 660 L460 780 L460 660 L260 660 Q200 660 200 600 Z" fill="#00a884"/>
+
+  <!-- "DC" text inside the bubble -->
+  <text x="512" y="490"
+        font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"
+        font-size="200"
+        font-weight="700"
+        fill="#0b141a"
+        text-anchor="middle"
+        dominant-baseline="middle">DC</text>
+</svg>

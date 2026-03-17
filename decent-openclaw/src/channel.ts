@@ -1,10 +1,31 @@
-import {
-  DEFAULT_ACCOUNT_ID,
-  formatPairingApproveHint,
-  buildChannelConfigSchema,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk";
+import type { ChannelPlugin } from "openclaw/plugin-sdk";
 import { z } from "zod";
+
+const DEFAULT_ACCOUNT_ID = "default";
+
+function formatPairingApproveHint(channelId: string): string {
+  return `Approve via: \`openclaw pairing list ${channelId}\` / \`openclaw pairing approve ${channelId} <code>\``;
+}
+
+function buildChannelConfigSchema(schema: z.ZodTypeAny): { schema: Record<string, unknown> } {
+  const schemaWithJson = schema as z.ZodTypeAny & {
+    toJSONSchema?: (opts?: { target?: string; unrepresentable?: string }) => Record<string, unknown>;
+  };
+  if (typeof schemaWithJson.toJSONSchema === "function") {
+    return {
+      schema: schemaWithJson.toJSONSchema({
+        target: "draft-07",
+        unrepresentable: "any",
+      }),
+    };
+  }
+  return {
+    schema: {
+      type: "object",
+      additionalProperties: true,
+    },
+  };
+}
 import { startDecentChatPeer } from "./monitor.js";
 import { getActivePeer } from "./peer-registry.js";
 import type { ResolvedDecentChatAccount } from "./types.js";

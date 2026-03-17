@@ -23,6 +23,9 @@
     "test:e2e": "cd decent-client-web && bun run test:e2e",
     "test:integration": "cd decent-client-web && bun run test:integration",
     "test:unit": "cd decent-client-web && bun run test:unit",
+    "test:mobile": "cd decent-client-mobile && bun run test:e2e",
+    "test:mobile:headed": "cd decent-client-mobile && bun run test:e2e:headed",
+    "test:mobile:ui": "cd decent-client-mobile && bun run test:e2e:ui",
     "test:all": "bun test && cd decent-client-web && bun run test:unit && bun run test:integration:migration",
     "typecheck": "tsc --build tsconfig.json",
     "perf:smoke": "cd decent-protocol && bun run tests/perf/run.ts --scenario=smoke --check-integrity",
@@ -35,6 +38,8 @@
     "decent-protocol",
     "decent-transport-webrtc",
     "decent-client-web",
+    "decent-client-core",
+    "decent-client-mobile",
     "decent-openclaw"
   ]
 }

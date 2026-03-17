@@ -30,7 +30,7 @@ test('PeerJS data channel works between two browser contexts', async ({ browser 
       t.send(targetId, { type: 'test-data', payload: 'hello-from-bob' });
     }, p1Id);
 
-    await u1.page.waitForFunction(() => ((window as any).__received ?? []).length > 0, { timeout: 10000 });
+    await u1.page.waitForFunction(() => ((window as any).__received ?? []).length > 0, undefined, { timeout: 10000 });
     const received = await u1.page.evaluate(() => (window as any).__received as string[]);
     expect(received.some((m) => m.includes('hello-from-bob'))).toBe(true);
 

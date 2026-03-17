@@ -1,0 +1,22 @@
+{
+  "name": "decent-client-core",
+  "version": "0.1.0",
+  "description": "Shared DecentChat client logic for web and mobile applications",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./src/*": "./src/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "decent-protocol": "workspace:*",
+    "decent-transport-webrtc": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

@@ -75,6 +75,9 @@ describe('NodeXenaPeer message restore', () => {
     });
 
     (peer as any).messageStore = {
+      getMessages: () => [
+        { id: 'root-1', senderId: 'alice', content: 'root', timestamp: 50 },
+      ],
       getThread: () => [
         { id: 'msg-1', senderId: 'alice', content: 'one', timestamp: 100 },
         { id: 'msg-4', senderId: 'alice', content: 'four', timestamp: 400 },

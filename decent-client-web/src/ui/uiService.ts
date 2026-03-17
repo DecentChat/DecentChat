@@ -58,12 +58,14 @@ export function createUIService(
   }
 
   function peerStatusClass(peerId: string): string {
+    if (peerId === state.myPeerId) return 'online';
     if (state.readyPeers.has(peerId)) return 'online';
     if (state.connectingPeers.has(peerId)) return 'connecting';
     return '';
   }
 
   function peerStatusTitle(peerId: string): string {
+    if (peerId === state.myPeerId) return 'Online';
     if (state.readyPeers.has(peerId)) return 'Online';
     if (state.connectingPeers.has(peerId)) return 'Connecting...';
     return 'Offline';

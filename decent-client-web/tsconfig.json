@@ -8,6 +8,12 @@
 
     /* Bundler mode */
     "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "paths": {
+      "decent-client-core/src/*": ["../decent-client-core/src/*"],
+      "decent-protocol": ["./node_modules/decent-protocol"],
+      "decent-transport-webrtc": ["./node_modules/decent-transport-webrtc"]
+    },
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,

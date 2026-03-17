@@ -645,6 +645,7 @@ async function init(): Promise<void> {
       console.warn("[DecentChat] Svelte mount failed (non-fatal):", err);
     }
 
+    const previousStoredPeerId = settings.myPeerId || null;
     if (settings.myPeerId !== myPeerId) {
       settings.myPeerId = myPeerId;
       await ctrl.persistentStore.saveSettings(settings);
@@ -671,6 +672,7 @@ async function init(): Promise<void> {
 
     // Restore persisted workspaces / messages
     await ctrl.restoreFromStorage();
+    await ctrl.migrateLocalPeerId(previousStoredPeerId, myPeerId);
 
     // Restore contacts and direct conversations
     await ctrl.restoreContacts();

@@ -1,0 +1,32 @@
+import type { CapacitorConfig } from '@capacitor/cli';
+
+const config: CapacitorConfig = {
+  appId: 'app.decentchat.mobile',
+  appName: 'DecentChat',
+  webDir: 'dist',
+  server: {
+    androidScheme: 'https',
+  },
+  plugins: {
+    StatusBar: {
+      style: 'DARK',
+      backgroundColor: '#0f0f23',
+    },
+    Keyboard: {
+      resize: 'body',
+      resizeOnFullScreen: true,
+    },
+    SplashScreen: {
+      launchShowDuration: 2000,
+      backgroundColor: '#0f0f23',
+      showSpinner: false,
+    },
+  },
+  ios: {
+    contentInset: 'automatic',
+    preferredContentMode: 'mobile',
+    backgroundColor: '#0f0f23',
+  },
+};
+
+export default config;

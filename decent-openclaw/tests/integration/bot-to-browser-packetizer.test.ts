@@ -12,7 +12,7 @@ let page: Page;
 
 beforeAll(async () => {
   browser = await chromium.launch({
-    headless: false,
+    headless: true,
     args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
   });
   page = await (await browser.newContext()).newPage();
@@ -20,8 +20,8 @@ beforeAll(async () => {
   await page.setContent(`<html><body><script>
     window.diag = { ontrackFired:false, trackMuted:null, playOk:false, connState:null, maxAmp:0 };
   </script></body></html>`);
-});
-afterAll(async () => { await browser?.close(); });
+}, 120000);
+afterAll(async () => { await browser?.close(); }, 120000);
 
 describe('RtpPacketizer chain', () => {
   it('sends raw Opus frames through packetizer and Chrome plays them', async () => {

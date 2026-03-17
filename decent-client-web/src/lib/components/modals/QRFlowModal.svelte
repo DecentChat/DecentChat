@@ -12,7 +12,7 @@
   export interface QRFlowController {
     showMyQR(data: { publicKey: string; displayName: string; peerId: string }): Promise<void>;
     showScanQR(): Promise<void>;
-    showSeedQR(mnemonic: string): Promise<void>;
+    showSeedQR(mnemonic: string, options?: { sourcePeerId?: string }): Promise<void>;
     showRestoreSeed(): Promise<void>;
     close(): void;
   }
@@ -23,6 +23,7 @@
     mode: StartMode;
     myQRData?: { publicKey: string; displayName: string; peerId: string };
     seedMnemonic?: string;
+    recoverySourcePeerId?: string;
   }
 
   export function createQRFlow(callbacks: QRFlowCallbacks): QRFlowController {
@@ -49,6 +50,7 @@
           initialMode: payload.mode,
           myQRData: payload.myQRData || null,
           seedMnemonic: payload.seedMnemonic || '',
+          recoverySourcePeerId: payload.recoverySourcePeerId || '',
           onClose: cleanup,
         },
       });
@@ -57,7 +59,11 @@
     return {
       showMyQR: async (data) => open({ mode: 'my-qr', myQRData: data }),
       showScanQR: async () => open({ mode: 'scan' }),
-      showSeedQR: async (mnemonic) => open({ mode: 'seed-qr', seedMnemonic: mnemonic }),
+      showSeedQR: async (mnemonic, options) => open({
+        mode: 'seed-qr',
+        seedMnemonic: mnemonic,
+        recoverySourcePeerId: options?.sourcePeerId || '',
+      }),
       showRestoreSeed: async () => open({ mode: 'restore' }),
       close: () => cleanup(),
     };
@@ -72,7 +78,7 @@
   import type { ContactURIData } from 'decent-protocol';
   import QRCode from 'qrcode';
   import QrScanner from 'qr-scanner';
-  import { ContactURI } from 'decent-protocol';
+  import { ContactURI, RecoveryURI } from 'decent-protocol';
   import type { QRFlowCallbacks } from './QRFlowModal.svelte';
 
   const SEED_QR_PREFIX = 'decent-seed://v1?m=';
@@ -85,10 +91,11 @@
     initialMode: 'my-qr' | 'scan' | 'seed-qr' | 'restore';
     myQRData: { publicKey: string; displayName: string; peerId: string } | null;
     seedMnemonic: string;
+    recoverySourcePeerId: string;
     onClose: () => void;
   }
 
-  let { callbacks, initialMode, myQRData, seedMnemonic, onClose }: Props = $props();
+  let { callbacks, initialMode, myQRData, seedMnemonic, recoverySourcePeerId, onClose }: Props = $props();
 
   let mode = $state<Mode>(initialMode);
 
@@ -199,7 +206,16 @@
   }
 
   async function prepareSeedQR(mnemonic: string): Promise<void> {
-    const uri = SEED_QR_PREFIX + encodeURIComponent(mnemonic);
+    // Recovery seed transfer should also include the source peer ID so the
+    // recovered device can immediately connect back and sync.
+    const peerId = (recoverySourcePeerId || myQRData?.peerId || '').trim();
+    const recoveryUri = RecoveryURI.encode({
+      seedPhrase: mnemonic,
+      sourcePeerId: peerId || undefined,
+    });
+
+    // Also keep legacy format as fallback comment
+    const uri = recoveryUri;
     try {
       qrDataUrl = await QRCode.toDataURL(uri, {
         width: 280,
@@ -283,6 +299,19 @@
     stopScanner();
     stopRestoreScanner();
 
+    // Handle new RecoveryURI format (decent://recover?seed=...&peer=...)
+    if (RecoveryURI.isValid(data)) {
+      if (expected === 'contact') {
+        await resumeScanWithError('Not a contact QR code');
+        return;
+      }
+
+      const decoded = RecoveryURI.decode(data);
+      openSeedConfirmation(decoded.seedPhrase);
+      return;
+    }
+
+    // Handle legacy seed QR format
     if (data.startsWith(SEED_QR_PREFIX)) {
       if (expected === 'contact') {
         await resumeScanWithError('Not a contact QR code');

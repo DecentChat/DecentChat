@@ -23,7 +23,7 @@ test('raw transport connection between two browser contexts', async ({ browser }
       await (window as any).__transport.connect(targetId);
     }, p1Id);
 
-    await u1.page.waitForFunction(() => ((window as any).__transport?.getConnectedPeers?.() ?? []).length > 0, { timeout: 10000 });
+    await u1.page.waitForFunction(() => ((window as any).__transport?.getConnectedPeers?.() ?? []).length > 0, undefined, { timeout: 10000 });
 
     const p1Peers = await u1.page.evaluate(() => (window as any).__transport.getConnectedPeers());
     const p2Peers = await u2.page.evaluate(() => (window as any).__transport.getConnectedPeers());

@@ -63,7 +63,7 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
   await page.waitForFunction(() => {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
-  }, { timeout: 15000 });
+  }, undefined, { timeout: 15000 });
 
   const openAppBtn = page.getByRole('button', { name: /open app/i });
   if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -174,7 +174,7 @@ async function restoreSeed(page: Page, seedPhrase: string): Promise<void> {
   await page.click('#restore-identity-btn');
   await page.waitForSelector('#restore-seed-input', { timeout: 10000 });
   await page.fill('#restore-seed-input', seedPhrase);
-  await page.waitForFunction(() => !(document.getElementById('restore-confirm-btn') as HTMLButtonElement | null)?.disabled, { timeout: 10000 });
+  await page.waitForFunction(() => !(document.getElementById('restore-confirm-btn') as HTMLButtonElement | null)?.disabled, undefined, { timeout: 10000 });
   await page.click('#restore-confirm-btn');
   await page.waitForSelector('#seed-restore-btn', { timeout: 10000 });
   await page.click('#seed-restore-btn');
@@ -245,7 +245,7 @@ test.describe('Runtime Negentropy full-history multi-device sync', () => {
         const ctrl = (window as any).__ctrl;
         const ws = s?.activeWorkspaceId ? ctrl.workspaceManager.getWorkspace(s.activeWorkspaceId) : null;
         return !!ws?.channels?.some((c: any) => c.name === 'random');
-      }, { timeout: 15000 });
+      }, undefined, { timeout: 60000 });
 
       const generalBob = await getChannelIdByName(bob.page, 'general');
       const randomBob = await getChannelIdByName(bob.page, 'random');

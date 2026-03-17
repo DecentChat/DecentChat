@@ -30,7 +30,7 @@ test('P2P data channel between two browser contexts', async ({ browser }) => {
       t.send(targetId, { type: 'test-data', payload: 'hello from P2' });
     }, p1Id);
 
-    await u1.page.waitForFunction(() => (window as any).__p2pData.length > 0, { timeout: 10000 });
+    await u1.page.waitForFunction(() => (window as any).__p2pData.length > 0, undefined, { timeout: 10000 });
     const p1Data = await u1.page.evaluate(() => (window as any).__p2pData);
     expect(p1Data).toContain('hello from P2');
 
@@ -48,7 +48,7 @@ test('P2P data channel between two browser contexts', async ({ browser }) => {
       (window as any).__transport.send(targetId, { type: 'test-data', payload: 'hello again from P1' });
     }, p2Id);
 
-    await u2.page.waitForFunction(() => (window as any).__p2pData.length > 0, { timeout: 10000 });
+    await u2.page.waitForFunction(() => (window as any).__p2pData.length > 0, undefined, { timeout: 10000 });
     const p2Data = await u2.page.evaluate(() => (window as any).__p2pData);
     expect(p2Data).toContain('hello again from P1');
   } finally {

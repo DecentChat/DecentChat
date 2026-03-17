@@ -1,18 +1,76 @@
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { chromium, type Browser, type Page } from 'playwright';
 import ndc from 'node-datachannel';
-import { readFileSync } from 'fs';
+import OpusScript from 'opusscript';
+import { existsSync, readFileSync } from 'fs';
 
-const rawPackets = JSON.parse(readFileSync('/tmp/tts-packets.json', 'utf8')) as number[][];
-const packets = rawPackets.map(arr => Buffer.from(arr));
-console.log(`Loaded ${packets.length} real TTS packets`);
+function buildSyntheticTtsPackets(): Buffer[] {
+  const encoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
+  const packets: Buffer[] = [];
+  const SPF = 960;
+  const FREQ = 440;
+  const FRAMES = 150;
+  let sequenceNumber = Math.floor(Math.random() * 65535);
+  let timestamp = Math.floor(Math.random() * 0xffffffff);
+
+  for (let f = 0; f < FRAMES; f++) {
+    const stereoPcm = Buffer.alloc(SPF * 4);
+    for (let i = 0; i < SPF; i++) {
+      const sample = Math.round(Math.sin((2 * Math.PI * FREQ * (f * SPF + i)) / 48000) * 8000);
+      stereoPcm.writeInt16LE(sample, i * 4);
+      stereoPcm.writeInt16LE(sample, i * 4 + 2);
+    }
+
+    const opusFrame = Buffer.from(encoder.encode(stereoPcm, SPF));
+    sequenceNumber = (sequenceNumber + 1) & 0xffff;
+    timestamp = (timestamp + SPF) >>> 0;
+
+    const header = Buffer.alloc(12);
+    header[0] = 0x80;
+    header[1] = (f === 0 ? 0x80 : 0x00) | 111;
+    header.writeUInt16BE(sequenceNumber, 2);
+    header.writeUInt32BE(timestamp, 4);
+    header.writeUInt32BE(1234, 8);
+
+    packets.push(Buffer.concat([header, opusFrame]));
+  }
+
+  encoder.delete();
+  return packets;
+}
+
+function loadPackets(): Buffer[] {
+  const fixturePath = '/tmp/tts-packets.json';
+  if (!existsSync(fixturePath)) {
+    const synthetic = buildSyntheticTtsPackets();
+    console.log(`Fixture ${fixturePath} not found. Generated ${synthetic.length} synthetic Opus packets.`);
+    return synthetic;
+  }
+
+  try {
+    const rawPackets = JSON.parse(readFileSync(fixturePath, 'utf8')) as number[][];
+    const buffers = rawPackets.map((arr) => Buffer.from(arr));
+    if (buffers.length > 0) {
+      console.log(`Loaded ${buffers.length} real TTS packets from ${fixturePath}`);
+      return buffers;
+    }
+  } catch (error) {
+    console.warn(`Failed to parse ${fixturePath}: ${String(error)}`);
+  }
+
+  const synthetic = buildSyntheticTtsPackets();
+  console.log(`Fell back to ${synthetic.length} synthetic Opus packets.`);
+  return synthetic;
+}
+
+const packets = loadPackets();
 
 let browser: Browser;
 let page: Page;
 
 beforeAll(async () => {
   browser = await chromium.launch({
-    headless: false,
+    headless: true,
     args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
   });
   page = await (await browser.newContext()).newPage();
@@ -20,8 +78,8 @@ beforeAll(async () => {
   await page.setContent(`<html><body><h1>TTS Audio Test</h1><script>
     window.diag = { ontrackFired:false, trackMuted:null, playOk:false, connState:null, maxAmp:0 };
   </script></body></html>`);
-});
-afterAll(async () => { await browser?.close(); });
+}, 120000);
+afterAll(async () => { await browser?.close(); }, 120000);
 
 describe('Real TTS to Chrome', () => {
   it('plays ElevenLabs TTS audio without noise', async () => {
@@ -98,8 +156,8 @@ describe('Real TTS to Chrome', () => {
     }
     await new Promise(r => setTimeout(r, 1000));
 
-    // Send real TTS packets
-    console.log(`[bot] Sending ${packets.length} real TTS packets...`);
+    // Send real TTS packets (or deterministic synthetic fallback)
+    console.log(`[bot] Sending ${packets.length} TTS packets...`);
     let ok = 0;
     for (const pkt of packets) {
       if (track.sendMessageBinary(pkt)) ok++;

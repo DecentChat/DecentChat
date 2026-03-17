@@ -2,10 +2,55 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { createReplyPrefixOptions, type OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { getDecentChatRuntime } from "./runtime.js";
 import { setActivePeer } from "./peer-registry.js";
 import type { ResolvedDecentChatAccount } from "./types.js";
+
+
+
+type ReplyPrefixOptions = {
+  responsePrefix?: string;
+  enableSlackInteractiveReplies?: boolean;
+  responsePrefixContextProvider?: (ctx: Record<string, unknown>) => string | undefined;
+  onModelSelected?: (modelCtx: { provider?: string; model?: string }) => void;
+};
+
+let cachedCreateReplyPrefixOptions:
+  | ((params: { cfg: OpenClawConfig; agentId: string; channel: string; accountId: string }) => ReplyPrefixOptions)
+  | null
+  | undefined;
+
+async function resolveReplyPrefixOptions(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  channel: string;
+  accountId: string;
+}): Promise<ReplyPrefixOptions> {
+  if (cachedCreateReplyPrefixOptions === undefined) {
+    try {
+      const sdk = await import("openclaw/plugin-sdk") as {
+        createReplyPrefixOptions?: (params: {
+          cfg: OpenClawConfig;
+          agentId: string;
+          channel: string;
+          accountId: string;
+        }) => ReplyPrefixOptions;
+      };
+      cachedCreateReplyPrefixOptions = typeof sdk.createReplyPrefixOptions === "function"
+        ? sdk.createReplyPrefixOptions
+        : null;
+    } catch {
+      cachedCreateReplyPrefixOptions = null;
+    }
+  }
+
+  if (!cachedCreateReplyPrefixOptions) {
+    return {};
+  }
+
+  return cachedCreateReplyPrefixOptions(params);
+}
 
 type InboundAttachment = {
   id: string;
@@ -945,7 +990,7 @@ async function processInboundMessage(
   let streamingActive = false;
   let lastPartialLength = 0;
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...prefixOptions } = await resolveReplyPrefixOptions({
     cfg,
     agentId: route.agentId,
     channel,

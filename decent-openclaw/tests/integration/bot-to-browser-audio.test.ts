@@ -10,7 +10,7 @@ let page: Page;
 
 beforeAll(async () => {
   browser = await chromium.launch({
-    headless: false,
+    headless: true,
     args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
   });
   page = await (await browser.newContext()).newPage();
@@ -18,8 +18,8 @@ beforeAll(async () => {
   await page.setContent(`<html><body><h1>Bot Audio Test</h1><script>
     window.diag = { ontrackFired: false, trackMuted: null, playOk: false, playErr: null, connState: null };
   </script></body></html>`);
-});
-afterAll(async () => { await browser?.close(); });
+}, 120000);
+afterAll(async () => { await browser?.close(); }, 120000);
 
 describe('Bot to Browser audio', () => {
   it('browser receives RTP from node-datachannel bot', async () => {

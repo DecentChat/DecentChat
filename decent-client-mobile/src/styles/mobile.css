@@ -1,0 +1,106 @@
+:root {
+  color-scheme: dark;
+
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+
+  --font-system: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display',
+    'Helvetica Neue', Helvetica, Arial, sans-serif;
+
+  --color-bg: #0f0f23;
+  --color-surface: #1a1a30;
+  --color-surface-elevated: #222240;
+  --color-surface-pressed: #2a2a45;
+  --color-border: #2a2a45;
+  --color-divider: #222240;
+  --color-text: #e2e4e9;
+  --color-text-muted: #8b8fa3;
+  --color-accent: #6c5ce7;
+  --color-accent-soft: rgba(108, 92, 231, 0.16);
+  --color-badge-text: #ffffff;
+  --color-success: #00b894;
+  --color-online: #00b894;
+  --color-error: #e74c3c;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+
+  --shadow-soft: 0 6px 20px rgba(0, 0, 0, 0.24);
+
+  --tabbar-height: 83px;
+  --tap-target-min: 44px;
+  --screen-max-width: 520px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100dvh;
+  font-family: var(--font-system);
+  background: var(--color-bg);
+  color: var(--color-text);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior-y: none;
+  overflow: hidden;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+input,
+textarea {
+  color: inherit;
+}
+
+button,
+a,
+[role='button'] {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  min-height: var(--tap-target-min);
+}
+
+#app,
+.mobile-app-root {
+  min-height: 100dvh;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  border: 0;
+}

@@ -1,0 +1,51 @@
+id: software-studio
+name: Software Studio
+mode: company-sim
+workspace:
+  name: Studio HQ
+  channels:
+    - general
+    - engineering
+    - qa
+    - leadership
+teams:
+  - id: engineering
+    name: Engineering
+    managerEmployeeId: team-manager
+  - id: qa
+    name: Quality Assurance
+    managerEmployeeId: tester
+employees:
+  - id: team-manager
+    accountId: team-manager
+    alias: Mira PM
+    teamId: engineering
+    title: Team Manager
+    reportsToHumanRole: ceo
+    channels: [general, engineering, leadership]
+    participation:
+      mode: summary-first
+      respondWhenMentioned: true
+      respondToChannelTopics: [planning, priorities, blockers, status]
+  - id: backend-dev
+    accountId: backend-dev
+    alias: Rian Backend
+    teamId: engineering
+    title: Backend Engineer
+    managerEmployeeId: team-manager
+    channels: [engineering]
+    participation:
+      mode: specialist
+      respondWhenMentioned: true
+      replyInThreadsOnly: true
+  - id: tester
+    accountId: tester
+    alias: Iva QA
+    teamId: qa
+    title: QA Engineer
+    managerEmployeeId: team-manager
+    channels: [qa, engineering]
+    participation:
+      mode: specialist
+      respondWhenMentioned: true
+      replyInThreadsOnly: true
