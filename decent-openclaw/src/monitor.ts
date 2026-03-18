@@ -4,6 +4,9 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { getDecentChatRuntime } from "./runtime.js";
+import { loadCompanyContextForAccount } from "./company-sim/context-loader.js";
+import { buildCompanyPromptContext } from "./company-sim/prompt-context.js";
+import { decideCompanyParticipation } from "./company-sim/router.js";
 import { setActivePeer } from "./peer-registry.js";
 import type { ResolvedDecentChatAccount } from "./types.js";
 
@@ -502,7 +505,7 @@ export async function relayInboundMessageToPeer(params: {
       replyToId: incoming.replyToId,
       threadId: incoming.threadId,
     },
-    { accountId: ctx.accountId, log: ctx.log },
+    { accountId: ctx.accountId, account: ctx.account, log: ctx.log },
     core,
     xenaPeer,
     async (replyText) => {
@@ -617,7 +620,7 @@ async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
 
         processInboundMessage(
           syntheticMsg,
-          { accountId: ctx.accountId, log: ctx.log },
+          { accountId: ctx.accountId, account: ctx.account, log: ctx.log },
           core,
           {
             sendReadReceipt: async () => {},
@@ -641,7 +644,7 @@ async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
   });
 
   await xenaPeer.start();
-  setActivePeer(xenaPeer);
+  setActivePeer(xenaPeer, ctx.accountId);
   ctx.setStatus({
     running: true,
     peerId: xenaPeer.peerId,
@@ -650,7 +653,7 @@ async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
 
   return new Promise<void>((resolve) => {
     const shutdown = () => {
-      setActivePeer(null);
+      setActivePeer(null, ctx.accountId);
       xenaPeer.destroy();
       ctx.setStatus({ running: false });
       resolve();
@@ -727,9 +730,10 @@ async function processInboundMessage(
     replyToId?: string;
     threadId?: string;
   },
-  ctx: { accountId: string; log?: any },
+  ctx: { accountId: string; account?: ResolvedDecentChatAccount; log?: any },
   core: ReturnType<typeof getDecentChatRuntime>,
   xenaPeer: Pick<StreamingPeerAdapter, "sendReadReceipt" | "getThreadHistory"> | {
+    resolveChannelNameById?: (channelId: string) => string | undefined;
     sendReadReceipt?: (peerId: string, channelId: string, messageId: string) => Promise<void>;
     getThreadHistory?: (args: {
       channelId: string;
@@ -797,6 +801,29 @@ async function processInboundMessage(
   }
 
   const cfg = core.config.loadConfig() as OpenClawConfig;
+  let companyContext = null;
+  if (ctx.account?.companySim?.enabled) {
+    try {
+      companyContext = loadCompanyContextForAccount(ctx.account);
+    } catch (err) {
+      ctx.log?.warn?.(`[decentchat] company context load failed for ${ctx.account.accountId}: ${String(err)}`);
+    }
+  }
+  const channelName = msg.chatType === "channel"
+    ? (xenaPeer.resolveChannelNameById?.(msg.channelId) ?? msg.channelId)
+    : undefined;
+  const participationDecision = decideCompanyParticipation({
+    context: companyContext,
+    chatType: msg.chatType === "direct" ? "direct" : "channel",
+    channelNameOrId: channelName,
+    text: rawBody,
+    threadId: msg.threadId ?? msg.replyToId,
+  });
+  if (!participationDecision.shouldRespond) {
+    ctx.log?.info?.(`[decentchat] company routing: silent account=${ctx.accountId} reason=${participationDecision.reason} channel=${channelName ?? msg.channelId}`);
+    await xenaPeer.sendReadReceipt?.(msg.senderId, msg.channelId, msg.messageId);
+    return;
+  }
   const threadingFlags = resolveDecentThreadingFlags(cfg, msg.chatType === "direct" ? "direct" : "channel");
   const channel = "decentchat";
   const peerId = msg.chatType === "direct"
@@ -905,6 +932,11 @@ async function processInboundMessage(
     initialHistoryLimit: threadingFlags.initialHistoryLimit,
   });
 
+  let companyContextPrefix = "";
+  if (companyContext) {
+    companyContextPrefix = buildCompanyPromptContext(companyContext);
+  }
+
   let threadContextPrefix = "";
   let threadHistoryCount = 0;
   const shouldBootstrapThreadHistory = isThreadReply && !previousTimestamp && threadingFlags.initialHistoryLimit > 0;
@@ -938,7 +970,9 @@ async function processInboundMessage(
     ctx.log?.warn?.("[decentchat] thread history bootstrap requested but adapter does not expose getThreadHistory");
   }
 
-  const bodySource = threadContextPrefix ? `${threadContextPrefix}\n\n${rawBody}` : rawBody;
+  const contextPrefixes = [companyContextPrefix, threadContextPrefix].filter((value) => value && value.trim().length > 0);
+  const contextPrefix = contextPrefixes.join("\n\n");
+  const bodySource = contextPrefix ? `${contextPrefix}\n\n${rawBody}` : rawBody;
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "DecentChat",
     from: fromLabel,

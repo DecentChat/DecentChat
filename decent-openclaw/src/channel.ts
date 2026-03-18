@@ -1,6 +1,10 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk";
 import { z } from "zod";
 
+import { startDecentChatPeer } from "./monitor.js";
+import { getActivePeer } from "./peer-registry.js";
+import type { DecentChatChannelConfig, ResolvedDecentChatAccount } from "./types.js";
+
 const DEFAULT_ACCOUNT_ID = "default";
 
 function formatPairingApproveHint(channelId: string): string {
@@ -26,9 +30,6 @@ function buildChannelConfigSchema(schema: z.ZodTypeAny): { schema: Record<string
     },
   };
 }
-import { startDecentChatPeer } from "./monitor.js";
-import { getActivePeer } from "./peer-registry.js";
-import type { ResolvedDecentChatAccount } from "./types.js";
 
 const DecentChatConfigSchema = z.object({
   enabled: z.boolean().optional(),
@@ -39,6 +40,7 @@ const DecentChatConfigSchema = z.object({
   dataDir: z.string().optional(),
   streamEnabled: z.boolean().optional().default(true),
   dmPolicy: z.enum(["open", "pairing", "allowlist", "disabled"]).optional().default("open"),
+  defaultAccount: z.string().optional(),
   replyToMode: z.enum(["off", "first", "all"]).optional().default("all"),
   // Flattened from replyToModeByChatType object (Control UI can't render nested objects)
   replyToModeDirect: z.enum(["off", "first", "all"]).optional(),
@@ -53,6 +55,65 @@ const DecentChatConfigSchema = z.object({
   // but excluded from schema so Control UI can render all fields cleanly.
 }).passthrough();
 
+function isRecord(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function getDecentChatChannelConfig(cfg: any): DecentChatChannelConfig {
+  const ch = cfg?.channels?.decentchat;
+  return isRecord(ch) ? (ch as DecentChatChannelConfig) : {};
+}
+
+export function listDecentChatAccountIds(cfg: any): string[] {
+  const channelCfg = getDecentChatChannelConfig(cfg);
+  const accounts = channelCfg.accounts;
+  if (!isRecord(accounts)) return [DEFAULT_ACCOUNT_ID];
+  const ids = Object.keys(accounts).map((id) => id.trim()).filter(Boolean);
+  if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
+  return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
+}
+
+export function resolveDefaultDecentChatAccountId(cfg: any): string {
+  const channelCfg = getDecentChatChannelConfig(cfg);
+  const ids = listDecentChatAccountIds(cfg);
+  const preferred = typeof channelCfg.defaultAccount === "string" ? channelCfg.defaultAccount.trim() : "";
+  if (preferred && ids.includes(preferred)) return preferred;
+  if (ids.includes(DEFAULT_ACCOUNT_ID)) return DEFAULT_ACCOUNT_ID;
+  return ids[0] ?? DEFAULT_ACCOUNT_ID;
+}
+
+function mergeObject<T extends Record<string, any> | undefined>(base: T, override: T): T | undefined {
+  if (!base && !override) return undefined;
+  return {
+    ...(base ?? {}),
+    ...(override ?? {}),
+  } as T;
+}
+
+function resolveRawDecentChatAccountConfig(cfg: any, accountId?: string | null): DecentChatChannelConfig {
+  const channelCfg = getDecentChatChannelConfig(cfg);
+  const resolvedAccountId = (accountId?.trim() || resolveDefaultDecentChatAccountId(cfg));
+  const accounts = isRecord(channelCfg.accounts) ? channelCfg.accounts : undefined;
+  const accountCfg = accounts && isRecord(accounts[resolvedAccountId])
+    ? accounts[resolvedAccountId] as DecentChatChannelConfig
+    : undefined;
+
+  const {
+    accounts: _accounts,
+    defaultAccount: _defaultAccount,
+    ...base
+  } = channelCfg;
+
+  return {
+    ...base,
+    ...(accountCfg ?? {}),
+    channels: mergeObject(base.channels, accountCfg?.channels),
+    replyToModeByChatType: mergeObject(base.replyToModeByChatType, accountCfg?.replyToModeByChatType),
+    thread: mergeObject(base.thread, accountCfg?.thread),
+    huddle: mergeObject(base.huddle, accountCfg?.huddle),
+    companySim: mergeObject(base.companySim, accountCfg?.companySim),
+  };
+}
 
 export function normalizeDecentChatMessagingTarget(raw: string): string | undefined {
   const value = raw.trim();
@@ -87,11 +148,12 @@ export function looksLikeDecentChatTargetId(raw: string, normalized?: string): b
   return value.startsWith("decentchat:channel:") || value.startsWith("decentchat:");
 }
 
-function resolveDecentChatAccount(cfg: any, accountId?: string | null): ResolvedDecentChatAccount {
-  const ch = cfg?.channels?.decentchat ?? {};
+export function resolveDecentChatAccount(cfg: any, accountId?: string | null): ResolvedDecentChatAccount {
+  const ch = resolveRawDecentChatAccountConfig(cfg, accountId);
+  const resolvedAccountId = accountId?.trim() || resolveDefaultDecentChatAccountId(cfg);
   const seedPhrase = typeof ch.seedPhrase === "string" ? ch.seedPhrase : undefined;
   return {
-    accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+    accountId: resolvedAccountId,
     enabled: ch.enabled !== false,
     dmPolicy: ch.dmPolicy ?? "open",
     configured: !!seedPhrase?.trim(),
@@ -103,14 +165,14 @@ function resolveDecentChatAccount(cfg: any, accountId?: string | null): Resolved
     streamEnabled: ch.streamEnabled !== false,
     replyToMode: ch.replyToMode ?? "all",
     replyToModeByChatType: {
-      direct: ch.replyToModeDirect ?? ch.replyToModeByChatType?.direct,
-      group: ch.replyToModeGroup ?? ch.replyToModeByChatType?.group,
-      channel: ch.replyToModeChannel ?? ch.replyToModeByChatType?.channel,
+      direct: (ch as any).replyToModeDirect ?? ch.replyToModeByChatType?.direct,
+      group: (ch as any).replyToModeGroup ?? ch.replyToModeByChatType?.group,
+      channel: (ch as any).replyToModeChannel ?? ch.replyToModeByChatType?.channel,
     },
     thread: {
-      historyScope: ch.threadHistoryScope ?? ch.thread?.historyScope ?? "thread",
-      inheritParent: ch.threadInheritParent ?? ch.thread?.inheritParent ?? false,
-      initialHistoryLimit: ch.threadInitialHistoryLimit ?? ch.thread?.initialHistoryLimit ?? 20,
+      historyScope: (ch as any).threadHistoryScope ?? ch.thread?.historyScope ?? "thread",
+      inheritParent: (ch as any).threadInheritParent ?? ch.thread?.inheritParent ?? false,
+      initialHistoryLimit: (ch as any).threadInitialHistoryLimit ?? ch.thread?.initialHistoryLimit ?? 20,
     },
     huddle: ch.huddle ? {
       enabled: ch.huddle.enabled,
@@ -123,7 +185,19 @@ function resolveDecentChatAccount(cfg: any, accountId?: string | null): Resolved
       vadSilenceMs: ch.huddle.vadSilenceMs,
       vadThreshold: ch.huddle.vadThreshold,
     } : undefined,
+    companySim: ch.companySim ? {
+      enabled: ch.companySim.enabled !== false,
+      manifestPath: ch.companySim.manifestPath,
+      companyId: ch.companySim.companyId,
+      employeeId: ch.companySim.employeeId,
+      roleFilesDir: ch.companySim.roleFilesDir,
+    } : undefined,
   };
+}
+
+function getPeerForContext(cfg: any, accountId?: string | null) {
+  const resolvedAccountId = accountId?.trim() || resolveDefaultDecentChatAccountId(cfg);
+  return getActivePeer(resolvedAccountId);
 }
 
 export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
@@ -148,6 +222,7 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       dataDir: { label: "Data Directory", advanced: true, help: "Path for persistent peer storage" },
       streamEnabled: { label: "Enable streaming", help: "Stream token deltas to peers in real time" },
       dmPolicy: { label: "DM Policy" },
+      defaultAccount: { label: "Default account", advanced: true, help: "Preferred DecentChat account id when multiple accounts are configured" },
       replyToMode: { label: "Reply-to mode", help: "off|first|all — controls thread reply behavior" },
       replyToModeDirect: { label: "Reply-to mode (DMs)", help: "Override for direct messages" },
       replyToModeGroup: { label: "Reply-to mode (Groups)", help: "Override for group chats" },
@@ -155,21 +230,24 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       threadHistoryScope: { label: "Thread history scope", help: "thread = isolated, channel = shared context", advanced: true },
       threadInheritParent: { label: "Thread inherit parent", help: "Thread sessions inherit parent channel context", advanced: true },
       threadInitialHistoryLimit: { label: "Thread initial history limit", help: "Messages to bootstrap in new thread sessions", advanced: true },
-
       invites: { label: "Invite URLs", advanced: true, help: "DecentChat invite URIs for workspaces to join on startup" },
     },
   },
 
   config: {
-    listAccountIds: () => [DEFAULT_ACCOUNT_ID],
+    listAccountIds: (cfg) => listDecentChatAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveDecentChatAccount(cfg, accountId),
-    defaultAccountId: () => DEFAULT_ACCOUNT_ID,
+    defaultAccountId: (cfg) => resolveDefaultDecentChatAccountId(cfg),
     isConfigured: (account) => account.configured,
     describeAccount: (account) => ({
       accountId: account.accountId,
       enabled: account.enabled,
       configured: account.configured,
       signalingServer: account.signalingServer,
+      companySim: account.companySim?.enabled ? {
+        companyId: account.companySim.companyId,
+        employeeId: account.companySim.employeeId,
+      } : undefined,
     }),
   },
 
@@ -202,14 +280,13 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
   },
 
   streaming: {
-    // Preserve real provider streaming: do not aggressively coalesce token deltas.
     blockStreamingCoalesceDefaults: { minChars: 1, idleMs: 0 },
   },
 
   groups: {
     resolveRequireMention: ({ cfg, groupId }) => {
-      const chCfg = (cfg as any)?.channels?.decentchat;
-      const grpCfg = chCfg?.channels?.[groupId] ?? chCfg?.channels?.["*"];
+      const chCfg = resolveRawDecentChatAccountConfig(cfg);
+      const grpCfg = chCfg.channels?.[groupId] ?? chCfg.channels?.["*"];
       return grpCfg?.requireMention ?? true;
     },
   },
@@ -225,22 +302,19 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
   outbound: {
     deliveryMode: "direct",
     sendText: async (ctx) => {
-      const peer = getActivePeer();
+      const peer = getPeerForContext(ctx.cfg, ctx.accountId);
       if (!peer) return { ok: false, error: new Error("DecentChat peer not running") };
 
       const { to, text, replyToId, threadId } = ctx;
-      // Preserve thread context. Some surfaces provide only replyToId for thread replies.
       const threadIdStr = threadId != null
         ? String(threadId)
         : (replyToId != null ? String(replyToId) : undefined);
 
       try {
         if (to.startsWith("decentchat:channel:")) {
-          // Group channel message: to = "decentchat:channel:<channelId>"
           const channelId = to.slice("decentchat:channel:".length);
           await peer.sendToChannel(channelId, text, threadIdStr, replyToId ?? undefined);
         } else {
-          // Direct message: to = "decentchat:<peerId>" or just "<peerId>"
           const peerId = to.startsWith("decentchat:") ? to.slice("decentchat:".length) : to;
           await peer.sendDirectToPeer(peerId, text, threadIdStr, replyToId ?? undefined);
         }
@@ -252,33 +326,34 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
   },
 
   directory: {
-    self: async () => {
-      const peer = getActivePeer();
+    self: async ({ cfg, accountId }) => {
+      const account = resolveDecentChatAccount(cfg, accountId);
+      const peer = getPeerForContext(cfg, accountId);
       if (!peer?.peerId) return null;
       return {
         kind: "user" as const,
         id: peer.peerId,
-        name: "Xena",
+        name: account.alias,
         handle: `decentchat:${peer.peerId}`,
       };
     },
-    listPeers: async ({ query, limit }) => {
-      const peer = getActivePeer();
+    listPeers: async ({ cfg, accountId, query, limit }) => {
+      const peer = getPeerForContext(cfg, accountId);
       if (!peer) return [];
       return peer.listDirectoryPeersLive({ query, limit });
     },
-    listPeersLive: async ({ query, limit }) => {
-      const peer = getActivePeer();
+    listPeersLive: async ({ cfg, accountId, query, limit }) => {
+      const peer = getPeerForContext(cfg, accountId);
       if (!peer) return [];
       return peer.listDirectoryPeersLive({ query, limit });
     },
-    listGroups: async ({ query, limit }) => {
-      const peer = getActivePeer();
+    listGroups: async ({ cfg, accountId, query, limit }) => {
+      const peer = getPeerForContext(cfg, accountId);
       if (!peer) return [];
       return peer.listDirectoryGroupsLive({ query, limit });
     },
-    listGroupsLive: async ({ query, limit }) => {
-      const peer = getActivePeer();
+    listGroupsLive: async ({ cfg, accountId, query, limit }) => {
+      const peer = getPeerForContext(cfg, accountId);
       if (!peer) return [];
       return peer.listDirectoryGroupsLive({ query, limit });
     },
@@ -301,6 +376,10 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       configured: account.configured,
       running: runtime?.running ?? false,
       lastError: runtime?.lastError ?? null,
+      companySim: account.companySim?.enabled ? {
+        companyId: account.companySim.companyId,
+        employeeId: account.companySim.employeeId,
+      } : undefined,
     }),
   },
 
