@@ -13,6 +13,8 @@ import {
   WorkspaceManager,
   PersistentStore,
   OfflineQueue,
+  CustodyStore,
+  ManifestStore,
   MessageCRDT,
 
   MediaStore,
@@ -50,6 +52,14 @@ import type {
   PresencePeerSlice,
   PresenceSubscribeMessage,
   PresenceUnsubscribeMessage,
+  DeliveryReceipt,
+  SyncDomain,
+  ManifestDelta,
+  ManifestDiffRequest,
+  SyncManifestSummary,
+  SyncManifestSnapshot,
+  ManifestStoreState,
+  CustodyEnvelope,
 } from 'decent-protocol';
 import {
   buildWorkspaceInviteLists,
@@ -222,6 +232,10 @@ export class ChatController {
   readonly persistentStore: PersistentStore;
   readonly publicWorkspaceController: PublicWorkspaceController;
   readonly offlineQueue: OfflineQueue;
+  readonly custodyStore: CustodyStore;
+  readonly manifestStore: ManifestStore;
+  private readonly custodianInbox = new Map<string, CustodyEnvelope>();
+  private readonly pendingCustodyOffers = new Map<string, string[]>();
   readonly messageCRDTs: Map<string, MessageCRDT> = new Map();
   readonly mediaStore: MediaStore;
   private readonly blobStorage: IndexedDBBlobStorage;
@@ -340,6 +354,7 @@ export class ChatController {
   huddle: HuddleManager | null = null;
   private ui: UIUpdater | null = null;
   private reactionsPersistTimer: ReturnType<typeof setTimeout> | null = null;
+  private manifestPersistTimer: ReturnType<typeof setTimeout> | null = null;
   private channelViewInFlight = new Map<string, Promise<void>>();
   private pendingReadReceiptKeys = new Set<string>();
   private presencePageRequestsByScope = new Map<string, Set<string>>();
@@ -366,6 +381,17 @@ export class ChatController {
     this.persistentStore = new PersistentStore();
     this.publicWorkspaceController = new PublicWorkspaceController(this.workspaceManager, this.persistentStore);
     this.offlineQueue = new OfflineQueue({ maxAgeMs: 7 * 24 * 60 * 60 * 1000 });
+    this.custodyStore = new CustodyStore(this.offlineQueue);
+    this.manifestStore = new ManifestStore();
+    this.manifestStore.setPersistence(
+      async (workspaceId, manifestState) => {
+        await this.persistentStore.saveManifest(workspaceId, manifestState);
+      },
+      async (workspaceId) => this.persistentStore.getManifest(workspaceId),
+      async (workspaceId) => {
+        await this.persistentStore.deleteManifest(workspaceId);
+      },
+    );
     this.blobStorage = new IndexedDBBlobStorage();
     this.mediaStore = new MediaStore(this.blobStorage);
     this.clockSync = new ClockSync();
@@ -383,6 +409,17 @@ export class ChatController {
     this.topologyTelemetry = new TopologyTelemetry();
     this.topologyAnomalyDetector = new TopologyAnomalyDetector();
     this.topologyDesiredSetByWorkspace = new Map<string, string[]>();
+    this.custodyStore.setReceiptPersistence(
+      async (receipt) => {
+        await this.persistentStore.saveDeliveryReceipt(receipt);
+      },
+      async (peerId) => this.persistentStore.getDeliveryReceipts(peerId),
+    );
+
+    this.loadCustodianInbox().catch((error) => {
+      console.warn('[Custody] Failed to load custodian inbox', error);
+    });
+
     this.messageGuard.rateLimiter.onViolation = (v) => {
       console.warn(`[Guard] ${v.severity} violation from ${v.peerId.slice(0, 8)}: ${v.action}`);
       if (v.severity === 'ban') {
@@ -507,16 +544,32 @@ export class ChatController {
       'message-sync-fetch-response',
       'message-sync-negentropy-query',
       'message-sync-negentropy-response',
+      'sync.summary',
+      'sync.diff_request',
+      'sync.diff_response',
+      'sync.fetch_snapshot',
+      'sync.snapshot_response',
+      'custody.offer',
+      'custody.accept',
+      'custody.reject',
+      'custody.store',
+      'custody.fetch_index',
+      'custody.fetch_envelopes',
+      'custody.ack',
     ]);
     if (!syncTypes.has(type)) return false;
 
-    return this.isWorkspaceMember(peerId, data?.workspaceId as string | undefined);
+    const workspaceId = data?.workspaceId as string | undefined;
+    return !workspaceId || this.isWorkspaceMember(peerId, workspaceId);
   }
 
   private isTrustedOfflineReplayMessage(_peerId: string, data: any): boolean {
     // Offline queue replay lane: allow higher throughput for messages explicitly
     // marked as local outbox replay after reconnect.
-    return data?._offlineReplay === 1 && (!!data?.encrypted || !!data?.ratchet);
+    if (data?._offlineReplay !== 1) return false;
+    if (data?.encrypted || data?.ratchet) return true;
+    if (data?.type === 'read' || data?.type === 'ack') return true;
+    return typeof data?.type === 'string' && data.type.startsWith('custody.');
   }
 
   /**
@@ -695,6 +748,26 @@ export class ChatController {
             if (!validation.valid) return;
 
             const { msg, recipients } = validation;
+            const ackReceipt: DeliveryReceipt = {
+              receiptId: `ack:${peerId}:${messageId}:${Date.now()}`,
+              kind: 'acknowledged',
+              opId: messageId,
+              recipientPeerId: peerId,
+              timestamp: Date.now(),
+              metadata: { channelId },
+            };
+            if (this.custodyStore?.applyReceipt) {
+              await this.custodyStore.applyReceipt(peerId, ackReceipt);
+            } else {
+              await this.offlineQueue?.applyReceipt?.(peerId, ackReceipt);
+            }
+            this.recordManifestDomain('receipt', this.findWorkspaceByChannelId(channelId)?.id, {
+              channelId,
+              operation: 'create',
+              subject: messageId,
+              data: { kind: 'acknowledged', peerId },
+            });
+
             const ackedBy = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
             ackedBy.add(peerId);
             (msg as any).ackedBy = Array.from(ackedBy);
@@ -727,6 +800,26 @@ export class ChatController {
             if (!validation.valid) return;
 
             const { msg, recipients } = validation;
+            const readReceipt: DeliveryReceipt = {
+              receiptId: `read:${peerId}:${messageId}:${Date.now()}`,
+              kind: 'read',
+              opId: messageId,
+              recipientPeerId: peerId,
+              timestamp: Date.now(),
+              metadata: { channelId },
+            };
+            if (this.custodyStore?.applyReceipt) {
+              await this.custodyStore.applyReceipt(peerId, readReceipt);
+            } else {
+              await this.offlineQueue?.applyReceipt?.(peerId, readReceipt);
+            }
+            this.recordManifestDomain('receipt', this.findWorkspaceByChannelId(channelId)?.id, {
+              channelId,
+              operation: 'create',
+              subject: messageId,
+              data: { kind: 'read', peerId },
+            });
+
             const readBy = new Set<string>(Array.isArray((msg as any).readBy) ? (msg as any).readBy : []);
             readBy.add(peerId);
             (msg as any).readBy = Array.from(readBy);
@@ -984,6 +1077,8 @@ export class ChatController {
 
           await this.flushOfflineQueue(peerId);
           this.requestMessageSync(peerId).catch(err => console.warn('[Sync] Message sync request failed:', err));
+          this.sendManifestSummary(peerId);
+          this.requestCustodyRecovery(peerId);
 
           // Send workspace state to new peer.
           // Use forceInclude so the peer receives state even if not yet in
@@ -1261,6 +1356,32 @@ export class ChatController {
           return;
         }
 
+        if (data?.type === 'sync.summary') {
+          await this.handleManifestSummary(peerId, data);
+          return;
+        }
+        if (data?.type === 'sync.diff_request') {
+          await this.handleManifestDiffRequest(peerId, data);
+          return;
+        }
+        if (data?.type === 'sync.diff_response') {
+          await this.handleManifestDiffResponse(peerId, data);
+          return;
+        }
+        if (data?.type === 'sync.fetch_snapshot') {
+          await this.handleManifestFetchSnapshot(peerId, data);
+          return;
+        }
+        if (data?.type === 'sync.snapshot_response') {
+          await this.handleManifestSnapshotResponse(peerId, data);
+          return;
+        }
+
+        if (typeof data?.type === 'string' && data.type.startsWith('custody.')) {
+          await this.handleCustodyControl(peerId, data);
+          return;
+        }
+
         // --- T3.2: Gossip dedup — drop if we already processed this message via another path ---
         // _originalMessageId is set on relayed copies; plain direct messages have none.
         // IMPORTANT: only CHECK here — don't set.  The seen-set is seeded uniformly
@@ -1367,6 +1488,13 @@ export class ChatController {
               prevHash: msg.prevHash || '',
             });
             await this.persistMessage(msg);
+            this.recordManifestDomain('channel-message', (conv as any).originWorkspaceId || 'direct', {
+              channelId,
+              operation: 'create',
+              subject: msg.id,
+              itemCount: this.getChannelMessageCount(channelId),
+              data: { messageId: msg.id, senderId: msg.senderId, isDirect: true },
+            });
 
             // DEP-005: Send delivery ACK back to sender
             this.transport.send(peerId, { type: 'ack', messageId: msg.id, channelId });
@@ -1457,6 +1585,13 @@ export class ChatController {
                   prevHash: msg.prevHash || '',
                 });
                 await this.persistMessage(msg);
+                this.recordManifestDomain('channel-message', (fallbackConv as any).originWorkspaceId || 'direct', {
+                  channelId,
+                  operation: 'create',
+                  subject: msg.id,
+                  itemCount: this.getChannelMessageCount(channelId),
+                  data: { messageId: msg.id, senderId: msg.senderId, isDirect: true },
+                });
                 this.transport.send(peerId, { type: 'ack', messageId: msg.id, channelId });
                 await this.directConversationStore.updateLastMessage(channelId, msg.timestamp);
                 const updatedConv = await this.directConversationStore.get(channelId);
@@ -1477,29 +1612,23 @@ export class ChatController {
             return;
           }
 
-          // Sender must be a member of that workspace
+          // Sender must be an explicit member of the target workspace.
+          // Do not auto-add here — membership must come from workspace sync/join flow.
           const isMember = targetWs.members.some((m: any) => m.peerId === peerId);
           if (!isMember) {
-            if (this.state.readyPeers.has(peerId)) {
-              this.workspaceManager.addMember(targetWs.id, {
-                peerId,
-                alias: peerId.slice(0, 8),
-                publicKey: '',
-                joinedAt: Date.now(),
-                role: 'member',
-              });
-              this.persistWorkspace(targetWs.id).catch(() => {});
-            } else {
-              console.warn(`[Security] Dropping message from ${peerId.slice(0, 8)}: not a member of workspace ${targetWs.id}`);
-              return;
-            }
+            console.warn(`[Security] Dropping message from ${peerId.slice(0, 8)}: not a member of workspace ${targetWs.id}`);
+            return;
           }
 
-          // Resolve channelId: use the declared one if it exists in the workspace,
-          // otherwise fall back to the first channel (handles channel-id drift on first sync)
+          // Resolve channelId. For workspace-scoped messages, never fallback to another
+          // channel when the declared channelId is unknown — that leaks messages across channels.
           if (data.channelId && targetWs.channels.some((ch: any) => ch.id === data.channelId)) {
             channelId = data.channelId;
+          } else if (data.workspaceId) {
+            console.warn(`[Security] Dropping message from ${peerId.slice(0, 8)}: unknown channel ${data.channelId || 'missing'} in workspace ${targetWs.id}`);
+            return;
           } else {
+            // Legacy envelopes without workspaceId may still rely on implicit first-channel routing.
             channelId = targetWs.channels[0]?.id || data.channelId || 'default';
           }
         }
@@ -1578,6 +1707,13 @@ export class ChatController {
           });
 
           await this.persistMessage(msg);
+          this.recordManifestDomain('channel-message', this.findWorkspaceByChannelId(channelId)?.id || this.state.activeWorkspaceId || 'direct', {
+            channelId,
+            operation: 'create',
+            subject: msg.id,
+            itemCount: this.getChannelMessageCount(channelId),
+            data: { messageId: msg.id, senderId: msg.senderId },
+          });
 
           // DEP-005: Send delivery ACK back to sender
           this.transport.send(peerId, { type: 'ack', messageId: msg.id, channelId });
@@ -1838,7 +1974,7 @@ export class ChatController {
         type: 'workspace-state',
         name: ws.name,
         description: ws.description,
-        channels: ws.channels.map(ch => ({ id: ch.id, name: ch.name, type: ch.type })),
+        channels: ws.channels.map(ch => ({ id: ch.id, name: ch.name, type: ch.type, members: Array.isArray((ch as any).members) ? [...(ch as any).members] : [], accessPolicy: (ch as any).accessPolicy ? JSON.parse(JSON.stringify((ch as any).accessPolicy)) : ((ch as any).type === 'channel' ? { mode: 'public-workspace', workspaceId: ws.id } : undefined), createdBy: (ch as any).createdBy, createdAt: (ch as any).createdAt })),
         members: ws.members.map(m => ({
           peerId: m.peerId,
           alias: m.alias,
@@ -1849,6 +1985,7 @@ export class ChatController {
           role: m.role,
           allowWorkspaceDMs: m.allowWorkspaceDMs !== false,
           isBot: (m as any).isBot,
+          companySim: (m as any).companySim,
         })),
         inviteCode: ws.inviteCode,
         permissions: ws.permissions,
@@ -2534,13 +2671,16 @@ export class ChatController {
     console.log(`[Sync] Received workspace state from ${peerId.slice(0, 8)}:`, sync);
 
     // Find matching local workspace deterministically:
-    // 1) exact workspace ID, 2) matching invite code, 3) active workspace fallback (legacy).
+    // 1) exact workspace ID, 2) matching invite code.
+    // Do NOT fallback to active workspace here — that can merge state across unrelated workspaces.
     const allWorkspaces = this.workspaceManager.getAllWorkspaces();
     let localWs = allWorkspaces.find((ws: any) => ws.id === remoteWorkspaceId)
-      || (sync?.inviteCode ? allWorkspaces.find((ws: any) => ws.inviteCode === sync.inviteCode) : null)
-      || (this.state.activeWorkspaceId ? this.workspaceManager.getWorkspace(this.state.activeWorkspaceId) : null);
+      || (sync?.inviteCode ? allWorkspaces.find((ws: any) => ws.inviteCode === sync.inviteCode) : null);
 
-    if (!localWs) return;
+    if (!localWs) {
+      console.warn(`[Sync] No matching workspace for workspace-state from ${peerId.slice(0, 8)} (remote=${remoteWorkspaceId?.slice?.(0, 8) || 'none'})`);
+      return;
+    }
 
     // SECURITY: never accept workspace-state from a banned peer.
     if (this.workspaceManager.isBanned(localWs.id, peerId)) {
@@ -2645,9 +2785,32 @@ export class ChatController {
     // Sync channels: map remote channels to local ones
     if (sync.channels && Array.isArray(sync.channels)) {
       for (const remoteCh of sync.channels) {
+        const remoteMembers = Array.isArray((remoteCh as any).members)
+          ? (remoteCh as any).members.filter((memberId: unknown): memberId is string => typeof memberId === 'string')
+          : [];
+        const remoteAccessPolicy = (remoteCh as any).accessPolicy
+          ? JSON.parse(JSON.stringify((remoteCh as any).accessPolicy))
+          : ((remoteCh as any).type === 'channel' ? { mode: 'public-workspace', workspaceId: localWs.id } : undefined);
+
         const localCh = localWs.channels.find(
           (ch: any) => ch.name === remoteCh.name && ch.type === remoteCh.type
         );
+
+        if (localCh) {
+          if (remoteAccessPolicy) {
+            localCh.accessPolicy = remoteAccessPolicy;
+          }
+          if (remoteMembers.length > 0) {
+            localCh.members = [...new Set<string>(remoteMembers as string[])];
+          }
+          if ((remoteCh as any).createdBy && !localCh.createdBy) {
+            localCh.createdBy = (remoteCh as any).createdBy;
+          }
+          if (Number.isFinite((remoteCh as any).createdAt) && !Number.isFinite(localCh.createdAt)) {
+            localCh.createdAt = (remoteCh as any).createdAt;
+          }
+        }
+
         if (localCh && localCh.id !== remoteCh.id && remoteCh.id < localCh.id) {
           // Min-wins: only adopt the remote channel ID when it is lexicographically smaller.
           // This prevents a late-joining peer (with fresh UUIDs) from overwriting the
@@ -2677,9 +2840,10 @@ export class ChatController {
             workspaceId: localWs.id,
             name: remoteCh.name,
             type: remoteCh.type || 'channel',
-            members: [],
-            createdBy: peerId,
-            createdAt: Date.now(),
+            members: remoteMembers as string[],
+            ...(remoteAccessPolicy ? { accessPolicy: remoteAccessPolicy } : {}),
+            createdBy: (remoteCh as any).createdBy || peerId,
+            createdAt: Number.isFinite((remoteCh as any).createdAt) ? (remoteCh as any).createdAt : Date.now(),
           });
         }
       }
@@ -2824,6 +2988,24 @@ export class ChatController {
 
     // Persist updated workspace state
     await this.persistWorkspace(localWs.id);
+    this.recordManifestDomain('workspace-manifest', localWs.id, {
+      operation: 'update',
+      subject: localWs.id,
+      itemCount: 1,
+      data: { name: localWs.name, description: localWs.description },
+    });
+    this.recordManifestDomain('membership', localWs.id, {
+      operation: 'update',
+      subject: localWs.id,
+      itemCount: localWs.members.length,
+      data: { memberCount: localWs.members.length },
+    });
+    this.recordManifestDomain('channel-manifest', localWs.id, {
+      operation: 'update',
+      subject: localWs.id,
+      itemCount: localWs.channels.length,
+      data: { channelCount: localWs.channels.length },
+    });
     this.ui?.renderApp();
     console.log(`[Sync] Workspace state synced from ${peerId.slice(0, 8)}`);
 
@@ -3092,7 +3274,7 @@ export class ChatController {
         const capabilitySummary = this.getPeerCapabilitySummary(peerId);
         return {
           peerId,
-          role: member.role,
+          role: member.role as 'owner' | 'admin' | 'member',
           joinedAt: member.joinedAt,
           connected: snapshot.connected.has(peerId),
           connecting: snapshot.connecting.has(peerId),
@@ -4135,6 +4317,8 @@ export class ChatController {
     const rawInviteRegistry = await this.persistentStore.getSetting(ChatController.WORKSPACE_INVITES_SETTING_KEY);
     this.workspaceInviteRegistry = normalizeWorkspaceInviteRegistry(rawInviteRegistry);
 
+    await this.restoreManifestState();
+
     // Shell-first boot path: restore lightweight workspace shells and any persisted
     // member-directory pages before hydrating full legacy workspace blobs.
     await this.publicWorkspaceController.restoreFromStorage();
@@ -4144,6 +4328,7 @@ export class ChatController {
     for (const ws of persistedWorkspaces) {
       this.workspaceManager.importWorkspace(ws);
       this.publicWorkspaceController.ingestWorkspaceSnapshot(ws);
+      await this.manifestStore.restoreWorkspace(ws.id);
 
       // DEP-002: Restore server discovery for this workspace
       await this.restoreServerDiscovery(ws.id, getDefaultSignalingServer());
@@ -4430,6 +4615,13 @@ export class ChatController {
     (msg as any).vectorClock = crdtMsg.vectorClock;
 
     await this.persistMessage(msg);
+    this.recordManifestDomain('channel-message', this.state.activeWorkspaceId ?? undefined, {
+      channelId: this.state.activeChannelId ?? undefined,
+      operation: 'create',
+      subject: msg.id,
+      itemCount: this.getChannelMessageCount(this.state.activeChannelId ?? undefined),
+      data: { messageId: msg.id, senderId: this.state.myPeerId },
+    });
 
     // Ensure thread root snapshot exists so the thread is self-contained
     if (threadId) {
@@ -4495,18 +4687,50 @@ export class ChatController {
           const sent = this.transport.send(peerId, envelope);
           // Reconnect race: readyPeers can be briefly stale after disconnect.
           // If transport rejects the send, persist to outbox instead of dropping.
-          if (!sent) {
-            await this.offlineQueue.enqueue(peerId, envelope);
+          if (sent === false) {
+            await this.queueCustodyEnvelope(peerId, {
+              envelopeId: typeof (envelope as any).id === 'string' ? (envelope as any).id : undefined,
+              opId: msg.id,
+              recipientPeerIds: [peerId],
+              workspaceId: this.state.activeWorkspaceId || 'direct',
+              channelId: this.state.activeChannelId,
+              ...(threadId ? { threadId } : {}),
+              domain: 'channel-message',
+              ciphertext: envelope,
+              metadata: {
+                messageId: msg.id,
+                senderId: this.state.myPeerId,
+                senderName: this.getDisplayNameForPeer(this.state.myPeerId),
+              },
+            }, envelope);
+            await this.replicateToCustodians(peerId, this.state.activeWorkspaceId, this.state.activeChannelId, msg.id);
           }
         } else {
-          await this.offlineQueue.enqueue(peerId, envelope);
+          await this.queueCustodyEnvelope(peerId, {
+            envelopeId: typeof (envelope as any).id === 'string' ? (envelope as any).id : undefined,
+            opId: msg.id,
+            recipientPeerIds: [peerId],
+            workspaceId: this.state.activeWorkspaceId || 'direct',
+            channelId: this.state.activeChannelId,
+            ...(threadId ? { threadId } : {}),
+            domain: 'channel-message',
+            ciphertext: envelope,
+            metadata: {
+              messageId: msg.id,
+              senderId: this.state.myPeerId,
+              senderName: this.getDisplayNameForPeer(this.state.myPeerId),
+            },
+          }, envelope);
+          await this.replicateToCustodians(peerId, this.state.activeWorkspaceId, this.state.activeChannelId, msg.id);
         }
         attemptedDispatch = true;
       } catch (err) {
         console.error('Send to', peerId, 'failed:', err);
         // Encryption failed (no ratchet state or shared secret — peer never connected
-        // in this session). Queue a deferred plaintext message; flushOfflineQueue will
-        // re-encrypt once the handshake completes on reconnect.
+        // in this session). Keep the deferred-plaintext outbox fallback for now:
+        // after app restarts we may have queued content before ratchets are restored,
+        // and dropping here would silently lose messages.
+        // flushOfflineQueue re-encrypts and sends once the handshake completes.
         try {
           await this.offlineQueue.enqueue(peerId, {
             _deferred: true,
@@ -4516,6 +4740,12 @@ export class ChatController {
             content: content.trim(),
             messageId: msg.id,
             vectorClock: (msg as any).vectorClock,
+          }, {
+            domain: 'channel-message',
+            workspaceId: this.state.activeWorkspaceId || undefined,
+            channelId: this.state.activeChannelId || undefined,
+            opId: msg.id,
+            recipientPeerIds: [peerId],
           });
           attemptedDispatch = true;
         } catch (queueErr) {
@@ -5117,6 +5347,7 @@ export class ChatController {
         }
       }
       await this.persistentStore.deleteWorkspace(wsId);
+      await this.manifestStore.removeWorkspace(wsId);
     } catch (err) {
       console.error('[Workspace] Failed to delete persisted workspace data:', err);
       return false;
@@ -5670,6 +5901,13 @@ export class ChatController {
     (msg as any).vectorClock = crdtMsg.vectorClock;
 
     await this.persistMessage(msg);
+    this.recordManifestDomain('channel-message', (conv as any).originWorkspaceId || 'direct', {
+      channelId: conversationId,
+      operation: 'create',
+      subject: msg.id,
+      itemCount: this.getChannelMessageCount(conversationId),
+      data: { messageId: msg.id, senderId: this.state.myPeerId, isDirect: true },
+    });
 
     // Ensure thread root snapshot exists for DM thread replies
     if (threadId) {
@@ -5725,9 +5963,42 @@ export class ChatController {
       }
 
       if (this.state.readyPeers.has(peerId)) {
-        this.transport.send(peerId, envelope);
+        const sent = this.transport.send(peerId, envelope);
+        if (sent === false) {
+          await this.queueCustodyEnvelope(peerId, {
+            envelopeId: typeof (envelope as any).id === 'string' ? (envelope as any).id : undefined,
+            opId: msg.id,
+            recipientPeerIds: [peerId],
+            workspaceId: ((conv as any).originWorkspaceId || 'direct') as string,
+            channelId: conversationId,
+            ...(threadId ? { threadId } : {}),
+            domain: 'channel-message',
+            ciphertext: envelope,
+            metadata: {
+              messageId: msg.id,
+              senderId: this.state.myPeerId,
+              senderName: this.getDisplayNameForPeer(this.state.myPeerId),
+              isDirect: true,
+            },
+          }, envelope);
+        }
       } else {
-        await this.offlineQueue.enqueue(peerId, envelope);
+        await this.queueCustodyEnvelope(peerId, {
+          envelopeId: typeof (envelope as any).id === 'string' ? (envelope as any).id : undefined,
+          opId: msg.id,
+          recipientPeerIds: [peerId],
+          workspaceId: ((conv as any).originWorkspaceId || 'direct') as string,
+          channelId: conversationId,
+          ...(threadId ? { threadId } : {}),
+          domain: 'channel-message',
+          ciphertext: envelope,
+          metadata: {
+            messageId: msg.id,
+            senderId: this.state.myPeerId,
+            senderName: this.getDisplayNameForPeer(this.state.myPeerId),
+            isDirect: true,
+          },
+        }, envelope);
       }
       attemptedDispatch = true;
     } catch (err) {
@@ -6393,10 +6664,56 @@ export class ChatController {
   /** Send read receipt for a message */
   sendReadReceipt(channelId: string, messageId: string): void {
     const receipt = this.presence.createReadReceipt(channelId, messageId, this.state.myPeerId);
-    this.broadcastToWorkspacePeers(receipt);
+    const recipients = this.getWorkspaceRecipientPeerIds();
+    const workspaceId = this.findWorkspaceByChannelId(channelId)?.id || this.state.activeWorkspaceId || 'direct';
+
+    for (const peerId of recipients) {
+      if (this.state.readyPeers.has(peerId)) {
+        try {
+          const sent = this.transport.send(peerId, receipt);
+          if (sent === false) {
+            void this.queueCustodyEnvelope(peerId, {
+              opId: messageId,
+              recipientPeerIds: [peerId],
+              workspaceId,
+              channelId,
+              domain: 'receipt',
+              ciphertext: receipt,
+              metadata: { kind: 'read' },
+            }, receipt);
+          }
+        } catch {
+          void this.queueCustodyEnvelope(peerId, {
+            opId: messageId,
+            recipientPeerIds: [peerId],
+            workspaceId,
+            channelId,
+            domain: 'receipt',
+            ciphertext: receipt,
+            metadata: { kind: 'read' },
+          }, receipt);
+        }
+      } else {
+        void this.queueCustodyEnvelope(peerId, {
+          opId: messageId,
+          recipientPeerIds: [peerId],
+          workspaceId,
+          channelId,
+          domain: 'receipt',
+          ciphertext: receipt,
+          metadata: { kind: 'read' },
+        }, receipt);
+      }
+    }
+
+    this.recordManifestDomain('receipt', workspaceId, {
+      channelId,
+      operation: 'create',
+      subject: messageId,
+      data: { kind: 'read', senderId: this.state.myPeerId },
+    });
   }
 
-  /** Send a message to all workspace peers */
   private broadcastToWorkspacePeers(data: any): void {
     const recipients = this.getWorkspaceRecipientPeerIds();
     for (const peerId of recipients) {
@@ -6494,6 +6811,13 @@ export class ChatController {
     (msg as any).vectorClock = crdtResult.vectorClock;
 
     await this.persistMessage(msg);
+    this.recordManifestDomain('channel-message', this.state.activeWorkspaceId ?? undefined, {
+      channelId: this.state.activeChannelId ?? undefined,
+      operation: 'create',
+      subject: msg.id,
+      itemCount: this.getChannelMessageCount(this.state.activeChannelId ?? undefined),
+      data: { messageId: msg.id, senderId: this.state.myPeerId, hasAttachment: true },
+    });
     if (threadId && this.state.threadOpen) {
       this.ui?.renderThreadMessages();
       this.ui?.updateThreadIndicator(threadId, this.state.activeChannelId);
@@ -6515,9 +6839,43 @@ export class ChatController {
         (envelope as any).attachments = [meta]; // Metadata travels with message
 
         if (this.state.readyPeers.has(peerId)) {
-          this.transport.send(peerId, envelope);
+          const sent = this.transport.send(peerId, envelope);
+          if (sent === false) {
+            await this.queueCustodyEnvelope(peerId, {
+              envelopeId: typeof (envelope as any).id === 'string' ? (envelope as any).id : undefined,
+              opId: msg.id,
+              recipientPeerIds: [peerId],
+              workspaceId: this.state.activeWorkspaceId || 'direct',
+              channelId: this.state.activeChannelId,
+              ...(threadId ? { threadId } : {}),
+              domain: 'channel-message',
+              ciphertext: envelope,
+              metadata: {
+                messageId: msg.id,
+                senderId: this.state.myPeerId,
+                senderName: this.getDisplayNameForPeer(this.state.myPeerId),
+                hasAttachment: true,
+              },
+            }, envelope);
+          }
         } else {
-          await this.offlineQueue.enqueue(peerId, envelope);
+          await this.queueCustodyEnvelope(peerId, {
+            envelopeId: typeof (envelope as any).id === 'string' ? (envelope as any).id : undefined,
+            opId: msg.id,
+            recipientPeerIds: [peerId],
+            workspaceId: this.state.activeWorkspaceId || 'direct',
+            channelId: this.state.activeChannelId,
+            ...(threadId ? { threadId } : {}),
+            domain: 'channel-message',
+            ciphertext: envelope,
+            metadata: {
+              messageId: msg.id,
+              senderId: this.state.myPeerId,
+              senderName: this.getDisplayNameForPeer(this.state.myPeerId),
+              hasAttachment: true,
+            },
+          }, envelope);
+          await this.replicateToCustodians(peerId, this.state.activeWorkspaceId, this.state.activeChannelId, msg.id);
         }
         attemptedDispatch = true;
       } catch (err) {
@@ -6801,6 +7159,639 @@ export class ChatController {
   // =========================================================================
   // Message sync (reconnect catch-up)
   // =========================================================================
+
+  private isCustodyEnvelope(value: unknown): value is CustodyEnvelope {
+    if (!value || typeof value !== 'object') return false;
+    const envelope = value as Partial<CustodyEnvelope>;
+    return typeof envelope.envelopeId === 'string'
+      && typeof envelope.opId === 'string'
+      && Array.isArray(envelope.recipientPeerIds)
+      && typeof envelope.workspaceId === 'string'
+      && typeof envelope.domain === 'string'
+      && 'ciphertext' in envelope;
+  }
+
+  private async loadCustodianInbox(): Promise<void> {
+    const raw = await this.persistentStore.getSetting('custodyInbox');
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      this.custodianInbox.clear();
+      for (const item of parsed) {
+        if (this.isCustodyEnvelope(item)) {
+          this.custodianInbox.set(item.envelopeId, item);
+        }
+      }
+    } catch {
+      // ignore malformed cache
+    }
+  }
+
+  private async persistCustodianInbox(): Promise<void> {
+    await this.persistentStore.saveSetting('custodyInbox', JSON.stringify([...this.custodianInbox.values()]));
+  }
+
+  private schedulePersistManifestState(): void {
+    if (this.manifestPersistTimer) clearTimeout(this.manifestPersistTimer);
+    this.manifestPersistTimer = setTimeout(() => {
+      this.manifestPersistTimer = null;
+      void this.persistManifestState();
+    }, 150);
+  }
+
+  private async persistManifestState(): Promise<void> {
+    try {
+      const state = this.manifestStore.exportState();
+      await this.persistentStore.saveManifestStoreState(state);
+    } catch (error) {
+      console.warn('[DecentChat] failed to persist manifest state', error);
+    }
+  }
+
+  private async restoreManifestState(): Promise<void> {
+    try {
+      const persisted = await this.persistentStore.getManifestStoreState();
+      if (!persisted) return;
+      this.manifestStore.importState(persisted as ManifestStoreState);
+    } catch (error) {
+      console.warn('[DecentChat] failed to restore manifest state', error);
+    }
+  }
+
+  private recordManifestDomain(
+    domain: SyncDomain,
+    workspaceId: string | undefined,
+    params?: {
+      channelId?: string;
+      operation?: ManifestDelta['operation'];
+      subject?: string;
+      itemCount?: number;
+      data?: Record<string, unknown>;
+    },
+  ): ManifestDelta | null {
+    if (!workspaceId || !this.manifestStore || typeof this.manifestStore.updateDomain !== 'function') return null;
+    return this.manifestStore.updateDomain({
+      domain,
+      workspaceId,
+      ...(params?.channelId ? { channelId: params.channelId } : {}),
+      author: this.state.myPeerId || 'unknown',
+      operation: params?.operation ?? 'update',
+      subject: params?.subject,
+      itemCount: params?.itemCount,
+      data: params?.data,
+    });
+  }
+
+  private getChannelMessageCount(channelId?: string): number {
+    if (!channelId) return 0;
+    const store: any = this.messageStore as any;
+    if (!store || typeof store.getMessages !== 'function') return 0;
+    return (store.getMessages(channelId) as any[])?.length ?? 0;
+  }
+
+  private async queueCustodyEnvelope(peerId: string, envelope: Parameters<CustodyStore['storeEnvelope']>[0], fallbackPayload?: any): Promise<void> {
+    if (this.custodyStore && typeof this.custodyStore.storeEnvelope === 'function') {
+      await this.custodyStore.storeEnvelope(envelope);
+      return;
+    }
+    if (fallbackPayload !== undefined) {
+      await this.offlineQueue.enqueue(peerId, fallbackPayload);
+    }
+  }
+
+  private sendManifestSummary(peerId: string, onlyWorkspaceId?: string): void {
+    for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+      if (onlyWorkspaceId && workspace.id !== onlyWorkspaceId) continue;
+      if (!workspace.members.some((member: any) => member.peerId === peerId)) continue;
+      const summary = this.manifestStore.getSummary(workspace.id);
+      this.transport.send(peerId, {
+        type: 'sync.summary',
+        workspaceId: workspace.id,
+        summary,
+      });
+    }
+  }
+
+  private async handleManifestSummary(peerId: string, data: any): Promise<void> {
+    const summary = (data?.summary ?? data) as SyncManifestSummary;
+    const workspaceId = typeof data?.workspaceId === 'string' ? data.workspaceId : summary?.workspaceId;
+    if (!workspaceId || !summary || !Array.isArray(summary.versions)) return;
+
+    if (!this.isWorkspaceMember(peerId, workspaceId)) return;
+
+    const requests = this.manifestStore.buildDiffRequest(workspaceId, summary);
+    if (requests.length > 0) {
+      this.transport.send(peerId, {
+        type: 'sync.diff_request',
+        workspaceId,
+        requestId: crypto.randomUUID(),
+        requests,
+      });
+    }
+
+    const remoteByKey: Map<string, { version: number }> = new Map(summary.versions.map((version) => [`${version.domain}:${version.channelId ?? ''}`, version]));
+    const localSummary = this.manifestStore.getSummary(workspaceId);
+    const deltas: ManifestDelta[] = [];
+
+    for (const localVersion of localSummary.versions) {
+      const key = `${localVersion.domain}:${localVersion.channelId ?? ''}`;
+      const remoteVersion = remoteByKey.get(key)?.version ?? 0;
+      if (localVersion.version <= remoteVersion) continue;
+      deltas.push(...this.manifestStore.getDeltasSince({
+        workspaceId,
+        domain: localVersion.domain,
+        channelId: localVersion.channelId,
+        fromVersion: remoteVersion,
+        toVersion: localVersion.version,
+        limit: 500,
+      }));
+    }
+
+    if (deltas.length > 0) {
+      this.transport.send(peerId, {
+        type: 'sync.diff_response',
+        workspaceId,
+        requestId: `push:${crypto.randomUUID()}`,
+        deltas,
+      });
+    }
+  }
+
+  private async handleManifestDiffRequest(peerId: string, data: any): Promise<void> {
+    const workspaceId = typeof data?.workspaceId === 'string' ? data.workspaceId : '';
+    if (!workspaceId || !this.isWorkspaceMember(peerId, workspaceId)) return;
+
+    const requests = Array.isArray(data?.requests)
+      ? (data.requests as ManifestDiffRequest[])
+      : (data?.request ? [data.request as ManifestDiffRequest] : []);
+    if (requests.length === 0) return;
+
+    const deltas: ManifestDelta[] = [];
+    const snapshots: Array<{ domain: SyncDomain; workspaceId: string; channelId?: string; snapshotId: string; version: number; basedOnVersion: number; createdAt: number; createdBy: string }> = [];
+
+    for (const request of requests) {
+      const chunk = this.manifestStore.getDeltasSince({
+        workspaceId,
+        domain: request.domain,
+        channelId: request.channelId,
+        fromVersion: request.fromVersion,
+        toVersion: request.toVersion,
+        limit: 500,
+      });
+      deltas.push(...chunk);
+
+      if (chunk.length === 0 && (request.toVersion ?? 0) > request.fromVersion) {
+        const snapshot = this.buildManifestSnapshot(workspaceId, request.domain, request.channelId);
+        if (snapshot) {
+          this.manifestStore.saveSnapshot(snapshot);
+          snapshots.push({
+            domain: snapshot.domain,
+            workspaceId: snapshot.workspaceId,
+            ...(snapshot.domain === 'channel-message' && snapshot.channelId ? { channelId: snapshot.channelId } : {}),
+            snapshotId: snapshot.snapshotId,
+            version: snapshot.version,
+            basedOnVersion: snapshot.basedOnVersion,
+            createdAt: snapshot.createdAt,
+            createdBy: snapshot.createdBy,
+          });
+        }
+      }
+    }
+
+    this.transport.send(peerId, {
+      type: 'sync.diff_response',
+      workspaceId,
+      requestId: typeof data?.requestId === 'string' ? data.requestId : crypto.randomUUID(),
+      deltas,
+      ...(snapshots.length > 0 ? { snapshots } : {}),
+    });
+  }
+
+  private async handleManifestDiffResponse(peerId: string, data: any): Promise<void> {
+    const workspaceId = typeof data?.workspaceId === 'string' ? data.workspaceId : '';
+    if (!workspaceId || !this.isWorkspaceMember(peerId, workspaceId)) return;
+
+    const deltas = Array.isArray(data?.deltas) ? (data.deltas as ManifestDelta[]) : [];
+    let needsMessageSync = false;
+
+    for (const delta of deltas) {
+      this.manifestStore.applyDelta(delta);
+      if (delta.domain === 'channel-message') needsMessageSync = true;
+    }
+
+    if (needsMessageSync) {
+      await this.requestMessageSync(peerId);
+    }
+
+    const snapshots = Array.isArray(data?.snapshots) ? data.snapshots : [];
+    for (const pointer of snapshots) {
+      const existing = this.manifestStore.getSnapshot(workspaceId, pointer.domain, pointer.channelId);
+      if (!existing || existing.version < pointer.version) {
+        this.transport.send(peerId, {
+          type: 'sync.fetch_snapshot',
+          workspaceId,
+          domain: pointer.domain,
+          ...(pointer.channelId ? { channelId: pointer.channelId } : {}),
+          snapshotId: pointer.snapshotId,
+        });
+      }
+    }
+  }
+
+  private async handleManifestFetchSnapshot(peerId: string, data: any): Promise<void> {
+    const workspaceId = typeof data?.workspaceId === 'string' ? data.workspaceId : '';
+    const domain = data?.domain as SyncDomain | undefined;
+    const channelId = typeof data?.channelId === 'string' ? data.channelId : undefined;
+    if (!workspaceId || !domain) return;
+    if (!this.isWorkspaceMember(peerId, workspaceId)) return;
+
+    const snapshot = this.manifestStore.getSnapshot(workspaceId, domain, channelId)
+      ?? this.buildManifestSnapshot(workspaceId, domain, channelId);
+    if (!snapshot) return;
+
+    this.manifestStore.saveSnapshot(snapshot);
+    this.transport.send(peerId, {
+      type: 'sync.snapshot_response',
+      workspaceId,
+      snapshot,
+    });
+  }
+
+  private async handleManifestSnapshotResponse(peerId: string, data: any): Promise<void> {
+    const snapshot = data?.snapshot as SyncManifestSnapshot | undefined;
+    if (!snapshot) return;
+
+    this.manifestStore.restoreSnapshot(snapshot, this.state.myPeerId || 'unknown');
+
+    if (snapshot.domain === 'workspace-manifest') {
+      const ws = this.workspaceManager.getWorkspace(snapshot.workspaceId);
+      if (ws) {
+        ws.name = snapshot.name;
+        ws.description = snapshot.description;
+        await this.persistWorkspace(ws.id);
+      }
+      return;
+    }
+
+    if (snapshot.domain === 'membership') {
+      const ws = this.workspaceManager.getWorkspace(snapshot.workspaceId);
+      if (ws) {
+        const existingByPeer = new Map(ws.members.map((member: any) => [member.peerId, member]));
+        ws.members = snapshot.members.map((member) => ({
+          peerId: member.peerId,
+          alias: member.alias || member.peerId.slice(0, 8),
+          publicKey: existingByPeer.get(member.peerId)?.publicKey || '',
+          role: member.role as 'owner' | 'admin' | 'member',
+          joinedAt: member.joinedAt,
+        }));
+        await this.persistWorkspace(ws.id);
+      }
+      return;
+    }
+
+    if (snapshot.domain === 'channel-manifest') {
+      const ws = this.workspaceManager.getWorkspace(snapshot.workspaceId);
+      if (ws) {
+        for (const channel of snapshot.channels) {
+          if (ws.channels.some((existing: any) => existing.id === channel.id)) continue;
+          ws.channels.push({
+            id: channel.id,
+            workspaceId: ws.id,
+            name: channel.name,
+            type: channel.type,
+            members: [],
+            createdBy: channel.createdBy,
+            createdAt: channel.createdAt,
+          } as any);
+        }
+        await this.persistWorkspace(ws.id);
+      }
+      return;
+    }
+
+    if (snapshot.domain === 'channel-message') {
+      const localIds = new Set(this.messageStore.getMessages(snapshot.channelId).map((message: any) => message.id));
+      const missing = snapshot.messageIds.filter((id) => !localIds.has(id));
+      if (missing.length > 0) {
+        this.transport.send(peerId, {
+          type: 'message-sync-fetch-request',
+          workspaceId: snapshot.workspaceId,
+          messageIdsByChannel: {
+            [snapshot.channelId]: missing,
+          },
+        });
+      }
+    }
+  }
+
+  private buildManifestSnapshot(workspaceId: string, domain: SyncDomain, channelId?: string): SyncManifestSnapshot | null {
+    const summary = this.manifestStore.getSummary(workspaceId);
+    const version = summary.versions.find((entry) => entry.domain === domain && (entry.channelId ?? '') === (channelId ?? ''))?.version ?? 0;
+
+    if (domain === 'workspace-manifest') {
+      const workspace = this.workspaceManager.getWorkspace(workspaceId);
+      if (!workspace) return null;
+      return {
+        domain,
+        workspaceId,
+        version,
+        name: workspace.name,
+        description: workspace.description,
+        policy: workspace.permissions as Record<string, unknown> | undefined,
+        snapshotId: crypto.randomUUID(),
+        snapshotVersion: version,
+        basedOnVersion: version,
+        deltasSince: 0,
+        createdAt: Date.now(),
+        createdBy: this.state.myPeerId,
+      };
+    }
+
+    if (domain === 'membership') {
+      const workspace = this.workspaceManager.getWorkspace(workspaceId);
+      if (!workspace) return null;
+      return {
+        domain,
+        workspaceId,
+        version,
+        snapshotId: crypto.randomUUID(),
+        basedOnVersion: version,
+        memberCount: workspace.members.length,
+        members: workspace.members.map((member: any) => ({
+          peerId: member.peerId,
+          alias: member.alias,
+          role: member.role as 'owner' | 'admin' | 'member',
+          joinedAt: member.joinedAt,
+        })),
+        createdAt: Date.now(),
+        createdBy: this.state.myPeerId,
+      };
+    }
+
+    if (domain === 'channel-manifest') {
+      const workspace = this.workspaceManager.getWorkspace(workspaceId);
+      if (!workspace) return null;
+      return {
+        domain,
+        workspaceId,
+        version,
+        snapshotId: crypto.randomUUID(),
+        basedOnVersion: version,
+        channelCount: workspace.channels.length,
+        channels: workspace.channels.map((channel: any) => ({
+          id: channel.id,
+          name: channel.name,
+          type: channel.type,
+          createdAt: channel.createdAt,
+          createdBy: channel.createdBy,
+        })),
+        createdAt: Date.now(),
+        createdBy: this.state.myPeerId,
+      };
+    }
+
+    if (domain === 'channel-message' && channelId) {
+      const messages = this.messageStore.getMessages(channelId).slice().sort((a, b) => a.timestamp - b.timestamp);
+      const minTimestamp = messages[0]?.timestamp ?? Date.now();
+      const maxTimestamp = messages[messages.length - 1]?.timestamp ?? minTimestamp;
+      return {
+        domain,
+        workspaceId,
+        channelId,
+        version,
+        snapshotId: crypto.randomUUID(),
+        basedOnVersion: version,
+        messageCount: messages.length,
+        messageIds: messages.map((message) => message.id),
+        minTimestamp,
+        maxTimestamp,
+        createdAt: Date.now(),
+        createdBy: this.state.myPeerId,
+      };
+    }
+
+    return null;
+  }
+
+  private requestCustodyRecovery(peerId: string): void {
+    for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+      if (!workspace.members.some((member: any) => member.peerId === peerId)) continue;
+      this.transport.send(peerId, {
+        type: 'custody.fetch_index',
+        workspaceId: workspace.id,
+        recipientPeerId: this.state.myPeerId,
+      });
+    }
+  }
+
+  private selectCustodianPeers(workspaceId: string, recipientPeerId: string, limit = 2): string[] {
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) return [];
+
+    return workspace.members
+      .map((member: any) => member.peerId)
+      .filter((peerId: string) => peerId !== this.state.myPeerId && peerId !== recipientPeerId)
+      .filter((peerId: string) => this.state.readyPeers.has(peerId))
+      .map((peerId: string) => {
+        let score = 100;
+        const alias = this.getDisplayNameForPeer(peerId).toLowerCase();
+        if (alias.includes('mobile') || alias.includes('iphone') || alias.includes('android')) score -= 20;
+        if (alias.includes('desktop') || alias.includes('server') || alias.includes('bot')) score += 20;
+        const connectAt = this.peerConnectedAt.get(peerId) ?? 0;
+        const disconnects = this.peerDisconnectCount.get(peerId) ?? 0;
+        score += Math.min(20, Math.floor((Date.now() - connectAt) / 60_000));
+        score -= Math.min(20, disconnects * 2);
+        return { peerId, score };
+      })
+      .sort((a, b) => b.score - a.score || a.peerId.localeCompare(b.peerId))
+      .slice(0, Math.max(0, limit))
+      .map((entry) => entry.peerId);
+  }
+
+  private async replicateToCustodians(
+    recipientPeerId: string,
+    workspaceId?: string | null,
+    channelId?: string | null,
+    messageId?: string | null,
+  ): Promise<void> {
+    if (!workspaceId || !channelId || !messageId) return;
+
+    const custodians = this.selectCustodianPeers(workspaceId, recipientPeerId);
+    if (custodians.length === 0) return;
+
+    const pending = await this.custodyStore.getPendingForRecipient(recipientPeerId);
+    const envelopes = pending.filter((envelope) => envelope.opId === messageId && envelope.workspaceId === workspaceId);
+    if (envelopes.length === 0) return;
+
+    for (const envelope of envelopes) {
+      this.pendingCustodyOffers.set(envelope.envelopeId, custodians);
+      for (const custodianPeerId of custodians) {
+        this.transport.send(custodianPeerId, {
+          type: 'custody.offer',
+          workspaceId,
+          recipientPeerId,
+          channelId,
+          envelope: {
+            envelopeId: envelope.envelopeId,
+            opId: envelope.opId,
+            workspaceId: envelope.workspaceId,
+            channelId: envelope.channelId,
+            threadId: envelope.threadId,
+            domain: envelope.domain,
+            createdAt: envelope.createdAt,
+            expiresAt: envelope.expiresAt,
+            replicationClass: envelope.replicationClass,
+          },
+        });
+      }
+    }
+  }
+
+  private async handleCustodyControl(peerId: string, data: any): Promise<void> {
+    if (data?.type === 'custody.offer') {
+      const workspaceId = typeof data?.workspaceId === 'string' ? data.workspaceId : '';
+      const canAccept = !workspaceId || this.isWorkspaceMember(this.state.myPeerId, workspaceId);
+      this.transport.send(peerId, {
+        type: canAccept ? 'custody.accept' : 'custody.reject',
+        workspaceId,
+        envelopeId: data?.envelope?.envelopeId,
+        recipientPeerId: data?.recipientPeerId,
+        reason: canAccept ? undefined : 'not-a-member',
+      });
+      return;
+    }
+
+    if (data?.type === 'custody.accept') {
+      const envelopeId = typeof data?.envelopeId === 'string' ? data.envelopeId : '';
+      const recipientPeerId = typeof data?.recipientPeerId === 'string' ? data.recipientPeerId : '';
+      const offered = this.pendingCustodyOffers.get(envelopeId) ?? [];
+      if (!envelopeId || !recipientPeerId || !offered.includes(peerId)) return;
+
+      const envelopes = await this.custodyStore.listAllForRecipient(recipientPeerId);
+      const envelope = envelopes.find((entry) => entry.envelopeId === envelopeId);
+      if (!envelope) return;
+
+      this.transport.send(peerId, {
+        type: 'custody.store',
+        workspaceId: envelope.workspaceId,
+        recipientPeerId,
+        envelope,
+      });
+      return;
+    }
+
+    if (data?.type === 'custody.reject') {
+      const envelopeId = typeof data?.envelopeId === 'string' ? data.envelopeId : '';
+      if (!envelopeId) return;
+      const offered = this.pendingCustodyOffers.get(envelopeId) ?? [];
+      this.pendingCustodyOffers.set(envelopeId, offered.filter((id) => id !== peerId));
+      return;
+    }
+
+    if (data?.type === 'custody.store') {
+      const envelope = data?.envelope;
+      if (!this.isCustodyEnvelope(envelope)) return;
+      this.custodianInbox.set(envelope.envelopeId, envelope);
+      await this.persistCustodianInbox();
+      this.transport.send(peerId, {
+        type: 'custody.ack',
+        envelopeIds: [envelope.envelopeId],
+        stage: 'stored',
+      });
+      return;
+    }
+
+    if (data?.type === 'custody.fetch_index') {
+      if (Array.isArray(data?.index)) {
+        const envelopeIds = data.index
+          .map((entry: any) => (typeof entry?.envelopeId === 'string' ? entry.envelopeId : null))
+          .filter((value: string | null): value is string => Boolean(value));
+        if (envelopeIds.length > 0) {
+          this.transport.send(peerId, {
+            type: 'custody.fetch_envelopes',
+            workspaceId: data.workspaceId,
+            envelopeIds,
+          });
+        }
+        return;
+      }
+
+      const recipientPeerId = typeof data?.recipientPeerId === 'string' ? data.recipientPeerId : peerId;
+      const workspaceId = typeof data?.workspaceId === 'string' ? data.workspaceId : undefined;
+      const index = [...this.custodianInbox.values()]
+        .filter((envelope) => envelope.recipientPeerIds.includes(recipientPeerId))
+        .filter((envelope) => !workspaceId || envelope.workspaceId === workspaceId)
+        .map((envelope) => ({
+          envelopeId: envelope.envelopeId,
+          opId: envelope.opId,
+          workspaceId: envelope.workspaceId,
+          channelId: envelope.channelId,
+          domain: envelope.domain,
+          createdAt: envelope.createdAt,
+          expiresAt: envelope.expiresAt,
+        }));
+
+      this.transport.send(peerId, {
+        type: 'custody.fetch_index',
+        workspaceId: workspaceId ?? '',
+        recipientPeerId,
+        index,
+      });
+      return;
+    }
+
+    if (data?.type === 'custody.fetch_envelopes') {
+      if (Array.isArray(data?.envelopes)) {
+        const recovered = data.envelopes.filter((entry: any) => this.isCustodyEnvelope(entry)) as CustodyEnvelope[];
+        const recoveredIds: string[] = [];
+
+        for (const envelope of recovered) {
+          if (!envelope.recipientPeerIds.includes(this.state.myPeerId)) continue;
+          recoveredIds.push(envelope.envelopeId);
+          await this.transport.onMessage?.(peerId, envelope.ciphertext as any);
+        }
+
+        if (recoveredIds.length > 0) {
+          this.transport.send(peerId, {
+            type: 'custody.ack',
+            envelopeIds: recoveredIds,
+            stage: 'delivered',
+          });
+        }
+        return;
+      }
+
+      const envelopeIds = Array.isArray(data?.envelopeIds)
+        ? data.envelopeIds.filter((id: unknown): id is string => typeof id === 'string')
+        : [];
+      const envelopes = envelopeIds
+        .map((id: string) => this.custodianInbox.get(id))
+        .filter((entry: CustodyEnvelope | undefined): entry is CustodyEnvelope => Boolean(entry));
+
+      this.transport.send(peerId, {
+        type: 'custody.fetch_envelopes',
+        workspaceId: typeof data?.workspaceId === 'string' ? data.workspaceId : '',
+        envelopes,
+      });
+      return;
+    }
+
+    if (data?.type === 'custody.ack') {
+      const envelopeIds = Array.isArray(data?.envelopeIds)
+        ? data.envelopeIds.filter((id: unknown): id is string => typeof id === 'string')
+        : [];
+      if (envelopeIds.length === 0) return;
+
+      let changed = false;
+      for (const envelopeId of envelopeIds) {
+        if (this.custodianInbox.delete(envelopeId)) changed = true;
+      }
+      if (changed) {
+        await this.persistCustodianInbox();
+      }
+    }
+  }
 
   private async requestMessageSync(peerId: string): Promise<void> {
     const workspaceId = this.resolveTopologyWorkspaceId(peerId);
@@ -7325,21 +8316,25 @@ export class ChatController {
     let hitBackpressure = false;
 
     for (const item of queued as any[]) {
-      let envelope = item?.data ?? item;
+      const queuedPayload = item?.data ?? item;
+      const custodyEnvelope = this.isCustodyEnvelope(queuedPayload) ? queuedPayload : null;
+      let envelope = custodyEnvelope ? custodyEnvelope.ciphertext : queuedPayload;
 
-      // Handle deferred plaintext messages: encrypt now that the handshake is complete
-      if (envelope?._deferred) {
+      // Deferred plaintext fallback is intentional: these outbox entries were queued
+      // only when encryption state was unavailable. Re-encrypt now that handshake is ready.
+      if ((envelope as any)?._deferred) {
         try {
-          const encrypted = await this.messageProtocol!.encryptMessage(peerId, envelope.content, 'text');
-          (encrypted as any).channelId = envelope.channelId;
-          (encrypted as any).workspaceId = envelope.workspaceId;
-          (encrypted as any).threadId = envelope.threadId;
-          (encrypted as any).vectorClock = envelope.vectorClock;
-          (encrypted as any).messageId = envelope.messageId;
+          const deferred = envelope as any;
+          const encrypted = await this.messageProtocol!.encryptMessage(peerId, deferred.content, 'text');
+          (encrypted as any).channelId = deferred.channelId;
+          (encrypted as any).workspaceId = deferred.workspaceId;
+          (encrypted as any).threadId = deferred.threadId;
+          (encrypted as any).vectorClock = deferred.vectorClock;
+          (encrypted as any).messageId = deferred.messageId;
 
           // Include thread root snapshot for thread messages
-          if (envelope.threadId) {
-            const threadRoot = this.messageStore.getThreadRoot(envelope.threadId);
+          if (deferred.threadId) {
+            const threadRoot = this.messageStore.getThreadRoot(deferred.threadId);
             if (threadRoot) {
               (encrypted as any).threadRootSnapshot = {
                 senderId: threadRoot.senderId,
@@ -7362,9 +8357,20 @@ export class ChatController {
         }
       }
 
+      if (!envelope || typeof envelope !== 'object') {
+        if (typeof item?.id === 'number') {
+          await this.offlineQueue.remove(peerId, item.id);
+        }
+        continue;
+      }
+
       // Mark replayed outbox traffic so receiver can route it through trusted
       // replay lane instead of normal chat throttling.
       (envelope as any)._offlineReplay = 1;
+      if (custodyEnvelope && !(envelope as any).envelopeId) {
+        (envelope as any).envelopeId = custodyEnvelope.envelopeId;
+      }
+
       try {
         const sent = this.transport.send(peerId, envelope);
         if (!sent) {
@@ -7380,7 +8386,7 @@ export class ChatController {
         delivered += 1;
 
         // Update message status from pending → sent for deferred messages
-        const msgId = envelope?.messageId ?? (item?.data ?? item)?.messageId;
+        const msgId = custodyEnvelope?.opId ?? (envelope as any)?.messageId ?? (item?.data ?? item)?.messageId;
         if (msgId) {
           this.ui?.updateMessageStatus?.(msgId, 'sent', undefined);
         }
@@ -7799,6 +8805,7 @@ export class ChatController {
         isOnline,
         isYou,
         allowWorkspaceDMs: localMember?.allowWorkspaceDMs ?? member.allowWorkspaceDMs ?? true,
+        companySim: (localMember as any)?.companySim ?? (member as any).companySim,
       };
     });
 
@@ -7831,6 +8838,7 @@ export class ChatController {
         isOnline: true,
         isYou: true,
         allowWorkspaceDMs: true,
+        companySim: undefined,
       });
     }
 
@@ -7949,7 +8957,9 @@ export class ChatController {
   }
 
   private findWorkspaceByChannelId(channelId: string): Workspace | null {
-    const workspaces = this.workspaceManager.getAllWorkspaces();
+    const manager: any = this.workspaceManager as any;
+    if (!manager || typeof manager.getAllWorkspaces !== 'function') return null;
+    const workspaces = manager.getAllWorkspaces() as Workspace[];
     return workspaces.find((ws) => ws.channels.some((ch: Channel) => ch.id === channelId)) || null;
   }
 
@@ -8039,12 +9049,39 @@ export class ChatController {
         const dedupeKey = `${msg.senderId}:${msg.id}:${channelId}`;
 
         try {
+          const workspaceId = this.findWorkspaceByChannelId(channelId)?.id || this.state.activeWorkspaceId || 'direct';
           if (this.state.readyPeers.has(msg.senderId)) {
-            this.transport.send(msg.senderId, payload);
+            const sent = this.transport.send(msg.senderId, payload);
+            if (sent === false && !this.pendingReadReceiptKeys.has(dedupeKey)) {
+              this.pendingReadReceiptKeys.add(dedupeKey);
+              await this.queueCustodyEnvelope(msg.senderId, {
+                opId: msg.id,
+                recipientPeerIds: [msg.senderId],
+                workspaceId,
+                channelId,
+                domain: 'receipt',
+                ciphertext: payload,
+                metadata: { kind: 'read' },
+              }, payload);
+            }
           } else if (!this.pendingReadReceiptKeys.has(dedupeKey)) {
             this.pendingReadReceiptKeys.add(dedupeKey);
-            await this.offlineQueue.enqueue(msg.senderId, payload);
+            await this.queueCustodyEnvelope(msg.senderId, {
+              opId: msg.id,
+              recipientPeerIds: [msg.senderId],
+              workspaceId,
+              channelId,
+              domain: 'receipt',
+              ciphertext: payload,
+              metadata: { kind: 'read' },
+            }, payload);
           }
+          this.recordManifestDomain('receipt', workspaceId, {
+            channelId,
+            operation: 'create',
+            subject: msg.id,
+            data: { kind: 'read', senderId: this.state.myPeerId },
+          });
           await this.persistentStore.saveMessage({ ...(msg as any), localReadAt: (msg as any).localReadAt });
         } catch (err) {
           console.warn('[ReadReceipt] Failed to emit late read receipt', err);
