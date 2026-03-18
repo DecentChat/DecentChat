@@ -44,14 +44,14 @@ export class CustodyStore {
     const queued = await this.queue.getQueued(recipientPeerId);
     return queued
       .map((item) => item.data as CustodyEnvelope)
-      .filter((item): item is CustodyEnvelope => this.isCustodyEnvelope(item));
+      .filter((item): item is CustodyEnvelope => this.isValidActiveEnvelope(item));
   }
 
   async listAllForRecipient(recipientPeerId: string): Promise<CustodyEnvelope[]> {
     const queued = await this.queue.listQueued(recipientPeerId);
     return queued
       .map((item) => item.data as CustodyEnvelope)
-      .filter((item): item is CustodyEnvelope => this.isCustodyEnvelope(item));
+      .filter((item): item is CustodyEnvelope => this.isValidActiveEnvelope(item));
   }
 
   async markDelivered(recipientPeerId: string, envelopeId: string, receipt?: DeliveryReceipt): Promise<boolean> {
@@ -189,13 +189,27 @@ export class CustodyStore {
     };
   }
 
+  private isValidActiveEnvelope(value: unknown): value is CustodyEnvelope {
+    return this.isCustodyEnvelope(value) && !this.isEnvelopeExpired(value);
+  }
+
+  private isEnvelopeExpired(envelope: CustodyEnvelope): boolean {
+    return Number.isFinite(envelope.expiresAt) && Date.now() >= envelope.expiresAt;
+  }
+
   private isCustodyEnvelope(value: unknown): value is CustodyEnvelope {
     if (!value || typeof value !== 'object') return false;
     const v = value as Partial<CustodyEnvelope>;
     return typeof v.envelopeId === 'string'
+      && v.envelopeId.length > 0
       && typeof v.opId === 'string'
+      && v.opId.length > 0
       && Array.isArray(v.recipientPeerIds)
+      && v.recipientPeerIds.length > 0
+      && v.recipientPeerIds.every((peerId) => typeof peerId === 'string' && peerId.length > 0)
       && typeof v.workspaceId === 'string'
-      && typeof v.domain === 'string';
+      && v.workspaceId.length > 0
+      && typeof v.domain === 'string'
+      && v.domain.length > 0;
   }
 }

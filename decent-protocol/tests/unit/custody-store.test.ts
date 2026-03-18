@@ -57,6 +57,72 @@ describe('CustodyStore', () => {
     expect(receipts[0].receiptId).toBe('r-ack');
   });
 
+
+  test('expired or malformed custody envelopes are ignored when listing recipients', async () => {
+    const queue = new OfflineQueue({ retryDelayMs: 1_000, maxAgeMs: 60_000, maxRetries: 3 });
+    const store = new CustodyStore(queue);
+    const now = Date.now();
+
+    await queue.enqueue('peer-a', {
+      envelopeId: 'env-expired',
+      opId: 'op-expired',
+      recipientPeerIds: ['peer-a'],
+      workspaceId: 'ws-1',
+      domain: 'channel-message',
+      ciphertext: { payload: 'expired' },
+      createdAt: now - 5_000,
+      expiresAt: now - 1_000,
+      deliveryState: 'stored',
+      replicationClass: 'standard',
+    }, {
+      envelopeId: 'env-expired',
+      opId: 'op-expired',
+      domain: 'channel-message',
+      replicationClass: 'standard',
+      createdAt: now - 5_000,
+      expiresAt: now - 1_000,
+      deliveryState: 'stored',
+      recipientPeerIds: ['peer-a'],
+    });
+
+    await queue.enqueue('peer-a', {
+      envelopeId: '',
+      opId: 'op-invalid',
+      recipientPeerIds: ['peer-a'],
+      workspaceId: 'ws-1',
+      domain: 'channel-message',
+      ciphertext: { payload: 'invalid' },
+      createdAt: now,
+      expiresAt: now + 60_000,
+      deliveryState: 'stored',
+      replicationClass: 'standard',
+    }, {
+      envelopeId: 'meta-invalid',
+      opId: 'op-invalid',
+      domain: 'channel-message',
+      replicationClass: 'standard',
+      createdAt: now,
+      expiresAt: now + 60_000,
+      deliveryState: 'stored',
+      recipientPeerIds: ['peer-a'],
+    });
+
+    await store.storeEnvelope({
+      envelopeId: 'env-live',
+      opId: 'op-live',
+      recipientPeerIds: ['peer-a'],
+      workspaceId: 'ws-1',
+      ciphertext: { payload: 'live' },
+      expiresAt: now + 60_000,
+    });
+
+    const listed = await store.listAllForRecipient('peer-a');
+    const pending = await store.getPendingForRecipient('peer-a');
+
+    expect(listed.map((item) => item.envelopeId)).toEqual(['env-live']);
+    expect(pending.map((item) => item.envelopeId)).toEqual(['env-live']);
+  });
+
   test('buildSyncSummary combines queue state and receipts', async () => {
     const queue = new OfflineQueue({ retryDelayMs: 1_000, maxAgeMs: 60_000, maxRetries: 3 });
     const store = new CustodyStore(queue);

@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
+import { fileURLToPath } from 'node:url';
 import { buildCompanyBootstrapPlan } from '../../src/company-sim/bootstrap.ts';
 import { resolveDecentChatAccount } from '../../src/channel.ts';
+
+const manifestPath = fileURLToPath(new URL('../../../company-sims/software-studio/company.yaml', import.meta.url));
 
 const cfg = {
   channels: {
@@ -11,7 +14,7 @@ const cfg = {
           alias: 'Mira PM',
           companySim: {
             enabled: true,
-            manifestPath: '/Users/claw/Projects/decent-chat/company-sims/software-studio/company.yaml',
+            manifestPath,
             companyId: 'software-studio',
             employeeId: 'team-manager',
           },
@@ -21,7 +24,7 @@ const cfg = {
           alias: 'Rian Backend',
           companySim: {
             enabled: true,
-            manifestPath: '/Users/claw/Projects/decent-chat/company-sims/software-studio/company.yaml',
+            manifestPath,
             companyId: 'software-studio',
             employeeId: 'backend-dev',
           },
@@ -31,7 +34,7 @@ const cfg = {
           alias: 'Iva QA',
           companySim: {
             enabled: true,
-            manifestPath: '/Users/claw/Projects/decent-chat/company-sims/software-studio/company.yaml',
+            manifestPath,
             companyId: 'software-studio',
             employeeId: 'tester',
           },
@@ -44,7 +47,7 @@ const cfg = {
 describe('company bootstrap', () => {
   test('loads software-studio template into workspace + employee bootstrap plan', () => {
     const plan = buildCompanyBootstrapPlan({
-      manifestPath: '/Users/claw/Projects/decent-chat/company-sims/software-studio/company.yaml',
+      manifestPath,
       resolveAccount: (accountId) => resolveDecentChatAccount(cfg, accountId),
     });
 
@@ -58,7 +61,7 @@ describe('company bootstrap', () => {
 
   test('fails when an employee account is not configured', () => {
     expect(() => buildCompanyBootstrapPlan({
-      manifestPath: '/Users/claw/Projects/decent-chat/company-sims/software-studio/company.yaml',
+      manifestPath,
       resolveAccount: (accountId) => resolveDecentChatAccount({ channels: { decentchat: { accounts: {} } } }, accountId),
     })).toThrow(/configured account/i);
   });
