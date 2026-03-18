@@ -10,11 +10,27 @@ import {
   InviteURI,
   MessageStore,
   OfflineQueue,
+  CustodyStore,
+  ManifestStore,
   SeedPhraseManager,
   WorkspaceManager,
   Negentropy,
 } from 'decent-protocol';
-import type { Workspace, WorkspaceMember, PlaintextMessage, MessageMetadata, AssistantMessageMetadata } from 'decent-protocol';
+import type {
+  Workspace,
+  WorkspaceMember,
+  PlaintextMessage,
+  MessageMetadata,
+  AssistantMessageMetadata,
+  CustodyEnvelope,
+  DeliveryReceipt,
+  SyncDomain,
+  ManifestDelta,
+  ManifestDiffRequest,
+  SyncManifestSummary,
+  SyncManifestSnapshot,
+  ManifestStoreState,
+} from 'decent-protocol';
 import { PeerTransport } from 'decent-transport-webrtc';
 import { randomUUID } from 'node:crypto';
 import { FileStore } from './FileStore.js';
@@ -22,6 +38,7 @@ import { NodeMessageProtocol } from './NodeMessageProtocol.js';
 import { SyncProtocol, type SyncEvent } from './SyncProtocol.js';
 import type { ResolvedDecentChatAccount } from '../types.js';
 import { BotHuddleManager, type BotHuddleConfig } from '../huddle/BotHuddleManager.js';
+import { loadCompanyContextForAccount } from '../company-sim/context-loader.js';
 
 export interface NodeXenaPeerOptions {
   account: ResolvedDecentChatAccount;
@@ -113,6 +130,8 @@ type DirectoryEntry = {
 };
 
 export class NodeXenaPeer {
+  private static readonly CUSTODIAN_REPLICATION_TARGET = 2;
+
   private readonly store: FileStore;
   private readonly workspaceManager: WorkspaceManager;
   private readonly messageStore: MessageStore;
@@ -125,9 +144,14 @@ export class NodeXenaPeer {
   private destroyed = false;
   private _maintenanceInterval: ReturnType<typeof setInterval> | null = null;
   private readonly offlineQueue: OfflineQueue;
+  private readonly custodyStore: CustodyStore;
+  private readonly manifestStore: ManifestStore;
+  private readonly custodianInbox = new Map<string, CustodyEnvelope>();
+  private readonly pendingCustodyOffers = new Map<string, string[]>();
   private readonly opts: NodeXenaPeerOptions;
   private readonly pendingMediaRequests = new Map<string, PendingMediaRequest>();
   private readonly mediaChunkTimeout = 30000;
+  private manifestPersistTimer: ReturnType<typeof setTimeout> | null = null;
   public botHuddle: BotHuddleManager | null = null;
 
   constructor(opts: NodeXenaPeerOptions) {
@@ -137,8 +161,11 @@ export class NodeXenaPeer {
     this.messageStore = new MessageStore();
     this.cryptoManager = new CryptoManager();
     this.offlineQueue = new OfflineQueue();
+    this.custodyStore = new CustodyStore(this.offlineQueue);
+    this.manifestStore = new ManifestStore();
+    this.manifestStore.setChangeListener(() => this.schedulePersistManifestState());
     this.offlineQueue.setPersistence(
-      async (peerId, data) => {
+      async (peerId, data, meta) => {
         const key = this.offlineQueueKey(peerId);
         const seqKey = 'offline-queue-seq';
         const seq = this.store.get<number>(seqKey, 1);
@@ -147,8 +174,10 @@ export class NodeXenaPeer {
           id: seq,
           targetPeerId: peerId,
           data,
-          createdAt: Date.now(),
-          attempts: 0,
+          createdAt: meta?.createdAt ?? Date.now(),
+          attempts: meta?.attempts ?? 0,
+          lastAttempt: meta?.lastAttempt,
+          ...meta,
         });
         this.store.set(key, queue);
         this.store.set(seqKey, seq + 1);
@@ -175,6 +204,30 @@ export class NodeXenaPeer {
         this.store.delete(key);
         return queue;
       },
+      async (id, patch) => {
+        for (const key of this.store.keys('offline-queue-')) {
+          if (key === 'offline-queue-seq') continue;
+          const queue = this.store.get<any[]>(key, []);
+          const idx = queue.findIndex((msg) => msg?.id === id);
+          if (idx < 0) continue;
+          queue[idx] = { ...queue[idx], ...patch };
+          this.store.set(key, queue);
+          break;
+        }
+      },
+    );
+
+    this.custodyStore.setReceiptPersistence(
+      async (receipt) => {
+        const key = this.receiptLogKey(receipt.recipientPeerId);
+        const receipts = this.store.get<DeliveryReceipt[]>(key, []);
+        if (!receipts.some((entry) => entry.receiptId === receipt.receiptId)) {
+          receipts.push(receipt);
+          receipts.sort((a, b) => a.timestamp - b.timestamp || a.receiptId.localeCompare(b.receiptId));
+          this.store.set(key, receipts);
+        }
+      },
+      async (peerId) => this.store.get<DeliveryReceipt[]>(this.receiptLogKey(peerId), []),
     );
   }
 
@@ -210,6 +263,8 @@ export class NodeXenaPeer {
 
     this.restoreWorkspaces();
     this.restoreMessages();
+    this.restoreManifestState();
+    this.restoreCustodianInbox();
 
     const configServer = this.opts.account.signalingServer ?? 'https://decentchat.app/peerjs';
     const allServers: string[] = [configServer];
@@ -387,6 +442,13 @@ export class NodeXenaPeer {
     const added = await this.messageStore.addMessage(msg);
     if (added.success) {
       this.persistMessagesForChannel(channelId);
+      this.recordManifestDomain('channel-message', workspaceId, {
+        channelId,
+        itemCount: this.messageStore.getMessages(channelId).length,
+        operation: 'create',
+        subject: msg.id,
+        data: { messageId: msg.id, senderId: this.myPeerId },
+      });
     }
 
     const workspace = workspaceId ? this.workspaceManager.getWorkspace(workspaceId) : undefined;
@@ -395,7 +457,72 @@ export class NodeXenaPeer {
       : this.transport.getConnectedPeers().filter((p) => p !== this.myPeerId);
 
     for (const peerId of recipients) {
-      if (!this.transport.getConnectedPeers().includes(peerId)) {
+      try {
+        const encrypted = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text', modelMeta);
+        (encrypted as any).channelId = channelId;
+        (encrypted as any).workspaceId = workspaceId;
+        (encrypted as any).senderId = this.myPeerId;
+        (encrypted as any).senderName = this.opts.account.alias;
+        (encrypted as any).messageId = msg.id;
+        if (threadId) (encrypted as any).threadId = threadId;
+        if (replyToId) (encrypted as any).replyToId = replyToId;
+
+        const connected = this.transport.getConnectedPeers().includes(peerId);
+        if (connected) {
+          await this.queuePendingAck(peerId, {
+            content: content.trim(),
+            channelId,
+            workspaceId,
+            senderId: this.myPeerId,
+            senderName: this.opts.account.alias,
+            messageId: msg.id,
+            threadId,
+            replyToId,
+            isDirect: false,
+            ...(modelMeta ? { metadata: modelMeta } : {}),
+          });
+          const accepted = this.transport.send(peerId, encrypted);
+          if (!accepted) {
+            await this.custodyStore.storeEnvelope({
+              envelopeId: typeof (encrypted as any).id === 'string' ? (encrypted as any).id : undefined,
+              opId: msg.id,
+              recipientPeerIds: [peerId],
+              workspaceId,
+              channelId,
+              ...(threadId ? { threadId } : {}),
+              domain: 'channel-message',
+              ciphertext: encrypted,
+              metadata: {
+                messageId: msg.id,
+                senderId: this.myPeerId,
+                senderName: this.opts.account.alias,
+                ...(replyToId ? { replyToId } : {}),
+              },
+            });
+            await this.replicateToCustodians(peerId, workspaceId, channelId, msg.id);
+          }
+          continue;
+        }
+
+        await this.custodyStore.storeEnvelope({
+          envelopeId: typeof (encrypted as any).id === 'string' ? (encrypted as any).id : undefined,
+          opId: msg.id,
+          recipientPeerIds: [peerId],
+          workspaceId,
+          channelId,
+          ...(threadId ? { threadId } : {}),
+          domain: 'channel-message',
+          ciphertext: encrypted,
+          metadata: {
+            messageId: msg.id,
+            senderId: this.myPeerId,
+            senderName: this.opts.account.alias,
+            ...(replyToId ? { replyToId } : {}),
+          },
+        });
+        await this.replicateToCustodians(peerId, workspaceId, channelId, msg.id);
+      } catch (err) {
+        this.opts.log?.error?.(`[xena-peer] failed to prepare outbound for ${peerId}: ${String(err)}`);
         await this.enqueueOffline(peerId, {
           content: content.trim(),
           channelId,
@@ -408,32 +535,6 @@ export class NodeXenaPeer {
           isDirect: false,
           ...(modelMeta ? { metadata: modelMeta } : {}),
         });
-        continue;
-      }
-      try {
-        await this.queuePendingAck(peerId, {
-          content: content.trim(),
-          channelId,
-          workspaceId,
-          senderId: this.myPeerId,
-          senderName: this.opts.account.alias,
-          messageId: msg.id,
-          threadId,
-          replyToId,
-          isDirect: false,
-          ...(modelMeta ? { metadata: modelMeta } : {}),
-        });
-        const envelope = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text', modelMeta);
-        (envelope as any).channelId = channelId;
-        (envelope as any).workspaceId = workspaceId;
-        (envelope as any).senderId = this.myPeerId;
-        (envelope as any).senderName = this.opts.account.alias;
-        (envelope as any).messageId = msg.id;
-        if (threadId) (envelope as any).threadId = threadId;
-        if (replyToId) (envelope as any).replyToId = replyToId;
-        this.transport.send(peerId, envelope);
-      } catch (err) {
-        this.opts.log?.error?.(`[xena-peer] failed to encrypt for ${peerId}: ${String(err)}`);
       }
     }
   }
@@ -462,6 +563,7 @@ export class NodeXenaPeer {
         publicKey: this.myPublicKey,
         role: 'member',
         isBot: true,
+        companySim: this.getMyCompanySimProfile(),
         joinedAt: Date.now(),
       };
 
@@ -477,6 +579,11 @@ export class NodeXenaPeer {
     if (this._maintenanceInterval) {
       clearInterval(this._maintenanceInterval);
       this._maintenanceInterval = null;
+    }
+    if (this.manifestPersistTimer) {
+      clearTimeout(this.manifestPersistTimer);
+      this.manifestPersistTimer = null;
+      this.persistManifestState();
     }
     // Clear all pending media request timeouts
     for (const pending of this.pendingMediaRequests.values()) {
@@ -551,10 +658,12 @@ export class NodeXenaPeer {
     const msg = rawData as any;
 
     if (msg?.type === 'ack') {
-      const ackMessageId = typeof msg.messageId === 'string' ? msg.messageId : '';
-      if (ackMessageId) {
-        await this.removePendingAck(fromPeerId, ackMessageId);
-      }
+      await this.handleInboundReceipt(fromPeerId, msg, 'acknowledged');
+      return;
+    }
+
+    if (msg?.type === 'read') {
+      await this.handleInboundReceipt(fromPeerId, msg, 'read');
       return;
     }
 
@@ -566,19 +675,23 @@ export class NodeXenaPeer {
       this.updateWorkspaceMemberKey(fromPeerId, msg.publicKey);
       // Save sender's display name if provided
       if (msg.alias) {
-        this.updateWorkspaceMemberAlias(fromPeerId, msg.alias as string);
+        this.updateWorkspaceMemberAlias(fromPeerId, msg.alias as string, msg.companySim as any, msg.isBot === true);
       }
-      await this.flushOfflineQueue(fromPeerId);
+      // Resend previously pending ACK-tracked messages first, then flush newly queued
+      // offline payloads to avoid immediate duplicate sends in the same handshake cycle.
       await this.resendPendingAcks(fromPeerId);
+      await this.flushOfflineQueue(fromPeerId);
       await this.flushPendingReadReceipts(fromPeerId);
       this.requestSyncForPeer(fromPeerId);
+      this.sendManifestSummary(fromPeerId);
+      this.requestCustodyRecovery(fromPeerId);
       return;
     }
 
     // Handle name-announce (unencrypted) — must be before the encrypted guard
     if (msg?.type === 'name-announce' && msg.alias) {
       const alias = msg.alias as string;
-      this.updateWorkspaceMemberAlias(fromPeerId, alias);
+      this.updateWorkspaceMemberAlias(fromPeerId, alias, msg.companySim as any, msg.isBot === true);
       // Also cache directly so resolveSenderName can find it even before workspace sync
       this.store.set(`peer-alias-${fromPeerId}`, alias);
       return;
@@ -604,6 +717,36 @@ export class NodeXenaPeer {
     // Handle fetch requests for specific message IDs (after Negentropy reconciliation)
     if (msg?.type === 'message-sync-fetch-request') {
       await this.handleFetchRequest(fromPeerId, msg);
+      return;
+    }
+
+    if (msg?.type === 'sync.summary') {
+      await this.handleManifestSummary(fromPeerId, msg);
+      return;
+    }
+
+    if (msg?.type === 'sync.diff_request') {
+      await this.handleManifestDiffRequest(fromPeerId, msg);
+      return;
+    }
+
+    if (msg?.type === 'sync.diff_response') {
+      await this.handleManifestDiffResponse(fromPeerId, msg);
+      return;
+    }
+
+    if (msg?.type === 'sync.fetch_snapshot') {
+      await this.handleManifestFetchSnapshot(fromPeerId, msg);
+      return;
+    }
+
+    if (msg?.type === 'sync.snapshot_response') {
+      await this.handleManifestSnapshotResponse(fromPeerId, msg);
+      return;
+    }
+
+    if (typeof msg?.type === 'string' && msg.type.startsWith('custody.')) {
+      await this.handleCustodyControl(fromPeerId, msg);
       return;
     }
 
@@ -681,13 +824,22 @@ export class NodeXenaPeer {
 
     this.persistMessagesForChannel(channelId);
 
+    const workspaceId = (msg.workspaceId as string | undefined) ?? '';
+    this.recordManifestDomain('channel-message', workspaceId || this.findWorkspaceIdForChannel(channelId), {
+      channelId,
+      itemCount: this.messageStore.getMessages(channelId).length,
+      operation: 'create',
+      subject: created.id,
+      data: { messageId: created.id, senderId: fromPeerId },
+    });
+
     this.transport.send(fromPeerId, {
       type: 'ack',
       messageId: created.id,
       channelId,
+      ...(typeof msg.envelopeId === 'string' ? { envelopeId: msg.envelopeId } : {}),
     });
 
-    const workspaceId = (msg.workspaceId as string | undefined) ?? '';
     const senderName = this.resolveSenderName(workspaceId, fromPeerId, msg.senderName as string | undefined);
     const attachments = Array.isArray(msg.attachments)
       ? (msg.attachments as Array<{
@@ -804,6 +956,7 @@ export class NodeXenaPeer {
         type: 'name-announce',
         alias: this.opts.account.alias,
         isBot: true,
+        companySim: this.getMyCompanySimProfile(),
         ...(workspaceWithPeer ? { workspaceId: workspaceWithPeer.id } : {}),
       });
     } catch (err) {
@@ -816,16 +969,60 @@ export class NodeXenaPeer {
       case 'workspace-joined': {
         this.opts.log?.info(`[xena-peer] joined workspace: ${event.workspace.id}`);
         this.persistWorkspaces();
+        this.recordManifestDomain('workspace-manifest', event.workspace.id, {
+          operation: 'update',
+          subject: event.workspace.id,
+          itemCount: 1,
+          data: { name: event.workspace.name },
+        });
+        this.recordManifestDomain('membership', event.workspace.id, {
+          operation: 'update',
+          subject: event.workspace.id,
+          itemCount: event.workspace.members.length,
+          data: { memberCount: event.workspace.members.length },
+        });
+        this.recordManifestDomain('channel-manifest', event.workspace.id, {
+          operation: 'update',
+          subject: event.workspace.id,
+          itemCount: event.workspace.channels.length,
+          data: { channelCount: event.workspace.channels.length },
+        });
         break;
       }
       case 'member-joined':
       case 'member-left':
       case 'channel-created': {
         this.persistWorkspaces();
+        const workspaceId = (event as any).workspaceId as string | undefined;
+        const ws = workspaceId ? this.workspaceManager.getWorkspace(workspaceId) : undefined;
+        if (workspaceId && ws) {
+          if (event.type === 'channel-created') {
+            this.recordManifestDomain('channel-manifest', workspaceId, {
+              operation: 'create',
+              subject: (event as any).channel?.id ?? workspaceId,
+              itemCount: ws.channels.length,
+              data: { channelCount: ws.channels.length },
+            });
+          } else {
+            this.recordManifestDomain('membership', workspaceId, {
+              operation: event.type === 'member-joined' ? 'create' : 'delete',
+              subject: (event as any).member?.peerId ?? workspaceId,
+              itemCount: ws.members.length,
+              data: { memberCount: ws.members.length },
+            });
+          }
+        }
         break;
       }
       case 'message-received': {
         this.persistMessagesForChannel(event.channelId);
+        this.recordManifestDomain('channel-message', this.findWorkspaceIdForChannel(event.channelId), {
+          channelId: event.channelId,
+          operation: 'create',
+          subject: event.message.id,
+          itemCount: this.messageStore.getMessages(event.channelId).length,
+          data: { messageId: event.message.id, senderId: event.message.senderId },
+        });
         const attachments = Array.isArray((event.message as any).attachments)
           ? ((event.message as any).attachments as Array<{
             id: string;
@@ -905,6 +1102,50 @@ export class NodeXenaPeer {
     }
   }
 
+  private restoreCustodianInbox(): void {
+    const raw = this.store.get<CustodyEnvelope[]>(this.custodialInboxKey(), []);
+    this.custodianInbox.clear();
+    for (const envelope of raw) {
+      if (this.isCustodyEnvelope(envelope)) {
+        this.custodianInbox.set(envelope.envelopeId, envelope);
+      }
+    }
+  }
+
+  private persistCustodianInbox(): void {
+    this.store.set(this.custodialInboxKey(), [...this.custodianInbox.values()]);
+  }
+
+  private manifestStateKey(): string {
+    return 'manifest-state-v1';
+  }
+
+  private restoreManifestState(): void {
+    try {
+      const persisted = this.store.get<ManifestStoreState | null>(this.manifestStateKey(), null);
+      if (!persisted) return;
+      this.manifestStore.importState(persisted);
+    } catch (error) {
+      this.opts.log?.warn?.(`[xena-peer] failed to restore manifest state: ${String(error)}`);
+    }
+  }
+
+  private persistManifestState(): void {
+    try {
+      this.store.set(this.manifestStateKey(), this.manifestStore.exportState());
+    } catch (error) {
+      this.opts.log?.warn?.(`[xena-peer] failed to persist manifest state: ${String(error)}`);
+    }
+  }
+
+  private schedulePersistManifestState(): void {
+    if (this.manifestPersistTimer) clearTimeout(this.manifestPersistTimer);
+    this.manifestPersistTimer = setTimeout(() => {
+      this.manifestPersistTimer = null;
+      this.persistManifestState();
+    }, 150);
+  }
+
   /**
    * Handle workspace-state sync from a peer.
    * The web client sends this on connect — it contains the full workspace
@@ -935,6 +1176,8 @@ export class NodeXenaPeer {
           publicKey: m.publicKey || '',
           signingPublicKey: m.signingPublicKey || undefined,
           role: m.role || 'member',
+          isBot: m.isBot === true,
+          companySim: m.companySim || undefined,
           joinedAt: Date.now(),
         })),
         inviteCode: sync.inviteCode || '',
@@ -951,6 +1194,7 @@ export class NodeXenaPeer {
           publicKey: this.myPublicKey,
           role: 'member',
           isBot: true,
+          companySim: this.getMyCompanySimProfile(),
           joinedAt: Date.now(),
         });
       }
@@ -973,11 +1217,15 @@ export class NodeXenaPeer {
             publicKey: remoteMember.publicKey || '',
             signingPublicKey: remoteMember.signingPublicKey || undefined,
             role: remoteMember.role || 'member',
+            isBot: remoteMember.isBot === true,
+            companySim: remoteMember.companySim || undefined,
             joinedAt: Date.now(),
           });
         } else if (remoteMember.alias && !/^[a-f0-9]{8}$/i.test(remoteMember.alias)) {
           existing.alias = remoteMember.alias;
           if (remoteMember.publicKey) existing.publicKey = remoteMember.publicKey;
+          if (remoteMember.isBot === true) existing.isBot = true;
+          if (remoteMember.companySim) existing.companySim = remoteMember.companySim;
         }
       }
 
@@ -1002,6 +1250,28 @@ export class NodeXenaPeer {
 
     this.persistWorkspaces();
     this.ensureBotFlag();
+
+    const current = this.workspaceManager.getWorkspace(workspaceId);
+    if (current) {
+      this.recordManifestDomain('workspace-manifest', workspaceId, {
+        operation: 'update',
+        subject: workspaceId,
+        itemCount: 1,
+        data: { name: current.name, description: current.description },
+      });
+      this.recordManifestDomain('membership', workspaceId, {
+        operation: 'update',
+        subject: workspaceId,
+        itemCount: current.members.length,
+        data: { memberCount: current.members.length },
+      });
+      this.recordManifestDomain('channel-manifest', workspaceId, {
+        operation: 'update',
+        subject: workspaceId,
+        itemCount: current.channels.length,
+        data: { channelCount: current.channels.length },
+      });
+    }
   }
 
   private persistWorkspaces(): void {
@@ -1163,7 +1433,67 @@ export class NodeXenaPeer {
     if (!this.transport || !this.messageProtocol || !content.trim()) return;
     const modelMeta = buildMessageMetadata(model);
     const outboundMessageId = messageId || randomUUID();
-    if (!this.transport.getConnectedPeers().includes(peerId)) {
+
+    try {
+      const encrypted = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text', modelMeta);
+      (encrypted as any).isDirect = true;
+      (encrypted as any).senderId = this.myPeerId;
+      (encrypted as any).senderName = this.opts.account.alias;
+      (encrypted as any).messageId = outboundMessageId;
+      if (threadId) (encrypted as any).threadId = threadId;
+      if (replyToId) (encrypted as any).replyToId = replyToId;
+
+      const connected = this.transport.getConnectedPeers().includes(peerId);
+      if (connected) {
+        await this.queuePendingAck(peerId, {
+          content: content.trim(),
+          senderId: this.myPeerId,
+          senderName: this.opts.account.alias,
+          messageId: outboundMessageId,
+          threadId,
+          replyToId,
+          isDirect: true,
+          ...(modelMeta ? { metadata: modelMeta } : {}),
+        });
+
+        const accepted = this.transport.send(peerId, encrypted);
+        if (!accepted) {
+          await this.custodyStore.storeEnvelope({
+            envelopeId: typeof (encrypted as any).id === 'string' ? (encrypted as any).id : undefined,
+            opId: outboundMessageId,
+            recipientPeerIds: [peerId],
+            workspaceId: 'direct',
+            ...(threadId ? { threadId } : {}),
+            domain: 'channel-message',
+            ciphertext: encrypted,
+            metadata: {
+              messageId: outboundMessageId,
+              isDirect: true,
+              senderId: this.myPeerId,
+              senderName: this.opts.account.alias,
+            },
+          });
+        }
+        return;
+      }
+
+      await this.custodyStore.storeEnvelope({
+        envelopeId: typeof (encrypted as any).id === 'string' ? (encrypted as any).id : undefined,
+        opId: outboundMessageId,
+        recipientPeerIds: [peerId],
+        workspaceId: 'direct',
+        ...(threadId ? { threadId } : {}),
+        domain: 'channel-message',
+        ciphertext: encrypted,
+        metadata: {
+          messageId: outboundMessageId,
+          isDirect: true,
+          senderId: this.myPeerId,
+          senderName: this.opts.account.alias,
+        },
+      });
+    } catch (err) {
+      this.opts.log?.error?.(`[xena-peer] DM to ${peerId} failed: ${String(err)}`);
       await this.enqueueOffline(peerId, {
         content: content.trim(),
         senderId: this.myPeerId,
@@ -1174,30 +1504,6 @@ export class NodeXenaPeer {
         isDirect: true,
         ...(modelMeta ? { metadata: modelMeta } : {}),
       });
-      return;
-    }
-
-    try {
-      await this.queuePendingAck(peerId, {
-        content: content.trim(),
-        senderId: this.myPeerId,
-        senderName: this.opts.account.alias,
-        messageId: outboundMessageId,
-        threadId,
-        replyToId,
-        isDirect: true,
-        ...(modelMeta ? { metadata: modelMeta } : {}),
-      });
-      const envelope = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text', modelMeta);
-      (envelope as any).isDirect = true;
-      (envelope as any).senderId = this.myPeerId;
-      (envelope as any).senderName = this.opts.account.alias;
-      (envelope as any).messageId = outboundMessageId;
-      if (threadId) (envelope as any).threadId = threadId;
-      if (replyToId) (envelope as any).replyToId = replyToId;
-      this.transport.send(peerId, envelope);
-    } catch (err) {
-      this.opts.log?.error?.(`[xena-peer] DM to ${peerId} failed: ${String(err)}`);
     }
   }
 
@@ -1211,16 +1517,29 @@ export class NodeXenaPeer {
     } as const;
 
     if (!this.transport.getConnectedPeers().includes(peerId)) {
-      await this.queuePendingReadReceipt(peerId, channelId, messageId);
+      await this.enqueueOffline(peerId, payload);
       return;
     }
 
     try {
-      this.transport.send(peerId, payload);
+      const accepted = this.transport.send(peerId, payload);
+      if (!accepted) {
+        await this.enqueueOffline(peerId, payload);
+      }
     } catch (err) {
       this.opts.log?.warn?.(`[xena-peer] failed to send read receipt to ${peerId}: ${String(err)}`);
-      await this.queuePendingReadReceipt(peerId, channelId, messageId);
+      await this.enqueueOffline(peerId, payload);
     }
+
+    this.recordManifestDomain('receipt', this.findWorkspaceIdForChannel(channelId), {
+      channelId,
+      operation: 'create',
+      subject: messageId,
+      data: {
+        kind: 'read',
+        targetPeerId: peerId,
+      },
+    });
   }
 
   async sendTyping(params: { channelId: string; workspaceId: string; typing: boolean }): Promise<void> {
@@ -1448,6 +1767,14 @@ export class NodeXenaPeer {
     }
   }
 
+  /** Public: resolve channel name by id. Returns undefined if none found. */
+  findChannelNameById(channelId: string): string | undefined {
+    const ws = this.workspaceManager
+      .getAllWorkspaces()
+      .find((workspace) => workspace.channels.some((ch) => ch.id === channelId));
+    return ws?.channels.find((ch) => ch.id === channelId)?.name;
+  }
+
   /** Public: find the workspace ID that owns a given channel. Returns '' if none found. */
   findWorkspaceIdForChannel(channelId: string): string {
     const ws = this.workspaceManager
@@ -1489,13 +1816,26 @@ export class NodeXenaPeer {
     }
   }
 
-  private updateWorkspaceMemberAlias(peerId: string, alias: string): void {
+  private updateWorkspaceMemberAlias(peerId: string, alias: string, companySim?: WorkspaceMember["companySim"], isBot?: boolean): void {
     let changed = false;
     for (const ws of this.workspaceManager.getAllWorkspaces()) {
       const member = ws.members.find((m) => m.peerId === peerId);
-      if (member && member.alias !== alias) {
+      if (!member) continue;
+      if (member.alias !== alias) {
         member.alias = alias;
         changed = true;
+      }
+      if (isBot === true && !member.isBot) {
+        member.isBot = true;
+        changed = true;
+      }
+      if (companySim) {
+        const prev = JSON.stringify(member.companySim || null);
+        const next = JSON.stringify(companySim);
+        if (prev !== next) {
+          member.companySim = companySim;
+          changed = true;
+        }
       }
     }
     if (changed) {
@@ -1520,8 +1860,32 @@ export class NodeXenaPeer {
     return `offline-queue-${peerId}`;
   }
 
+  private receiptLogKey(peerId: string): string {
+    return `receipt-log-${peerId}`;
+  }
+
+  private custodialInboxKey(): string {
+    return 'custodian-inbox';
+  }
+
   private pendingAckKey(peerId: string): string {
     return `pending-ack-${peerId}`;
+  }
+
+  private getMyCompanySimProfile(): WorkspaceMember["companySim"] | undefined {
+    if (!this.opts.account.companySim?.enabled) return undefined;
+    try {
+      const context = loadCompanyContextForAccount(this.opts.account);
+      if (!context) return undefined;
+      return {
+        automationKind: 'openclaw-agent',
+        roleTitle: context.employee.title,
+        teamId: context.employee.teamId,
+      };
+    } catch (err) {
+      this.opts.log?.warn?.(`[xena-peer] failed to load company profile for ${this.opts.account.accountId}: ${String(err)}`);
+      return { automationKind: 'openclaw-agent' };
+    }
   }
 
   private pendingReadReceiptKey(peerId: string): string {
@@ -1571,6 +1935,625 @@ export class NodeXenaPeer {
     else this.store.set(key, retry);
   }
 
+  private isCustodyEnvelope(value: unknown): value is CustodyEnvelope {
+    if (!value || typeof value !== 'object') return false;
+    const envelope = value as Partial<CustodyEnvelope>;
+    return typeof envelope.envelopeId === 'string'
+      && typeof envelope.opId === 'string'
+      && Array.isArray(envelope.recipientPeerIds)
+      && typeof envelope.workspaceId === 'string'
+      && typeof envelope.domain === 'string'
+      && 'ciphertext' in envelope;
+  }
+
+  private recordManifestDomain(
+    domain: SyncDomain,
+    workspaceId: string | undefined,
+    params?: {
+      channelId?: string;
+      operation?: ManifestDelta['operation'];
+      subject?: string;
+      itemCount?: number;
+      data?: Record<string, unknown>;
+    },
+  ): ManifestDelta | null {
+    if (!workspaceId) return null;
+    return this.manifestStore.updateDomain({
+      domain,
+      workspaceId,
+      ...(params?.channelId ? { channelId: params.channelId } : {}),
+      author: this.myPeerId || 'unknown',
+      operation: params?.operation ?? 'update',
+      subject: params?.subject,
+      itemCount: params?.itemCount,
+      data: params?.data,
+    });
+  }
+
+  private async handleInboundReceipt(fromPeerId: string, msg: any, kind: DeliveryReceipt['kind']): Promise<void> {
+    const messageId = typeof msg?.messageId === 'string' ? msg.messageId : '';
+    if (!messageId) return;
+
+    const receipt: DeliveryReceipt = {
+      receiptId: `${kind}:${fromPeerId}:${messageId}:${Date.now()}`,
+      kind,
+      opId: messageId,
+      recipientPeerId: fromPeerId,
+      timestamp: Date.now(),
+      ...(typeof msg?.envelopeId === 'string' ? { envelopeId: msg.envelopeId } : {}),
+      metadata: {
+        ...(typeof msg?.channelId === 'string' ? { channelId: msg.channelId } : {}),
+      },
+    };
+
+    await this.removePendingAck(fromPeerId, messageId);
+    await this.custodyStore.applyReceipt(fromPeerId, receipt);
+    await this.offlineQueue.applyReceipt(fromPeerId, receipt);
+
+    this.recordManifestDomain('receipt', typeof msg?.channelId === 'string' ? this.findWorkspaceIdForChannel(msg.channelId) : undefined, {
+      channelId: typeof msg?.channelId === 'string' ? msg.channelId : undefined,
+      operation: 'create',
+      subject: messageId,
+      data: {
+        kind,
+        recipientPeerId: fromPeerId,
+      },
+    });
+  }
+
+  private sendManifestSummary(peerId: string, onlyWorkspaceId?: string): void {
+    if (!this.transport) return;
+    for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+      if (onlyWorkspaceId && workspace.id !== onlyWorkspaceId) continue;
+      if (!workspace.members.some((member) => member.peerId === peerId)) continue;
+      const summary = this.manifestStore.getSummary(workspace.id);
+      this.transport.send(peerId, {
+        type: 'sync.summary',
+        workspaceId: workspace.id,
+        summary,
+      });
+    }
+  }
+
+  private async handleManifestSummary(peerId: string, msg: any): Promise<void> {
+    if (!this.transport) return;
+    const summary = (msg?.summary ?? msg) as SyncManifestSummary;
+    const workspaceId = typeof msg?.workspaceId === 'string' ? msg.workspaceId : summary?.workspaceId;
+    if (!workspaceId || !summary || !Array.isArray(summary.versions)) return;
+
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace || !workspace.members.some((member) => member.peerId === peerId)) return;
+
+    const missing = this.manifestStore.buildDiffRequest(workspaceId, summary);
+    if (missing.length > 0) {
+      this.transport.send(peerId, {
+        type: 'sync.diff_request',
+        workspaceId,
+        requestId: randomUUID(),
+        requests: missing,
+      });
+    }
+
+    const remoteByKey = new Map(summary.versions.map((version) => [`${version.domain}:${version.channelId ?? ''}`, version] as const));
+    const localSummary = this.manifestStore.getSummary(workspaceId);
+    const pushDeltas: ManifestDelta[] = [];
+
+    for (const localVersion of localSummary.versions) {
+      const key = `${localVersion.domain}:${localVersion.channelId ?? ''}`;
+      const remoteVersion = remoteByKey.get(key)?.version ?? 0;
+      if (localVersion.version <= remoteVersion) continue;
+      pushDeltas.push(...this.manifestStore.getDeltasSince({
+        workspaceId,
+        domain: localVersion.domain,
+        channelId: localVersion.channelId,
+        fromVersion: remoteVersion,
+        toVersion: localVersion.version,
+        limit: 500,
+      }));
+    }
+
+    if (pushDeltas.length > 0) {
+      this.transport.send(peerId, {
+        type: 'sync.diff_response',
+        workspaceId,
+        requestId: `push:${randomUUID()}`,
+        deltas: pushDeltas,
+      });
+    }
+  }
+
+  private async handleManifestDiffRequest(peerId: string, msg: any): Promise<void> {
+    if (!this.transport) return;
+    const workspaceId = typeof msg?.workspaceId === 'string' ? msg.workspaceId : '';
+    if (!workspaceId) return;
+
+    const requests = Array.isArray(msg?.requests)
+      ? (msg.requests as ManifestDiffRequest[])
+      : (msg?.request ? [msg.request as ManifestDiffRequest] : []);
+    if (requests.length === 0) return;
+
+    const deltas: ManifestDelta[] = [];
+    const snapshots: Array<{ domain: SyncDomain; workspaceId: string; channelId?: string; snapshotId: string; version: number; basedOnVersion: number; createdAt: number; createdBy: string }> = [];
+
+    for (const request of requests) {
+      const slice = this.manifestStore.getDeltasSince({
+        workspaceId,
+        domain: request.domain,
+        channelId: request.channelId,
+        fromVersion: request.fromVersion,
+        toVersion: request.toVersion,
+        limit: 500,
+      });
+      deltas.push(...slice);
+
+      if (slice.length === 0 && (request.toVersion ?? 0) > request.fromVersion) {
+        const snapshot = this.buildManifestSnapshot(workspaceId, request.domain, request.channelId);
+        if (snapshot) {
+          this.manifestStore.saveSnapshot(snapshot);
+          snapshots.push({
+            domain: snapshot.domain,
+            workspaceId: snapshot.workspaceId,
+            ...(snapshot.domain === 'channel-message' && snapshot.channelId ? { channelId: snapshot.channelId } : {}),
+            snapshotId: snapshot.snapshotId,
+            version: snapshot.version,
+            basedOnVersion: snapshot.basedOnVersion,
+            createdAt: snapshot.createdAt,
+            createdBy: snapshot.createdBy,
+          });
+        }
+      }
+    }
+
+    this.transport.send(peerId, {
+      type: 'sync.diff_response',
+      workspaceId,
+      requestId: typeof msg?.requestId === 'string' ? msg.requestId : randomUUID(),
+      deltas,
+      ...(snapshots.length > 0 ? { snapshots } : {}),
+    });
+  }
+
+  private async handleManifestDiffResponse(peerId: string, msg: any): Promise<void> {
+    if (!this.transport) return;
+    const workspaceId = typeof msg?.workspaceId === 'string' ? msg.workspaceId : '';
+    if (!workspaceId) return;
+
+    const deltas = Array.isArray(msg?.deltas) ? (msg.deltas as ManifestDelta[]) : [];
+    for (const delta of deltas) {
+      this.manifestStore.applyDelta(delta);
+      if (delta.domain === 'channel-message') {
+        this.requestSyncForPeer(peerId);
+      }
+    }
+
+    const snapshots = Array.isArray(msg?.snapshots) ? msg.snapshots : [];
+    for (const pointer of snapshots) {
+      const existing = this.manifestStore.getSnapshot(workspaceId, pointer.domain, pointer.channelId);
+      if (!existing || existing.version < pointer.version) {
+        this.transport.send(peerId, {
+          type: 'sync.fetch_snapshot',
+          workspaceId,
+          domain: pointer.domain,
+          ...(pointer.channelId ? { channelId: pointer.channelId } : {}),
+          snapshotId: pointer.snapshotId,
+        });
+      }
+    }
+  }
+
+  private async handleManifestFetchSnapshot(peerId: string, msg: any): Promise<void> {
+    if (!this.transport) return;
+    const workspaceId = typeof msg?.workspaceId === 'string' ? msg.workspaceId : '';
+    const domain = msg?.domain as SyncDomain | undefined;
+    const channelId = typeof msg?.channelId === 'string' ? msg.channelId : undefined;
+    if (!workspaceId || !domain) return;
+
+    const existing = this.manifestStore.getSnapshot(workspaceId, domain, channelId);
+    const snapshot = existing ?? this.buildManifestSnapshot(workspaceId, domain, channelId);
+    if (!snapshot) return;
+
+    this.manifestStore.saveSnapshot(snapshot);
+    this.transport.send(peerId, {
+      type: 'sync.snapshot_response',
+      workspaceId,
+      snapshot,
+    });
+  }
+
+  private async handleManifestSnapshotResponse(peerId: string, msg: any): Promise<void> {
+    const snapshot = msg?.snapshot as SyncManifestSnapshot | undefined;
+    if (!snapshot) return;
+
+    this.manifestStore.restoreSnapshot(snapshot, this.myPeerId || 'unknown');
+
+    if (snapshot.domain === 'workspace-manifest') {
+      const ws = this.workspaceManager.getWorkspace(snapshot.workspaceId);
+      if (ws) {
+        ws.name = snapshot.name;
+        ws.description = snapshot.description;
+        this.persistWorkspaces();
+      }
+      return;
+    }
+
+    if (snapshot.domain === 'membership') {
+      const ws = this.workspaceManager.getWorkspace(snapshot.workspaceId);
+      if (ws) {
+        ws.members = snapshot.members.map((member) => ({
+          peerId: member.peerId,
+          alias: member.alias || member.peerId.slice(0, 8),
+          publicKey: ws.members.find((existing) => existing.peerId === member.peerId)?.publicKey || '',
+          role: member.role as any,
+          joinedAt: member.joinedAt,
+        }));
+        this.ensureBotFlag();
+        this.persistWorkspaces();
+      }
+      return;
+    }
+
+    if (snapshot.domain === 'channel-manifest') {
+      const ws = this.workspaceManager.getWorkspace(snapshot.workspaceId);
+      if (ws) {
+        for (const channel of snapshot.channels) {
+          if (ws.channels.some((existing) => existing.id === channel.id)) continue;
+          ws.channels.push({
+            id: channel.id,
+            workspaceId: snapshot.workspaceId,
+            name: channel.name,
+            type: channel.type as any,
+            members: [],
+            createdAt: channel.createdAt,
+            createdBy: channel.createdBy,
+          });
+        }
+        this.persistWorkspaces();
+      }
+      return;
+    }
+
+    if (snapshot.domain === 'channel-message' && this.transport) {
+      const existingIds = new Set(this.messageStore.getMessages(snapshot.channelId).map((message) => message.id));
+      const missing = snapshot.messageIds.filter((id) => !existingIds.has(id));
+      if (missing.length > 0) {
+        this.transport.send(peerId, {
+          type: 'message-sync-fetch-request',
+          workspaceId: snapshot.workspaceId,
+          messageIdsByChannel: {
+            [snapshot.channelId]: missing,
+          },
+        });
+      }
+    }
+  }
+
+  private buildManifestSnapshot(workspaceId: string, domain: SyncDomain, channelId?: string): SyncManifestSnapshot | null {
+    const summary = this.manifestStore.getSummary(workspaceId);
+    const version = summary.versions.find((entry) => entry.domain === domain && (entry.channelId ?? '') === (channelId ?? ''))?.version ?? 0;
+
+    if (domain === 'workspace-manifest') {
+      const ws = this.workspaceManager.getWorkspace(workspaceId);
+      if (!ws) return null;
+      return {
+        domain,
+        workspaceId,
+        version,
+        name: ws.name,
+        description: ws.description,
+        policy: ws.permissions,
+        snapshotId: randomUUID(),
+        snapshotVersion: version,
+        basedOnVersion: version,
+        deltasSince: 0,
+        createdAt: Date.now(),
+        createdBy: this.myPeerId,
+      };
+    }
+
+    if (domain === 'membership') {
+      const ws = this.workspaceManager.getWorkspace(workspaceId);
+      if (!ws) return null;
+      return {
+        domain,
+        workspaceId,
+        version,
+        snapshotId: randomUUID(),
+        basedOnVersion: version,
+        memberCount: ws.members.length,
+        members: ws.members.map((member) => ({
+          peerId: member.peerId,
+          alias: member.alias,
+          role: member.role,
+          joinedAt: member.joinedAt,
+        })),
+        createdAt: Date.now(),
+        createdBy: this.myPeerId,
+      };
+    }
+
+    if (domain === 'channel-manifest') {
+      const ws = this.workspaceManager.getWorkspace(workspaceId);
+      if (!ws) return null;
+      return {
+        domain,
+        workspaceId,
+        version,
+        snapshotId: randomUUID(),
+        basedOnVersion: version,
+        channelCount: ws.channels.length,
+        channels: ws.channels.map((channel) => ({
+          id: channel.id,
+          name: channel.name,
+          type: channel.type,
+          createdAt: channel.createdAt,
+          createdBy: channel.createdBy,
+        })),
+        createdAt: Date.now(),
+        createdBy: this.myPeerId,
+      };
+    }
+
+    if (domain === 'channel-message' && channelId) {
+      const messages = this.messageStore.getMessages(channelId).slice().sort((a, b) => a.timestamp - b.timestamp);
+      const minTimestamp = messages[0]?.timestamp ?? Date.now();
+      const maxTimestamp = messages[messages.length - 1]?.timestamp ?? minTimestamp;
+      return {
+        domain,
+        workspaceId,
+        channelId,
+        version,
+        snapshotId: randomUUID(),
+        basedOnVersion: version,
+        messageCount: messages.length,
+        messageIds: messages.map((message) => message.id),
+        minTimestamp,
+        maxTimestamp,
+        createdAt: Date.now(),
+        createdBy: this.myPeerId,
+      };
+    }
+
+    return null;
+  }
+
+  private requestCustodyRecovery(peerId: string): void {
+    if (!this.transport) return;
+    for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+      if (!workspace.members.some((member) => member.peerId === peerId)) continue;
+      this.transport.send(peerId, {
+        type: 'custody.fetch_index',
+        workspaceId: workspace.id,
+        recipientPeerId: this.myPeerId,
+      });
+    }
+  }
+
+  private selectCustodianPeers(workspaceId: string, recipientPeerId: string, limit = NodeXenaPeer.CUSTODIAN_REPLICATION_TARGET): string[] {
+    if (!this.transport) return [];
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) return [];
+
+    const connected = new Set(this.transport.getConnectedPeers());
+
+    const scored = workspace.members
+      .map((member) => member.peerId)
+      .filter((peerId) => peerId !== this.myPeerId && peerId !== recipientPeerId && connected.has(peerId))
+      .map((peerId) => {
+        let score = 100;
+        const alias = this.resolveSenderName(workspaceId, peerId).toLowerCase();
+        if (alias.includes('mobile') || alias.includes('iphone') || alias.includes('android')) score -= 20;
+        if (alias.includes('server') || alias.includes('desktop') || alias.includes('bot')) score += 20;
+        score += this.store.get<number>(`custody-score-${peerId}`, 0);
+        return { peerId, score };
+      })
+      .sort((a, b) => b.score - a.score || a.peerId.localeCompare(b.peerId));
+
+    return scored.slice(0, Math.max(0, limit)).map((entry) => entry.peerId);
+  }
+
+  private async replicateToCustodians(
+    recipientPeerId: string,
+    workspaceId: string,
+    channelId: string,
+    messageId: string,
+  ): Promise<void> {
+    if (!this.transport || !workspaceId) return;
+    const custodians = this.selectCustodianPeers(workspaceId, recipientPeerId);
+    if (custodians.length === 0) return;
+
+    const pending = await this.custodyStore.getPendingForRecipient(recipientPeerId);
+    const envelopes = pending.filter((envelope) => envelope.opId === messageId && envelope.workspaceId === workspaceId);
+    if (envelopes.length === 0) return;
+
+    for (const envelope of envelopes) {
+      this.pendingCustodyOffers.set(envelope.envelopeId, custodians);
+      for (const custodianPeerId of custodians) {
+        this.transport.send(custodianPeerId, {
+          type: 'custody.offer',
+          workspaceId,
+          recipientPeerId,
+          channelId,
+          envelope: {
+            envelopeId: envelope.envelopeId,
+            opId: envelope.opId,
+            workspaceId: envelope.workspaceId,
+            channelId: envelope.channelId,
+            threadId: envelope.threadId,
+            domain: envelope.domain,
+            createdAt: envelope.createdAt,
+            expiresAt: envelope.expiresAt,
+            replicationClass: envelope.replicationClass,
+          },
+        });
+      }
+    }
+  }
+
+  private async handleCustodyControl(fromPeerId: string, msg: any): Promise<void> {
+    if (!this.transport) return;
+
+    if (msg?.type === 'custody.offer') {
+      const workspaceId = typeof msg?.workspaceId === 'string' ? msg.workspaceId : '';
+      const workspace = workspaceId ? this.workspaceManager.getWorkspace(workspaceId) : undefined;
+      const canAccept = Boolean(workspace?.members.some((member) => member.peerId === this.myPeerId));
+
+      this.transport.send(fromPeerId, {
+        type: canAccept ? 'custody.accept' : 'custody.reject',
+        workspaceId,
+        envelopeId: msg?.envelope?.envelopeId,
+        recipientPeerId: msg?.recipientPeerId,
+        reason: canAccept ? undefined : 'not-a-member',
+      });
+      return;
+    }
+
+    if (msg?.type === 'custody.accept') {
+      const envelopeId = typeof msg?.envelopeId === 'string' ? msg.envelopeId : '';
+      const recipientPeerId = typeof msg?.recipientPeerId === 'string' ? msg.recipientPeerId : '';
+      const offeredPeers = this.pendingCustodyOffers.get(envelopeId) ?? [];
+      if (!envelopeId || !recipientPeerId || !offeredPeers.includes(fromPeerId)) return;
+
+      const envelopes = await this.custodyStore.listAllForRecipient(recipientPeerId);
+      const envelope = envelopes.find((entry) => entry.envelopeId === envelopeId);
+      if (!envelope) return;
+
+      this.transport.send(fromPeerId, {
+        type: 'custody.store',
+        workspaceId: envelope.workspaceId,
+        recipientPeerId,
+        envelope,
+      });
+      return;
+    }
+
+    if (msg?.type === 'custody.reject') {
+      const envelopeId = typeof msg?.envelopeId === 'string' ? msg.envelopeId : '';
+      if (!envelopeId) return;
+      const offeredPeers = this.pendingCustodyOffers.get(envelopeId) ?? [];
+      this.pendingCustodyOffers.set(
+        envelopeId,
+        offeredPeers.filter((peerId) => peerId !== fromPeerId),
+      );
+      return;
+    }
+
+    if (msg?.type === 'custody.store') {
+      const envelope = msg?.envelope;
+      if (!this.isCustodyEnvelope(envelope)) return;
+      this.custodianInbox.set(envelope.envelopeId, envelope);
+      this.persistCustodianInbox();
+      this.transport.send(fromPeerId, {
+        type: 'custody.ack',
+        envelopeIds: [envelope.envelopeId],
+        stage: 'stored',
+      });
+      return;
+    }
+
+    if (msg?.type === 'custody.fetch_index') {
+      if (Array.isArray(msg?.index)) {
+        const envelopeIds = msg.index
+          .map((entry: any) => (typeof entry?.envelopeId === 'string' ? entry.envelopeId : null))
+          .filter((value: string | null): value is string => Boolean(value));
+
+        if (envelopeIds.length > 0) {
+          this.transport.send(fromPeerId, {
+            type: 'custody.fetch_envelopes',
+            workspaceId: msg.workspaceId,
+            envelopeIds,
+          });
+        }
+        return;
+      }
+
+      const recipientPeerId = typeof msg?.recipientPeerId === 'string' ? msg.recipientPeerId : fromPeerId;
+      const workspaceId = typeof msg?.workspaceId === 'string' ? msg.workspaceId : undefined;
+      const index = [...this.custodianInbox.values()]
+        .filter((envelope) => envelope.recipientPeerIds.includes(recipientPeerId))
+        .filter((envelope) => !workspaceId || envelope.workspaceId === workspaceId)
+        .map((envelope) => ({
+          envelopeId: envelope.envelopeId,
+          opId: envelope.opId,
+          workspaceId: envelope.workspaceId,
+          channelId: envelope.channelId,
+          domain: envelope.domain,
+          createdAt: envelope.createdAt,
+          expiresAt: envelope.expiresAt,
+        }));
+
+      this.transport.send(fromPeerId, {
+        type: 'custody.fetch_index',
+        workspaceId: workspaceId ?? '',
+        recipientPeerId,
+        index,
+      });
+      return;
+    }
+
+    if (msg?.type === 'custody.fetch_envelopes') {
+      if (Array.isArray(msg?.envelopes)) {
+        const recovered = msg.envelopes.filter((entry: any) => this.isCustodyEnvelope(entry)) as CustodyEnvelope[];
+        if (recovered.length === 0) return;
+
+        const recoveredIds: string[] = [];
+        for (const envelope of recovered) {
+          if (!envelope.recipientPeerIds.includes(this.myPeerId)) continue;
+          recoveredIds.push(envelope.envelopeId);
+          if (envelope.workspaceId) {
+            this.recordManifestDomain('channel-message', envelope.workspaceId, {
+              channelId: envelope.channelId,
+              operation: 'update',
+              subject: envelope.opId,
+              data: { recovered: true, envelopeId: envelope.envelopeId },
+            });
+          }
+          await this.handlePeerMessage(fromPeerId, envelope.ciphertext);
+        }
+
+        if (recoveredIds.length > 0) {
+          this.transport.send(fromPeerId, {
+            type: 'custody.ack',
+            envelopeIds: recoveredIds,
+            stage: 'delivered',
+          });
+        }
+        return;
+      }
+
+      const envelopeIds = Array.isArray(msg?.envelopeIds)
+        ? msg.envelopeIds.filter((id: unknown): id is string => typeof id === 'string')
+        : [];
+      const envelopes = envelopeIds
+        .map((id) => this.custodianInbox.get(id))
+        .filter((entry): entry is CustodyEnvelope => Boolean(entry));
+
+      this.transport.send(fromPeerId, {
+        type: 'custody.fetch_envelopes',
+        workspaceId: typeof msg?.workspaceId === 'string' ? msg.workspaceId : '',
+        envelopes,
+      });
+      return;
+    }
+
+    if (msg?.type === 'custody.ack') {
+      const envelopeIds = Array.isArray(msg?.envelopeIds)
+        ? msg.envelopeIds.filter((id: unknown): id is string => typeof id === 'string')
+        : [];
+      if (envelopeIds.length === 0) return;
+
+      let changed = false;
+      for (const envelopeId of envelopeIds) {
+        if (this.custodianInbox.delete(envelopeId)) changed = true;
+      }
+      if (changed) {
+        this.persistCustodianInbox();
+        const key = `custody-score-${fromPeerId}`;
+        const current = this.store.get<number>(key, 0);
+        this.store.set(key, current + 1);
+      }
+    }
+  }
+
   private async queuePendingAck(peerId: string, payload: any): Promise<void> {
     if (!payload?.messageId) return;
     const key = this.pendingAckKey(peerId);
@@ -1602,8 +2585,19 @@ export class NodeXenaPeer {
     if (pending.length === 0) return;
 
     for (const item of pending) {
-      if (!item || typeof item.content !== 'string') continue;
+      if (!item || typeof item !== 'object') continue;
       try {
+        if (item.ciphertext && typeof item.ciphertext === 'object') {
+          const outbound = { ...item.ciphertext } as any;
+          outbound._offlineReplay = 1;
+          if (typeof item.envelopeId === 'string' && !outbound.envelopeId) {
+            outbound.envelopeId = item.envelopeId;
+          }
+          this.transport.send(peerId, outbound);
+          continue;
+        }
+
+        if (typeof item.content !== 'string') continue;
         const envelope = await this.messageProtocol.encryptMessage(peerId, item.content, 'text', item.metadata);
         (envelope as any).senderId = item.senderId ?? this.myPeerId;
         (envelope as any).senderName = item.senderName ?? this.opts.account.alias;
@@ -1625,7 +2619,80 @@ export class NodeXenaPeer {
 
   private async enqueueOffline(peerId: string, payload: any): Promise<void> {
     try {
-      await this.offlineQueue.enqueue(peerId, payload);
+      const now = Date.now();
+      const isReceipt = payload?.type === 'read' || payload?.type === 'ack';
+      const workspaceId = typeof payload?.workspaceId === 'string'
+        ? payload.workspaceId
+        : (typeof payload?.channelId === 'string' ? this.findWorkspaceIdForChannel(payload.channelId) : 'direct');
+
+      if (isReceipt) {
+        await this.custodyStore.storeEnvelope({
+          opId: typeof payload?.messageId === 'string' ? payload.messageId : randomUUID(),
+          recipientPeerIds: [peerId],
+          workspaceId: workspaceId || 'direct',
+          ...(typeof payload?.channelId === 'string' ? { channelId: payload.channelId } : {}),
+          domain: 'receipt',
+          ciphertext: payload,
+          createdAt: now,
+          metadata: {
+            kind: payload?.type,
+          },
+        });
+        return;
+      }
+
+      if (typeof payload?.content === 'string' && this.messageProtocol) {
+        try {
+          const encrypted = await this.messageProtocol.encryptMessage(peerId, payload.content, 'text', payload.metadata);
+          (encrypted as any).senderId = payload.senderId ?? this.myPeerId;
+          (encrypted as any).senderName = payload.senderName ?? this.opts.account.alias;
+          (encrypted as any).messageId = payload.messageId ?? randomUUID();
+          if (payload.isDirect) {
+            (encrypted as any).isDirect = true;
+          } else {
+            (encrypted as any).channelId = payload.channelId;
+            (encrypted as any).workspaceId = payload.workspaceId;
+          }
+          if (payload.threadId) (encrypted as any).threadId = payload.threadId;
+          if (payload.replyToId) (encrypted as any).replyToId = payload.replyToId;
+
+          await this.custodyStore.storeEnvelope({
+            envelopeId: typeof (encrypted as any).id === 'string' ? (encrypted as any).id : undefined,
+            opId: typeof payload?.messageId === 'string' ? payload.messageId : randomUUID(),
+            recipientPeerIds: [peerId],
+            workspaceId: workspaceId || 'direct',
+            ...(typeof payload?.channelId === 'string' ? { channelId: payload.channelId } : {}),
+            ...(typeof payload?.threadId === 'string' ? { threadId: payload.threadId } : {}),
+            domain: 'channel-message',
+            ciphertext: encrypted,
+            createdAt: now,
+            metadata: {
+              ...(payload.isDirect ? { isDirect: true } : {}),
+              ...(payload.replyToId ? { replyToId: payload.replyToId } : {}),
+              senderId: payload.senderId ?? this.myPeerId,
+              senderName: payload.senderName ?? this.opts.account.alias,
+            },
+          });
+          return;
+        } catch {
+          // Fall back to deferred plaintext path below.
+        }
+      }
+
+      await this.offlineQueue.enqueue(peerId, payload, {
+        createdAt: now,
+        envelopeId: typeof payload?.id === 'string' ? payload.id : undefined,
+        opId: typeof payload?.messageId === 'string'
+          ? payload.messageId
+          : (typeof payload?.opId === 'string' ? payload.opId : undefined),
+        workspaceId: typeof payload?.workspaceId === 'string' ? payload.workspaceId : undefined,
+        channelId: typeof payload?.channelId === 'string' ? payload.channelId : undefined,
+        threadId: typeof payload?.threadId === 'string' ? payload.threadId : undefined,
+        domain: isReceipt ? 'receipt' : 'channel-message',
+        recipientPeerIds: [peerId],
+        replicationClass: 'standard',
+        deliveryState: 'stored',
+      });
       this.opts.log?.info?.(`[xena-peer] queued outbound message for offline peer ${peerId}`);
     } catch (err) {
       this.opts.log?.error?.(`[xena-peer] failed to queue outbound message for ${peerId}: ${String(err)}`);
@@ -1636,13 +2703,78 @@ export class NodeXenaPeer {
     if (!this.transport || !this.messageProtocol) return;
     if (!this.transport.getConnectedPeers().includes(peerId)) return;
 
-    const queued = await this.offlineQueue.flush(peerId);
+    const queued = await this.offlineQueue.getQueued(peerId);
     if (queued.length === 0) return;
 
-    const retry: any[] = [];
-    for (const item of queued) {
-      if (!item || typeof item !== 'object' || typeof item.content !== 'string') continue;
+    let sentCount = 0;
+    let failedCount = 0;
+
+    for (const queuedItem of queued) {
+      const item = (queuedItem?.data ?? queuedItem) as any;
+      if (!item || typeof item !== 'object') {
+        if (typeof queuedItem?.id === 'number') {
+          await this.offlineQueue.remove(peerId, queuedItem.id);
+        }
+        continue;
+      }
+
       try {
+        if (this.isCustodyEnvelope(item)) {
+          const outbound = typeof item.ciphertext === 'object' && item.ciphertext
+            ? { ...(item.ciphertext as Record<string, unknown>) }
+            : item.ciphertext;
+
+          if (!outbound || typeof outbound !== 'object') {
+            throw new Error('custody envelope missing ciphertext payload');
+          }
+
+          (outbound as any)._offlineReplay = 1;
+          if (!(outbound as any).envelopeId) {
+            (outbound as any).envelopeId = item.envelopeId;
+          }
+
+          const accepted = this.transport.send(peerId, outbound);
+          if (!accepted) throw new Error('transport rejected queued send');
+
+          if (item.domain === 'channel-message') {
+            await this.queuePendingAck(peerId, {
+              messageId: item.opId,
+              envelopeId: item.envelopeId,
+              channelId: item.channelId,
+              workspaceId: item.workspaceId,
+              threadId: item.threadId,
+              ciphertext: outbound,
+              isDirect: (item.metadata as any)?.isDirect === true,
+              replyToId: (item.metadata as any)?.replyToId,
+              senderId: (item.metadata as any)?.senderId ?? this.myPeerId,
+              senderName: (item.metadata as any)?.senderName ?? this.opts.account.alias,
+            });
+          }
+
+          if (typeof queuedItem?.id === 'number') {
+            await this.offlineQueue.remove(peerId, queuedItem.id);
+          }
+          sentCount += 1;
+          continue;
+        }
+
+        if (item.type === 'read' || item.type === 'ack') {
+          const accepted = this.transport.send(peerId, item);
+          if (!accepted) throw new Error('transport rejected queued receipt send');
+          if (typeof queuedItem?.id === 'number') {
+            await this.offlineQueue.remove(peerId, queuedItem.id);
+          }
+          sentCount += 1;
+          continue;
+        }
+
+        if (typeof item.content !== 'string') {
+          if (typeof queuedItem?.id === 'number') {
+            await this.offlineQueue.remove(peerId, queuedItem.id);
+          }
+          continue;
+        }
+
         if (!item.messageId) item.messageId = randomUUID();
         await this.queuePendingAck(peerId, item);
         const envelope = await this.messageProtocol.encryptMessage(peerId, item.content, 'text', item.metadata);
@@ -1657,19 +2789,29 @@ export class NodeXenaPeer {
         }
         if (item.threadId) (envelope as any).threadId = item.threadId;
         if (item.replyToId) (envelope as any).replyToId = item.replyToId;
-        this.transport.send(peerId, envelope);
-      } catch {
-        retry.push(item);
+
+        const accepted = this.transport.send(peerId, envelope);
+        if (!accepted) throw new Error('transport rejected queued send');
+
+        if (typeof queuedItem?.id === 'number') {
+          await this.offlineQueue.remove(peerId, queuedItem.id);
+        }
+        sentCount += 1;
+      } catch (err) {
+        failedCount += 1;
+        if (typeof queuedItem?.id === 'number') {
+          await this.offlineQueue.markAttempt(peerId, queuedItem.id);
+        }
+        this.opts.log?.warn?.(`[xena-peer] failed queued send to ${peerId}: ${String(err)}`);
       }
     }
 
-    for (const item of retry) {
-      await this.offlineQueue.enqueue(peerId, item);
-    }
-
-    const sentCount = queued.length - retry.length;
     if (sentCount > 0) {
       this.opts.log?.info?.(`[xena-peer] flushed ${sentCount} queued messages to ${peerId}`);
     }
+    if (failedCount > 0) {
+      this.opts.log?.warn?.(`[xena-peer] ${failedCount} queued message(s) remain pending for ${peerId}`);
+    }
   }
+
 }
