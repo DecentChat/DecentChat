@@ -93,6 +93,7 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
               role: member.role,
               isBot: member.isBot,
               allowWorkspaceDMs: member.allowWorkspaceDMs,
+              companySim: (member as any).companySim,
               statusClass: peerStatusClass(member.peerId),
               statusTitle: peerStatusTitle(member.peerId),
             }));
@@ -118,6 +119,7 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
               role: m.role,
               isBot: m.isBot,
               allowWorkspaceDMs: m.allowWorkspaceDMs !== false,
+              companySim: (m as any).companySim,
               statusClass: peerStatusClass(m.peerId),
               statusTitle: peerStatusTitle(m.peerId),
             };

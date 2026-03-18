@@ -12,6 +12,13 @@
     isMe: boolean;
     role?: string;
     isBot?: boolean;
+    companySim?: {
+      automationKind?: string;
+      roleTitle?: string;
+      teamId?: string;
+      managerPeerId?: string;
+      avatarUrl?: string;
+    };
     statusClass?: string;
     statusTitle?: string;
   }

@@ -35,6 +35,7 @@
     getThread: (channelId: string, messageId: string) => PlaintextMessage[];
     getPeerAlias: (peerId: string) => string;
     isBot: (senderId: string) => boolean;
+    getCompanySimProfile: (senderId: string) => { automationKind?: string; roleTitle?: string; teamId?: string; managerPeerId?: string; avatarUrl?: string } | undefined;
     onOpenThread: (messageId: string) => void;
     onToggleReaction: (messageId: string, emoji: string) => void;
     onRememberReaction: (emoji: string) => void;
@@ -58,6 +59,7 @@
     getThread,
     getPeerAlias,
     isBot,
+    getCompanySimProfile,
     onOpenThread,
     onToggleReaction,
     onRememberReaction,
@@ -697,6 +699,7 @@
         isMine={threadRoot.senderId === myPeerId}
         isBot={isBot(threadRoot.senderId)}
         modelLabel={getModelLabel(threadRoot)}
+        companySim={getCompanySimProfile(threadRoot.senderId)}
         isGrouped={false}
         {inThreadView}
         attachments={(threadRoot as any).attachments}
@@ -734,6 +737,7 @@
         isMine={msg.senderId === myPeerId}
         isBot={isBot(msg.senderId)}
         modelLabel={getModelLabel(msg)}
+        companySim={getCompanySimProfile(msg.senderId)}
         isGrouped={isGrouped(msg, i + visibleStartIndex, messages)}
         {inThreadView}
         isActiveThreadRoot={!inThreadView && !!activeThreadRootId && msg.id === activeThreadRootId}

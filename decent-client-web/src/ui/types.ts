@@ -44,6 +44,13 @@ export interface WorkspaceMemberDirectoryView {
     isOnline: boolean;
     isYou: boolean;
     allowWorkspaceDMs: boolean;
+    companySim?: {
+      automationKind?: string;
+      roleTitle?: string;
+      teamId?: string;
+      managerPeerId?: string;
+      avatarUrl?: string;
+    };
   }>;
   loadedCount: number;
   totalCount: number;

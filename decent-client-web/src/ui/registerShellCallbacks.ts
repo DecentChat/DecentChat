@@ -246,6 +246,10 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
       const ws = state.activeWorkspaceId ? workspaceManager.getWorkspace(state.activeWorkspaceId) : null;
       return ws?.members.find((m: any) => m.peerId === senderId)?.isBot === true;
     },
+    getCompanySimProfile: (senderId) => {
+      const ws = state.activeWorkspaceId ? workspaceManager.getWorkspace(state.activeWorkspaceId) : null;
+      return ws?.members.find((m: any) => m.peerId === senderId)?.companySim;
+    },
     onOpenThread: (messageId) => openThread(messageId),
     onToggleReaction: (messageId, emoji) => callbacks.toggleReaction?.(messageId, emoji),
     onRememberReaction: (emoji) => rememberReaction(emoji),

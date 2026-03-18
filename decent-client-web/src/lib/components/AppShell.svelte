@@ -271,6 +271,7 @@
                 getThread={cb.getThread}
                 getPeerAlias={cb.getPeerAlias}
                 isBot={cb.isBot}
+                getCompanySimProfile={cb.getCompanySimProfile}
                 onOpenThread={cb.onOpenThread}
                 onToggleReaction={cb.onToggleReaction}
                 onRememberReaction={cb.onRememberReaction}
@@ -317,6 +318,7 @@
               getThread={cb.getThread}
               getPeerAlias={cb.getPeerAlias}
               isBot={cb.isBot}
+              getCompanySimProfile={cb.getCompanySimProfile}
               onOpenThread={cb.onOpenThread}
               onToggleReaction={cb.onToggleReaction}
               onRememberReaction={cb.onRememberReaction}

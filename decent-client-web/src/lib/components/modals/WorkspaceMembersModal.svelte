@@ -5,6 +5,14 @@
 <script lang="ts" module>
   import { mount, unmount } from 'svelte';
 
+  interface CompanyProfile {
+    automationKind?: string;
+    roleTitle?: string;
+    teamId?: string;
+    managerPeerId?: string;
+    avatarUrl?: string;
+  }
+
   interface WorkspaceMember {
     peerId: string;
     name: string;
@@ -14,6 +22,7 @@
     isYou: boolean;
     color: string;
     isHydrated?: boolean;
+    companySim?: CompanyProfile;
   }
 
   interface WorkspaceMembersPagePayload {
@@ -60,6 +69,14 @@
 </script>
 
 <script lang="ts">
+  interface CompanyProfile {
+    automationKind?: string;
+    roleTitle?: string;
+    teamId?: string;
+    managerPeerId?: string;
+    avatarUrl?: string;
+  }
+
   interface WorkspaceMember {
     peerId: string;
     name: string;
@@ -69,6 +86,7 @@
     isYou: boolean;
     color: string;
     isHydrated?: boolean;
+    companySim?: CompanyProfile;
   }
 
   interface WorkspaceMembersPagePayload {
@@ -211,21 +229,32 @@
           {@const canBan = isAdminOrOwner && hydratedMember && !member.isYou && member.role !== 'owner'}
           {@const canPromote = isOwner && hydratedMember && !member.isYou && member.role === 'member'}
           {@const canDemote = isOwner && hydratedMember && !member.isYou && member.role === 'admin'}
+          {@const avatarUrl = member.companySim?.avatarUrl}
+          {@const isCompanyAgent = member.companySim?.automationKind === 'openclaw-agent'}
           <div class="member-row">
             <div class="member-info">
-              <div class="member-avatar{member.isBot ? ' bot-avatar' : ''}" style="background:{member.color}">
-                {member.isBot ? '🤖' : member.name.charAt(0).toUpperCase()}
+              <div class="member-avatar{member.isBot ? ' bot-avatar' : ''}" style="background:{avatarUrl ? 'transparent' : member.color}">
+                {#if avatarUrl}
+                  <img src={avatarUrl} alt={member.name} class="member-avatar-image" />
+                {:else}
+                  {member.isBot ? '🤖' : member.name.charAt(0).toUpperCase()}
+                {/if}
               </div>
               <div class="member-details">
                 <div class="member-name-line">
                   <span class="member-name">{member.name}</span>
-                  {#if member.isBot}<span class="role-badge role-bot" title="Bot">BOT</span>{/if}
+                  {#if isCompanyAgent}<span class="role-badge role-bot" title="OpenClaw Agent">AGENT</span>{/if}
+                  {#if member.companySim?.roleTitle}<span class="role-badge" title={member.companySim.roleTitle}>{member.companySim.roleTitle}</span>{/if}
+                  {#if !isCompanyAgent && member.isBot}<span class="role-badge role-bot" title="Bot">BOT</span>{/if}
                   {#if member.role === 'owner'}<span class="role-badge role-owner" title="Owner">Owner</span>{/if}
                   {#if member.role === 'admin'}<span class="role-badge role-admin" title="Admin">Admin</span>{/if}
                   {#if member.isYou}<span class="you-badge">you</span>{/if}
                 </div>
                 <span class="member-status {member.isOnline ? 'online' : 'offline'}">
                   {member.isOnline ? 'Online' : 'Offline'}
+                  {#if member.companySim?.teamId}
+                    · {member.companySim.teamId}
+                  {/if}
                 </span>
               </div>
             </div>
@@ -261,3 +290,12 @@
     </form>
   </div>
 </div>
+
+<style>
+  .member-avatar-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+  }
+</style>

@@ -24,6 +24,14 @@
     timestamp: number;
   }
 
+  interface CompanyProfile {
+    automationKind?: string;
+    roleTitle?: string;
+    teamId?: string;
+    managerPeerId?: string;
+    avatarUrl?: string;
+  }
+
   interface Props {
     id: string;
     senderId: string;
@@ -34,6 +42,7 @@
     isMine: boolean;
     isBot: boolean;
     modelLabel?: string;
+    companySim?: CompanyProfile;
     isGrouped: boolean;
     inThreadView: boolean;
     isActiveThreadRoot?: boolean;
@@ -65,6 +74,7 @@
     isMine,
     isBot,
     modelLabel = '',
+    companySim = undefined,
     isGrouped,
     inThreadView,
     isActiveThreadRoot = false,
@@ -87,8 +97,10 @@
 
   let initial = $derived(senderName.slice(0, 2).toUpperCase());
   let time = $derived(formatTime(timestamp));
-  let avatarColor = $derived(isBot ? '#7c3aed' : peerColor(senderId));
-  let avatarContent = $derived(isBot ? '🤖' : initial);
+  let avatarUrl = $derived(companySim?.avatarUrl);
+  let avatarColor = $derived(avatarUrl ? 'transparent' : (isBot ? '#7c3aed' : peerColor(senderId)));
+  let avatarContent = $derived(avatarUrl ? '' : (isBot ? '🤖' : initial));
+  let isCompanyAgent = $derived(companySim?.automationKind === 'openclaw-agent');
   let isSystem = $derived(type === 'system');
 
   // Prefer receipt-derived state when available. This avoids stale ⏳ when
@@ -214,12 +226,17 @@
     <div class="message-content">{content}</div>
   {:else}
     <div class="message-avatar{isBot ? ' bot-avatar' : ''}" style="background: {avatarColor}">
-      {avatarContent}
+      {#if avatarUrl}
+        <img src={avatarUrl} alt={senderName} class="message-avatar-image" />
+      {:else}
+        {avatarContent}
+      {/if}
     </div>
     <div class="message-body">
       <div class="message-header">
         <span class="message-sender">{senderName}</span>
-        {#if isBot}<span class="msg-bot-badge">BOT</span>{/if}
+        {#if isCompanyAgent}<span class="msg-bot-badge">AGENT</span>{:else if isBot}<span class="msg-bot-badge">BOT</span>{/if}
+        {#if companySim?.roleTitle}<span class="msg-role-badge" title={companySim.roleTitle}>{companySim.roleTitle}</span>{/if}
         {#if modelLabel}<span class="msg-model-badge">{modelLabel}</span>{/if}
         <span class="message-time">{time}</span>
         {#if isMine}
@@ -377,5 +394,18 @@
   .message-expand-btn:hover {
     opacity: 0.85;
     text-decoration: underline;
+  }
+
+  .message-avatar-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+  }
+
+  .msg-role-badge {
+    margin-left: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
   }
 </style>

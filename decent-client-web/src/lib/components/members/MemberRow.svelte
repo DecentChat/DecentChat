@@ -4,6 +4,14 @@
 <script lang="ts">
   import { peerColor } from '$lib/utils/peer';
 
+  interface CompanyProfile {
+    automationKind?: string;
+    roleTitle?: string;
+    teamId?: string;
+    managerPeerId?: string;
+    avatarUrl?: string;
+  }
+
   interface Props {
     peerId: string;
     alias: string;
@@ -11,6 +19,7 @@
     isMe: boolean;
     role?: string;
     isBot?: boolean;
+    companySim?: CompanyProfile;
     statusClass?: string;
     statusTitle?: string;
     isActive?: boolean;
@@ -30,6 +39,7 @@
     isMe,
     role,
     isBot = false,
+    companySim = undefined,
     statusClass = '',
     statusTitle = 'Offline',
     isActive = false,
@@ -43,10 +53,12 @@
   }: Props = $props();
 
   let initial = $derived(alias.charAt(0).toUpperCase());
-  let color = $derived(isBot ? '#7c3aed' : peerColor(peerId));
-  let avatarContent = $derived(isBot ? '🤖' : initial);
+  let avatarUrl = $derived(companySim?.avatarUrl);
+  let color = $derived(avatarUrl ? 'transparent' : (isBot ? '#7c3aed' : peerColor(peerId)));
+  let avatarContent = $derived(avatarUrl ? '' : (isBot ? '🤖' : initial));
   let presenceClass = $derived(isMe ? 'online' : statusClass);
   let presenceTitle = $derived(isMe ? 'Online' : statusTitle);
+  let isCompanyAgent = $derived(companySim?.automationKind === 'openclaw-agent');
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -62,8 +74,12 @@
   {title}
   onclick={onClick}
 >
-  <div class="member-avatar-sm{isBot ? ' bot-avatar' : ''}" style="background: {color}">
-    {avatarContent}
+  <div class="member-avatar-sm{isBot ? ' bot-avatar' : ''}{isCompanyAgent ? ' company-agent-avatar' : ''}" style="background: {color}">
+    {#if avatarUrl}
+      <img src={avatarUrl} alt={alias} class="member-avatar-image" />
+    {:else}
+      {avatarContent}
+    {/if}
     <span class="dm-status {presenceClass}" title={presenceTitle}></span>
   </div>
   <div class="member-name-wrapper">
@@ -74,7 +90,15 @@
           <span class="sidebar-item-meta">(you)</span>
         {/if}
       </span>
-      {#if isBot}
+      {#if isCompanyAgent}
+        <span class="member-role-tag company-agent">AGENT</span>
+      {/if}
+      {#if companySim?.roleTitle}
+        <span class="member-company-role" title={companySim.roleTitle}>
+          {companySim.roleTitle.split(/\s+/)[0]}
+        </span>
+      {/if}
+      {#if isBot && !isCompanyAgent}
         <span class="member-role-tag bot">BOT</span>
       {/if}
       {#if role === 'owner'}
@@ -94,3 +118,22 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .member-company-role {
+    font-size: 0.7em;
+    opacity: 0.7;
+    margin-left: 0.3em;
+  }
+
+  .company-agent-avatar {
+    position: relative;
+  }
+
+  .member-avatar-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+  }
+</style>

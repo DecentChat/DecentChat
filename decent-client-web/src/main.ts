@@ -455,7 +455,7 @@ async function init(): Promise<void> {
 
     // Wire offline queue → persistent storage
     ctrl.offlineQueue.setPersistence(
-      (peerId, data) => ctrl.persistentStore.enqueueMessage(peerId, data),
+      (peerId, data, meta) => ctrl.persistentStore.enqueueMessage(peerId, data, meta),
       (peerId) => ctrl.persistentStore.getQueuedMessages(peerId),
       (id) => ctrl.persistentStore.dequeueMessage(id),
       (peerId) => ctrl.persistentStore.dequeueAllForPeer(peerId),

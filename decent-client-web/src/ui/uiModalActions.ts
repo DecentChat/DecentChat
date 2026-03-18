@@ -446,6 +446,7 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
         isYou: member.isYou,
         isBot: member.isBot,
         color: peerColor(member.peerId),
+        companySim: (member as any).companySim,
       }));
 
     const directoryView = callbacks.getWorkspaceMemberDirectory?.(ws.id);
@@ -460,6 +461,7 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
         isYou: member.peerId === state.myPeerId,
         isBot: !!(member as any).isBot,
         color: peerColor(member.peerId),
+        companySim: (member as any).companySim,
       }));
 
     const usingDirectoryState = isPublicWorkspaceChannel && (
@@ -519,6 +521,7 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
         isOnline: member.isOnline,
         isYou: member.isYou,
         color: member.isBot ? '#7c3aed' : peerColor(member.peerId),
+        companySim: (member as any).companySim,
         // Moderation controls still require hydrated member records in workspace-state.
         isHydrated: member.isYou || hydratedPeerIds.has(member.peerId),
       }));
@@ -536,6 +539,7 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
       isOnline: state.connectedPeers.has(member.peerId) || member.peerId === state.myPeerId,
       isYou: member.peerId === state.myPeerId,
       color: member.isBot ? '#7c3aed' : peerColor(member.peerId),
+      companySim: (member as any).companySim,
       isHydrated: true,
     }));
 

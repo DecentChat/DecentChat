@@ -24,6 +24,13 @@ export interface ShellMemberData {
   role: string;
   isBot: boolean;
   allowWorkspaceDMs?: boolean;
+  companySim?: {
+    automationKind?: string;
+    roleTitle?: string;
+    teamId?: string;
+    managerPeerId?: string;
+    avatarUrl?: string;
+  };
   statusClass: string;
   statusTitle: string;
 }
@@ -229,6 +236,7 @@ export interface ShellCallbacks {
   // Messages
   getThread: (channelId: string, messageId: string) => PlaintextMessage[];
   isBot: (senderId: string) => boolean;
+  getCompanySimProfile: (senderId: string) => { automationKind?: string; roleTitle?: string; teamId?: string; managerPeerId?: string; avatarUrl?: string } | undefined;
   onOpenThread: (messageId: string) => void;
   onToggleReaction: (messageId: string, emoji: string) => void;
   onRememberReaction: (emoji: string) => void;

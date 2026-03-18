@@ -5,6 +5,14 @@
 <script lang="ts" module>
   import { mount, unmount } from 'svelte';
 
+  interface CompanyProfile {
+    automationKind?: string;
+    roleTitle?: string;
+    teamId?: string;
+    managerPeerId?: string;
+    avatarUrl?: string;
+  }
+
   interface ChannelMember {
     peerId: string;
     name: string;
@@ -12,6 +20,7 @@
     isYou: boolean;
     isBot: boolean;
     color: string;
+    companySim?: CompanyProfile;
   }
 
   interface ChannelMembersPagePayload {
@@ -52,6 +61,14 @@
 </script>
 
 <script lang="ts">
+  interface CompanyProfile {
+    automationKind?: string;
+    roleTitle?: string;
+    teamId?: string;
+    managerPeerId?: string;
+    avatarUrl?: string;
+  }
+
   interface ChannelMember {
     peerId: string;
     name: string;
@@ -59,6 +76,7 @@
     isYou: boolean;
     isBot: boolean;
     color: string;
+    companySim?: CompanyProfile;
   }
 
   interface ChannelMembersPagePayload {
@@ -150,18 +168,29 @@
       </div>
       <div class="members-list">
         {#each members as member (member.peerId)}
+          {@const avatarUrl = member.companySim?.avatarUrl}
+          {@const isCompanyAgent = member.companySim?.automationKind === 'openclaw-agent'}
           <div class="member-row">
             <div class="member-info">
-              <div class="member-avatar{member.isBot ? ' bot-avatar' : ''}" style="background:{member.color}">
-                {member.isBot ? '🤖' : member.name.charAt(0).toUpperCase()}
+              <div class="member-avatar{member.isBot ? ' bot-avatar' : ''}" style="background:{avatarUrl ? 'transparent' : member.color}">
+                {#if avatarUrl}
+                  <img src={avatarUrl} alt={member.name} class="member-avatar-image" />
+                {:else}
+                  {member.isBot ? '🤖' : member.name.charAt(0).toUpperCase()}
+                {/if}
               </div>
               <div class="member-details">
                 <div class="member-name-line">
                   <span class="member-name">{member.name}</span>
+                  {#if isCompanyAgent}<span class="you-badge">AGENT</span>{/if}
+                  {#if member.companySim?.roleTitle}<span class="member-role-inline">{member.companySim.roleTitle}</span>{/if}
                   {#if member.isYou}<span class="you-badge">you</span>{/if}
                 </div>
                 <span class="member-status {member.isOnline ? 'online' : 'offline'}">
                   {member.isOnline ? 'Online' : 'Offline'}
+                  {#if member.companySim?.teamId}
+                    · {member.companySim.teamId}
+                  {/if}
                 </span>
               </div>
             </div>
@@ -183,3 +212,18 @@
     </form>
   </div>
 </div>
+
+<style>
+  .member-avatar-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+  }
+
+  .member-role-inline {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-left: 6px;
+  }
+</style>
