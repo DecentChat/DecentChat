@@ -153,6 +153,7 @@
         {getThread}
         {getPeerAlias}
         {isBot}
+        {getCompanySimProfile}
         {onOpenThread}
         {onToggleReaction}
         {onRememberReaction}

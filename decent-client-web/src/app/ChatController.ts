@@ -416,10 +416,6 @@ export class ChatController {
       async (peerId) => this.persistentStore.getDeliveryReceipts(peerId),
     );
 
-    this.loadCustodianInbox().catch((error) => {
-      console.warn('[Custody] Failed to load custodian inbox', error);
-    });
-
     this.messageGuard.rateLimiter.onViolation = (v) => {
       console.warn(`[Guard] ${v.severity} violation from ${v.peerId.slice(0, 8)}: ${v.action}`);
       if (v.severity === 'ban') {
@@ -556,6 +552,9 @@ export class ChatController {
       'custody.fetch_index',
       'custody.fetch_envelopes',
       'custody.ack',
+      'pre-key-bundle.publish',
+      'pre-key-bundle.request',
+      'pre-key-bundle.response',
     ]);
     if (!syncTypes.has(type)) return false;
 
@@ -650,6 +649,51 @@ export class ChatController {
     return this.getTopologyTelemetry().getDebugSnapshot(workspaceId || undefined);
   }
 
+  private async publishPreKeyBundle(peerId: string): Promise<void> {
+    if (!this.messageProtocol) return;
+    try {
+      const bundle = await this.messageProtocol.createPreKeyBundle();
+      this.sendControlWithRetry(peerId, {
+        type: 'pre-key-bundle.publish',
+        bundle,
+      }, { label: 'pre-key-bundle.publish' });
+    } catch (error) {
+      console.warn('[PreKey] Failed to publish pre-key bundle:', error);
+    }
+  }
+
+  private async handlePreKeyControlMessage(peerId: string, data: any): Promise<boolean> {
+    if (!this.messageProtocol) return false;
+
+    if (data?.type === 'pre-key-bundle.publish') {
+      if (!data.bundle) return true;
+      await this.messageProtocol.storePeerPreKeyBundle(peerId, data.bundle);
+      return true;
+    }
+
+    if (data?.type === 'pre-key-bundle.request') {
+      try {
+        const bundle = await this.messageProtocol.createPreKeyBundle();
+        this.sendControlWithRetry(peerId, {
+          type: 'pre-key-bundle.response',
+          bundle,
+        }, { label: 'pre-key-bundle.response' });
+      } catch (error) {
+        console.warn('[PreKey] Failed to create bundle response:', error);
+      }
+      return true;
+    }
+
+    if (data?.type === 'pre-key-bundle.response') {
+      if (data.bundle) {
+        await this.messageProtocol.storePeerPreKeyBundle(peerId, data.bundle);
+      }
+      return true;
+    }
+
+    return false;
+  }
+
   setupTransportHandlers(): void {
     this.transport.onSignalingStateChange = () => {
       this.ui?.updateSidebar();
@@ -680,6 +724,7 @@ export class ChatController {
           ...handshake,
           capabilities: this.getAdvertisedControlCapabilities(this.state.activeWorkspaceId ?? undefined),
         }, { label: 'handshake' });
+        void this.publishPreKeyBundle(peerId);
       } catch (err) {
         console.error('Handshake failed:', err);
       }
@@ -983,6 +1028,10 @@ export class ChatController {
           return;
         }
 
+        if (await this.handlePreKeyControlMessage(peerId, data)) {
+          return;
+        }
+
         // --- Handshake ---
         if (data?.type === 'handshake') {
           // DEP-003 / MITM protection: if we have a pre-stored public key for this peer
@@ -1057,6 +1106,11 @@ export class ChatController {
             ? data.capabilities.filter((value: unknown): value is string => typeof value === 'string')
             : [];
           this.peerCapabilities.set(peerId, new Set(capabilities));
+
+          if (data.preKeySupport) {
+            this.sendControlWithRetry(peerId, { type: 'pre-key-bundle.request' }, { label: 'pre-key-bundle.request' });
+          }
+          void this.publishPreKeyBundle(peerId);
 
           this.state.readyPeers.add(peerId);
           this.ensurePeerInActiveWorkspace(peerId, data.publicKey);
@@ -4290,6 +4344,10 @@ export class ChatController {
   }
 
   async restoreFromStorage(): Promise<void> {
+    await this.loadCustodianInbox().catch((error) => {
+      console.warn('[Custody] Failed to load custodian inbox', error);
+    });
+
     const savedAlias = await this.persistentStore.getSetting('myAlias');
     if (savedAlias) this.state.myAlias = savedAlias;
 

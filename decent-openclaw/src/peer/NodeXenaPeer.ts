@@ -258,6 +258,12 @@ export class NodeXenaPeer {
       save: async (peerId, state) => this.store.set(`ratchet-${peerId}`, state),
       load: async (peerId) => this.store.get(`ratchet-${peerId}`, null),
       delete: async (peerId) => this.store.delete(`ratchet-${peerId}`),
+      savePreKeyBundle: async (peerId, bundle) => this.store.set(`prekey-bundle-${peerId}`, bundle),
+      loadPreKeyBundle: async (peerId) => this.store.get(`prekey-bundle-${peerId}`, null),
+      deletePreKeyBundle: async (peerId) => this.store.delete(`prekey-bundle-${peerId}`),
+      saveLocalPreKeyState: async (ownerPeerId, state) => this.store.set(`prekey-state-${ownerPeerId}`, state),
+      loadLocalPreKeyState: async (ownerPeerId) => this.store.get(`prekey-state-${ownerPeerId}`, null),
+      deleteLocalPreKeyState: async (ownerPeerId) => this.store.delete(`prekey-state-${ownerPeerId}`),
     });
     await this.messageProtocol.init(ecdsaKeyPair);
 
@@ -667,8 +673,16 @@ export class NodeXenaPeer {
       return;
     }
 
+    if (await this.handlePreKeyControl(fromPeerId, msg)) {
+      return;
+    }
+
     if (msg?.type === 'handshake') {
       await this.messageProtocol.processHandshake(fromPeerId, msg);
+      if (msg.preKeySupport) {
+        this.transport.send(fromPeerId, { type: 'pre-key-bundle.request' });
+      }
+      await this.publishPreKeyBundle(fromPeerId);
       const knownKeys = this.store.get<Record<string, string>>('peer-public-keys', {});
       knownKeys[fromPeerId] = msg.publicKey;
       this.store.set('peer-public-keys', knownKeys);
@@ -939,11 +953,52 @@ export class NodeXenaPeer {
     this.opts.log?.info?.(`[xena-peer] Fetch request from ${fromPeerId.slice(0, 8)}: sent ${allMessages.length} messages`);
   }
 
+  private async publishPreKeyBundle(peerId: string): Promise<void> {
+    if (!this.transport || !this.messageProtocol) return;
+    try {
+      const bundle = await this.messageProtocol.createPreKeyBundle();
+      this.transport.send(peerId, { type: 'pre-key-bundle.publish', bundle });
+    } catch (error) {
+      this.opts.log?.warn?.(`[xena-peer] failed to publish pre-key bundle to ${peerId.slice(0, 8)}: ${String(error)}`);
+    }
+  }
+
+  private async handlePreKeyControl(fromPeerId: string, msg: any): Promise<boolean> {
+    if (!this.transport || !this.messageProtocol) return false;
+
+    if (msg?.type === 'pre-key-bundle.publish') {
+      if (msg.bundle) {
+        await this.messageProtocol.storePeerPreKeyBundle(fromPeerId, msg.bundle);
+      }
+      return true;
+    }
+
+    if (msg?.type === 'pre-key-bundle.request') {
+      try {
+        const bundle = await this.messageProtocol.createPreKeyBundle();
+        this.transport.send(fromPeerId, { type: 'pre-key-bundle.response', bundle });
+      } catch (error) {
+        this.opts.log?.warn?.(`[xena-peer] failed to respond with pre-key bundle to ${fromPeerId.slice(0, 8)}: ${String(error)}`);
+      }
+      return true;
+    }
+
+    if (msg?.type === 'pre-key-bundle.response') {
+      if (msg.bundle) {
+        await this.messageProtocol.storePeerPreKeyBundle(fromPeerId, msg.bundle);
+      }
+      return true;
+    }
+
+    return false;
+  }
+
   private async sendHandshake(peerId: string): Promise<void> {
     if (!this.transport || !this.messageProtocol) return;
     try {
       const handshake = await this.messageProtocol.createHandshake();
       this.transport.send(peerId, { type: 'handshake', ...handshake, capabilities: ['negentropy-sync-v1'] });
+      await this.publishPreKeyBundle(peerId);
       // Announce display name (separate unencrypted message — same pattern as the web client)
       // Include workspaceId so the peer can deterministically add us to the correct workspace
       // (critical when the peer has multiple workspaces — without this, we'd only update
@@ -2674,7 +2729,8 @@ export class NodeXenaPeer {
             },
           });
           return;
-        } catch {
+        } catch (err) {
+          this.opts.log?.warn?.(`[xena-peer] encryption failed while queueing offline payload for ${peerId}: ${String(err)}`);
           // Fall back to deferred plaintext path below.
         }
       }
