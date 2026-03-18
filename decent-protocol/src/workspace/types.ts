@@ -4,6 +4,7 @@
 
 import type {
   WorkspaceShell,
+  CompanySimProfile,
   MemberDirectoryPage,
   DirectoryShardRef,
   ChannelAccessPolicy,
@@ -20,6 +21,7 @@ import type {
 export type {
   WorkspaceShell,
   MemberSummary,
+  CompanySimProfile,
   MemberDirectoryPage,
   DirectoryShardRef,
   ChannelAccessPolicy,
@@ -102,6 +104,8 @@ export interface WorkspaceMember {
   /** Privacy preference for workspace-origin DMs (missing/undefined = allow). */
   allowWorkspaceDMs?: boolean;
   addedBy?: string;
+  /** Company simulation profile metadata (roles, teams, avatars, etc.) */
+  companySim?: CompanySimProfile;
 }
 
 export interface Channel {
@@ -189,7 +193,7 @@ export type SyncMessage =
   | { type: 'channel-created'; channel: Channel }
   | { type: 'channel-removed'; channelId: string; removedBy: string }
   | { type: 'workspace-deleted'; workspaceId: string; deletedBy: string }
-  | { type: 'channel-message'; channelId: string; message: any }
+  | { type: 'channel-message'; workspaceId?: string; channelId: string; message: any }
   | {
       type: 'sync-request';
       workspaceId: string;

@@ -144,6 +144,7 @@ export class DirectoryProtocol {
       identityId: member.identityId,
       isBot: member.isBot,
       allowWorkspaceDMs: member.allowWorkspaceDMs,
+      companySim: member.companySim,
     };
   }
 

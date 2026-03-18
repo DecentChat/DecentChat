@@ -20,6 +20,8 @@ export interface MemberSummary {
   /** Privacy preference for workspace-origin DMs (missing/undefined = allow). */
   allowWorkspaceDMs?: boolean;
   presence?: 'online' | 'offline' | 'away';
+  /** Company simulation profile metadata (roles, teams, avatars, etc.) */
+  companySim?: CompanySimProfile;
 }
 
 export interface MemberDirectoryPage {
@@ -141,4 +143,17 @@ export interface PeerCapabilities {
   relay?: { channels?: string[] };
   archive?: { retentionDays?: number };
   presenceAggregator?: boolean;
+}
+
+export interface CompanySimProfile {
+  /** Automation kind: 'openclaw-agent' or other system identifiers */
+  automationKind?: string;
+  /** Job title within the company (e.g., 'Backend Engineer', 'QA Lead') */
+  roleTitle?: string;
+  /** Team identifier this member belongs to */
+  teamId?: string;
+  /** Peer ID of this member's manager (if any) */
+  managerPeerId?: string;
+  /** Custom avatar URL (overrides default bot emoji or initials) */
+  avatarUrl?: string;
 }

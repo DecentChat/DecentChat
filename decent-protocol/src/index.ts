@@ -31,6 +31,8 @@ export type { ServerStats } from './workspace/ServerDiscovery';
 // ─── Messages ───────────────────────────────────────────────────────────────
 export { MessageStore } from './messages/MessageStore';
 export { OfflineQueue } from './messages/OfflineQueue';
+export { CustodyStore } from './messages/CustodyStore';
+export { ManifestStore, MANIFEST_STORE_STATE_SCHEMA_VERSION } from './sync/ManifestStore';
 
 // ─── Storage ────────────────────────────────────────────────────────────────
 export { PersistentStore } from './storage/PersistentStore';
@@ -106,6 +108,26 @@ export type {
   NegentropyQuery,
   NegentropyResponse,
 } from './crdt/Negentropy';
+export type {
+  ManifestDomainState,
+  ManifestStoreWorkspaceState,
+  ManifestStoreState,
+} from './sync/ManifestStore';
+export type {
+  ManifestVersion,
+  WorkspaceManifestSnapshot,
+  MembershipManifestSnapshot,
+  ChannelManifestSnapshot,
+  MessageLogSnapshot,
+  SyncManifestSnapshot,
+  ManifestDelta,
+  ManifestDomainVersion,
+  ManifestSnapshotPointer,
+  SyncManifestSummary,
+  ManifestDiffRequest,
+  ManifestDiffResponse,
+  SyncManifestState,
+} from './sync/SyncManifest';
 export { WorkspaceRole, DEFAULT_WORKSPACE_PERMISSIONS } from './workspace/types';
 export type {
   Workspace,
@@ -142,6 +164,17 @@ export type {
 } from './workspace/PresenceProtocol';
 export type { SyncEvent, SendFn, OnEvent } from './workspace/SyncProtocol';
 export type { ChatMessage, PlaintextMessage, MessageMetadata, AssistantMessageMetadata } from './messages/types';
+export type {
+  CustodyReplicationClass,
+  CustodyDeliveryState,
+  SyncDomain,
+  DeliveryReceipt,
+  CustodyEnvelope,
+  CustodyEnvelopeInput,
+  CustodyRecipientSummary,
+  CustodyReconciliationResult,
+  CustodySyncSummary,
+} from './messages/CustodyTypes';
 export type {
   DecentIdentity,
   IdentityBundle,

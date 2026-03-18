@@ -290,6 +290,7 @@ export class WorkspaceManager {
     const normalizedMember: WorkspaceMember = {
       ...member,
       allowWorkspaceDMs: member.allowWorkspaceDMs !== false,
+      companySim: member.companySim,
     };
 
     workspace.members.push(normalizedMember);

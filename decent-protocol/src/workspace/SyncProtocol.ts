@@ -229,13 +229,19 @@ export class SyncProtocol {
   }
 
   /**
-   * Broadcast a channel message to all connected workspace peers
+   * Broadcast a channel message to all connected workspace peers.
+   * Includes workspaceId so receivers can enforce workspace boundaries.
    */
-  broadcastMessage(channelId: string, message: PlaintextMessage, connectedPeerIds: string[]): void {
-    const msg: SyncMessage = { type: 'channel-message', channelId, message: message as any };
+  broadcastMessage(workspaceId: string, channelId: string, message: PlaintextMessage, connectedPeerIds: string[]): void {
+    const msg: SyncMessage = {
+      type: 'channel-message',
+      workspaceId,
+      channelId,
+      message: message as any,
+    };
     for (const peerId of connectedPeerIds) {
       if (peerId !== this.myPeerId) {
-        this.sendFn(peerId, { type: 'workspace-sync', sync: msg });
+        this.sendFn(peerId, { type: 'workspace-sync', sync: msg, workspaceId });
       }
     }
   }
@@ -433,7 +439,13 @@ export class SyncProtocol {
       this.serverDiscovery.mergeReceivedServers(msg.pexServers);
     }
 
-    // Import workspace
+    const inviterMembership = msg.workspace.members.find((member) => member.peerId === fromPeerId);
+    if (!inviterMembership) {
+      console.warn(`Ignoring join-accepted from ${fromPeerId}: sender not present in workspace membership`);
+      return;
+    }
+
+    // Import full workspace snapshot from inviter (channels + members + permissions)
     this.workspaceManager.importWorkspace(msg.workspace);
 
     // Import message histories (with chain verification)
@@ -678,18 +690,69 @@ export class SyncProtocol {
 
   private async handleChannelMessage(fromPeerId: string, msg: Extract<SyncMessage, { type: 'channel-message' }>): Promise<void> {
     const message = msg.message as unknown as PlaintextMessage;
+    const workspace = this.resolveChannelMessageWorkspace(msg.workspaceId, msg.channelId);
 
-    const result = await this.messageStore.addMessage(message);
+    if (!workspace) {
+      console.warn(`Rejected channel message from ${fromPeerId}: unknown workspace/channel mapping (${msg.workspaceId ?? 'none'} / ${msg.channelId})`);
+      return;
+    }
+
+    const senderIsMember = workspace.members.some((member) => member.peerId === fromPeerId);
+    if (!senderIsMember) {
+      console.warn(`Rejected channel message from ${fromPeerId}: not a member of workspace ${workspace.id}`);
+      return;
+    }
+
+    const channel = workspace.channels.find((candidate) => candidate.id === msg.channelId);
+    if (!channel) {
+      console.warn(`Rejected channel message from ${fromPeerId}: channel ${msg.channelId} missing in workspace ${workspace.id}`);
+      return;
+    }
+
+    if (!this.workspaceManager.isMemberAllowedInChannel(workspace.id, channel.id, fromPeerId)) {
+      console.warn(`Rejected channel message from ${fromPeerId}: not allowed in channel ${msg.channelId}`);
+      return;
+    }
+
+    const normalizedMessage = {
+      ...message,
+      channelId: msg.channelId,
+    } as PlaintextMessage;
+
+    const result = await this.messageStore.addMessage(normalizedMessage);
     if (result.success) {
-      this.onEvent({ type: 'message-received', channelId: msg.channelId, message });
+      this.onEvent({ type: 'message-received', channelId: msg.channelId, message: normalizedMessage });
     } else {
       console.warn('Rejected message from', fromPeerId, ':', result.error);
     }
   }
 
+  private resolveChannelMessageWorkspace(workspaceId: string | undefined, channelId: string): Workspace | undefined {
+    if (workspaceId) {
+      const workspace = this.workspaceManager.getWorkspace(workspaceId);
+      if (!workspace) return undefined;
+      return workspace.channels.some((channel) => channel.id === channelId)
+        ? workspace
+        : undefined;
+    }
+
+    for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+      if (workspace.channels.some((channel) => channel.id === channelId)) {
+        return workspace;
+      }
+    }
+    return undefined;
+  }
+
   private handleSyncRequest(fromPeerId: string, msg: Extract<SyncMessage, { type: 'sync-request' }>): void {
     const workspace = this.workspaceManager.getWorkspace(msg.workspaceId);
     if (!workspace) return;
+
+    const requesterIsMember = workspace.members.some((member) => member.peerId === fromPeerId);
+    if (!requesterIsMember) {
+      console.warn(`Ignoring sync-request for workspace ${msg.workspaceId} from non-member ${fromPeerId}`);
+      return;
+    }
 
     const historySyncMode = this.resolveHistorySyncMode(msg, workspace);
     const usePagedHistory = historySyncMode === 'paged';
