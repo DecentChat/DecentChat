@@ -137,6 +137,44 @@ const v6_contacts: Migration = {
   },
 };
 
+
+/**
+ * v7: Add manifestStates store for durable sync-manifest convergence cache
+ * The IndexedDB object store is created by PersistentStore.init() (version bump).
+ * This migration just marks the schema version.
+ */
+const v7_manifestState: Migration = {
+  version: 7,
+  description: 'Add manifestStates store for durable sync-manifest state',
+  up: async (ctx) => {
+    ctx.log('manifestStates store added (created by IndexedDB upgrade)');
+  },
+  down: async (ctx) => {
+    try {
+      await ctx.clear('manifestStates');
+    } catch {}
+    ctx.log('Cleared manifestStates store');
+  },
+};
+
+/**
+ * v8: Add manifests store for per-workspace manifest persistence
+ * The IndexedDB object store is created by PersistentStore.init() (version bump).
+ */
+const v8_manifestRecords: Migration = {
+  version: 8,
+  description: 'Add manifests store for per-workspace manifest persistence',
+  up: async (ctx) => {
+    ctx.log('manifests store added (created by IndexedDB upgrade)');
+  },
+  down: async (ctx) => {
+    try {
+      await ctx.clear('manifests');
+    } catch {}
+    ctx.log('Cleared manifests store');
+  },
+};
+
 /**
  * All migrations in order
  */
@@ -147,7 +185,9 @@ export const ALL_MIGRATIONS: Migration[] = [
   v4_workspaceSettings,
   v5_doubleRatchet,
   v6_contacts,
+  v7_manifestState,
+  v8_manifestRecords,
 ];
 
 /** Current schema version */
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 8;

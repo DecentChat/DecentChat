@@ -185,6 +185,79 @@ describe('PersistentStore', () => {
     expect(charlieQ).toHaveLength(1);
   });
 
+
+  test('persists custody metadata alongside queued messages', async () => {
+    await store.enqueueMessage('bob', { content: 'opaque' }, {
+      envelopeId: 'env-1',
+      opId: 'op-1',
+      workspaceId: 'ws-1',
+      domain: 'channel-message',
+      replicationClass: 'critical',
+    });
+
+    const queued = await store.getQueuedMessages('bob');
+    expect(queued).toHaveLength(1);
+    expect(queued[0].envelopeId).toBe('env-1');
+    expect(queued[0].opId).toBe('op-1');
+    expect(queued[0].replicationClass).toBe('critical');
+  });
+
+
+  test('saves and retrieves delivery receipts', async () => {
+    await store.saveDeliveryReceipt({
+      receiptId: 'r-1',
+      kind: 'delivered',
+      opId: 'op-1',
+      recipientPeerId: 'bob',
+      timestamp: 100,
+    });
+    await store.saveDeliveryReceipt({
+      receiptId: 'r-2',
+      kind: 'acknowledged',
+      opId: 'op-2',
+      recipientPeerId: 'bob',
+      timestamp: 200,
+    });
+    await store.saveDeliveryReceipt({
+      receiptId: 'r-3',
+      kind: 'delivered',
+      opId: 'op-3',
+      recipientPeerId: 'charlie',
+      timestamp: 150,
+    });
+
+    const bobReceipts = await store.getDeliveryReceipts('bob');
+    expect(bobReceipts).toHaveLength(2);
+    expect(bobReceipts[0].receiptId).toBe('r-1');
+    expect(bobReceipts[1].receiptId).toBe('r-2');
+
+    const charlieReceipts = await store.getDeliveryReceipts('charlie');
+    expect(charlieReceipts).toHaveLength(1);
+    expect(charlieReceipts[0].receiptId).toBe('r-3');
+  });
+
+  test('dedupes delivery receipts by recipient + receiptId', async () => {
+    await store.saveDeliveryReceipt({
+      receiptId: 'r-1',
+      kind: 'delivered',
+      opId: 'op-1',
+      recipientPeerId: 'bob',
+      timestamp: 100,
+    });
+    await store.saveDeliveryReceipt({
+      receiptId: 'r-1',
+      kind: 'acknowledged',
+      opId: 'op-1',
+      recipientPeerId: 'bob',
+      timestamp: 999,
+    });
+
+    const bobReceipts = await store.getDeliveryReceipts('bob');
+    expect(bobReceipts).toHaveLength(1);
+    expect(bobReceipts[0].timestamp).toBe(999);
+    expect(bobReceipts[0].kind).toBe('acknowledged');
+  });
+
   // === Settings ===
 
   test('saves and retrieves settings', async () => {
@@ -236,6 +309,108 @@ describe('PersistentStore - Survives Restart', () => {
 
     const id = await store2.getIdentity('myId');
     expect(id.name).toBe('Alice');
+
+    await store2.close();
+  });
+
+
+  test('delivery receipts persist across close/reopen', async () => {
+    const dbName = `receipt-persist-test-${Date.now()}`;
+
+    const store1 = new PersistentStore({ dbName });
+    await store1.init();
+    await store1.saveDeliveryReceipt({
+      receiptId: 'r-1',
+      kind: 'delivered',
+      opId: 'op-1',
+      recipientPeerId: 'bob',
+      timestamp: 123,
+    });
+    await store1.close();
+
+    const store2 = new PersistentStore({ dbName });
+    await store2.init();
+    const receipts = await store2.getDeliveryReceipts('bob');
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0].receiptId).toBe('r-1');
+    expect(receipts[0].timestamp).toBe(123);
+    await store2.close();
+  });
+
+
+  test('manifest store state persists across close/reopen', async () => {
+    const dbName = `manifest-persist-test-${Date.now()}`;
+
+    const state = {
+      schemaVersion: 1,
+      workspaces: [
+        {
+          workspaceId: 'ws-1',
+          versions: [
+            {
+              domain: 'membership' as const,
+              workspaceId: 'ws-1',
+              version: 2,
+              itemCount: 3,
+              lastUpdatedAt: 123,
+              lastUpdatedBy: 'peer-a',
+            },
+          ],
+          deltas: [],
+          snapshots: [],
+        },
+      ],
+    };
+
+    const store1 = new PersistentStore({ dbName });
+    await store1.init();
+    await store1.saveManifestStoreState(state as any);
+    await store1.close();
+
+    const store2 = new PersistentStore({ dbName });
+    await store2.init();
+    const loaded = await store2.getManifestStoreState();
+    expect(loaded).toEqual(state);
+
+    await store2.clearManifestStoreState();
+    const cleared = await store2.getManifestStoreState();
+    expect(cleared).toBeUndefined();
+
+    await store2.close();
+  });
+
+  test('per-workspace manifest records persist across close/reopen', async () => {
+    const dbName = `manifest-record-persist-test-${Date.now()}`;
+    const workspaceState = {
+      workspaceId: 'ws-1',
+      versions: [
+        {
+          domain: 'membership' as const,
+          workspaceId: 'ws-1',
+          version: 2,
+          itemCount: 3,
+          lastUpdatedAt: 123,
+          lastUpdatedBy: 'peer-a',
+        },
+      ],
+      deltas: [],
+      snapshots: [],
+    };
+
+    const store1 = new PersistentStore({ dbName });
+    await store1.init();
+    await store1.saveManifest('ws-1', workspaceState as any);
+    await store1.close();
+
+    const store2 = new PersistentStore({ dbName });
+    await store2.init();
+
+    const loaded = await store2.getManifest('ws-1');
+    expect(loaded).toEqual(workspaceState);
+
+    await store2.deleteManifest('ws-1');
+    const cleared = await store2.getManifest('ws-1');
+    expect(cleared).toBeUndefined();
 
     await store2.close();
   });
@@ -330,7 +505,7 @@ describe('OfflineQueue', () => {
 
     const queue = new OfflineQueue();
     queue.setPersistence(
-      (peerId, data) => store.enqueueMessage(peerId, data),
+      (peerId, data, meta) => store.enqueueMessage(peerId, data, meta),
       (peerId) => store.getQueuedMessages(peerId),
       (id) => store.dequeueMessage(id),
       (peerId) => store.dequeueAllForPeer(peerId),

@@ -6,6 +6,8 @@
  */
 
 import { AtRestEncryption } from './AtRestEncryption';
+import type { DeliveryReceipt } from '../messages/CustodyTypes';
+import type { ManifestStoreState, ManifestStoreWorkspaceState } from '../sync/ManifestStore';
 import type {
   ChannelAccessPolicy,
   DirectoryShardRef,
@@ -28,6 +30,9 @@ export interface PersistentStoreConfig {
   version?: number;
 }
 
+const MANIFEST_STORE_STATE_KEY = 'default';
+const MANIFESTS_STORE = 'manifests';
+
 export class PersistentStore {
   private db: IDBDatabase | null = null;
   private dbName: string;
@@ -37,7 +42,7 @@ export class PersistentStore {
 
   constructor(config: PersistentStoreConfig = {}) {
     this.dbName = config.dbName || 'decent-protocol';
-    this.version = config.version || 5;
+    this.version = config.version || 8;
   }
 
   async init(): Promise<void> {
@@ -85,6 +90,13 @@ export class PersistentStore {
           db.createObjectStore('ratchetStates', { keyPath: 'peerId' });
         }
 
+        // Delivery receipts (durable custody/receipt reconciliation)
+        if (!db.objectStoreNames.contains('deliveryReceipts')) {
+          const receiptStore = db.createObjectStore('deliveryReceipts', { keyPath: 'key' });
+          receiptStore.createIndex('recipientPeerId', 'recipientPeerId', { unique: false });
+          receiptStore.createIndex('recipientTimestamp', ['recipientPeerId', 'timestamp'], { unique: false });
+        }
+
         // Contacts (standalone, independent of workspaces)
         if (!db.objectStoreNames.contains('contacts')) {
           db.createObjectStore('contacts', { keyPath: 'peerId' });
@@ -94,6 +106,16 @@ export class PersistentStore {
         if (!db.objectStoreNames.contains('directConversations')) {
           const dcStore = db.createObjectStore('directConversations', { keyPath: 'id' });
           dcStore.createIndex('contactPeerId', 'contactPeerId', { unique: true });
+        }
+
+        // Sync manifest state (durable reconnect/restart convergence cache)
+        if (!db.objectStoreNames.contains('manifestStates')) {
+          db.createObjectStore('manifestStates', { keyPath: 'id' });
+        }
+
+        // Per-workspace manifest records (used by ManifestStore persistence callbacks)
+        if (!db.objectStoreNames.contains(MANIFESTS_STORE)) {
+          db.createObjectStore(MANIFESTS_STORE, { keyPath: 'workspaceId' });
         }
 
         // Public/adaptive workspace normalized stores
@@ -438,13 +460,14 @@ export class PersistentStore {
 
   // === Offline Outbox ===
 
-  async enqueueMessage(targetPeerId: string, data: any): Promise<void> {
+  async enqueueMessage(targetPeerId: string, data: any, meta: Record<string, any> = {}): Promise<void> {
     await this.put('outbox', {
       targetPeerId,
       data,
-      createdAt: Date.now(),
-      attempts: 0,
-      lastAttempt: 0,
+      createdAt: meta.createdAt ?? Date.now(),
+      attempts: meta.attempts ?? 0,
+      lastAttempt: meta.lastAttempt ?? 0,
+      ...meta,
     });
   }
 
@@ -482,6 +505,26 @@ export class PersistentStore {
     return messages;
   }
 
+  // === Delivery Receipts ===
+
+  async saveDeliveryReceipt(receipt: DeliveryReceipt): Promise<void> {
+    await this.put('deliveryReceipts', {
+      ...receipt,
+      key: this.makeDeliveryReceiptKey(receipt.recipientPeerId, receipt.receiptId),
+    });
+  }
+
+  async getDeliveryReceipts(recipientPeerId: string): Promise<DeliveryReceipt[]> {
+    const records = await this.getAllByIndex('deliveryReceipts', 'recipientPeerId', recipientPeerId);
+    return records
+      .map(({ key, ...receipt }) => receipt as DeliveryReceipt)
+      .sort((a, b) => a.timestamp - b.timestamp || a.receiptId.localeCompare(b.receiptId));
+  }
+
+  async deleteDeliveryReceipt(recipientPeerId: string, receiptId: string): Promise<void> {
+    await this.delete('deliveryReceipts', this.makeDeliveryReceiptKey(recipientPeerId, receiptId));
+  }
+
   // === Ratchet States ===
 
   async saveRatchetState(peerId: string, state: any): Promise<void> {
@@ -499,6 +542,96 @@ export class PersistentStore {
 
   async getAllRatchetStates(): Promise<any[]> {
     return this.getAll('ratchetStates');
+  }
+
+  // === Sync Manifest State ===
+
+  async saveManifestStoreState(state: ManifestStoreState): Promise<void> {
+    if (this.hasStore('manifestStates')) {
+      await this.put('manifestStates', {
+        id: MANIFEST_STORE_STATE_KEY,
+        state,
+        updatedAt: Date.now(),
+      });
+      return;
+    }
+
+    // Backward-compat fallback for pre-v7 DBs opened with a pinned lower version.
+    await this.saveSetting('_manifestStoreState', state);
+  }
+
+  async getManifestStoreState(): Promise<ManifestStoreState | undefined> {
+    if (this.hasStore('manifestStates')) {
+      const result = await this.get('manifestStates', MANIFEST_STORE_STATE_KEY);
+      return result?.state as ManifestStoreState | undefined;
+    }
+
+    return this.getSetting('_manifestStoreState') as Promise<ManifestStoreState | undefined>;
+  }
+
+  async clearManifestStoreState(): Promise<void> {
+    if (this.hasStore('manifestStates')) {
+      await this.delete('manifestStates', MANIFEST_STORE_STATE_KEY);
+      return;
+    }
+
+    await this.saveSetting('_manifestStoreState', undefined);
+  }
+
+  async saveManifest(workspaceId: string, state: ManifestStoreWorkspaceState): Promise<void> {
+    if (!workspaceId) return;
+
+    if (this.hasStore(MANIFESTS_STORE)) {
+      await this.put(MANIFESTS_STORE, {
+        workspaceId,
+        state,
+        updatedAt: Date.now(),
+      });
+      return;
+    }
+
+    const legacyState = (await this.getManifestStoreState()) || { schemaVersion: 1, workspaces: [] };
+    const workspaces = Array.isArray(legacyState.workspaces)
+      ? [...legacyState.workspaces.filter((entry) => entry?.workspaceId !== workspaceId), state]
+      : [state];
+    await this.saveManifestStoreState({
+      ...legacyState,
+      schemaVersion: legacyState.schemaVersion || 1,
+      workspaces,
+    });
+  }
+
+  async getManifest(workspaceId: string): Promise<ManifestStoreWorkspaceState | undefined> {
+    if (!workspaceId) return undefined;
+
+    if (this.hasStore(MANIFESTS_STORE)) {
+      const result = await this.get(MANIFESTS_STORE, workspaceId);
+      return result?.state as ManifestStoreWorkspaceState | undefined;
+    }
+
+    const legacyState = await this.getManifestStoreState();
+    if (!legacyState || !Array.isArray(legacyState.workspaces)) return undefined;
+    return legacyState.workspaces.find((entry) => entry?.workspaceId === workspaceId);
+  }
+
+  async deleteManifest(workspaceId: string): Promise<void> {
+    if (!workspaceId) return;
+
+    if (this.hasStore(MANIFESTS_STORE)) {
+      await this.delete(MANIFESTS_STORE, workspaceId);
+      return;
+    }
+
+    const legacyState = await this.getManifestStoreState();
+    if (!legacyState || !Array.isArray(legacyState.workspaces)) return;
+
+    const nextWorkspaces = legacyState.workspaces.filter((entry) => entry?.workspaceId !== workspaceId);
+    if (nextWorkspaces.length === legacyState.workspaces.length) return;
+
+    await this.saveManifestStoreState({
+      ...legacyState,
+      workspaces: nextWorkspaces,
+    });
   }
 
   // === Settings ===
@@ -588,8 +721,10 @@ export class PersistentStore {
       'outbox',
       'settings',
       'ratchetStates',
+      'deliveryReceipts',
       'contacts',
       'directConversations',
+      'manifestStates',
       PUBLIC_WORKSPACE_STORES.workspaceShells,
       PUBLIC_WORKSPACE_STORES.memberDirectoryPages,
       PUBLIC_WORKSPACE_STORES.directoryShardRefs,
@@ -614,6 +749,10 @@ export class PersistentStore {
   }
 
   // === Generic helpers ===
+
+  private hasStore(storeName: string): boolean {
+    return this.getDB().objectStoreNames.contains(storeName);
+  }
 
   private getDB(): IDBDatabase {
     if (!this.db) throw new Error('PersistentStore not initialized — call init() first');
@@ -663,5 +802,9 @@ export class PersistentStore {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
+  }
+
+  private makeDeliveryReceiptKey(recipientPeerId: string, receiptId: string): string {
+    return `${recipientPeerId}:${receiptId}`;
   }
 }
