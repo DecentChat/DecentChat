@@ -319,3 +319,363 @@ describe('OfflineQueue - Configuration', () => {
     expect(queue).toBeDefined()
   })
 })
+
+describe('OfflineQueue - Custody metadata', () => {
+  test('enqueue preserves custody metadata for in-memory queue', async () => {
+    const queue = new OfflineQueue()
+
+    await queue.enqueue('peer1', { kind: 'ciphertext' }, {
+      envelopeId: 'env-1',
+      opId: 'op-1',
+      workspaceId: 'ws-1',
+      channelId: 'ch-1',
+      domain: 'channel-message',
+      replicationClass: 'critical',
+      deliveryState: 'stored',
+      contentHash: 'hash-1',
+      recipientPeerIds: ['peer1'],
+      metadata: { fanout: 3 },
+    })
+
+    const queued = await queue.getQueued('peer1')
+    expect(queued).toHaveLength(1)
+    expect(queued[0].envelopeId).toBe('env-1')
+    expect(queued[0].opId).toBe('op-1')
+    expect(queued[0].domain).toBe('channel-message')
+    expect(queued[0].replicationClass).toBe('critical')
+    expect(queued[0].metadata).toEqual({ fanout: 3 })
+  })
+
+  test('markDeliveredEnvelope updates delivery state without removing message', async () => {
+    let nextId = 1
+    const persisted = new Map<string, QueuedMessage[]>()
+    const queue = new OfflineQueue()
+    queue.setPersistence(
+      async (peerId, data, meta) => {
+        const row: QueuedMessage = {
+          id: nextId++,
+          targetPeerId: peerId,
+          data,
+          createdAt: meta?.createdAt ?? Date.now(),
+          attempts: meta?.attempts ?? 0,
+          ...meta,
+        }
+        persisted.set(peerId, [...(persisted.get(peerId) || []), row])
+      },
+      async (peerId) => persisted.get(peerId) || [],
+      async (id) => {
+        for (const [peerId, rows] of persisted.entries()) {
+          const idx = rows.findIndex((row) => row.id === id)
+          if (idx >= 0) {
+            rows.splice(idx, 1)
+            persisted.set(peerId, rows)
+            return
+          }
+        }
+      },
+      async (peerId) => {
+        const rows = persisted.get(peerId) || []
+        persisted.delete(peerId)
+        return rows
+      },
+      async (id, patch) => {
+        for (const [peerId, rows] of persisted.entries()) {
+          const idx = rows.findIndex((row) => row.id === id)
+          if (idx >= 0) {
+            rows[idx] = { ...rows[idx], ...patch }
+            persisted.set(peerId, rows)
+            return
+          }
+        }
+      },
+    )
+
+    await queue.enqueue('peer1', { kind: 'ciphertext' }, {
+      envelopeId: 'env-1',
+      opId: 'op-1',
+      domain: 'channel-message',
+      deliveryState: 'stored',
+    })
+
+    const ok = await queue.markDeliveredEnvelope('peer1', 'env-1', {
+      receiptId: 'r-1',
+      kind: 'delivered',
+      opId: 'op-1',
+      envelopeId: 'env-1',
+      recipientPeerId: 'peer1',
+      timestamp: 123,
+    })
+
+    expect(ok).toBe(true)
+    const rows = await queue.listQueued('peer1')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].deliveryState).toBe('delivered')
+    expect(rows[0].deliveredAt).toBe(123)
+    expect(rows[0].receipt?.receiptId).toBe('r-1')
+  })
+
+  test('acknowledgeEnvelope removes persisted envelope', async () => {
+    let nextId = 1
+    const persisted = new Map<string, QueuedMessage[]>()
+    const queue = new OfflineQueue()
+    queue.setPersistence(
+      async (peerId, data, meta) => {
+        const row: QueuedMessage = {
+          id: nextId++,
+          targetPeerId: peerId,
+          data,
+          createdAt: meta?.createdAt ?? Date.now(),
+          attempts: meta?.attempts ?? 0,
+          ...meta,
+        }
+        persisted.set(peerId, [...(persisted.get(peerId) || []), row])
+      },
+      async (peerId) => persisted.get(peerId) || [],
+      async (id) => {
+        for (const [peerId, rows] of persisted.entries()) {
+          const idx = rows.findIndex((row) => row.id === id)
+          if (idx >= 0) {
+            rows.splice(idx, 1)
+            persisted.set(peerId, rows)
+            return
+          }
+        }
+      },
+      async (peerId) => {
+        const rows = persisted.get(peerId) || []
+        persisted.delete(peerId)
+        return rows
+      },
+      async (id, patch) => {
+        for (const [peerId, rows] of persisted.entries()) {
+          const idx = rows.findIndex((row) => row.id === id)
+          if (idx >= 0) {
+            rows[idx] = { ...rows[idx], ...patch }
+            persisted.set(peerId, rows)
+            return
+          }
+        }
+      },
+    )
+
+    await queue.enqueue('peer1', { kind: 'ciphertext' }, {
+      envelopeId: 'env-1',
+      opId: 'op-1',
+      domain: 'channel-message',
+      deliveryState: 'stored',
+    })
+
+    const ok = await queue.acknowledgeEnvelope('peer1', 'env-1', {
+      receiptId: 'r-ack',
+      kind: 'delivered',
+      opId: 'op-1',
+      envelopeId: 'env-1',
+      recipientPeerId: 'peer1',
+      timestamp: 456,
+    })
+
+    expect(ok).toBe(true)
+    expect(await queue.listQueued('peer1')).toHaveLength(0)
+  })
+
+  test('expires entries using expiresAt even when maxAge would allow them', async () => {
+    const queue = new OfflineQueue({ maxAgeMs: 60_000 })
+    await queue.enqueue('peer1', { kind: 'ciphertext' }, {
+      envelopeId: 'env-1',
+      opId: 'op-1',
+      expiresAt: Date.now() + 10,
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const queued = await queue.getQueued('peer1')
+    expect(queued).toHaveLength(0)
+  })
+})
+
+describe('OfflineQueue - Custody Semantics', () => {
+  test('acknowledges queued payloads by logical message id', async () => {
+    const queue = new OfflineQueue();
+
+    await queue.enqueue('peer1', { messageId: 'msg-1', text: 'hello' }, {
+      opId: 'msg-1',
+      domain: 'channel-message',
+      replicationClass: 'critical',
+      deliveryState: 'stored',
+    });
+
+    const acked = await queue.acknowledgeByMessageId('peer1', 'msg-1', {
+      receiptId: 'r-1',
+      kind: 'acknowledged',
+      opId: 'msg-1',
+      recipientPeerId: 'peer1',
+      timestamp: Date.now(),
+    });
+
+    expect(acked).toBe(true);
+    expect(await queue.listQueued('peer1')).toHaveLength(0);
+  });
+
+  test('backs off retries after markAttempt and redelivers after delay', async () => {
+    const queue = new OfflineQueue({ retryDelayMs: 80, maxRetries: 3, maxAgeMs: 10_000 });
+
+    const persisted = new Map<string, QueuedMessage[]>();
+    let seq = 1;
+    const save = async (peerId: string, data: any, meta: Partial<QueuedMessage> = {}) => {
+      const current = persisted.get(peerId) || [];
+      current.push({
+        id: seq++,
+        targetPeerId: peerId,
+        data,
+        createdAt: meta.createdAt ?? Date.now(),
+        attempts: meta.attempts ?? 0,
+        ...meta,
+      });
+      persisted.set(peerId, current);
+    };
+    const load = async (peerId: string) => [...(persisted.get(peerId) || [])];
+    const remove = async (id: number) => {
+      for (const [peerId, items] of persisted.entries()) {
+        const next = items.filter((item) => item.id !== id);
+        if (next.length === 0) persisted.delete(peerId);
+        else persisted.set(peerId, next);
+      }
+    };
+    const removeAll = async (peerId: string) => {
+      const items = persisted.get(peerId) || [];
+      persisted.delete(peerId);
+      return items;
+    };
+    const update = async (id: number, patch: Partial<QueuedMessage>) => {
+      for (const [peerId, items] of persisted.entries()) {
+        const idx = items.findIndex((item) => item.id === id);
+        if (idx < 0) continue;
+        const next = [...items];
+        next[idx] = { ...next[idx], ...patch };
+        persisted.set(peerId, next);
+        break;
+      }
+    };
+
+    queue.setPersistence(save, load, remove, removeAll, update);
+    await queue.enqueue('peer1', { messageId: 'msg-2' }, { opId: 'msg-2', domain: 'channel-message' });
+
+    const queued = await queue.getQueued('peer1');
+    expect(queued).toHaveLength(1);
+
+    const id = (await queue.listQueued('peer1'))[0]?.id;
+    expect(typeof id).toBe('number');
+
+    await queue.markAttempt('peer1', id!);
+    expect(await queue.getQueued('peer1')).toHaveLength(0);
+
+    await new Promise((resolve) => setTimeout(resolve, 185));
+    expect(await queue.getQueued('peer1')).toHaveLength(1);
+  });
+
+  test('tracks expiry + replication metadata in sync summary', async () => {
+    const queue = new OfflineQueue({ maxAgeMs: 60_000 });
+
+    await queue.enqueue('peer1', { messageId: 'fresh' }, {
+      envelopeId: 'env-fresh',
+      opId: 'fresh',
+      domain: 'channel-message',
+      replicationClass: 'critical',
+      metadata: { replicaPeers: ['peer2', 'peer3'], minimumAcks: 2 },
+      expiresAt: Date.now() + 60_000,
+    });
+
+    await queue.enqueue('peer1', { messageId: 'stale' }, {
+      envelopeId: 'env-stale',
+      opId: 'stale',
+      domain: 'receipt',
+      replicationClass: 'bulk',
+      expiresAt: Date.now() - 1,
+    });
+
+    const deliverable = await queue.getQueued('peer1');
+    expect(deliverable).toHaveLength(1);
+    expect(deliverable[0].metadata).toEqual({ replicaPeers: ['peer2', 'peer3'], minimumAcks: 2 });
+
+    const summary = await queue.getSyncSummary('peer1');
+    expect(summary.totalEnvelopes).toBe(2);
+    expect(summary.deliverableCount).toBe(1);
+    expect(summary.expiredCount).toBe(1);
+    expect(summary.byReplicationClass.critical).toBe(1);
+    expect(summary.byReplicationClass.bulk).toBe(1);
+    expect(summary.byDomain['channel-message']).toBe(1);
+    expect(summary.byDomain.receipt).toBe(1);
+  });
+
+  test('applyReceipt removes envelope by envelopeId when available', async () => {
+    const queue = new OfflineQueue();
+
+    await queue.enqueue('peer1', { messageId: 'msg-3' }, {
+      envelopeId: 'env-3',
+      opId: 'msg-3',
+      domain: 'channel-message',
+    });
+
+    const applied = await queue.applyReceipt('peer1', {
+      receiptId: 'r-3',
+      kind: 'acknowledged',
+      opId: 'msg-3',
+      envelopeId: 'env-3',
+      recipientPeerId: 'peer1',
+      timestamp: Date.now(),
+    });
+
+    expect(applied).toBe(true);
+    expect(await queue.listQueued('peer1')).toHaveLength(0);
+  });
+
+  test('applyReceipt(kind=delivered) marks delivered and keeps queue entry', async () => {
+    const queue = new OfflineQueue();
+
+    await queue.enqueue('peer1', { messageId: 'msg-delivered' }, {
+      envelopeId: 'env-delivered',
+      opId: 'msg-delivered',
+      domain: 'channel-message',
+      deliveryState: 'stored',
+    });
+
+    const applied = await queue.applyReceipt('peer1', {
+      receiptId: 'r-delivered',
+      kind: 'delivered',
+      opId: 'msg-delivered',
+      envelopeId: 'env-delivered',
+      recipientPeerId: 'peer1',
+      timestamp: 111,
+    });
+
+    expect(applied).toBe(true);
+    const all = await queue.listQueued('peer1');
+    expect(all).toHaveLength(1);
+    expect(all[0].deliveryState).toBe('delivered');
+    expect(all[0].deliveredAt).toBe(111);
+  });
+
+  test('applyReceipt(kind=delivered) matches by opId when envelopeId is absent', async () => {
+    const queue = new OfflineQueue();
+
+    await queue.enqueue('peer1', { messageId: 'msg-op-only' }, {
+      opId: 'msg-op-only',
+      domain: 'channel-message',
+      deliveryState: 'stored',
+    });
+
+    const applied = await queue.applyReceipt('peer1', {
+      receiptId: 'r-op-only',
+      kind: 'delivered',
+      opId: 'msg-op-only',
+      recipientPeerId: 'peer1',
+      timestamp: 222,
+    });
+
+    expect(applied).toBe(true);
+    const all = await queue.listQueued('peer1');
+    expect(all).toHaveLength(1);
+    expect(all[0].deliveryState).toBe('delivered');
+    expect(all[0].deliveredAt).toBe(222);
+  });
+
+});

@@ -244,7 +244,7 @@ describe('Edge Case: Message broadcast to disconnected peer', () => {
     await alice.ms.addMessage(msg);
 
     // Broadcast to all three (bob, charlie, dave) — dave will fail
-    alice.sync.broadcastMessage(channelId, msg, ['bob', 'charlie', 'dave']);
+    alice.sync.broadcastMessage(ws.id, channelId, msg, ['bob', 'charlie', 'dave']);
 
     // sendFn was called for all three
     expect(sentTo).toContain('bob');
@@ -256,7 +256,7 @@ describe('Edge Case: Message broadcast to disconnected peer', () => {
     // by calling handleMessage on bob and charlie
     const sentMessages = sentTo
       .filter(p => p !== 'alice' && p !== 'dave')
-      .map(p => ({ to: p, data: { type: 'workspace-sync', sync: { type: 'channel-message', channelId, message: msg } } }));
+      .map(p => ({ to: p, data: { type: 'workspace-sync', workspaceId: ws.id, sync: { type: 'channel-message', workspaceId: ws.id, channelId, message: msg } } }));
 
     for (const m of sentMessages) {
       const syncMsg = { ...m.data.sync };

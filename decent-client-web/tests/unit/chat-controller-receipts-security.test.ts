@@ -20,6 +20,7 @@ function makeReceiptController(message: any, workspaces: any[] = []): any {
   };
 
   ctrl.transport = {};
+  ctrl.offlineQueue = { applyReceipt: mock(async () => true) };
   ctrl.messageGuard = { check: mock(() => ({ allowed: true })) };
   ctrl.messageStore = { getMessages: mock(() => [message]) };
   ctrl.workspaceManager = { getAllWorkspaces: mock(() => workspaces) };
@@ -49,6 +50,7 @@ describe('ChatController inbound receipt security + consistency', () => {
     expect(ctrl.persistentStore.saveMessage).not.toHaveBeenCalled();
     expect(ctrl.ui.updateMessageStatus).not.toHaveBeenCalled();
     expect(msg.ackedBy).toEqual([]);
+    expect(ctrl.offlineQueue.applyReceipt).not.toHaveBeenCalled();
   });
 
   test('read implies delivered (upserts ack markers)', async () => {
@@ -71,6 +73,7 @@ describe('ChatController inbound receipt security + consistency', () => {
     expect(msg.readBy).toContain('alice');
     expect(msg.status).toBe('read');
     expect(ctrl.persistentStore.saveMessage).toHaveBeenCalledTimes(1);
+    expect(ctrl.offlineQueue.applyReceipt).toHaveBeenCalledTimes(1);
   });
 });
 

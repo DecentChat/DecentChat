@@ -330,6 +330,14 @@ describe('SyncProtocol history paging', () => {
     const channelId = ws.channels[0]!.id;
     await seedMessages(alice.ms, channelId, 'alice', 4);
 
+    alice.wm.addMember(ws.id, {
+      peerId: 'bob',
+      alias: 'Bob',
+      publicKey: 'bob-key',
+      joinedAt: Date.now(),
+      role: 'member',
+    });
+
     bob.wm.importWorkspace(structuredClone(alice.wm.exportWorkspace(ws.id)!));
 
     bob.sync.requestSync('alice', ws.id, { historySyncMode: 'paged' });

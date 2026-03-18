@@ -105,6 +105,28 @@ describe('SyncProtocol - Join Flow', () => {
     expect(bobWS!.channels[0].name).toBe('general');
   });
 
+  test('join-accepted includes all existing channels for the new member', async () => {
+    const ws = alice.wm.createWorkspace('Engineering', 'alice', 'Alice', 'alice-key');
+    const backend = alice.wm.createChannel(ws.id, 'backend', 'alice');
+    const frontend = alice.wm.createChannel(ws.id, 'frontend', 'alice');
+
+    expect(backend.success).toBe(true);
+    expect(frontend.success).toBe(true);
+
+    bob.sync.requestJoin('alice', ws.inviteCode, {
+      peerId: 'bob', alias: 'Bob', publicKey: 'bob-key',
+      joinedAt: Date.now(), role: 'member',
+    });
+
+    await deliver(bob, alice);
+    await deliver(alice, bob);
+
+    const bobWS = bob.wm.getWorkspace(ws.id);
+    expect(bobWS).toBeDefined();
+    const channelNames = (bobWS?.channels ?? []).map((channel) => channel.name).sort();
+    expect(channelNames).toEqual(['backend', 'frontend', 'general']);
+  });
+
   test('join with invalid invite code is rejected', async () => {
     alice.wm.createWorkspace('Team', 'alice', 'Alice', 'alice-key');
 
@@ -259,7 +281,7 @@ describe('SyncProtocol - Broadcasting', () => {
     msg.timestamp = 5000;
     await alice.ms.addMessage(msg);
 
-    alice.sync.broadcastMessage(channelId, msg, ['bob', 'charlie']);
+    alice.sync.broadcastMessage(ws.id, channelId, msg, ['bob', 'charlie']);
 
     expect(alice.outbox).toHaveLength(2);
 
@@ -273,6 +295,29 @@ describe('SyncProtocol - Broadcasting', () => {
     const bobMsgs = bob.ms.getMessages(channelId);
     expect(bobMsgs).toHaveLength(1);
     expect(bobMsgs[0].content).toBe('Hello everyone!');
+  });
+
+  test('drops channel messages that target a workspace the receiver has not joined', async () => {
+    const wsAlpha = alice.wm.createWorkspace('WS-Alpha', 'alice', 'Alice', 'alice-key');
+    const wsBeta = alice.wm.createWorkspace('WS-Beta', 'alice', 'Alice', 'alice-key');
+
+    // Bob is only a member of WS-Alpha
+    alice.wm.addMember(wsAlpha.id, {
+      peerId: 'bob', alias: 'Bob', publicKey: 'bob-key', joinedAt: Date.now(), role: 'member',
+    });
+    bob.wm.importWorkspace(JSON.parse(JSON.stringify(alice.wm.exportWorkspace(wsAlpha.id)!)));
+
+    const betaChannel = wsBeta.channels[0].id;
+    const msg = await alice.ms.createMessage(betaChannel, 'alice', 'Secret beta message');
+    msg.timestamp = 9000;
+    await alice.ms.addMessage(msg);
+
+    // Simulate an accidental fanout to Bob. Receiver must still reject by workspace boundaries.
+    alice.sync.broadcastMessage(wsBeta.id, betaChannel, msg, ['bob']);
+    await deliver(alice, bob);
+
+    expect(bob.events.some((event) => event.type === 'message-received')).toBe(false);
+    expect(bob.ms.getMessages(betaChannel)).toHaveLength(0);
   });
 
   test('does not broadcast to self', async () => {
@@ -326,11 +371,26 @@ describe('SyncProtocol - Full Sync', () => {
     }
   });
 
+  test('ignores sync-request from non-members', async () => {
+    const alice = createPeer('alice');
+    const bob = createPeer('bob');
+
+    const ws = alice.wm.createWorkspace('Private', 'alice', 'Alice', 'alice-key');
+    // Bob is not added to workspace membership.
+
+    bob.sync.requestSync('alice', ws.id);
+    await deliver(bob, alice);
+
+    // Alice should not respond with sync-response to unauthorized requester.
+    expect(alice.outbox.some((entry) => entry.to === 'bob')).toBe(false);
+  });
+
   test('sync imports metadata-only history even if original plaintext was tampered', async () => {
     const alice = createPeer('alice');
     const bob = createPeer('bob');
 
     const ws = alice.wm.createWorkspace('Team', 'alice', 'Alice', 'alice-key');
+    alice.wm.addMember(ws.id, { peerId: 'bob', alias: 'Bob', publicKey: 'bob-key', joinedAt: Date.now(), role: 'member' });
     const channelId = ws.channels[0].id;
 
     // Build legitimate chain
