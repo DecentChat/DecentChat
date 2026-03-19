@@ -150,34 +150,6 @@ function parseRequestUrl(rawUrl?: string): URL | null {
 }
 
 
-function normalizeRemoteAddress(remoteAddress: string | undefined): string {
-  const normalized = remoteAddress?.trim().toLowerCase() ?? '';
-  if (!normalized) return '';
-  return normalized.startsWith('::ffff:') ? normalized.slice('::ffff:'.length) : normalized;
-}
-
-function isLoopbackAddress(remoteAddress: string | undefined): boolean {
-  const normalized = normalizeRemoteAddress(remoteAddress);
-  if (!normalized) return false;
-  if (normalized === '::1' || normalized === '127.0.0.1') return true;
-  return normalized.startsWith('127.');
-}
-
-function hasProxyForwardingHints(req: IncomingMessage): boolean {
-  const headers = req.headers ?? {};
-  return Boolean(
-    headers['x-forwarded-for']
-    || headers['x-real-ip']
-    || headers.forwarded
-    || headers['x-forwarded-host']
-    || headers['x-forwarded-proto'],
-  );
-}
-
-function isTrustedLocalRequest(req: IncomingMessage): boolean {
-  return isLoopbackAddress(req.socket?.remoteAddress) && !hasProxyForwardingHints(req);
-}
-
 async function readJsonBody(req: IncomingMessage, maxBytes = 256 * 1024): Promise<unknown> {
   return await new Promise((resolve, reject) => {
     let size = 0;
@@ -293,15 +265,8 @@ export function createCompanyTemplateBridgeHttpHandler(params: CompanyTemplateBr
     if (pathname !== COMPANY_TEMPLATE_BRIDGE_HTTP_PATH) {
       return false;
     }
-
-    if (!isTrustedLocalRequest(req)) {
-      sendJson(res, 403, {
-        ok: false,
-        error: 'Forbidden',
-      });
-      return true;
-    }
-
+    // Auth is enforced by OpenClaw's route layer (`auth: 'plugin'` in index.ts).
+    // Keep this handler remote-accessible so operator clients can install templates from non-local browsers.
     const method = String(req.method || 'GET').toUpperCase();
 
     if (method === 'GET') {

@@ -7,6 +7,17 @@ import type {
 
 export const COMPANY_TEMPLATE_BRIDGE_HTTP_PATH = '/api/channels/decentchat/company-template';
 
+
+export class CompanyTemplateRuntimeBridgeHttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'CompanyTemplateRuntimeBridgeHttpError';
+    this.status = status;
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -60,7 +71,7 @@ async function parseBridgeJsonResponse(response: Response): Promise<unknown> {
   if (!response.ok) {
     const message = parseBridgeErrorMessage(payload)
       ?? `Company template runtime bridge request failed (${response.status})`;
-    throw new Error(message);
+    throw new CompanyTemplateRuntimeBridgeHttpError(response.status, message);
   }
 
   return payload;
@@ -124,6 +135,7 @@ function createBuiltInHttpRuntimeBridge(): CompanyTemplateRuntimeBridge {
         method: 'POST',
         body: {
           templateId: request.templateId,
+          workspaceId: request.workspaceId,
           answers: request.answers,
         },
       });

@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from 'bun:test';
 import { describeCompanyTemplateInstallStatus } from '../../src/lib/company-sim/installStatus';
 import {
   COMPANY_TEMPLATE_BRIDGE_HTTP_PATH,
+  CompanyTemplateRuntimeBridgeHttpError,
   normalizeRuntimeBridgeInstallResult,
   resolveCompanyTemplateRuntimeBridge,
 } from '../../src/lib/company-sim/runtimeBridge';
@@ -103,6 +104,36 @@ describe('runtime bridge normalization', () => {
     }
   });
 
+
+  test('throws typed bridge errors for non-OK HTTP responses', async () => {
+    const previousWindow = (globalThis as any).window;
+    const previousFetch = globalThis.fetch;
+
+    const fetchMock = mock(async () => new Response(JSON.stringify({ error: 'Forbidden' }), {
+      status: 403,
+      headers: { 'content-type': 'application/json' },
+    }));
+
+    (globalThis as any).window = {
+      location: { origin: 'http://127.0.0.1:1234' },
+    };
+    (globalThis as any).fetch = fetchMock as typeof fetch;
+
+    try {
+      const bridge = resolveCompanyTemplateRuntimeBridge();
+      expect(bridge).not.toBeNull();
+
+      await expect(bridge?.listTemplates?.()).rejects.toBeInstanceOf(CompanyTemplateRuntimeBridgeHttpError);
+      await expect(bridge?.listTemplates?.()).rejects.toMatchObject({
+        status: 403,
+        message: 'Forbidden',
+      });
+    } finally {
+      (globalThis as any).window = previousWindow;
+      (globalThis as any).fetch = previousFetch;
+    }
+  });
+
   test('creates built-in HTTP bridge and parses list/install responses', async () => {
     const previousWindow = (globalThis as any).window;
     const previousFetch = globalThis.fetch;
@@ -193,6 +224,7 @@ describe('runtime bridge normalization', () => {
           },
           body: JSON.stringify({
             templateId: 'software-studio',
+            workspaceId: 'ws-1',
             answers: { companyName: 'Acme' },
           }),
         },

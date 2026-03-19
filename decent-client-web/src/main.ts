@@ -81,6 +81,7 @@ import {
 } from './lib/company-sim/templateCatalog';
 import { describeCompanyTemplateInstallStatus } from './lib/company-sim/installStatus';
 import {
+  CompanyTemplateRuntimeBridgeHttpError,
   normalizeRuntimeBridgeInstallResult,
   resolveCompanyTemplateRuntimeBridge,
 } from './lib/company-sim/runtimeBridge';
@@ -303,6 +304,17 @@ function renderStartupError(error: unknown): void {
   });
 }
 
+
+function shouldFallbackToWorkspaceShell(error: unknown): boolean {
+  if (error instanceof CompanyTemplateRuntimeBridgeHttpError) {
+    return error.status === 404;
+  }
+
+  const message = String((error as Error)?.message ?? error ?? '').toLowerCase();
+  return message.includes('failed to fetch') || message.includes('networkerror');
+}
+
+
 // ---------------------------------------------------------------------------
 // Bootstrap
 // ---------------------------------------------------------------------------
@@ -344,6 +356,25 @@ async function init(): Promise<void> {
 
     const preview = buildCompanyTemplatePreview(template, request.answers);
 
+    const runtimeBridge = resolveCompanyTemplateRuntimeBridge();
+    let runtimeInstall: ReturnType<typeof normalizeRuntimeBridgeInstallResult> | null = null;
+
+    if (runtimeBridge?.installTemplate) {
+      try {
+        runtimeInstall = normalizeRuntimeBridgeInstallResult(await runtimeBridge.installTemplate(request));
+      } catch (error) {
+        if (shouldFallbackToWorkspaceShell(error)) {
+          console.warn('[company-template] runtime bridge install unavailable, falling back to workspace-shell mode', {
+            error: (error as Error).message || String(error),
+          });
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    const provisioningMode: CompanyTemplateProvisioningMode = runtimeInstall?.provisioningMode ?? 'workspace-shell';
+
     const createdChannelNames: string[] = [];
     const existingChannelNames = new Set((workspace.channels || []).map((channel: any) => String(channel.name || '').toLowerCase()));
 
@@ -374,20 +405,6 @@ async function init(): Promise<void> {
       state.activeChannelId = previousChannelId;
     }
 
-    const runtimeBridge = resolveCompanyTemplateRuntimeBridge();
-    let runtimeInstall: ReturnType<typeof normalizeRuntimeBridgeInstallResult> | null = null;
-
-    if (runtimeBridge?.installTemplate) {
-      try {
-        runtimeInstall = normalizeRuntimeBridgeInstallResult(await runtimeBridge.installTemplate(request));
-      } catch (error) {
-        console.warn('[company-template] runtime bridge install failed, falling back to workspace-shell mode', {
-          error: (error as Error).message || String(error),
-        });
-      }
-    }
-
-    const provisioningMode: CompanyTemplateProvisioningMode = runtimeInstall?.provisioningMode ?? 'workspace-shell';
     const createdAccountIds = runtimeInstall?.createdAccountIds ?? [];
     const provisionedAccountIds = runtimeInstall?.provisionedAccountIds ?? [];
     const onlineReadyAccountIds = runtimeInstall?.onlineReadyAccountIds ?? [];

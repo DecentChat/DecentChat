@@ -96,7 +96,7 @@ describe('company template runtime bridge http handler', () => {
     expect(handled).toBeFalse();
   });
 
-  test('rejects non-loopback callers', async () => {
+  test('accepts remote callers (plugin auth is enforced by route registration)', async () => {
     const handler = createCompanyTemplateBridgeHttpHandler({
       runtimeConfig: {
         loadConfig: () => ({}),
@@ -111,8 +111,8 @@ describe('company template runtime bridge http handler', () => {
 
     const handled = await handler(req, res);
     expect(handled).toBeTrue();
-    expect(res._status()).toBe(403);
-    expect(res._json()?.error).toBe('Forbidden');
+    expect(res._status()).toBe(200);
+    expect(res._json()?.ok).toBeTrue();
   });
 
   test('lists bundled templates through GET endpoint', async () => {
