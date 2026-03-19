@@ -907,18 +907,25 @@ async function processInboundMessage(
     storePath,
     sessionKey,
   });
-  // Bootstrap context for first thread turn even when inheritParent=false,
-  // so root channel turn + first assistant reply are available in new thread session.
-  const bootstrapParentSessionKey = isThreadReply && !previousTimestamp ? baseSessionKey : undefined;
+  // Bootstrap context only for genuine reply-based thread entry on the first turn.
+  // Auto-threaded top-level channel messages must start clean (Slack-like), or they
+  // inherit stale base-channel context into a brand-new thread session.
+  const shouldBootstrapFromBase = isThreadReply
+    && !previousTimestamp
+    && !autoThreadEligible
+    && threadingFlags.initialHistoryLimit > 0;
+  const bootstrapParentSessionKey = shouldBootstrapFromBase ? baseSessionKey : undefined;
   const effectiveParentSessionKey = threadKeys.parentSessionKey ?? bootstrapParentSessionKey;
 
   const bootstrapReason = !isThreadReply
     ? "not-thread"
     : previousTimestamp
       ? "not-first-turn"
-      : threadingFlags.initialHistoryLimit <= 0
-        ? "limit-zero"
-        : "enabled";
+      : autoThreadEligible
+        ? "auto-thread-clean"
+        : threadingFlags.initialHistoryLimit <= 0
+          ? "limit-zero"
+          : "enabled";
   logThreadRouteDecision(ctx.log, {
     chatType: msg.chatType,
     replyToMode: threadingFlags.replyToMode,

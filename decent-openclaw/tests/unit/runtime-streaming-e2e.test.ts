@@ -119,6 +119,66 @@ describe("runtime streaming relay integration", () => {
     expect(recorded[0]?.ctx?.ParentSessionKey).toBe("session:group:ws:chan");
   });
 
+  test("auto-threaded top-level channel message starts a clean thread session", async () => {
+    const recorded: Array<{ sessionKey: string; ctx: any }> = [];
+
+    const core = {
+      config: { loadConfig: () => ({ channels: { decentchat: { replyToMode: "all", thread: { historyScope: "thread", inheritParent: false } } } }) },
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({ sessionKey: "session:group:ws:chan", agentId: "agent-1", accountId: "acct-1" }),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/decent-openclaw-stream-test-store",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: async (args: any) => recorded.push(args),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope: (params: { body: string }) => params.body,
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher: async ({ dispatcherOptions }: any) => {
+            await dispatcherOptions.deliver({ text: "ok" });
+          },
+        },
+      },
+    } as any;
+
+    const xenaPeer = {
+      startStream: async () => {},
+      startDirectStream: async () => {},
+      sendStreamDelta: async () => {},
+      sendDirectStreamDelta: async () => {},
+      sendStreamDone: async () => {},
+      sendDirectStreamDone: async () => {},
+      sendDirectToPeer: async () => {},
+      sendToChannel: async () => {},
+      sendReadReceipt: async () => {},
+      requestFullImage: async () => null,
+    } as any;
+
+    await relayInboundMessageToPeer({
+      incoming: {
+        channelId: "chan-1",
+        workspaceId: "ws-1",
+        content: "hello",
+        senderId: "peer-1",
+        senderName: "Peer",
+        messageId: "msg-200",
+        chatType: "channel",
+        timestamp: Date.now(),
+      },
+      ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
+      core,
+      xenaPeer,
+    });
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.sessionKey).toContain(":thread:msg-200");
+    expect(recorded[0]?.ctx?.MessageThreadId).toBe("msg-200");
+    expect(recorded[0]?.ctx?.ParentSessionKey).toBeUndefined();
+  });
+
   test("replyToMode=off keeps base channel session (no per-thread split)", async () => {
     const recorded: Array<{ sessionKey: string; ctx: any }> = [];
 
