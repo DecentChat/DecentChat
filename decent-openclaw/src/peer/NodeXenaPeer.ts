@@ -2659,6 +2659,11 @@ export class NodeXenaPeer {
     return ws?.channels.find((ch) => ch.id === channelId)?.name;
   }
 
+  /** Compatibility alias used by monitor/company routing. */
+  resolveChannelNameById(channelId: string): string | undefined {
+    return this.findChannelNameById(channelId);
+  }
+
   /** Public: find the workspace ID that owns a given channel. Returns '' if none found. */
   findWorkspaceIdForChannel(channelId: string): string {
     const ws = this.workspaceManager
