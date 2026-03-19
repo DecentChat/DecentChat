@@ -1,7 +1,11 @@
 import type {
+  CompanyTemplateDefinition,
+  CompanyTemplateInstallRequest,
   CompanyTemplateRuntimeBridge,
   CompanyTemplateRuntimeBridgeResult,
 } from '../../ui/types';
+
+export const COMPANY_TEMPLATE_BRIDGE_HTTP_PATH = '/api/channels/decentchat/company-template';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -20,6 +24,112 @@ function readStringArray(value: unknown): string[] {
       .map((entry) => entry.trim())
       .filter(Boolean),
   );
+}
+
+function parseBridgeErrorMessage(payload: unknown): string | null {
+  if (typeof payload === 'string') {
+    const trimmed = payload.trim();
+    return trimmed || null;
+  }
+
+  if (isRecord(payload)) {
+    const error = payload.error;
+    if (typeof error === 'string' && error.trim()) {
+      return error.trim();
+    }
+    if (isRecord(error) && typeof error.message === 'string' && error.message.trim()) {
+      return error.message.trim();
+    }
+  }
+
+  return null;
+}
+
+async function parseBridgeJsonResponse(response: Response): Promise<unknown> {
+  const text = await response.text();
+  let payload: unknown = null;
+
+  if (text.trim()) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = text;
+    }
+  }
+
+  if (!response.ok) {
+    const message = parseBridgeErrorMessage(payload)
+      ?? `Company template runtime bridge request failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  return payload;
+}
+
+async function fetchBridgeJson(params: {
+  method: 'GET' | 'POST';
+  body?: Record<string, unknown>;
+}): Promise<unknown> {
+  if (typeof fetch !== 'function') {
+    throw new Error('Fetch API unavailable for runtime bridge');
+  }
+
+  const response = await fetch(COMPANY_TEMPLATE_BRIDGE_HTTP_PATH, {
+    method: params.method,
+    credentials: 'same-origin',
+    headers: params.method === 'POST'
+      ? {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      }
+      : {
+        accept: 'application/json',
+      },
+    ...(params.body ? { body: JSON.stringify(params.body) } : {}),
+  });
+
+  return await parseBridgeJsonResponse(response);
+}
+
+function parseTemplateListPayload(payload: unknown): CompanyTemplateDefinition[] {
+  if (Array.isArray(payload)) {
+    return payload as CompanyTemplateDefinition[];
+  }
+
+  if (isRecord(payload) && Array.isArray(payload.templates)) {
+    return payload.templates as CompanyTemplateDefinition[];
+  }
+
+  return [];
+}
+
+function parseInstallPayload(payload: unknown): CompanyTemplateRuntimeBridgeResult {
+  if (isRecord(payload) && isRecord(payload.result)) {
+    return payload.result as CompanyTemplateRuntimeBridgeResult;
+  }
+  if (isRecord(payload)) {
+    return payload as CompanyTemplateRuntimeBridgeResult;
+  }
+  return {};
+}
+
+function createBuiltInHttpRuntimeBridge(): CompanyTemplateRuntimeBridge {
+  return {
+    listTemplates: async () => {
+      const payload = await fetchBridgeJson({ method: 'GET' });
+      return parseTemplateListPayload(payload);
+    },
+    installTemplate: async (request: CompanyTemplateInstallRequest) => {
+      const payload = await fetchBridgeJson({
+        method: 'POST',
+        body: {
+          templateId: request.templateId,
+          answers: request.answers,
+        },
+      });
+      return parseInstallPayload(payload);
+    },
+  };
 }
 
 export interface NormalizedRuntimeBridgeInstallResult {
@@ -49,9 +159,7 @@ export function normalizeRuntimeBridgeInstallResult(
   };
 }
 
-export function resolveCompanyTemplateRuntimeBridge(): CompanyTemplateRuntimeBridge | null {
-  if (typeof window === 'undefined') return null;
-
+function resolveInjectedRuntimeBridge(): CompanyTemplateRuntimeBridge | null {
   const raw = (window as any).__DECENT_COMPANY_TEMPLATE_BRIDGE__;
   if (!isRecord(raw)) return null;
 
@@ -65,6 +173,17 @@ export function resolveCompanyTemplateRuntimeBridge(): CompanyTemplateRuntimeBri
 
   if (!bridge.listTemplates && !bridge.installTemplate) return null;
   return bridge;
+}
+
+export function resolveCompanyTemplateRuntimeBridge(): CompanyTemplateRuntimeBridge | null {
+  if (typeof window === 'undefined') return null;
+
+  const injectedBridge = resolveInjectedRuntimeBridge();
+  if (injectedBridge) {
+    return injectedBridge;
+  }
+
+  return createBuiltInHttpRuntimeBridge();
 }
 
 declare global {

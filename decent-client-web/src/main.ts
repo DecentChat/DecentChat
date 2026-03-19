@@ -375,9 +375,17 @@ async function init(): Promise<void> {
     }
 
     const runtimeBridge = resolveCompanyTemplateRuntimeBridge();
-    const runtimeInstall = runtimeBridge?.installTemplate
-      ? normalizeRuntimeBridgeInstallResult(await runtimeBridge.installTemplate(request))
-      : null;
+    let runtimeInstall: ReturnType<typeof normalizeRuntimeBridgeInstallResult> | null = null;
+
+    if (runtimeBridge?.installTemplate) {
+      try {
+        runtimeInstall = normalizeRuntimeBridgeInstallResult(await runtimeBridge.installTemplate(request));
+      } catch (error) {
+        console.warn('[company-template] runtime bridge install failed, falling back to workspace-shell mode', {
+          error: (error as Error).message || String(error),
+        });
+      }
+    }
 
     const provisioningMode: CompanyTemplateProvisioningMode = runtimeInstall?.provisioningMode ?? 'workspace-shell';
     const createdAccountIds = runtimeInstall?.createdAccountIds ?? [];
@@ -531,7 +539,16 @@ async function init(): Promise<void> {
     listCompanyTemplates: async () => {
       const runtimeBridge = resolveCompanyTemplateRuntimeBridge();
       if (runtimeBridge?.listTemplates) {
-        return await runtimeBridge.listTemplates();
+        try {
+          const templates = await runtimeBridge.listTemplates();
+          if (templates.length > 0) {
+            return templates;
+          }
+        } catch (error) {
+          console.warn('[company-template] runtime bridge list failed, falling back to local catalog', {
+            error: (error as Error).message || String(error),
+          });
+        }
       }
       return listLocalCompanyTemplates();
     },
