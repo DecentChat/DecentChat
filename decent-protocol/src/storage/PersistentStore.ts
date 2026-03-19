@@ -29,28 +29,57 @@ import {
 export interface PersistentStoreConfig {
   dbName?: string;
   version?: number;
+  openTimeoutMs?: number;
 }
 
 const MANIFEST_STORE_STATE_KEY = 'default';
 const MANIFESTS_STORE = 'manifests';
 const PRE_KEY_MAX_ONE_TIME_AGE_MS = 21 * 24 * 60 * 60 * 1000;
 const PRE_KEY_MAX_BUNDLE_AGE_MS = 45 * 24 * 60 * 60 * 1000;
+const DEFAULT_OPEN_TIMEOUT_MS = 12_000;
 
 export class PersistentStore {
   private db: IDBDatabase | null = null;
+  private initPromise: Promise<void> | null = null;
   private dbName: string;
   private version: number;
+  private openTimeoutMs: number;
   /** T3.5: Optional at-rest encryption for message content */
   private atRest: AtRestEncryption | null = null;
 
   constructor(config: PersistentStoreConfig = {}) {
     this.dbName = config.dbName || 'decent-protocol';
     this.version = config.version || 9;
+    this.openTimeoutMs = config.openTimeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS;
   }
 
   async init(): Promise<void> {
-    return new Promise((resolve, reject) => {
+    if (this.db) return;
+    if (this.initPromise) return this.initPromise;
+
+    const initPromise = new Promise<void>((resolve, reject) => {
       const request = indexedDB.open(this.dbName, this.version);
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+      const finish = () => {
+        if (settled) return false;
+        settled = true;
+        if (timeoutId) clearTimeout(timeoutId);
+        return true;
+      };
+
+      const fail = (error: Error) => {
+        if (!finish()) return;
+        reject(error);
+      };
+
+      timeoutId = setTimeout(() => {
+        fail(this.makeInitError(
+          'timeout',
+          `Timed out opening IndexedDB "${this.dbName}". Close other DecentChat tabs/windows and retry.`,
+        ));
+      }, this.openTimeoutMs);
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
@@ -157,13 +186,48 @@ export class PersistentStore {
         }
       };
 
+      request.onblocked = () => {
+        fail(this.makeInitError(
+          'blocked',
+          `Opening IndexedDB "${this.dbName}" was blocked by another tab/window. Close other DecentChat tabs/windows and retry.`,
+        ));
+      };
+
       request.onsuccess = (event) => {
-        this.db = (event.target as IDBOpenDBRequest).result;
+        const db = (event.target as IDBOpenDBRequest).result;
+        if (!finish()) {
+          try { db.close(); } catch {}
+          return;
+        }
+        db.onversionchange = () => {
+          console.warn(`[PersistentStore] versionchange detected for ${this.dbName}; closing stale connection.`);
+          try {
+            db.close();
+          } finally {
+            if (this.db === db) this.db = null;
+          }
+        };
+        this.db = db;
         resolve();
       };
 
-      request.onerror = () => reject(new Error(`Failed to open IndexedDB: ${request.error?.message}`));
+      request.onerror = () => {
+        fail(this.makeInitError(
+          'open-failed',
+          `Failed to open IndexedDB "${this.dbName}": ${request.error?.message || 'unknown error'}`,
+          request.error,
+        ));
+      };
     });
+
+    this.initPromise = initPromise;
+    try {
+      await initPromise;
+    } finally {
+      if (this.initPromise === initPromise) {
+        this.initPromise = null;
+      }
+    }
   }
 
   // === Workspaces ===
@@ -866,6 +930,15 @@ export class PersistentStore {
   async close(): Promise<void> {
     this.db?.close();
     this.db = null;
+  }
+
+
+  private makeInitError(code: 'blocked' | 'timeout' | 'open-failed', message: string, cause?: unknown): Error {
+    const error = new Error(message) as Error & { code?: string; cause?: unknown };
+    error.name = 'IndexedDBInitError';
+    error.code = code;
+    if (cause !== undefined) error.cause = cause;
+    return error;
   }
 
   // === Generic helpers ===

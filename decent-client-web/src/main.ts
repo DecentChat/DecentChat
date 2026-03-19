@@ -155,6 +155,143 @@ export interface AppState {
   activeDirectConversationId: string | null;
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function isLikelyStorageInitIssue(error: unknown): boolean {
+  const msg = (error instanceof Error ? error.message : String(error || '')).toLowerCase();
+  const code = (() => {
+    if (!error || typeof error !== 'object' || !('code' in error)) return '';
+    return String((error as any).code || '').toLowerCase();
+  })();
+
+  return code === 'blocked'
+    || code === 'timeout'
+    || msg.includes('indexeddb')
+    || msg.includes('storage')
+    || msg.includes('blocked')
+    || msg.includes('versionchange')
+    || msg.includes('another tab')
+    || msg.includes('tabs/windows')
+    || msg.includes('timed out opening');
+}
+
+async function deleteIndexedDb(name: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(name);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error ?? new Error(`Failed deleting IndexedDB ${name}`));
+    req.onblocked = () => reject(new Error(`IndexedDB ${name} is still open in another tab/window`));
+  });
+}
+
+async function clearLocalAppData(): Promise<void> {
+  const dbNames = new Set<string>();
+
+  if (typeof indexedDB.databases === 'function') {
+    const dbs = await indexedDB.databases();
+    for (const db of dbs) {
+      if (db.name) dbNames.add(db.name);
+    }
+  }
+
+  // Fallback for browsers without indexedDB.databases() support.
+  dbNames.add('decent-protocol');
+  dbNames.add('p2p-chat-keys');
+
+  for (const dbName of dbNames) {
+    await deleteIndexedDb(dbName);
+  }
+
+  localStorage.clear();
+  sessionStorage.clear();
+
+  if ('serviceWorker' in navigator) {
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    for (const registration of registrations) {
+      await registration.unregister();
+    }
+  }
+
+  if ('caches' in window) {
+    const cacheNames = await caches.keys();
+    for (const name of cacheNames) {
+      await caches.delete(name);
+    }
+  }
+}
+
+function renderStartupError(error: unknown): void {
+  const err = error instanceof Error ? error : new Error(String(error));
+  const storageIssue = isLikelyStorageInitIssue(err);
+
+  const loading = document.getElementById('loading');
+  if (loading) loading.style.display = 'none';
+
+  const app = document.getElementById('app');
+  if (!app) return;
+
+  const guidance = storageIssue
+    ? 'Local storage could not be opened. This is usually caused by another DecentChat tab/window or a stale IndexedDB connection after an update.'
+    : 'DecentChat failed to initialize due to an unexpected startup error.';
+
+  const nextStep = storageIssue
+    ? 'First close other DecentChat tabs/windows, then retry. Only clear local data if retry still fails.'
+    : 'Try reload first. If it keeps failing, clear local data as a last resort.';
+
+  const safeMessage = escapeHtml(err.message || 'Unknown error');
+  const safeStack = escapeHtml(err.stack || String(err));
+
+  app.innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;padding:20px;text-align:center;gap:16px;">
+      <div style="font-size:64px;">⚠️</div>
+      <h1 style="font-size:24px;font-weight:600;margin:0;">Failed to initialize</h1>
+      <p style="max-width:640px;opacity:0.8;margin:0;line-height:1.45;">${guidance}</p>
+      <p style="max-width:640px;font-size:14px;opacity:0.65;margin:0;line-height:1.45;">${nextStep}</p>
+      <p style="max-width:640px;opacity:0.7;margin:0;font-size:13px;">${safeMessage}</p>
+      <div style="display:flex;gap:12px;margin-top:8px;flex-wrap:wrap;justify-content:center;">
+        <button id="retry-init-btn" style="padding:12px 24px;background:#6c5ce7;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">Retry</button>
+        <button id="clear-storage-btn" style="padding:12px 24px;background:#e74c3c;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">Clear Local Data & Reload (Last resort)</button>
+      </div>
+      <details style="max-width:760px;margin-top:10px;opacity:0.55;font-size:12px;text-align:left;">
+        <summary style="cursor:pointer;user-select:none;">Technical details</summary>
+        <pre style="margin-top:10px;padding:10px;background:rgba(0,0,0,0.2);border-radius:4px;overflow:auto;white-space:pre-wrap;">${safeStack}</pre>
+      </details>
+    </div>
+  `;
+
+  document.getElementById('retry-init-btn')?.addEventListener('click', () => {
+    window.location.reload();
+  });
+
+  document.getElementById('clear-storage-btn')?.addEventListener('click', async (event) => {
+    const btn = event.currentTarget as HTMLButtonElement;
+    const confirmed = window.confirm(
+      'This will permanently remove local messages, settings, and cached data on this browser. Continue?',
+    );
+    if (!confirmed) return;
+
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Clearing…';
+
+    try {
+      await clearLocalAppData();
+      window.location.reload();
+    } catch (clearError) {
+      btn.disabled = false;
+      btn.textContent = originalText;
+      alert('Failed to clear storage: ' + (clearError as Error).message);
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Bootstrap
 // ---------------------------------------------------------------------------
@@ -396,20 +533,51 @@ async function init(): Promise<void> {
   const isAppRoute = path === '/app' || path.startsWith('/app/');
   const isJoinRoute = /^\/join\/[A-Za-z0-9]+/.test(path);
 
+  const loadingHint = document.querySelector('#loading .hint') as HTMLElement | null;
+  const setLoadingHint = (message: string) => {
+    if (loadingHint) loadingHint.textContent = message;
+  };
+
+  const initIndexedDbWithRetry = async (
+    label: string,
+    initFn: () => Promise<void>,
+    closeFn?: () => Promise<void> | void,
+    retries = 1,
+  ): Promise<void> => {
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        await initFn();
+        return;
+      } catch (error) {
+        lastError = error;
+        if (!isLikelyStorageInitIssue(error) || attempt >= retries) break;
+
+        setLoadingHint(`${label} is busy in another tab. Close other DecentChat tabs/windows… retrying`);
+        try {
+          await closeFn?.();
+        } catch {
+          // best-effort cleanup before retry
+        }
+        await sleep(900);
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error(`Failed to initialize ${label}`);
+  };
+
   try {
     // Initialize storage — PersistentStore is the primary store.
     // Database is kept but no longer initialized here (see task #8 consolidation).
 
-    // Update loading hint
-    const loadingHint = document.querySelector('#loading .hint') as HTMLElement;
-    if (loadingHint) loadingHint.textContent = 'Loading storage...';
+    setLoadingHint('Loading local storage...');
 
     // Hard route split:
     // - / and non-app routes render landing only (no transport/bootstrap/network)
     // - /app and /join/* run full app bootstrap
     if (!isAppRoute && !isJoinRoute) {
       const landingDefaults: AppSettings = { theme: 'auto', notifications: true };
-      await ctrl.persistentStore.init();
+      await initIndexedDbWithRetry('local storage', () => ctrl.persistentStore.init(), () => ctrl.persistentStore.close(), 1);
 
       const settings = await ctrl.persistentStore.getSettings<AppSettings>(landingDefaults);
       const myAlias = await ctrl.persistentStore.getSetting('myAlias');
@@ -450,8 +618,11 @@ async function init(): Promise<void> {
       return;
     }
 
-    await ctrl.keyStore.init();
-    await ctrl.persistentStore.init();
+    setLoadingHint('Opening key storage...');
+    await initIndexedDbWithRetry('key storage', () => ctrl.keyStore.init(), () => ctrl.keyStore.close(), 1);
+
+    setLoadingHint('Opening message storage...');
+    await initIndexedDbWithRetry('message storage', () => ctrl.persistentStore.init(), () => ctrl.persistentStore.close(), 1);
 
     // Wire offline queue → persistent storage
     ctrl.offlineQueue.setPersistence(
@@ -885,75 +1056,10 @@ async function init(): Promise<void> {
 
   } catch (error) {
     console.error('[DecentChat] Initialization failed:', error);
-    
-    // Show error screen with storage reset option
-    const loading = document.getElementById('loading');
-    if (loading) loading.style.display = 'none';
-    
-    const app = document.getElementById('app')!;
-    app.innerHTML = `
-      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;padding:20px;text-align:center;gap:20px;">
-        <div style="font-size:64px;">⚠️</div>
-        <h1 style="font-size:24px;font-weight:600;margin:0;">Failed to initialize</h1>
-        <p style="max-width:500px;opacity:0.7;margin:0;">
-          ${(error as Error).message || 'Unknown error'}
-        </p>
-        <p style="max-width:500px;font-size:14px;opacity:0.6;margin:0;">
-          This usually happens after an update when storage format changes. 
-          Clearing local data will reset the app to a fresh state.
-        </p>
-        <div style="display:flex;gap:12px;margin-top:12px;">
-          <button id="clear-storage-btn" style="padding:12px 24px;background:#e74c3c;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">
-            Clear Local Data & Reload
-          </button>
-          <button onclick="location.reload()" style="padding:12px 24px;background:#6c5ce7;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">
-            Retry
-          </button>
-        </div>
-        <details style="max-width:600px;margin-top:20px;opacity:0.5;font-size:12px;text-align:left;">
-          <summary style="cursor:pointer;user-select:none;">Technical details</summary>
-          <pre style="margin-top:10px;padding:10px;background:rgba(0,0,0,0.2);border-radius:4px;overflow:auto;white-space:pre-wrap;">${(error as Error).stack || error}</pre>
-        </details>
-      </div>
-    `;
-    
-    // Clear storage handler
-    document.getElementById('clear-storage-btn')?.addEventListener('click', async () => {
-      try {
-        // Clear IndexedDB
-        const dbs = await indexedDB.databases();
-        for (const db of dbs) {
-          if (db.name) indexedDB.deleteDatabase(db.name);
-        }
-        
-        // Clear localStorage
-        localStorage.clear();
-        
-        // Clear sessionStorage
-        sessionStorage.clear();
-        
-        // Unregister service workers
-        if ('serviceWorker' in navigator) {
-          const registrations = await navigator.serviceWorker.getRegistrations();
-          for (const registration of registrations) {
-            await registration.unregister();
-          }
-        }
-        
-        // Clear cache
-        if ('caches' in window) {
-          const cacheNames = await caches.keys();
-          for (const name of cacheNames) {
-            await caches.delete(name);
-          }
-        }
-        
-        // Reload
-        location.reload();
-      } catch (err) {
-        alert('Failed to clear storage: ' + (err as Error).message);
-      }
-    });
+    // Best-effort cleanup so destructive recovery (clear data) is less likely to hit blocked handles.
+    try { ctrl.keyStore.close(); } catch {}
+    try { await ctrl.persistentStore.close(); } catch {}
+    renderStartupError(error);
   }
 }
 
@@ -980,39 +1086,21 @@ if (document.readyState === 'loading') {
 // Wrapper that adds a timeout to detect stuck initialization
 async function initWithTimeout() {
   const INIT_TIMEOUT = 30000; // 30 seconds
-  
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
   const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => {
-      reject(new Error('Initialization timed out after 30 seconds. This usually means storage is corrupted or a background operation is stuck.'));
+    timeoutId = setTimeout(() => {
+      reject(new Error('Initialization timed out while opening local storage. Close other DecentChat tabs/windows and retry.'));
     }, INIT_TIMEOUT);
   });
-  
+
   try {
     await Promise.race([init(), timeoutPromise]);
   } catch (error) {
     console.error('[DecentChat] Init failed or timed out:', error);
-    
-    // The error handler in init() will show the UI, but if we timeout
-    // before init() catches the error, we need to handle it here
-    const loading = document.getElementById('loading');
-    if (loading && loading.style.display !== 'none') {
-      // Still showing loading screen, manually trigger error UI
-      const event = new CustomEvent('init-error', { detail: error });
-      window.dispatchEvent(event);
-      
-      // Show error inline
-      const hint = loading.querySelector('.hint') as HTMLElement;
-      if (hint) {
-        hint.innerHTML = `
-          <div style="color:#e74c3c;margin-top:20px;">
-            ⚠️ ${(error as Error).message}
-            <br><br>
-            <button onclick="location.reload()" style="padding:8px 16px;background:#6c5ce7;color:#fff;border:none;border-radius:4px;cursor:pointer;margin-right:8px;">Retry</button>
-            <button onclick="if(confirm('Clear all local data and start fresh?')){indexedDB.databases().then(dbs=>dbs.forEach(db=>db.name&&indexedDB.deleteDatabase(db.name)));localStorage.clear();location.reload();}" style="padding:8px 16px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;">Clear Data</button>
-          </div>
-        `;
-      }
-    }
+    renderStartupError(error);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }
 

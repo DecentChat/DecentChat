@@ -7,9 +7,16 @@
 import type { SerializedKeyPair, KeyPair } from 'decent-protocol';
 import { CryptoManager } from 'decent-protocol';
 
-const DB_NAME = 'p2p-chat-keys';
-const DB_VERSION = 1;
+const DEFAULT_DB_NAME = 'p2p-chat-keys';
+const DEFAULT_DB_VERSION = 1;
 const STORE_NAME = 'keys';
+const DEFAULT_OPEN_TIMEOUT_MS = 8_000;
+
+export interface KeyStoreConfig {
+  dbName?: string;
+  version?: number;
+  openTimeoutMs?: number;
+}
 
 interface StoredKey {
   id: string;
@@ -21,19 +28,77 @@ interface StoredKey {
 
 export class KeyStore {
   private db: IDBDatabase | null = null;
+  private initPromise: Promise<void> | null = null;
   private cryptoManager: CryptoManager;
+  private dbName: string;
+  private version: number;
+  private openTimeoutMs: number;
 
-  constructor(cryptoManager: CryptoManager) {
+  constructor(cryptoManager: CryptoManager, config: KeyStoreConfig = {}) {
     this.cryptoManager = cryptoManager;
+    this.dbName = config.dbName ?? DEFAULT_DB_NAME;
+    this.version = config.version ?? DEFAULT_DB_VERSION;
+    this.openTimeoutMs = config.openTimeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS;
   }
 
   async init(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
+    if (this.db) return;
+    if (this.initPromise) return this.initPromise;
 
-      request.onerror = () => reject(request.error);
+    const initPromise = new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open(this.dbName, this.version);
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+      const finish = () => {
+        if (settled) return false;
+        settled = true;
+        if (timeoutId) clearTimeout(timeoutId);
+        return true;
+      };
+
+      const fail = (error: Error) => {
+        if (!finish()) return;
+        reject(error);
+      };
+
+      timeoutId = setTimeout(() => {
+        fail(this.makeInitError(
+          'timeout',
+          `Timed out opening key storage "${this.dbName}". Close other DecentChat tabs/windows and retry.`,
+        ));
+      }, this.openTimeoutMs);
+
+      request.onerror = () => {
+        fail(this.makeInitError(
+          'open-failed',
+          `Failed to open key storage "${this.dbName}": ${request.error?.message || 'unknown error'}`,
+          request.error,
+        ));
+      };
+
+      request.onblocked = () => {
+        fail(this.makeInitError(
+          'blocked',
+          `Opening key storage "${this.dbName}" was blocked by another tab/window. Close other DecentChat tabs/windows and retry.`,
+        ));
+      };
+
       request.onsuccess = () => {
-        this.db = request.result;
+        const db = request.result;
+        if (!finish()) {
+          try { db.close(); } catch {}
+          return;
+        }
+        db.onversionchange = () => {
+          console.warn(`[KeyStore] versionchange detected for ${this.dbName}; closing stale connection.`);
+          try {
+            db.close();
+          } finally {
+            if (this.db === db) this.db = null;
+          }
+        };
+        this.db = db;
         resolve();
       };
 
@@ -47,6 +112,15 @@ export class KeyStore {
         }
       };
     });
+
+    this.initPromise = initPromise;
+    try {
+      await initPromise;
+    } finally {
+      if (this.initPromise === initPromise) {
+        this.initPromise = null;
+      }
+    }
   }
 
   async storeECDHKeyPair(keyPair: KeyPair): Promise<void> {
@@ -108,6 +182,14 @@ export class KeyStore {
       req.onerror = () => reject(req.error);
       req.onsuccess = () => resolve(req.result || null);
     });
+  }
+
+  private makeInitError(code: 'blocked' | 'timeout' | 'open-failed', message: string, cause?: unknown): Error {
+    const error = new Error(message) as Error & { code?: string; cause?: unknown };
+    error.name = 'IndexedDBInitError';
+    error.code = code;
+    if (cause !== undefined) error.cause = cause;
+    return error;
   }
 
   close(): void {
