@@ -39,6 +39,11 @@ import { SyncProtocol, type SyncEvent } from './SyncProtocol.js';
 import type { ResolvedDecentChatAccount } from '../types.js';
 import { BotHuddleManager, type BotHuddleConfig } from '../huddle/BotHuddleManager.js';
 import { loadCompanyContextForAccount } from '../company-sim/context-loader.js';
+import { getCompanySimTemplate } from '../company-sim/template-registry.js';
+import { installCompanyTemplate } from '../company-sim/template-installer.js';
+import type { CompanyTemplateQuestionValue } from '../company-sim/template-types.js';
+
+const COMPANY_TEMPLATE_CONTROL_CAPABILITY = 'company-template-control-v1';
 
 export interface NodeXenaPeerOptions {
   account: ResolvedDecentChatAccount;
@@ -69,6 +74,19 @@ export interface NodeXenaPeerOptions {
     inReplyToId: string;
   }) => void;
   onHuddleTranscription?: (text: string, peerId: string, channelId: string, senderName: string) => Promise<string | undefined>;
+  companyTemplateControl?: {
+    installTemplate?: (params: {
+      workspaceId: string;
+      templateId: string;
+      answers?: unknown;
+      requestedByPeerId: string;
+    }) => Promise<CompanyTemplateControlInstallResult>;
+    loadConfig?: () => Record<string, unknown>;
+    writeConfigFile?: (config: Record<string, unknown>) => Promise<void>;
+    workspaceRootDir?: string;
+    companySimsRootDir?: string;
+    templatesRoot?: string;
+  };
   log?: { info: (s: string) => void; warn?: (s: string) => void; error?: (s: string) => void };
 }
 
@@ -110,6 +128,90 @@ function buildMessageMetadata(model?: AssistantModelMeta): MessageMetadata | und
     },
   };
 }
+
+
+interface CompanyTemplateControlInstallResult {
+  provisioningMode: 'config-provisioned';
+  createdAccountIds?: string[];
+  provisionedAccountIds?: string[];
+  onlineReadyAccountIds?: string[];
+  manualActionRequiredAccountIds?: string[];
+  manualActionItems?: string[];
+  companyId?: string;
+  manifestPath?: string;
+  companyDirPath?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function toQuestionValue(value: unknown): CompanyTemplateQuestionValue | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    const normalized = uniqueSorted(
+      value
+        .map((entry) => (typeof entry === 'string' ? entry : String(entry ?? '')))
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    );
+    return normalized.length > 0 ? normalized : undefined;
+  }
+
+  return undefined;
+}
+
+function normalizeTemplateInstallAnswers(value: unknown): Record<string, CompanyTemplateQuestionValue> {
+  if (!isRecord(value)) return {};
+
+  const answers: Record<string, CompanyTemplateQuestionValue> = {};
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const key = rawKey.trim();
+    if (!key) continue;
+    const normalized = toQuestionValue(rawValue);
+    if (normalized === undefined) continue;
+    answers[key] = normalized;
+  }
+
+  return answers;
+}
+
+function buildManualActionItems(manualActionRequiredAccountIds: string[]): string[] {
+  const actions = [
+    'Restart/reload OpenClaw so runtime bootstrap applies the new company manifest.',
+  ];
+
+  if (manualActionRequiredAccountIds.length > 0) {
+    actions.push(`Fix invalid seed phrases for: ${manualActionRequiredAccountIds.join(', ')}.`);
+  }
+
+  return uniqueSorted(actions);
+}
+
+function normalizeCompanyTemplateControlErrorMessage(error: unknown): string {
+  const message = String((error as Error)?.message ?? error ?? '').trim();
+  if (!message) return 'Failed to install company template';
+  if (message.length > 240) return `${message.slice(0, 239)}…`;
+  return message;
+}
+
 
 type PendingMediaRequest = {
   attachmentId: string;
@@ -160,6 +262,7 @@ export class NodeXenaPeer {
   private readonly pendingMediaRequests = new Map<string, PendingMediaRequest>();
   private readonly pendingPreKeyBundleFetches = new Map<string, PendingPreKeyBundleFetch>();
   private readonly publishedPreKeyVersionByWorkspace = new Map<string, string>();
+  private companyTemplateInstallLock: Promise<void> = Promise.resolve();
   private readonly mediaChunkTimeout = 30000;
   private manifestPersistTimer: ReturnType<typeof setTimeout> | null = null;
   public botHuddle: BotHuddleManager | null = null;
@@ -622,6 +725,7 @@ export class NodeXenaPeer {
    * Request full-quality image from a peer.
    * Returns a Buffer with the decrypted image data, or null if unavailable.
    */
+
   async requestFullImage(peerId: string, attachmentId: string): Promise<Buffer | null> {
     if (!this.transport) return null;
 
@@ -672,6 +776,205 @@ export class NodeXenaPeer {
         }
       }
     }, 30_000);
+  }
+
+  private async withCompanyTemplateInstallLock<T>(task: () => Promise<T>): Promise<T> {
+    const waitForPrevious = this.companyTemplateInstallLock;
+    let releaseCurrent: (() => void) | null = null;
+
+    this.companyTemplateInstallLock = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+
+    await waitForPrevious;
+
+    try {
+      return await task();
+    } finally {
+      releaseCurrent?.();
+    }
+  }
+
+  private canRequesterInstallCompanyTemplate(workspace: Workspace, peerId: string): boolean {
+    const requester = workspace.members.find((member) => member.peerId === peerId);
+    if (!requester) return false;
+
+    const role = requester.role ?? 'member';
+    if (role === 'owner' || role === 'admin') return true;
+
+    return workspace.createdBy === peerId;
+  }
+
+  private sendCompanyTemplateInstallResponse(params: {
+    targetPeerId: string;
+    workspaceId: string;
+    requestId: string;
+    ok: boolean;
+    result?: CompanyTemplateControlInstallResult;
+    error?: { code: string; message: string };
+  }): void {
+    if (!this.transport) return;
+
+    this.transport.send(params.targetPeerId, {
+      type: 'workspace-sync',
+      workspaceId: params.workspaceId,
+      sync: {
+        type: 'company-template-install-response',
+        requestId: params.requestId,
+        ok: params.ok,
+        ...(params.result ? { result: params.result } : {}),
+        ...(params.error ? { error: params.error } : {}),
+      },
+    });
+  }
+
+  private async installCompanyTemplateViaControlPlane(params: {
+    workspaceId: string;
+    templateId: string;
+    answers?: unknown;
+    requestedByPeerId: string;
+  }): Promise<CompanyTemplateControlInstallResult> {
+    const control = this.opts.companyTemplateControl;
+    if (!control) {
+      throw new Error('Company template control bridge is unavailable on this host');
+    }
+
+    if (typeof control.installTemplate === 'function') {
+      return await control.installTemplate(params);
+    }
+
+    if (typeof control.loadConfig !== 'function' || typeof control.writeConfigFile !== 'function') {
+      throw new Error('Host control bridge is misconfigured for template installs');
+    }
+
+    const template = getCompanySimTemplate(
+      params.templateId,
+      control.templatesRoot ? { templatesRoot: control.templatesRoot } : undefined,
+    );
+
+    const existingConfig = control.loadConfig();
+    if (!isRecord(existingConfig)) {
+      throw new Error('OpenClaw config is not an object');
+    }
+
+    const install = installCompanyTemplate({
+      template,
+      config: existingConfig,
+      answers: normalizeTemplateInstallAnswers(params.answers),
+      ...(control.workspaceRootDir ? { workspaceRootDir: control.workspaceRootDir } : {}),
+      ...(control.companySimsRootDir ? { companySimsRootDir: control.companySimsRootDir } : {}),
+    });
+
+    await control.writeConfigFile(install.config);
+
+    const manualActionItems = buildManualActionItems(install.summary.manualActionRequiredAccountIds);
+
+    return {
+      provisioningMode: 'config-provisioned',
+      createdAccountIds: install.summary.createdAccountIds,
+      provisionedAccountIds: install.summary.provisionedAccountIds,
+      onlineReadyAccountIds: install.summary.onlineReadyAccountIds,
+      manualActionRequiredAccountIds: install.summary.manualActionRequiredAccountIds,
+      manualActionItems,
+      companyId: install.summary.companyId,
+      manifestPath: install.summary.manifestPath,
+      companyDirPath: install.summary.companyDirPath,
+    };
+  }
+
+  private async handleCompanyTemplateInstallRequest(fromPeerId: string, sync: any): Promise<void> {
+    const requestId = typeof sync?.requestId === 'string' ? sync.requestId.trim() : '';
+    const workspaceId = typeof sync?.workspaceId === 'string' ? sync.workspaceId.trim() : '';
+    const templateId = typeof sync?.templateId === 'string' ? sync.templateId.trim() : '';
+
+    if (!requestId || !workspaceId || !templateId) {
+      if (requestId && workspaceId) {
+        this.sendCompanyTemplateInstallResponse({
+          targetPeerId: fromPeerId,
+          workspaceId,
+          requestId,
+          ok: false,
+          error: {
+            code: 'bad_request',
+            message: 'requestId, workspaceId, and templateId are required',
+          },
+        });
+      }
+      return;
+    }
+
+    if (!this.opts.companyTemplateControl) {
+      this.sendCompanyTemplateInstallResponse({
+        targetPeerId: fromPeerId,
+        workspaceId,
+        requestId,
+        ok: false,
+        error: {
+          code: 'bridge_unavailable',
+          message: 'Host control bridge is unavailable for template installs',
+        },
+      });
+      return;
+    }
+
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) {
+      this.sendCompanyTemplateInstallResponse({
+        targetPeerId: fromPeerId,
+        workspaceId,
+        requestId,
+        ok: false,
+        error: {
+          code: 'workspace_not_found',
+          message: `Workspace not found: ${workspaceId}`,
+        },
+      });
+      return;
+    }
+
+    if (this.workspaceManager.isBanned(workspaceId, fromPeerId) || !this.canRequesterInstallCompanyTemplate(workspace, fromPeerId)) {
+      this.sendCompanyTemplateInstallResponse({
+        targetPeerId: fromPeerId,
+        workspaceId,
+        requestId,
+        ok: false,
+        error: {
+          code: 'forbidden',
+          message: 'Only workspace owners/admins can install AI teams via host control plane',
+        },
+      });
+      return;
+    }
+
+    try {
+      const result = await this.withCompanyTemplateInstallLock(() => this.installCompanyTemplateViaControlPlane({
+        workspaceId,
+        templateId,
+        answers: sync?.answers,
+        requestedByPeerId: fromPeerId,
+      }));
+
+      this.sendCompanyTemplateInstallResponse({
+        targetPeerId: fromPeerId,
+        workspaceId,
+        requestId,
+        ok: true,
+        result,
+      });
+    } catch (error) {
+      const message = normalizeCompanyTemplateControlErrorMessage(error);
+      this.opts.log?.warn?.(`[xena-peer] rejected company template install request: ${message}`);
+      this.sendCompanyTemplateInstallResponse({
+        targetPeerId: fromPeerId,
+        workspaceId,
+        requestId,
+        ok: false,
+        error: {
+          code: 'install_failed',
+          message,
+        },
+      });
+    }
   }
 
   private async handlePeerMessage(fromPeerId: string, rawData: unknown): Promise<void> {
@@ -732,12 +1035,19 @@ export class NodeXenaPeer {
     }
 
     if (msg?.type === 'workspace-sync' && msg.sync) {
-      // Handle workspace-state directly (SyncProtocol doesn't have a case for it)
-      if (msg.sync.type === 'workspace-state' && msg.workspaceId) {
-        this.handleWorkspaceState(fromPeerId, msg.workspaceId, msg.sync);
+      const merged = msg.workspaceId ? { ...msg.sync, workspaceId: msg.workspaceId } : msg.sync;
+
+      if (merged.type === 'company-template-install-request') {
+        await this.handleCompanyTemplateInstallRequest(fromPeerId, merged);
         return;
       }
-      const merged = msg.workspaceId ? { ...msg.sync, workspaceId: msg.workspaceId } : msg.sync;
+
+      // Handle workspace-state directly (SyncProtocol doesn't have a case for it)
+      if (merged.type === 'workspace-state' && merged.workspaceId) {
+        this.handleWorkspaceState(fromPeerId, merged.workspaceId, merged);
+        return;
+      }
+
       await this.syncProtocol.handleMessage(fromPeerId, merged);
       return;
     }
@@ -1382,7 +1692,11 @@ export class NodeXenaPeer {
     if (!this.transport || !this.messageProtocol) return;
     try {
       const handshake = await this.messageProtocol.createHandshake();
-      this.transport.send(peerId, { type: 'handshake', ...handshake, capabilities: ['negentropy-sync-v1'] });
+      const capabilities = ['negentropy-sync-v1'];
+      if (this.opts.companyTemplateControl) {
+        capabilities.push(COMPANY_TEMPLATE_CONTROL_CAPABILITY);
+      }
+      this.transport.send(peerId, { type: 'handshake', ...handshake, capabilities });
       await this.publishPreKeyBundle(peerId);
       // Announce display name (separate unencrypted message — same pattern as the web client)
       // Include workspaceId so the peer can deterministically add us to the correct workspace

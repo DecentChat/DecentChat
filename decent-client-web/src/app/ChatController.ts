@@ -108,6 +108,8 @@ const DIRECTORY_SHARD_CAPABILITY_PREFIX = 'directory-shard:';
 const RELAY_CHANNEL_CAPABILITY_PREFIX = 'relay-channel:';
 const ARCHIVE_HISTORY_CAPABILITY = 'archive-history-v1';
 const PRESENCE_AGGREGATOR_CAPABILITY = 'presence-aggregator-v1';
+const COMPANY_TEMPLATE_CONTROL_CAPABILITY = 'company-template-control-v1';
+const COMPANY_TEMPLATE_INSTALL_TIMEOUT_MS = 20_000;
 const NEGENTROPY_QUERY_TIMEOUT_MS = 8000;
 const PRESENCE_PAGE_REQUEST_TIMEOUT_MS = 5000;
 const PRESENCE_AUTO_ADVANCE_PAGE_TARGET = 150;
@@ -225,6 +227,28 @@ type PendingPreKeyBundleFetch = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+type CompanyTemplateControlInstallRequest = {
+  workspaceId: string;
+  templateId: string;
+  answers: Record<string, string>;
+};
+
+type CompanyTemplateControlInstallResult = {
+  provisioningMode: 'runtime-provisioned' | 'config-provisioned';
+  createdAccountIds?: string[];
+  provisionedAccountIds?: string[];
+  onlineReadyAccountIds?: string[];
+  manualActionRequiredAccountIds?: string[];
+  manualActionItems?: string[];
+};
+
+type PendingCompanyTemplateInstallRequest = {
+  targetPeerId: string;
+  resolve: (result: CompanyTemplateControlInstallResult) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 // ---------------------------------------------------------------------------
 // ChatController
 // ---------------------------------------------------------------------------
@@ -270,6 +294,7 @@ export class ChatController {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  private readonly pendingCompanyTemplateInstallRequests = new Map<string, PendingCompanyTemplateInstallRequest>();
   private readonly pendingPreKeyBundleFetches = new Map<string, PendingPreKeyBundleFetch>();
   private readonly publishedPreKeyVersionByWorkspace = new Map<string, string>();
   private lastMessageSyncRequestAt = new Map<string, number>();
@@ -1105,6 +1130,12 @@ export class ChatController {
         clearTimeout(pending.timer);
         pending.reject(new Error(`Peer ${peerId} disconnected during negentropy sync`));
         this.pendingNegentropyQueries.delete(requestId);
+      }
+      for (const [requestId, pending] of this.pendingCompanyTemplateInstallRequests) {
+        if (pending.targetPeerId !== peerId) continue;
+        clearTimeout(pending.timer);
+        pending.reject(new Error('Host control peer disconnected during AI team install'));
+        this.pendingCompanyTemplateInstallRequests.delete(requestId);
       }
       this.ui?.updateSidebar();
     };
@@ -2445,6 +2476,207 @@ export class ChatController {
     return this.selectWorkspaceSyncTargetPeers(workspaceId, capability, preferredPeerId)[0] ?? null;
   }
 
+  private normalizeCompanyTemplateControlInstallResult(value: unknown): CompanyTemplateControlInstallResult | null {
+    const payload = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+
+    if (!payload) return null;
+
+    const provisioningMode = payload.provisioningMode === 'runtime-provisioned'
+      ? 'runtime-provisioned'
+      : payload.provisioningMode === 'config-provisioned'
+        ? 'config-provisioned'
+        : null;
+
+    if (!provisioningMode) return null;
+
+    const normalizeStringArray = (raw: unknown): string[] => {
+      if (!Array.isArray(raw)) return [];
+      return [...new Set(
+        raw
+          .map((entry) => (typeof entry === 'string' ? entry : String(entry ?? '')))
+          .map((entry) => entry.trim())
+          .filter(Boolean),
+      )].sort((a, b) => a.localeCompare(b));
+    };
+
+    const createdAccountIds = normalizeStringArray(payload.createdAccountIds);
+    const provisionedAccountIds = normalizeStringArray(payload.provisionedAccountIds);
+    const onlineReadyAccountIds = normalizeStringArray(payload.onlineReadyAccountIds);
+    const manualActionRequiredAccountIds = normalizeStringArray(payload.manualActionRequiredAccountIds);
+    const manualActionItems = normalizeStringArray(payload.manualActionItems);
+
+    const hasProvisioningEvidence =
+      createdAccountIds.length > 0
+      || provisionedAccountIds.length > 0
+      || onlineReadyAccountIds.length > 0
+      || manualActionRequiredAccountIds.length > 0
+      || manualActionItems.length > 0;
+
+    if (!hasProvisioningEvidence) return null;
+
+    return {
+      provisioningMode,
+      createdAccountIds,
+      provisionedAccountIds,
+      onlineReadyAccountIds,
+      manualActionRequiredAccountIds,
+      manualActionItems,
+    };
+  }
+
+  private handleCompanyTemplateInstallResponse(peerId: string, sync: any): void {
+    const requestId = typeof sync?.requestId === 'string' ? sync.requestId.trim() : '';
+    if (!requestId) return;
+
+    const pending = this.pendingCompanyTemplateInstallRequests.get(requestId);
+    if (!pending) return;
+    if (pending.targetPeerId !== peerId) return;
+
+    clearTimeout(pending.timer);
+    this.pendingCompanyTemplateInstallRequests.delete(requestId);
+
+    if (sync?.ok === true) {
+      const normalized = this.normalizeCompanyTemplateControlInstallResult(sync?.result);
+      if (!normalized) {
+        pending.reject(new Error('Host control bridge returned malformed install result payload'));
+        return;
+      }
+      pending.resolve(normalized);
+      return;
+    }
+
+    const errorMessage = (() => {
+      if (typeof sync?.error === 'string') {
+        const trimmed = sync.error.trim();
+        if (trimmed) return trimmed;
+      }
+      if (sync?.error && typeof sync.error === 'object') {
+        const rawMessage = (sync.error as Record<string, unknown>).message;
+        if (typeof rawMessage === 'string' && rawMessage.trim()) {
+          return rawMessage.trim();
+        }
+      }
+      return 'Host control bridge rejected AI team install request';
+    })();
+
+    pending.reject(new Error(errorMessage));
+  }
+
+  private requestCompanyTemplateInstallFromPeer(
+    targetPeerId: string,
+    request: CompanyTemplateControlInstallRequest,
+  ): Promise<CompanyTemplateControlInstallResult> {
+    const randomUuid = (globalThis.crypto as any)?.randomUUID?.bind(globalThis.crypto);
+    const requestId = typeof randomUuid === 'function'
+      ? randomUuid()
+      : `company-template:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const pending = this.pendingCompanyTemplateInstallRequests.get(requestId);
+        if (!pending) return;
+        this.pendingCompanyTemplateInstallRequests.delete(requestId);
+        pending.reject(new Error('Timed out waiting for host control bridge response'));
+      }, COMPANY_TEMPLATE_INSTALL_TIMEOUT_MS);
+
+      this.pendingCompanyTemplateInstallRequests.set(requestId, {
+        targetPeerId,
+        resolve,
+        reject,
+        timer,
+      });
+
+      this.sendControlWithRetry(targetPeerId, {
+        type: 'workspace-sync',
+        workspaceId: request.workspaceId,
+        sync: {
+          type: 'company-template-install-request',
+          requestId,
+          workspaceId: request.workspaceId,
+          templateId: request.templateId,
+          answers: request.answers,
+        },
+      }, { label: 'company-template-install' });
+    });
+  }
+
+  private async warmCompanyTemplateControlPeerConnections(workspaceId: string): Promise<void> {
+    if (!this.transport?.connect) return;
+
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) return;
+
+    const connectCandidates = workspace.members
+      .filter((member) => member.peerId !== this.state.myPeerId)
+      .filter((member) => !this.state.readyPeers.has(member.peerId))
+      .sort((a, b) => {
+        const aPriority = (a.isBot ? 0 : 1) + ((a.role === 'owner' || a.role === 'admin') ? -1 : 0);
+        const bPriority = (b.isBot ? 0 : 1) + ((b.role === 'owner' || b.role === 'admin') ? -1 : 0);
+        return aPriority - bPriority;
+      })
+      .slice(0, 6)
+      .map((member) => member.peerId);
+
+    if (!connectCandidates.length) return;
+
+    for (const peerId of connectCandidates) {
+      this.transport.connect(peerId).catch(() => {});
+    }
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 1200));
+  }
+
+  async installCompanyTemplateViaControlPlane(
+    request: CompanyTemplateControlInstallRequest,
+  ): Promise<CompanyTemplateControlInstallResult> {
+    const workspaceId = String(request.workspaceId ?? '').trim();
+    const templateId = String(request.templateId ?? '').trim();
+    if (!workspaceId) throw new Error('workspaceId is required for host control install');
+    if (!templateId) throw new Error('templateId is required for host control install');
+
+    const normalizedAnswers: Record<string, string> = {};
+    for (const [rawKey, rawValue] of Object.entries(request.answers ?? {})) {
+      const key = rawKey.trim();
+      if (!key) continue;
+      normalizedAnswers[key] = String(rawValue ?? '').trim();
+    }
+
+    let targetPeers = this.selectWorkspaceSyncTargetPeers(
+      workspaceId,
+      COMPANY_TEMPLATE_CONTROL_CAPABILITY,
+    );
+
+    if (!targetPeers.length) {
+      await this.warmCompanyTemplateControlPeerConnections(workspaceId);
+      targetPeers = this.selectWorkspaceSyncTargetPeers(
+        workspaceId,
+        COMPANY_TEMPLATE_CONTROL_CAPABILITY,
+      );
+    }
+
+    if (!targetPeers.length) {
+      throw new Error('No online host control peer is available to install AI team right now');
+    }
+
+    const failures: string[] = [];
+    for (const targetPeerId of targetPeers) {
+      try {
+        return await this.requestCompanyTemplateInstallFromPeer(targetPeerId, {
+          workspaceId,
+          templateId,
+          answers: normalizedAnswers,
+        });
+      } catch (error) {
+        failures.push(String((error as Error)?.message ?? error ?? 'Unknown host control failure'));
+      }
+    }
+
+    const detail = failures.find((entry) => entry.trim()) ?? 'Host control bridge failed to install AI team';
+    throw new Error(detail);
+  }
+
   private getDirectoryRequestKey(workspaceId: string, cursor?: string): string {
     return `${workspaceId}::${cursor || '__root__'}`;
   }
@@ -2693,6 +2925,11 @@ export class ChatController {
   }
 
   private async handleSyncMessage(peerId: string, msg: any): Promise<void> {
+    if (msg.sync?.type === 'company-template-install-response') {
+      this.handleCompanyTemplateInstallResponse(peerId, msg.sync);
+      return;
+    }
+
     if (msg.sync?.type === 'workspace-shell-request' && msg.sync.workspaceId) {
       this.handleWorkspaceShellRequest(peerId, msg.sync.workspaceId);
       return;
