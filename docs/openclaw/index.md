@@ -45,4 +45,5 @@ Partially implemented / gaps:
 - [Architecture](./architecture)
 - [Event Flow](./event-flow)
 - [Operations & Troubleshooting](./operations)
+- [Company-sim template installer](./company-sim-template-installer)
 - [DecentChat thread-binding parity design](./decent-thread-bindings-design)

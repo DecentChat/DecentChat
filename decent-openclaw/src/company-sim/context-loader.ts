@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import type { ResolvedDecentChatAccount } from '../types.ts';
@@ -16,10 +16,17 @@ export type CompanyContextDocumentId =
   | 'memory'
   | 'playbook';
 
+export interface CompanyContextFileSnapshot {
+  path: string;
+  mtimeMs: number;
+  size: number;
+}
+
 export interface CompanyContextDocument {
   id: CompanyContextDocumentId;
   path: string;
   content: string;
+  snapshot?: CompanyContextFileSnapshot;
 }
 
 export interface LoadedCompanyContext {
@@ -29,26 +36,101 @@ export interface LoadedCompanyContext {
   employee: CompanyEmployeeConfig;
   team?: CompanyTeamConfig;
   documents: CompanyContextDocument[];
+  trackedFiles?: CompanyContextFileSnapshot[];
+  versionToken?: string;
 }
 
-function readRequiredFile(filePath: string): string {
-  return readFileSync(filePath, 'utf8').trim();
+export interface LoadCompanyContextForAccountOptions {
+  workspaceDir?: string;
 }
 
-function readOptionalFile(filePath: string): string | undefined {
+function snapshotFile(filePath: string): CompanyContextFileSnapshot {
+  const stats = statSync(filePath);
+  return {
+    path: filePath,
+    mtimeMs: stats.mtimeMs,
+    size: stats.size,
+  };
+}
+
+function readRequiredFile(filePath: string): { content: string; snapshot: CompanyContextFileSnapshot } {
+  return {
+    content: readFileSync(filePath, 'utf8').trim(),
+    snapshot: snapshotFile(filePath),
+  };
+}
+
+function readOptionalFile(filePath: string): { content: string; snapshot: CompanyContextFileSnapshot } | undefined {
   if (!existsSync(filePath)) return undefined;
   const content = readFileSync(filePath, 'utf8').trim();
-  return content || undefined;
+  if (!content) return undefined;
+  return {
+    content,
+    snapshot: snapshotFile(filePath),
+  };
 }
 
-export function loadCompanyContextForAccount(account: ResolvedDecentChatAccount): LoadedCompanyContext | null {
+function getCompanyEmployeeByAccountId(manifest: CompanyManifest, accountId: string): CompanyEmployeeConfig | undefined {
+  return manifest.employees.find((employee) => employee.accountId === accountId);
+}
+
+function hasScaffoldedWorkspaceContext(workspaceDir: string): boolean {
+  const requiredPaths = [
+    join(workspaceDir, 'company', 'COMPANY.md'),
+    join(workspaceDir, 'company', 'ORG.md'),
+    join(workspaceDir, 'company', 'WORKFLOWS.md'),
+    join(workspaceDir, 'employee', 'IDENTITY.md'),
+    join(workspaceDir, 'employee', 'ROLE.md'),
+    join(workspaceDir, 'employee', 'RULES.md'),
+    join(workspaceDir, 'employee', 'MEMORY.md'),
+    join(workspaceDir, 'employee', 'PLAYBOOK.md'),
+  ];
+  return requiredPaths.every((filePath) => existsSync(filePath));
+}
+
+function resolveContextDirs(params: {
+  manifestPath: string;
+  employeeId: string;
+  roleFilesDir?: string;
+  workspaceDir?: string;
+}): { companyDir: string; employeeDir: string } {
+  const workspaceDir = params.workspaceDir?.trim();
+  if (workspaceDir && hasScaffoldedWorkspaceContext(workspaceDir)) {
+    return {
+      companyDir: join(workspaceDir, 'company'),
+      employeeDir: join(workspaceDir, 'employee'),
+    };
+  }
+
+  const companyDir = dirname(params.manifestPath);
+  return {
+    companyDir,
+    employeeDir: params.roleFilesDir || join(companyDir, 'employees', params.employeeId),
+  };
+}
+
+export function createCompanyContextVersionToken(files: CompanyContextFileSnapshot[]): string {
+  return files
+    .map((file) => `${file.path}:${file.mtimeMs}:${file.size}`)
+    .join('|');
+}
+
+export function readCompanyContextFileSnapshots(paths: string[]): CompanyContextFileSnapshot[] {
+  return paths.map((filePath) => snapshotFile(filePath));
+}
+
+export function buildCompanyContextTrackedPaths(context: Pick<LoadedCompanyContext, 'manifestPath' | 'documents'>): string[] {
+  return [context.manifestPath, ...context.documents.map((doc) => doc.path)];
+}
+
+export function loadCompanyContextForAccount(
+  account: ResolvedDecentChatAccount,
+  options?: LoadCompanyContextForAccountOptions,
+): LoadedCompanyContext | null {
   const sim = account.companySim;
   if (!sim?.enabled) return null;
   if (!sim.manifestPath) {
     throw new Error(`Company sim is enabled for account ${account.accountId} but companySim.manifestPath is missing`);
-  }
-  if (!sim.employeeId) {
-    throw new Error(`Company sim is enabled for account ${account.accountId} but companySim.employeeId is missing`);
   }
 
   const manifest = parseCompanyManifestFile(sim.manifestPath);
@@ -56,26 +138,39 @@ export function loadCompanyContextForAccount(account: ResolvedDecentChatAccount)
     throw new Error(`Company manifest id mismatch for account ${account.accountId}: expected ${sim.companyId}, got ${manifest.id}`);
   }
 
-  const employee = getCompanyEmployeeById(manifest, sim.employeeId);
+  const employeeFromAccount = getCompanyEmployeeByAccountId(manifest, account.accountId);
+  const employeeFromConfig = sim.employeeId ? getCompanyEmployeeById(manifest, sim.employeeId) : undefined;
+  const employee = employeeFromAccount ?? employeeFromConfig;
   if (!employee) {
-    throw new Error(`Unknown employee ${sim.employeeId} for company ${manifest.id}`);
+    throw new Error(
+      `Unknown employee for account ${account.accountId} in company ${manifest.id}`
+      + (sim.employeeId ? ` (configured employeeId=${sim.employeeId})` : ''),
+    );
   }
 
   const team = employee.teamId ? getCompanyTeamById(manifest, employee.teamId) : undefined;
-  const companyDir = dirname(sim.manifestPath);
-  const employeeDir = sim.roleFilesDir || join(companyDir, 'employees', employee.id);
+  const { companyDir, employeeDir } = resolveContextDirs({
+    manifestPath: sim.manifestPath,
+    employeeId: employee.id,
+    roleFilesDir: sim.roleFilesDir,
+    workspaceDir: options?.workspaceDir,
+  });
+
+  const companyDoc = readRequiredFile(join(companyDir, 'COMPANY.md'));
+  const orgDoc = readRequiredFile(join(companyDir, 'ORG.md'));
+  const workflowsDoc = readRequiredFile(join(companyDir, 'WORKFLOWS.md'));
 
   const documents: CompanyContextDocument[] = [
-    { id: 'company', path: join(companyDir, 'COMPANY.md'), content: readRequiredFile(join(companyDir, 'COMPANY.md')) },
-    { id: 'org', path: join(companyDir, 'ORG.md'), content: readRequiredFile(join(companyDir, 'ORG.md')) },
-    { id: 'workflows', path: join(companyDir, 'WORKFLOWS.md'), content: readRequiredFile(join(companyDir, 'WORKFLOWS.md')) },
+    { id: 'company', path: join(companyDir, 'COMPANY.md'), content: companyDoc.content, snapshot: companyDoc.snapshot },
+    { id: 'org', path: join(companyDir, 'ORG.md'), content: orgDoc.content, snapshot: orgDoc.snapshot },
+    { id: 'workflows', path: join(companyDir, 'WORKFLOWS.md'), content: workflowsDoc.content, snapshot: workflowsDoc.snapshot },
   ];
 
   if (team?.id) {
     const teamPath = join(companyDir, 'teams', `${team.id}.md`);
-    const teamContent = readOptionalFile(teamPath);
-    if (teamContent) {
-      documents.push({ id: 'team', path: teamPath, content: teamContent });
+    const teamDoc = readOptionalFile(teamPath);
+    if (teamDoc) {
+      documents.push({ id: 'team', path: teamPath, content: teamDoc.content, snapshot: teamDoc.snapshot });
     }
   }
 
@@ -88,8 +183,14 @@ export function loadCompanyContextForAccount(account: ResolvedDecentChatAccount)
   ];
 
   for (const [id, filePath] of employeeDocs) {
-    documents.push({ id, path: filePath, content: readRequiredFile(filePath) });
+    const doc = readRequiredFile(filePath);
+    documents.push({ id, path: filePath, content: doc.content, snapshot: doc.snapshot });
   }
+
+  const trackedFiles = [
+    snapshotFile(sim.manifestPath),
+    ...documents.map((doc) => doc.snapshot).filter((snapshot): snapshot is CompanyContextFileSnapshot => Boolean(snapshot)),
+  ];
 
   return {
     manifestPath: sim.manifestPath,
@@ -98,5 +199,7 @@ export function loadCompanyContextForAccount(account: ResolvedDecentChatAccount)
     employee,
     team,
     documents,
+    trackedFiles,
+    versionToken: createCompanyContextVersionToken(trackedFiles),
   };
 }

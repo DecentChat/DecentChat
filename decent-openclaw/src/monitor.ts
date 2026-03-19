@@ -4,8 +4,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { getDecentChatRuntime } from "./runtime.js";
-import { loadCompanyContextForAccount } from "./company-sim/context-loader.js";
-import { buildCompanyPromptContext } from "./company-sim/prompt-context.js";
+import { resolveCompanyPromptContextForAccount } from "./company-sim/prompt-context.js";
 import { decideCompanyParticipation } from "./company-sim/router.js";
 import { setActivePeer } from "./peer-registry.js";
 import type { ResolvedDecentChatAccount } from "./types.js";
@@ -53,6 +52,20 @@ async function resolveReplyPrefixOptions(params: {
   }
 
   return cachedCreateReplyPrefixOptions(params);
+}
+
+function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string): string | undefined {
+  const agentList = (cfg as any)?.agents?.list;
+  if (!Array.isArray(agentList)) return undefined;
+
+  const entry = agentList.find((candidate: any) => candidate && typeof candidate === "object" && candidate.id === agentId);
+  if (!entry) return undefined;
+
+  const workspace = (entry as any).workspace;
+  if (typeof workspace !== "string") return undefined;
+
+  const trimmed = workspace.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 type InboundAttachment = {
@@ -415,45 +428,36 @@ export async function relayInboundMessageToPeer(params: {
         return;
       }
 
-      // When streaming was active (mid is set), the client already received
-      // the full content via stream deltas + stream-done and persisted it.
-      // Only persist locally in the bot's message store for sync resilience
-      // (so Negentropy can offer it to peers who were offline).
-      // Do NOT re-send over the wire — that causes duplicates.
-      if (mid && streamEnabled) {
-        try {
-          const persistThreadId = incoming.chatType === "direct"
-            ? incoming.threadId
-            : (incoming.threadId ?? incoming.messageId);
-          // Store in bot's message store (FileStore) without sending over WebRTC
-          await xenaPeer.persistMessageLocally(
-            incoming.channelId,
-            incoming.workspaceId,
+      const persistThreadId = incoming.chatType === "direct"
+        ? incoming.threadId
+        : (incoming.threadId ?? incoming.messageId);
+
+      // Always send one canonical final message envelope, even after streaming.
+      // It reuses the stream message ID so receivers can dedupe/update instead of
+      // rendering a duplicate bubble, and it covers peers that missed live stream events.
+      try {
+        if (incoming.chatType === "direct") {
+          await xenaPeer.sendDirectToPeer(
+            incoming.senderId,
             finalReply,
             persistThreadId,
             incoming.messageId,
-            mid,
+            mid ?? undefined,
             selectedModel,
           );
-          ctx.log?.info?.(`[decentchat] persisted streamed reply locally for sync (${finalReply.length} chars)`);
-        } catch (err) {
-          ctx.log?.error?.(`[decentchat] failed to persist streamed reply locally: ${String(err)}`);
-        }
-        return;
-      }
-
-      // Non-streaming fallback: send the message normally (encrypt + transmit + persist).
-      try {
-        const persistThreadId = incoming.chatType === "direct"
-          ? incoming.threadId
-          : (incoming.threadId ?? incoming.messageId);
-
-        if (incoming.chatType === "direct") {
-          await xenaPeer.sendDirectToPeer(incoming.senderId, finalReply, persistThreadId, incoming.messageId, undefined, selectedModel);
         } else {
-          await xenaPeer.sendToChannel(incoming.channelId, finalReply, persistThreadId, incoming.messageId, undefined, selectedModel);
+          await xenaPeer.sendToChannel(
+            incoming.channelId,
+            finalReply,
+            persistThreadId,
+            incoming.messageId,
+            mid ?? undefined,
+            selectedModel,
+          );
         }
-        ctx.log?.info?.(`[decentchat] persisted assistant reply (${finalReply.length} chars) in ${incoming.chatType}`);
+        ctx.log?.info?.(
+          `[decentchat] persisted assistant reply (${finalReply.length} chars) in ${incoming.chatType}${mid && streamEnabled ? ' via stream-finalize' : ''}`,
+        );
       } catch (err) {
         ctx.log?.error?.(`[decentchat] failed to persist assistant reply: ${String(err)}`);
       }
@@ -801,10 +805,32 @@ async function processInboundMessage(
   }
 
   const cfg = core.config.loadConfig() as OpenClawConfig;
+  const channel = "decentchat";
+  const peerId = msg.chatType === "direct"
+    ? msg.senderId
+    : `${msg.workspaceId}:${msg.channelId}`;
+
+  const route = core.channel.routing.resolveAgentRoute({
+    cfg,
+    channel,
+    accountId: ctx.accountId,
+    peer: { kind: msg.chatType === "direct" ? "direct" : "group", id: peerId },
+  });
+  const agentWorkspaceDir = resolveAgentWorkspaceDir(cfg, route.agentId);
+
   let companyContext = null;
+  let companyContextPrefix = "";
   if (ctx.account?.companySim?.enabled) {
     try {
-      companyContext = loadCompanyContextForAccount(ctx.account);
+      const resolvedCompanyPrompt = resolveCompanyPromptContextForAccount(ctx.account, {
+        log: ctx.log,
+        workspaceDir: agentWorkspaceDir,
+        agentId: route.agentId,
+      });
+      if (resolvedCompanyPrompt) {
+        companyContext = resolvedCompanyPrompt.context;
+        companyContextPrefix = resolvedCompanyPrompt.prompt;
+      }
     } catch (err) {
       ctx.log?.warn?.(`[decentchat] company context load failed for ${ctx.account.accountId}: ${String(err)}`);
     }
@@ -825,17 +851,6 @@ async function processInboundMessage(
     return;
   }
   const threadingFlags = resolveDecentThreadingFlags(cfg, msg.chatType === "direct" ? "direct" : "channel");
-  const channel = "decentchat";
-  const peerId = msg.chatType === "direct"
-    ? msg.senderId
-    : `${msg.workspaceId}:${msg.channelId}`;
-
-  const route = core.channel.routing.resolveAgentRoute({
-    cfg,
-    channel,
-    accountId: ctx.accountId,
-    peer: { kind: msg.chatType === "direct" ? "direct" : "group", id: peerId },
-  });
 
   const baseSessionKey = route.sessionKey;
   // Thread-aware session routing (parallelism):
@@ -938,11 +953,6 @@ async function processInboundMessage(
     bootstrapReason,
     initialHistoryLimit: threadingFlags.initialHistoryLimit,
   });
-
-  let companyContextPrefix = "";
-  if (companyContext) {
-    companyContextPrefix = buildCompanyPromptContext(companyContext);
-  }
 
   let threadContextPrefix = "";
   let threadHistoryCount = 0;

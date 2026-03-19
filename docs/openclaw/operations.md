@@ -8,6 +8,49 @@
 4. Confirm peers connect and handshake successfully
 5. Verify inbound messages trigger assistant reply in DM/group
 
+## Template-first company-sim runbook
+
+1. Install a template (see `docs/openclaw/company-sim-template-installer.md`).
+2. Confirm install summary includes expected agents/accounts/channels.
+3. Fill `seedPhrase` for every account in `summary.createdAccountIds`.
+4. Ensure `channels.decentchat.companySimBootstrap` is enabled in runtime mode with valid `manifestPath`.
+5. Start OpenClaw and check for bootstrap log: `company bootstrap ready`.
+6. Verify each company account data dir has a shared workspace with expected channels/members.
+
+### Template install troubleshooting
+
+#### Bootstrap enabled but manifest path missing
+
+Symptoms:
+
+- startup error similar to `companySimBootstrapManifestPath is missing`
+
+Fix:
+
+- set `channels.decentchat.companySimBootstrap.manifestPath` (or legacy flat field) to the generated `company.yaml` path
+
+#### Bootstrap fails with missing account list
+
+Symptoms:
+
+- error lists missing account ids for company employees
+
+Fix:
+
+- add missing entries under `channels.decentchat.accounts`
+- ensure each account has `seedPhrase` and (recommended) dedicated `dataDir`
+
+#### Bootstrap fails with missing topology installation
+
+Symptoms:
+
+- error mentions missing `agents.list` entries or route bindings
+
+Fix:
+
+- re-run template installer and write merged config
+- avoid manually deleting installer-managed `agents.list`/`bindings` entries
+
 ## Health indicators
 
 Expected logs:

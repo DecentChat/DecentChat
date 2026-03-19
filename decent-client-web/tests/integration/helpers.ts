@@ -5,6 +5,15 @@ import { type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { startRelayServer, type RelayServer } from '../mocks/mock-relay-server';
 import { getMockTransportScript } from '../mocks/MockTransport';
 import { createBrowserContext } from './context-permissions';
+import {
+  seedCompanyFixtureMembers as seedCompanyFixtureMembersE2E,
+  postFixtureMessage as postFixtureMessageE2E,
+  openThreadForMessage as openThreadForMessageE2E,
+  type CompanyFixtureMember,
+  type SeedCompanyFixtureResult,
+  type PostFixtureMessageInput,
+  type PostedFixtureMessage,
+} from '../e2e/multi-user-helpers';
 
 export interface TestUser { name: string; context: BrowserContext; page: Page }
 
@@ -161,4 +170,32 @@ export async function getWorkspaceSnapshot(page: Page): Promise<{
       persistedWorkspaceIds: persisted.map((w: any) => w.id),
     };
   });
+}
+
+
+// Company-sim integration helpers (shared with e2e helper primitives)
+export type {
+  CompanyFixtureMember,
+  SeedCompanyFixtureResult,
+  PostFixtureMessageInput,
+  PostedFixtureMessage,
+};
+
+export async function seedCompanyFixtureMembers(
+  page: Page,
+  members: CompanyFixtureMember[],
+  channelName = 'general',
+): Promise<SeedCompanyFixtureResult> {
+  return seedCompanyFixtureMembersE2E(page, members, channelName);
+}
+
+export async function postFixtureMessage(
+  page: Page,
+  input: PostFixtureMessageInput,
+): Promise<PostedFixtureMessage> {
+  return postFixtureMessageE2E(page, input);
+}
+
+export async function openThreadForMessage(page: Page, messageId: string): Promise<void> {
+  await openThreadForMessageE2E(page, messageId);
 }

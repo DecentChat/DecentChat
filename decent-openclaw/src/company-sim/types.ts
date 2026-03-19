@@ -25,14 +25,23 @@ export interface CompanyTeamConfig {
   managerEmployeeId?: string;
 }
 
+export interface CompanyEmployeeBindingConfig {
+  channel: string;
+  accountId?: string;
+}
+
 export interface CompanyEmployeeConfig {
   id: string;
+  agentId: string;
   accountId: string;
   alias: string;
   teamId?: string;
   title: string;
   managerEmployeeId?: string;
   reportsToHumanRole?: string;
+  workspaceDir?: string;
+  workspaceName?: string;
+  bindings?: CompanyEmployeeBindingConfig[];
   channels: string[];
   participation: CompanyParticipationConfig;
 }

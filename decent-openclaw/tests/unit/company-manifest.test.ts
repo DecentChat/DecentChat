@@ -26,6 +26,7 @@ teams:
     managerEmployeeId: team-manager
 employees:
   - id: team-manager
+    agentId: team-manager
     accountId: team-manager
     alias: Mira PM
     teamId: engineering
@@ -35,6 +36,7 @@ employees:
       mode: summary-first
       respondWhenMentioned: true
   - id: backend-dev
+    agentId: backend-dev
     accountId: backend-dev
     alias: Rian Backend
     teamId: engineering
@@ -52,6 +54,7 @@ employees:
     expect(manifest.workspace.channels).toEqual(['general', 'engineering']);
     expect(getCompanyTeamById(manifest, 'engineering')?.name).toBe('Engineering');
     expect(getCompanyEmployeeById(manifest, 'team-manager')?.title).toBe('Team Manager');
+    expect(getCompanyEmployeeById(manifest, 'team-manager')?.agentId).toBe('team-manager');
     expect(getCompanyEmployeeById(manifest, 'missing')).toBeUndefined();
   });
 
@@ -71,6 +74,7 @@ teams:
     name: Operations
 employees:
   - id: lead
+    agentId: lead-agent
     accountId: lead
     alias: Lea
     teamId: ops
@@ -83,18 +87,166 @@ employees:
       const manifest = parseCompanyManifestFile(filePath);
       expect(manifest.name).toBe('Test Company');
       expect(getCompanyEmployeeById(manifest, 'lead')?.alias).toBe('Lea');
+      expect(getCompanyEmployeeById(manifest, 'lead')?.agentId).toBe('lead-agent');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
-
-
 
   test('parses bundled software-studio template', () => {
     const manifest = parseCompanyManifestFile(new URL('../../../company-sims/software-studio/company.yaml', import.meta.url).pathname);
     expect(manifest.id).toBe('software-studio');
     expect(manifest.employees.length).toBe(3);
     expect(getCompanyEmployeeById(manifest, 'tester')?.title).toBe('QA Engineer');
+    expect(getCompanyEmployeeById(manifest, 'tester')?.agentId).toBe('software-studio-tester');
+  });
+
+  test('supports optional employee workspace and binding fields', () => {
+    const manifest = parseCompanyManifestText(`
+id: software-studio
+name: Software Studio
+mode: company-sim
+workspace:
+  name: Studio HQ
+  channels: [engineering]
+teams:
+  - id: engineering
+    name: Engineering
+employees:
+  - id: backend-dev
+    agentId: software-studio-backend
+    accountId: backend-dev
+    alias: Rian Backend
+    teamId: engineering
+    title: Backend Engineer
+    workspaceDir: company-sims/software-studio/employees/backend-dev
+    workspaceName: Backend Dev Workspace
+    bindings:
+      - channel: decentchat
+        accountId: backend-dev
+    channels: [engineering]
+    participation:
+      mode: specialist
+`);
+
+    const employee = getCompanyEmployeeById(manifest, 'backend-dev');
+    expect(employee?.workspaceDir).toBe('company-sims/software-studio/employees/backend-dev');
+    expect(employee?.workspaceName).toBe('Backend Dev Workspace');
+    expect(employee?.bindings).toEqual([
+      { channel: 'decentchat', accountId: 'backend-dev' },
+    ]);
+  });
+
+  test('rejects employee entries that omit agentId', () => {
+    expect(() => parseCompanyManifestText(`
+id: broken-company
+name: Broken Company
+mode: company-sim
+workspace:
+  name: Broken HQ
+  channels: [general]
+teams:
+  - id: engineering
+    name: Engineering
+employees:
+  - id: backend-dev
+    accountId: backend-dev
+    alias: Rian Backend
+    teamId: engineering
+    title: Backend Engineer
+    channels: [general]
+    participation:
+      mode: specialist
+`)).toThrow(/agentId/i);
+  });
+
+  test('rejects employee entries that omit accountId', () => {
+    expect(() => parseCompanyManifestText(`
+id: broken-company
+name: Broken Company
+mode: company-sim
+workspace:
+  name: Broken HQ
+  channels: [general]
+teams:
+  - id: engineering
+    name: Engineering
+employees:
+  - id: backend-dev
+    agentId: software-studio-backend
+    alias: Rian Backend
+    teamId: engineering
+    title: Backend Engineer
+    channels: [general]
+    participation:
+      mode: specialist
+`)).toThrow(/accountId/i);
+  });
+
+  test('rejects duplicate employee agent ids separately from account ids', () => {
+    expect(() => parseCompanyManifestText(`
+id: broken-company
+name: Broken Company
+mode: company-sim
+workspace:
+  name: Broken HQ
+  channels: [general]
+teams:
+  - id: engineering
+    name: Engineering
+employees:
+  - id: e1
+    agentId: shared-agent
+    accountId: account-one
+    alias: One
+    teamId: engineering
+    title: Engineer
+    channels: [general]
+    participation:
+      mode: specialist
+  - id: e2
+    agentId: shared-agent
+    accountId: account-two
+    alias: Two
+    teamId: engineering
+    title: Engineer
+    channels: [general]
+    participation:
+      mode: specialist
+`)).toThrow(/duplicate employee agent id: shared-agent/i);
+  });
+
+  test('rejects duplicate employee account ids separately from agent ids', () => {
+    expect(() => parseCompanyManifestText(`
+id: broken-company
+name: Broken Company
+mode: company-sim
+workspace:
+  name: Broken HQ
+  channels: [general]
+teams:
+  - id: engineering
+    name: Engineering
+employees:
+  - id: e1
+    agentId: agent-one
+    accountId: shared-account
+    alias: One
+    teamId: engineering
+    title: Engineer
+    channels: [general]
+    participation:
+      mode: specialist
+  - id: e2
+    agentId: agent-two
+    accountId: shared-account
+    alias: Two
+    teamId: engineering
+    title: Engineer
+    channels: [general]
+    participation:
+      mode: specialist
+`)).toThrow(/duplicate employee account id: shared-account/i);
   });
 
   test('rejects employee team references that do not exist', () => {
@@ -110,6 +262,7 @@ teams:
     name: Engineering
 employees:
   - id: backend-dev
+    agentId: software-studio-backend
     accountId: backend-dev
     alias: Rian Backend
     teamId: missing-team
@@ -134,6 +287,7 @@ teams:
     managerEmployeeId: missing-manager
 employees:
   - id: backend-dev
+    agentId: software-studio-backend
     accountId: backend-dev
     alias: Rian Backend
     teamId: engineering
@@ -143,5 +297,29 @@ employees:
     participation:
       mode: specialist
 `)).toThrow(/unknown manager/i);
+  });
+
+  test('rejects employee channel references that are not in workspace channels', () => {
+    expect(() => parseCompanyManifestText(`
+id: broken-company
+name: Broken Company
+mode: company-sim
+workspace:
+  name: Broken HQ
+  channels: [general]
+teams:
+  - id: engineering
+    name: Engineering
+employees:
+  - id: backend-dev
+    agentId: software-studio-backend
+    accountId: backend-dev
+    alias: Rian Backend
+    teamId: engineering
+    title: Backend Engineer
+    channels: [engineering]
+    participation:
+      mode: specialist
+`)).toThrow(/unknown workspace channel/i);
   });
 });

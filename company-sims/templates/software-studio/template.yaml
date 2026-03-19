@@ -1,0 +1,73 @@
+id: software-studio
+label: Software Studio
+description: Product team preset with a manager, backend engineer, and QA specialist.
+icon: "🛠️"
+roles:
+  - id: manager
+    label: Team Manager
+    description: Owns planning, priorities, and cross-role coordination.
+    title: Team Manager
+    defaultAlias: Mira PM
+    teamId: engineering
+    channels: [general, engineering, leadership]
+    participation:
+      mode: summary-first
+      respondWhenMentioned: true
+      respondToChannelTopics: [planning, priorities, blockers, status]
+  - id: backend
+    label: Backend Engineer
+    description: Designs and implements backend features and APIs.
+    title: Backend Engineer
+    defaultAlias: Rian Backend
+    teamId: engineering
+    managerRoleId: manager
+    channels: [engineering]
+    participation:
+      mode: specialist
+      respondWhenMentioned: true
+      replyInThreadsOnly: true
+  - id: qa
+    label: QA Engineer
+    description: Verifies quality and ships release confidence.
+    title: QA Engineer
+    defaultAlias: Iva QA
+    teamId: qa
+    managerRoleId: manager
+    channels: [qa, engineering]
+    participation:
+      mode: specialist
+      respondWhenMentioned: true
+      replyInThreadsOnly: true
+questions:
+  - id: companyName
+    label: Company name
+    description: Name shown to all team members.
+    type: text
+    required: true
+    default: Software Studio
+  - id: workspaceName
+    label: Workspace name
+    description: Friendly name for the shared workspace.
+    type: text
+    required: true
+    default: Studio HQ
+  - id: managerAlias
+    label: Manager display name
+    type: text
+    default: Mira PM
+  - id: backendAlias
+    label: Backend display name
+    type: text
+    default: Rian Backend
+  - id: qaAlias
+    label: QA display name
+    type: text
+    default: Iva QA
+defaults:
+  companyName: Software Studio
+  workspaceName: Studio HQ
+  channels: [general, engineering, qa, leadership]
+  questionAnswers:
+    managerAlias: Mira PM
+    backendAlias: Rian Backend
+    qaAlias: Iva QA

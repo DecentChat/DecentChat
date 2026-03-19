@@ -74,6 +74,11 @@ import { LifecycleReconnectGuard } from './app/LifecycleReconnectGuard';
 import { createUIService, type UIService } from './ui/uiService';
 import { CommandParser } from './commands/CommandParser';
 import { registerCommands } from './commands/registerCommands';
+import {
+  buildCompanyTemplatePreview,
+  getLocalCompanyTemplate,
+  listLocalCompanyTemplates,
+} from './lib/company-sim/templateCatalog';
 import type { AppSettings } from './storage/types';
 import { SeedPhraseManager as _SeedPhraseManager, IdentityManager as _IdentityManager } from 'decent-protocol';
 const _spm = new _SeedPhraseManager();
@@ -320,6 +325,99 @@ async function init(): Promise<void> {
   const commandParser = new CommandParser();
   registerCommands(commandParser, ctrl, state);
 
+  const installCompanyTemplateToWorkspace = async (request: {
+    templateId: string;
+    workspaceId: string;
+    answers: Record<string, string>;
+  }) => {
+    const template = getLocalCompanyTemplate(request.templateId);
+    if (!template) throw new Error(`Unknown template: ${request.templateId}`);
+
+    const workspace = ctrl.workspaceManager.getWorkspace(request.workspaceId);
+    if (!workspace) throw new Error(`Workspace not found: ${request.workspaceId}`);
+
+    const preview = buildCompanyTemplatePreview(template, request.answers);
+
+    const createdChannelNames: string[] = [];
+    const existingChannelNames = new Set((workspace.channels || []).map((channel: any) => String(channel.name || '').toLowerCase()));
+
+    const previousWorkspaceId = state.activeWorkspaceId;
+    const previousChannelId = state.activeChannelId;
+
+    state.activeWorkspaceId = workspace.id;
+
+    try {
+      if (!state.activeChannelId && workspace.channels?.[0]) {
+        state.activeChannelId = workspace.channels[0].id;
+      }
+
+      for (const channelName of preview.channelNames) {
+        const normalized = channelName.toLowerCase();
+        if (existingChannelNames.has(normalized)) continue;
+
+        const created = ctrl.createChannel(channelName);
+        if (!created.success || !created.channel) {
+          throw new Error(created.error || `Failed to create channel: ${channelName}`);
+        }
+
+        existingChannelNames.add(normalized);
+        createdChannelNames.push(created.channel.name);
+      }
+    } finally {
+      state.activeWorkspaceId = previousWorkspaceId;
+      state.activeChannelId = previousChannelId;
+    }
+
+    if (!Array.isArray(workspace.members)) workspace.members = [];
+
+    const createdMemberPeerIds: string[] = [];
+    const existingMemberIds = new Set(workspace.members.map((member: any) => member.peerId));
+    const managerByRoleId = new Map(preview.members.map((member) => [member.roleId, member.peerId]));
+
+    for (const member of preview.members) {
+      if (existingMemberIds.has(member.peerId)) continue;
+
+      const managerPeerId = member.managerRoleId
+        ? managerByRoleId.get(member.managerRoleId)
+        : undefined;
+
+      workspace.members.push({
+        peerId: member.peerId,
+        alias: member.alias,
+        publicKey: `pk-${member.peerId}`,
+        signingPublicKey: `spk-${member.peerId}`,
+        identityId: member.peerId,
+        devices: [],
+        role: 'member',
+        isBot: true,
+        allowWorkspaceDMs: false,
+        companySim: {
+          automationKind: 'openclaw-agent',
+          roleTitle: member.roleTitle,
+          teamId: member.teamId,
+          managerPeerId,
+        },
+      } as any);
+
+      existingMemberIds.add(member.peerId);
+      createdMemberPeerIds.push(member.peerId);
+    }
+
+    await ctrl.persistWorkspace(workspace.id);
+
+    return {
+      templateId: template.id,
+      templateLabel: template.label,
+      workspaceId: workspace.id,
+      workspaceName: preview.workspaceName,
+      companyName: preview.companyName,
+      createdChannelNames,
+      createdMemberPeerIds,
+      channelNames: preview.channelNames,
+      members: preview.members,
+    };
+  };
+
   // Create UI service (owns all DOM manipulation via Svelte stores)
   const ui = createUIService(state, ctrl.workspaceManager, ctrl.messageStore, {
     sendMessage: async (content, threadId) => {
@@ -432,6 +530,13 @@ async function init(): Promise<void> {
     getMessageReceiptInfo: (messageId) => ctrl.getMessageReceiptInfo(messageId),
     getConnectionStatus: () => ctrl.getConnectionStatus(),
     retryReconnect: () => ctrl.retryReconnectNow(),
+    listCompanyTemplates: () => listLocalCompanyTemplates(),
+    installCompanyTemplate: async (request) => {
+      const result = await installCompanyTemplateToWorkspace(request);
+      ui.updateSidebar();
+      ui.updateChannelHeader();
+      return result;
+    },
 
     // Identity restore / transfer
     getCurrentSeed: () => ctrl.persistentStore.getSetting('seedPhrase') as Promise<string | null>,

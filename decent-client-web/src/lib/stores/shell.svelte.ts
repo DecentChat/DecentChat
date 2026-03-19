@@ -194,6 +194,7 @@ export interface ShellCallbacks {
   onCreateWorkspace: () => void;
   onJoinWorkspace: () => void;
   onRestoreSeed: () => void;
+  onInstallAiTeam: () => void;
 
   // Workspace rail
   onSwitchToDMs: () => void;

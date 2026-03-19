@@ -83,6 +83,7 @@
     onMemberClick: (peerId: string) => void;
     onDirectConvClick: (convId: string) => void;
     onAddChannel: () => void;
+    onAddAiTeam: () => void;
     onStartDM: () => void;
     onAddContact: () => void;
     onConnectPeer: () => void;
@@ -120,6 +121,7 @@
     onMemberClick,
     onDirectConvClick,
     onAddChannel,
+    onAddAiTeam,
     onStartDM,
     onAddContact,
     onConnectPeer,
@@ -239,8 +241,17 @@
   {#if isInWorkspace}
     <div class="sidebar-section">
       <div class="sidebar-section-header">
-        Channels
-        <button class="add-btn" id="add-channel-btn" title="Create channel" onclick={onAddChannel}>+</button>
+        <span>Channels</span>
+        <div class="members-header-actions">
+          <button
+            class="add-btn"
+            id="add-ai-team-btn"
+            title="Install AI team template"
+            aria-label="Add AI Team"
+            onclick={onAddAiTeam}
+          >AI</button>
+          <button class="add-btn" id="add-channel-btn" title="Create channel" onclick={onAddChannel}>+</button>
+        </div>
       </div>
       {#each channels as ch (ch.id)}
         {@const unread = getUnreadCount(ch.id)}

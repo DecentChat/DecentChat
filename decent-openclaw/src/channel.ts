@@ -1,9 +1,11 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk";
 import { z } from "zod";
 
+import { assertCompanyBootstrapAgentInstallation, ensureCompanyBootstrapRuntime, resolveCompanyManifestPath } from "./company-sim/bootstrap.js";
 import { startDecentChatPeer } from "./monitor.js";
 import { getActivePeer } from "./peer-registry.js";
-import type { DecentChatChannelConfig, ResolvedDecentChatAccount } from "./types.js";
+import { buildDecentChatRuntimeBootstrapKey, runDecentChatBootstrapOnce } from "./runtime.js";
+import type { DecentChatChannelConfig, OpenClawConfigShape, ResolvedDecentChatAccount } from "./types.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
 
@@ -50,6 +52,9 @@ const DecentChatConfigSchema = z.object({
   threadHistoryScope: z.enum(["thread", "channel"]).optional().default("thread"),
   threadInheritParent: z.boolean().optional().default(false),
   threadInitialHistoryLimit: z.number().int().min(0).optional().default(20),
+  companySimBootstrapEnabled: z.boolean().optional().default(false),
+  companySimBootstrapMode: z.enum(["runtime", "off"]).optional().default("runtime"),
+  companySimBootstrapManifestPath: z.string().optional(),
   // Legacy nested forms still accepted at runtime via passthrough
   // (resolveDecentChatAccount reads ch.replyToModeByChatType, ch.thread, ch.channels)
   // but excluded from schema so Control UI can render all fields cleanly.
@@ -112,6 +117,7 @@ function resolveRawDecentChatAccountConfig(cfg: any, accountId?: string | null):
     thread: mergeObject(base.thread, accountCfg?.thread),
     huddle: mergeObject(base.huddle, accountCfg?.huddle),
     companySim: mergeObject(base.companySim, accountCfg?.companySim),
+    companySimBootstrap: mergeObject(base.companySimBootstrap, accountCfg?.companySimBootstrap),
   };
 }
 
@@ -152,6 +158,13 @@ export function resolveDecentChatAccount(cfg: any, accountId?: string | null): R
   const ch = resolveRawDecentChatAccountConfig(cfg, accountId);
   const resolvedAccountId = accountId?.trim() || resolveDefaultDecentChatAccountId(cfg);
   const seedPhrase = typeof ch.seedPhrase === "string" ? ch.seedPhrase : undefined;
+  const bootstrapEnabledRaw = (ch as any).companySimBootstrapEnabled ?? ch.companySimBootstrap?.enabled;
+  const bootstrapModeRaw = (ch as any).companySimBootstrapMode ?? ch.companySimBootstrap?.mode;
+  const bootstrapManifestPathRaw = (ch as any).companySimBootstrapManifestPath ?? ch.companySimBootstrap?.manifestPath;
+  const hasBootstrapConfig = bootstrapEnabledRaw !== undefined
+    || bootstrapModeRaw !== undefined
+    || typeof bootstrapManifestPathRaw === "string";
+
   return {
     accountId: resolvedAccountId,
     enabled: ch.enabled !== false,
@@ -192,12 +205,47 @@ export function resolveDecentChatAccount(cfg: any, accountId?: string | null): R
       employeeId: ch.companySim.employeeId,
       roleFilesDir: ch.companySim.roleFilesDir,
     } : undefined,
+    companySimBootstrap: hasBootstrapConfig ? {
+      enabled: bootstrapEnabledRaw !== false,
+      mode: bootstrapModeRaw === "off" ? "off" : "runtime",
+      manifestPath: typeof bootstrapManifestPathRaw === "string" ? bootstrapManifestPathRaw : undefined,
+    } : undefined,
   };
 }
 
 function getPeerForContext(cfg: any, accountId?: string | null) {
   const resolvedAccountId = accountId?.trim() || resolveDefaultDecentChatAccountId(cfg);
   return getActivePeer(resolvedAccountId);
+}
+
+export async function bootstrapDecentChatCompanySimForStartup(params: {
+  cfg: any;
+  accountId: string;
+  account: ResolvedDecentChatAccount;
+  log?: { info?: (message: string) => void; warn?: (message: string) => void; error?: (message: string) => void };
+}): Promise<void> {
+  const bootstrap = params.account.companySimBootstrap;
+  if (!bootstrap?.enabled || bootstrap.mode === "off") return;
+
+  const manifestPath = bootstrap.manifestPath?.trim();
+  if (!manifestPath) {
+    throw new Error(`Company bootstrap is enabled for account ${params.accountId} but companySimBootstrapManifestPath is missing`);
+  }
+
+  const resolvedManifestPath = resolveCompanyManifestPath(manifestPath);
+  await runDecentChatBootstrapOnce(buildDecentChatRuntimeBootstrapKey(resolvedManifestPath), async () => {
+    assertCompanyBootstrapAgentInstallation({
+      manifestPath: resolvedManifestPath,
+      cfg: params.cfg as OpenClawConfigShape,
+    });
+
+    await ensureCompanyBootstrapRuntime({
+      manifestPath: resolvedManifestPath,
+      accountIds: listDecentChatAccountIds(params.cfg),
+      resolveAccount: (accountId) => resolveDecentChatAccount(params.cfg, accountId),
+      log: params.log,
+    });
+  });
 }
 
 export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
@@ -230,6 +278,9 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       threadHistoryScope: { label: "Thread history scope", help: "thread = isolated, channel = shared context", advanced: true },
       threadInheritParent: { label: "Thread inherit parent", help: "Thread sessions inherit parent channel context", advanced: true },
       threadInitialHistoryLimit: { label: "Thread initial history limit", help: "Messages to bootstrap in new thread sessions", advanced: true },
+      companySimBootstrapEnabled: { label: "Company bootstrap enabled", advanced: true },
+      companySimBootstrapMode: { label: "Company bootstrap mode", advanced: true, help: "runtime = materialize company workspace on account startup" },
+      companySimBootstrapManifestPath: { label: "Company manifest path", advanced: true, help: "Path to company.yaml (supports relative paths from current working directory)" },
       invites: { label: "Invite URLs", advanced: true, help: "DecentChat invite URIs for workspaces to join on startup" },
     },
   },
@@ -247,6 +298,10 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       companySim: account.companySim?.enabled ? {
         companyId: account.companySim.companyId,
         employeeId: account.companySim.employeeId,
+      } : undefined,
+      companySimBootstrap: account.companySimBootstrap?.enabled ? {
+        mode: account.companySimBootstrap.mode,
+        manifestPath: account.companySimBootstrap.manifestPath,
       } : undefined,
     }),
   },
@@ -380,6 +435,10 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
         companyId: account.companySim.companyId,
         employeeId: account.companySim.employeeId,
       } : undefined,
+      companySimBootstrap: account.companySimBootstrap?.enabled ? {
+        mode: account.companySimBootstrap.mode,
+        manifestPath: account.companySimBootstrap.manifestPath,
+      } : undefined,
     }),
   },
 
@@ -391,6 +450,13 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
         configured: ctx.account.configured,
       });
       try {
+        await bootstrapDecentChatCompanySimForStartup({
+          cfg: ctx.cfg,
+          accountId: ctx.accountId,
+          account: ctx.account,
+          log: ctx.log,
+        });
+
         await startDecentChatPeer({
           account: ctx.account,
           accountId: ctx.accountId,

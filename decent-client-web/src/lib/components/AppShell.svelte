@@ -139,6 +139,7 @@
     onCreateWorkspace={cb?.onCreateWorkspace ?? (() => {})}
     onJoinWorkspace={cb?.onJoinWorkspace ?? (() => {})}
     onRestoreSeed={cb?.onRestoreSeed ?? (() => {})}
+    onInstallAiTeam={cb?.onInstallAiTeam ?? (() => {})}
   />
 {:else if shellData.view === 'app'}
   <div class="app-layout">
@@ -181,6 +182,7 @@
           onMemberClick={cb.onMemberClick}
           onDirectConvClick={cb.onDirectConvClick}
           onAddChannel={cb.onAddChannel}
+          onAddAiTeam={cb.onInstallAiTeam}
           onStartDM={cb.onStartDM}
           onAddContact={cb.onAddContact}
           onConnectPeer={cb.onConnectPeer}

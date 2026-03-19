@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type {
+  CompanyEmployeeBindingConfig,
   CompanyEmployeeConfig,
   CompanyManifest,
   CompanyParticipationConfig,
@@ -32,14 +33,23 @@ const CompanyTeamSchema = z.object({
   managerEmployeeId: z.string().min(1).optional(),
 }) satisfies z.ZodType<CompanyTeamConfig>;
 
+const CompanyEmployeeBindingSchema = z.object({
+  channel: z.string().min(1),
+  accountId: z.string().min(1).optional(),
+}) satisfies z.ZodType<CompanyEmployeeBindingConfig>;
+
 const CompanyEmployeeSchema = z.object({
   id: z.string().min(1),
+  agentId: z.string().min(1),
   accountId: z.string().min(1),
   alias: z.string().min(1),
   teamId: z.string().min(1).optional(),
   title: z.string().min(1),
   managerEmployeeId: z.string().min(1).optional(),
   reportsToHumanRole: z.string().min(1).optional(),
+  workspaceDir: z.string().min(1).optional(),
+  workspaceName: z.string().min(1).optional(),
+  bindings: z.array(CompanyEmployeeBindingSchema).optional(),
   channels: z.array(z.string().min(1)).min(1),
   participation: CompanyParticipationSchema,
 }) satisfies z.ZodType<CompanyEmployeeConfig>;
@@ -66,6 +76,7 @@ function assertUniqueIds(values: string[], label: string): void {
 function validateManifestReferences(manifest: CompanyManifest): CompanyManifest {
   assertUniqueIds(manifest.teams.map((team) => team.id), 'team');
   assertUniqueIds(manifest.employees.map((employee) => employee.id), 'employee');
+  assertUniqueIds(manifest.employees.map((employee) => employee.agentId), 'employee agent');
   assertUniqueIds(manifest.employees.map((employee) => employee.accountId), 'employee account');
 
   const teamIds = new Set(manifest.teams.map((team) => team.id));

@@ -285,3 +285,165 @@ export async function closeModal(page: Page): Promise<void> {
   await page.keyboard.press('Escape');
   await page.waitForSelector('.modal-overlay', { state: 'detached', timeout: 3000 }).catch(() => {});
 }
+
+
+// ─── Company Simulation Fixtures ─────────────────────────────────────────────
+
+export interface CompanyFixtureProfile {
+  automationKind?: string;
+  roleTitle?: string;
+  teamId?: string;
+  managerPeerId?: string;
+  avatarUrl?: string;
+}
+
+export interface CompanyFixtureMember {
+  peerId: string;
+  alias: string;
+  role?: 'owner' | 'admin' | 'member';
+  companySim?: CompanyFixtureProfile;
+}
+
+export interface SeedCompanyFixtureResult {
+  workspaceId: string;
+  channelId: string;
+  channelName: string;
+}
+
+export interface PostFixtureMessageInput {
+  senderId: string;
+  content: string;
+  channelId?: string;
+  threadId?: string;
+  senderAlias?: string;
+}
+
+export interface PostedFixtureMessage {
+  id: string;
+  channelId: string;
+  threadId: string | null;
+  senderId: string;
+  senderName: string;
+}
+
+/** Ensure workspace contains deterministic company-sim fixture members */
+export async function seedCompanyFixtureMembers(
+  page: Page,
+  members: CompanyFixtureMember[],
+  channelName = 'general',
+): Promise<SeedCompanyFixtureResult> {
+  return page.evaluate(({ membersArg, channelNameArg }) => {
+    const state = (window as any).__state;
+    const ctrl = (window as any).__ctrl;
+
+    if (!state?.activeWorkspaceId) throw new Error('No active workspace in test session');
+    const ws = ctrl?.workspaceManager?.getWorkspace(state.activeWorkspaceId);
+    if (!ws) throw new Error(`Workspace ${state.activeWorkspaceId} not found`);
+
+    if (!Array.isArray(ws.members)) ws.members = [];
+
+    for (const member of membersArg) {
+      let existing = ws.members.find((m: any) => m.peerId === member.peerId);
+      if (!existing) {
+        existing = {
+          peerId: member.peerId,
+          alias: member.alias,
+          publicKey: `pk-${member.peerId}`,
+          signingPublicKey: `spk-${member.peerId}`,
+          identityId: member.peerId,
+          devices: [],
+          role: member.role ?? 'member',
+        };
+        ws.members.push(existing);
+      }
+
+      existing.alias = member.alias;
+      if (member.role) existing.role = member.role;
+      if (member.companySim) {
+        existing.companySim = {
+          ...(existing.companySim ?? {}),
+          ...member.companySim,
+        };
+      }
+    }
+
+    const channel = (ws.channels || []).find((c: any) => c.name === channelNameArg) || ws.channels?.[0];
+    if (!channel) throw new Error(`No channel found for ${channelNameArg}`);
+
+    return {
+      workspaceId: ws.id,
+      channelId: channel.id,
+      channelName: channel.name,
+    };
+  }, { membersArg: members, channelNameArg: channelName });
+}
+
+/** Inject a local message as a seeded fixture member (no network dependency). */
+export async function postFixtureMessage(
+  page: Page,
+  input: PostFixtureMessageInput,
+): Promise<PostedFixtureMessage> {
+  return page.evaluate(async ({ payload }) => {
+    const state = (window as any).__state;
+    const ctrl = (window as any).__ctrl;
+
+    if (!ctrl?.messageStore) throw new Error('Chat controller messageStore unavailable');
+
+    const channelId = payload.channelId || state?.activeChannelId;
+    if (!channelId) throw new Error('No active channel available for fixture message');
+
+    const ws = state?.activeWorkspaceId
+      ? ctrl.workspaceManager?.getWorkspace(state.activeWorkspaceId)
+      : null;
+
+    const member = ws?.members?.find((m: any) => m.peerId === payload.senderId);
+    const senderName = payload.senderAlias || member?.alias || payload.senderId;
+
+    const msg = await ctrl.messageStore.createMessage(
+      channelId,
+      payload.senderId,
+      payload.content,
+      'text',
+      payload.threadId || undefined,
+    );
+
+    const existingMessages = ctrl.messageStore.getMessages(channelId);
+    const previous = existingMessages[existingMessages.length - 1];
+    if (previous && msg.timestamp <= previous.timestamp) {
+      msg.timestamp = previous.timestamp + 1;
+    }
+
+    (msg as any).senderName = senderName;
+    (msg as any).status = 'sent';
+
+    const added = await ctrl.messageStore.addMessage(msg);
+    if (!added?.success) {
+      throw new Error(`Failed to add fixture message: ${added?.error || 'unknown error'}`);
+    }
+
+    ctrl.ui?.renderMessages?.();
+    if (payload.threadId && state?.threadOpen && state?.activeThreadId === payload.threadId) {
+      ctrl.ui?.renderThreadMessages?.();
+    }
+
+    return {
+      id: msg.id,
+      channelId,
+      threadId: msg.threadId ?? null,
+      senderId: msg.senderId,
+      senderName,
+    };
+  }, { payload: input });
+}
+
+/** Open a thread from the channel message list using stable test ids. */
+export async function openThreadForMessage(page: Page, messageId: string): Promise<void> {
+  const root = page.locator(`[data-testid="message"][data-message-id="${messageId}"]`);
+  await expect(root, `message ${messageId} should exist before opening thread`).toHaveCount(1);
+
+  const threadIndicator = root.locator(`.message-thread-indicator[data-thread-id="${messageId}"]`);
+  await threadIndicator.click({ force: true });
+
+  const panel = page.getByTestId('thread-panel');
+  await expect(panel).toBeVisible();
+}

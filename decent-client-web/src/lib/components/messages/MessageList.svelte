@@ -673,7 +673,11 @@
   }
 </script>
 
-<div style="display: contents;">
+<div
+  style="display: contents;"
+  data-testid="message-list"
+  data-view={inThreadView ? 'thread' : 'channel'}
+>
   {#if !activeChannelId}
     <div class="empty-state">
       <div class="emoji">💬</div>
@@ -689,34 +693,47 @@
     </div>
   {:else}
     {#if threadRoot}
-      <MessageItem
-        id={threadRoot.id}
-        senderId={threadRoot.senderId}
-        senderName={getSenderName(threadRoot)}
-        content={threadRoot.content}
-        timestamp={threadRoot.timestamp}
-        type={threadRoot.type}
-        isMine={threadRoot.senderId === myPeerId}
-        isBot={isBot(threadRoot.senderId)}
-        modelLabel={getModelLabel(threadRoot)}
-        companySim={getCompanySimProfile(threadRoot.senderId)}
-        isGrouped={false}
-        {inThreadView}
-        attachments={(threadRoot as any).attachments}
-        threadReplies={[]}
-        status={(threadRoot as any).status}
-        recipientCount={(threadRoot as any).recipientPeerIds?.length ?? 0}
-        ackedCount={(threadRoot as any).ackedBy?.length ?? 0}
-        readCount={(threadRoot as any).readBy?.length ?? 0}
-        {frequentReactions}
-        {getPeerAlias}
-        {onOpenThread}
-        {onToggleReaction}
-        {onRememberReaction}
-        {onShowMessageInfo}
-        {onImageClick}
-        {resolveAttachmentImageUrl}
-      />
+      {@const threadRootProfile = getCompanySimProfile(threadRoot.senderId)}
+      <div
+        style="display: contents;"
+        data-testid="message-meta"
+        data-view={inThreadView ? 'thread' : 'channel'}
+        data-message-id={threadRoot.id}
+        data-sender-id={threadRoot.senderId}
+        data-sender-name={getSenderName(threadRoot)}
+        data-thread-id={threadRoot.threadId || ''}
+        data-role-title={threadRootProfile?.roleTitle || ''}
+        data-automation-kind={threadRootProfile?.automationKind || ''}
+      >
+        <MessageItem
+          id={threadRoot.id}
+          senderId={threadRoot.senderId}
+          senderName={getSenderName(threadRoot)}
+          content={threadRoot.content}
+          timestamp={threadRoot.timestamp}
+          type={threadRoot.type}
+          isMine={threadRoot.senderId === myPeerId}
+          isBot={isBot(threadRoot.senderId)}
+          modelLabel={getModelLabel(threadRoot)}
+          companySim={threadRootProfile}
+          isGrouped={false}
+          {inThreadView}
+          attachments={(threadRoot as any).attachments}
+          threadReplies={[]}
+          status={(threadRoot as any).status}
+          recipientCount={(threadRoot as any).recipientPeerIds?.length ?? 0}
+          ackedCount={(threadRoot as any).ackedBy?.length ?? 0}
+          readCount={(threadRoot as any).readBy?.length ?? 0}
+          {frequentReactions}
+          {getPeerAlias}
+          {onOpenThread}
+          {onToggleReaction}
+          {onRememberReaction}
+          {onShowMessageInfo}
+          {onImageClick}
+          {resolveAttachmentImageUrl}
+        />
+      </div>
       <div class="thread-root-separator"><span>Thread</span></div>
     {/if}
 
@@ -727,35 +744,48 @@
     {/if}
 
     {#each renderedMessages as msg, i (msg.id)}
-      <MessageItem
-        id={msg.id}
-        senderId={msg.senderId}
-        senderName={getSenderName(msg)}
-        content={msg.content}
-        timestamp={msg.timestamp}
-        type={msg.type}
-        isMine={msg.senderId === myPeerId}
-        isBot={isBot(msg.senderId)}
-        modelLabel={getModelLabel(msg)}
-        companySim={getCompanySimProfile(msg.senderId)}
-        isGrouped={isGrouped(msg, i + visibleStartIndex, messages)}
-        {inThreadView}
-        isActiveThreadRoot={!inThreadView && !!activeThreadRootId && msg.id === activeThreadRootId}
-        attachments={(msg as any).attachments}
-        threadReplies={activeChannelId ? getThread(activeChannelId, msg.id) : []}
-        status={(msg as any).status}
-        recipientCount={(msg as any).recipientPeerIds?.length ?? 0}
-        ackedCount={(msg as any).ackedBy?.length ?? 0}
-        readCount={(msg as any).readBy?.length ?? 0}
-        {frequentReactions}
-        {getPeerAlias}
-        {onOpenThread}
-        {onToggleReaction}
-        {onRememberReaction}
-        {onShowMessageInfo}
-        {onImageClick}
-        {resolveAttachmentImageUrl}
-      />
+      {@const msgProfile = getCompanySimProfile(msg.senderId)}
+      <div
+        style="display: contents;"
+        data-testid="message-meta"
+        data-view={inThreadView ? 'thread' : 'channel'}
+        data-message-id={msg.id}
+        data-sender-id={msg.senderId}
+        data-sender-name={getSenderName(msg)}
+        data-thread-id={msg.threadId || ''}
+        data-role-title={msgProfile?.roleTitle || ''}
+        data-automation-kind={msgProfile?.automationKind || ''}
+      >
+        <MessageItem
+          id={msg.id}
+          senderId={msg.senderId}
+          senderName={getSenderName(msg)}
+          content={msg.content}
+          timestamp={msg.timestamp}
+          type={msg.type}
+          isMine={msg.senderId === myPeerId}
+          isBot={isBot(msg.senderId)}
+          modelLabel={getModelLabel(msg)}
+          companySim={msgProfile}
+          isGrouped={isGrouped(msg, i + visibleStartIndex, messages)}
+          {inThreadView}
+          isActiveThreadRoot={!inThreadView && !!activeThreadRootId && msg.id === activeThreadRootId}
+          attachments={(msg as any).attachments}
+          threadReplies={activeChannelId ? getThread(activeChannelId, msg.id) : []}
+          status={(msg as any).status}
+          recipientCount={(msg as any).recipientPeerIds?.length ?? 0}
+          ackedCount={(msg as any).ackedBy?.length ?? 0}
+          readCount={(msg as any).readBy?.length ?? 0}
+          {frequentReactions}
+          {getPeerAlias}
+          {onOpenThread}
+          {onToggleReaction}
+          {onRememberReaction}
+          {onShowMessageInfo}
+          {onImageClick}
+          {resolveAttachmentImageUrl}
+        />
+      </div>
     {/each}
 
     {#if bottomSpacerHeight > 0}

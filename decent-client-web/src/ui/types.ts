@@ -67,6 +67,70 @@ export interface WorkspaceMemberDirectoryView {
   };
 }
 
+export interface CompanyTemplateQuestionDefinition {
+  id: string;
+  label: string;
+  description?: string;
+  placeholder?: string;
+  required?: boolean;
+  defaultValue?: string;
+}
+
+export interface CompanyTemplateRoleDefinition {
+  id: string;
+  title: string;
+  teamId: string;
+  defaultAlias: string;
+  aliasQuestionId?: string;
+  managerRoleId?: string;
+}
+
+export interface CompanyTemplateDefinition {
+  id: string;
+  label: string;
+  description: string;
+  icon?: string;
+  channels: string[];
+  roles: CompanyTemplateRoleDefinition[];
+  questions: CompanyTemplateQuestionDefinition[];
+}
+
+export interface CompanyTemplateInstallPreviewMember {
+  roleId: string;
+  roleTitle: string;
+  teamId: string;
+  alias: string;
+  peerId: string;
+  managerRoleId?: string;
+}
+
+export interface CompanyTemplateInstallPreview {
+  templateId: string;
+  templateLabel: string;
+  companyName: string;
+  workspaceName: string;
+  channelNames: string[];
+  members: CompanyTemplateInstallPreviewMember[];
+}
+
+export interface CompanyTemplateInstallRequest {
+  templateId: string;
+  workspaceId: string;
+  answers: Record<string, string>;
+}
+
+export interface CompanyTemplateInstallResult {
+  templateId: string;
+  templateLabel: string;
+  workspaceId: string;
+  workspaceName: string;
+  companyName: string;
+  createdChannelNames: string[];
+  createdMemberPeerIds: string[];
+  channelNames: string[];
+  members: CompanyTemplateInstallPreviewMember[];
+}
+
 export interface UICallbacks {
   sendMessage: (content: string, threadId?: string) => Promise<void>;
   sendAttachment: (file: File, text?: string, threadId?: string) => Promise<void>;
@@ -179,4 +243,6 @@ export interface UICallbacks {
     };
   };
   retryReconnect?: () => Promise<{ attempted: number; reinitialized: boolean }>;
+  listCompanyTemplates?: () => Promise<CompanyTemplateDefinition[]> | CompanyTemplateDefinition[];
+  installCompanyTemplate?: (request: CompanyTemplateInstallRequest) => Promise<CompanyTemplateInstallResult>;
 }

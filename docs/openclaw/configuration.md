@@ -42,6 +42,43 @@ Optional persistence root. Default:
 
 - `~/.openclaw/data/decentchat`
 
+## Company-sim template installer outputs
+
+When you install a team template with `installCompanyTemplate`, config is materialized under `channels.decentchat`:
+
+### `companySimBootstrap`
+
+Installer defaults (unless already explicitly configured):
+
+```yaml
+companySimBootstrap:
+  enabled: true
+  mode: runtime
+  manifestPath: /absolute/path/to/company-sims/<company-id>/company.yaml
+```
+
+Legacy flat aliases are also populated for compatibility:
+
+- `companySimBootstrapEnabled`
+- `companySimBootstrapMode`
+- `companySimBootstrapManifestPath`
+
+### `accounts.<accountId>.companySim`
+
+Each generated template employee account gets:
+
+- `enabled: true`
+- `manifestPath`
+- `companyId`
+- `employeeId`
+- `roleFilesDir`
+
+### `accounts.<accountId>.seedPhrase`
+
+Installer does **not** auto-create secret seed phrases.
+
+Operators must set a valid mnemonic for each newly created account before startup runtime bootstrap can succeed.
+
 ## OpenClaw policy/threading options
 
 ### `dmPolicy` (enum)

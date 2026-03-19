@@ -13,6 +13,7 @@ import { showJoinWorkspaceModal as svelteShowJoinWorkspaceModal } from '../lib/c
 import { showPeerSelectModal } from '../lib/components/modals/PeerSelectModal.svelte';
 import { showAddContactModal as svelteShowAddContactModal } from '../lib/components/modals/AddContactModal.svelte';
 import { showSettingsModal } from '../lib/components/modals/SettingsModal.svelte';
+import { showInstallTeamTemplateModal as svelteShowInstallTeamTemplateModal } from '../lib/components/modals/installTeamTemplateModal';
 import { filterMemberPickerPeers, searchMemberPickerPeers } from './memberPickerSearch';
 
 interface QRFlowLike {
@@ -60,6 +61,7 @@ export interface ModalActions {
   showRestoreSeed: () => void;
   showSearchPanel: () => void;
   showSettings: () => void;
+  showInstallTeamTemplateModal: () => void;
 }
 
 export function createModalActions(ctx: ModalActionContext): ModalActions {
@@ -810,6 +812,25 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     });
   }
 
+  function showInstallTeamTemplateModal(): void {
+    if (!state.activeWorkspaceId) {
+      showToast('Open a workspace before installing an AI team.', 'error');
+      return;
+    }
+
+    svelteShowInstallTeamTemplateModal({
+      workspaceId: state.activeWorkspaceId,
+      workspaceName: workspaceManager.getWorkspace(state.activeWorkspaceId)?.name ?? null,
+      listTemplates: callbacks.listCompanyTemplates,
+      installTemplate: callbacks.installCompanyTemplate,
+      onInstalled: async () => {
+        updateSidebar();
+        syncShellHeader();
+      },
+      onToast: showToast,
+    });
+  }
+
   return {
     showCreateWorkspaceModal,
     showJoinWorkspaceModal,
@@ -829,5 +850,6 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     showRestoreSeed,
     showSearchPanel,
     showSettings,
+    showInstallTeamTemplateModal,
   };
 }

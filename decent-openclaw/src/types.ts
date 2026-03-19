@@ -1,3 +1,36 @@
+
+export type OpenClawAgentListEntryConfig = {
+  id?: string;
+  workspace?: string;
+  [key: string]: unknown;
+};
+
+export type OpenClawRouteBindingConfig = {
+  type?: string;
+  agentId?: string;
+  match?: {
+    channel?: string;
+    accountId?: string;
+  };
+  [key: string]: unknown;
+};
+
+export type OpenClawConfigShape = {
+  channels?: Record<string, unknown>;
+  agents?: {
+    list?: OpenClawAgentListEntryConfig[];
+    [key: string]: unknown;
+  };
+  bindings?: OpenClawRouteBindingConfig[];
+  [key: string]: unknown;
+};
+
+export type DecentChatCompanySimBootstrapConfig = {
+  enabled?: boolean;
+  mode?: 'runtime' | 'off';
+  manifestPath?: string;
+};
+
 export type DecentChatCompanySimConfig = {
   enabled?: boolean;
   manifestPath?: string;
@@ -39,6 +72,10 @@ export type DecentChatChannelConfig = {
     vadThreshold?: number;
   };
   companySim?: DecentChatCompanySimConfig;
+  companySimBootstrap?: DecentChatCompanySimBootstrapConfig;
+  companySimBootstrapEnabled?: boolean;
+  companySimBootstrapMode?: 'runtime' | 'off';
+  companySimBootstrapManifestPath?: string;
   defaultAccount?: string;
   accounts?: Record<string, Omit<DecentChatChannelConfig, 'accounts'>>;
 };
@@ -82,5 +119,10 @@ export type ResolvedDecentChatAccount = {
     companyId?: string;
     employeeId?: string;
     roleFilesDir?: string;
+  };
+  companySimBootstrap?: {
+    enabled: boolean;
+    mode: 'runtime' | 'off';
+    manifestPath?: string;
   };
 };

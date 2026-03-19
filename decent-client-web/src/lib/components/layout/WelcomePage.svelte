@@ -11,6 +11,7 @@
     onCreateWorkspace: () => void;
     onJoinWorkspace: () => void;
     onRestoreSeed: () => void;
+    onInstallAiTeam?: () => void;
   }
 
   let {
@@ -19,9 +20,37 @@
     onCreateWorkspace,
     onJoinWorkspace,
     onRestoreSeed,
+    onInstallAiTeam,
   }: Props = $props();
 
   const isAppLikeRoute = typeof window !== 'undefined' && (window.location.pathname === '/app' || window.location.pathname.startsWith('/app/'));
+  const donationAddresses = [
+    {
+      ticker: 'BTC',
+      name: 'Bitcoin',
+      address: 'bc1qj7rf9vc0nvk8maux6gc6dwzpelj2d3ck0krlm7',
+    },
+    {
+      ticker: 'LTC',
+      name: 'Litecoin',
+      address: 'ltc1qjhsl7eztls8l557vrtmhlm4g86hlql2qq4x5jz',
+    },
+    {
+      ticker: 'ETH',
+      name: 'Ethereum',
+      address: '0x33e98006401fE7298a255f5890380403e57cdf67',
+    },
+    {
+      ticker: 'XMR',
+      name: 'Monero',
+      address: '42uEmNUt3Jp5qNpP8sg2rQf45eNEthvMadZutxT6z2eR3opSZepkN93cQ5wxdstyA2MfkyRjB93tgis6a5DBhqgh3u8PnZh',
+    },
+    {
+      ticker: 'ZEC',
+      name: 'Zcash',
+      address: 'u1deqeprze5jdwz2ywmr3q9kmgdf4vel5shr8jeamm9upvrjlc08yqx55a0w2zq2kggaa4e7ctymw3nthqdv329l6vygypqd9228r9628y70anfk78mj9tld4hrjsh9zrlq7ekth6q23zhjlw7tsdrvsvcx53ggsclmuk6q7wl3cht9m5p',
+    },
+  ] as const;
 
   function handleCreate() {
     if (!isAppLikeRoute) {
@@ -48,6 +77,11 @@
   function copyPeerId() {
     navigator.clipboard.writeText(myPeerId);
     toast('Peer ID copied!');
+  }
+
+  function copyDonationAddress(name: string, address: string) {
+    navigator.clipboard.writeText(address);
+    toast(`${name} address copied!`);
   }
 </script>
 
@@ -85,6 +119,9 @@
           <button class="btn-primary btn-lg" id="create-ws-btn" onclick={handleCreate}>Start Chatting Free →</button>
         {/if}
         <button class="btn-secondary btn-lg" id="join-ws-btn" onclick={handleJoin}>Join with Invite Code</button>
+        {#if hasWorkspace && isAppLikeRoute && onInstallAiTeam}
+          <button class="btn-secondary btn-lg" id="welcome-add-ai-team-btn" onclick={onInstallAiTeam}>Add AI Team</button>
+        {/if}
       </div>
       <p class="lp-hero-note">No signup · No phone number · Works in your browser</p>
     </div>
@@ -246,6 +283,42 @@
         <span class="lp-tech-pill">IndexedDB Persistence</span>
         <span class="lp-tech-pill">Service Worker PWA</span>
       </div>
+    </div>
+  </section>
+
+  <!-- ── Support / sponsorship ── -->
+  <section class="lp-support">
+    <div class="lp-container">
+      <div class="lp-support-header">
+        <div class="lp-hero-badge">⚡ Community funded</div>
+        <h2 class="lp-section-title">Sponsor DecentChat</h2>
+        <p class="lp-section-sub">
+          If DecentChat is useful to you and you want to help fund development,
+          protocol work, and infrastructure, donations are welcome.
+        </p>
+      </div>
+      <div class="lp-support-grid">
+        {#each donationAddresses as donation}
+          <article class="lp-support-card">
+            <div class="lp-support-card-top">
+              <div>
+                <div class="lp-support-ticker">{donation.ticker}</div>
+                <h3>{donation.name}</h3>
+              </div>
+              <button
+                class="lp-copy-btn"
+                type="button"
+                aria-label={`Copy ${donation.name} donation address`}
+                onclick={() => copyDonationAddress(donation.name, donation.address)}
+              >
+                Copy
+              </button>
+            </div>
+            <code class="lp-support-address">{donation.address}</code>
+          </article>
+        {/each}
+      </div>
+      <p class="lp-support-note">Direct crypto donations only for now. No token, no ICO, no VC gatekeepers.</p>
     </div>
   </section>
 

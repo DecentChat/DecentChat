@@ -126,6 +126,10 @@
   class:hidden={!open}
   class:open={open}
   id="thread-panel"
+  data-testid="thread-panel"
+  data-open={open ? 'true' : 'false'}
+  data-thread-id={threadId || ''}
+  data-channel-id={channelId || ''}
 >
   <div bind:this={handleEl} class="thread-resize-handle" id="thread-resize-handle" title="Drag to resize"></div>
   <div class="thread-header">
@@ -137,7 +141,7 @@
     </div>
     <button class="thread-close icon-btn" id="thread-close" onclick={onClose}>✕</button>
   </div>
-  <div class="thread-messages" id="thread-messages">
+  <div class="thread-messages" id="thread-messages" data-testid="thread-messages">
     {#if open && channelId && threadId}
       <MessageList
         messages={replies}

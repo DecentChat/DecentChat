@@ -154,6 +154,7 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     onCreateWorkspace: () => modalActions.showCreateWorkspaceModal(),
     onJoinWorkspace: () => modalActions.showJoinWorkspaceModal(),
     onRestoreSeed: () => modalActions.showRestoreSeed(),
+    onInstallAiTeam: () => modalActions.showInstallTeamTemplateModal(),
 
     // Workspace rail
     onSwitchToDMs: () => {

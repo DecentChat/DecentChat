@@ -17,33 +17,51 @@ teams:
     managerEmployeeId: tester
 employees:
   - id: team-manager
+    agentId: software-studio-team-manager
     accountId: team-manager
     alias: Mira PM
     teamId: engineering
     title: Team Manager
     reportsToHumanRole: ceo
+    workspaceDir: company-sims/software-studio/employees/team-manager
+    workspaceName: Team Manager Workspace
+    bindings:
+      - channel: decentchat
+        accountId: team-manager
     channels: [general, engineering, leadership]
     participation:
       mode: summary-first
       respondWhenMentioned: true
       respondToChannelTopics: [planning, priorities, blockers, status]
   - id: backend-dev
+    agentId: software-studio-backend-dev
     accountId: backend-dev
     alias: Rian Backend
     teamId: engineering
     title: Backend Engineer
     managerEmployeeId: team-manager
+    workspaceDir: company-sims/software-studio/employees/backend-dev
+    workspaceName: Backend Dev Workspace
+    bindings:
+      - channel: decentchat
+        accountId: backend-dev
     channels: [engineering]
     participation:
       mode: specialist
       respondWhenMentioned: true
       replyInThreadsOnly: true
   - id: tester
+    agentId: software-studio-tester
     accountId: tester
     alias: Iva QA
     teamId: qa
     title: QA Engineer
     managerEmployeeId: team-manager
+    workspaceDir: company-sims/software-studio/employees/tester
+    workspaceName: Tester Workspace
+    bindings:
+      - channel: decentchat
+        accountId: tester
     channels: [qa, engineering]
     participation:
       mode: specialist
