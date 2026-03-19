@@ -55,6 +55,8 @@ const DecentChatConfigSchema = z.object({
   companySimBootstrapEnabled: z.boolean().optional().default(false),
   companySimBootstrapMode: z.enum(["runtime", "off"]).optional().default("runtime"),
   companySimBootstrapManifestPath: z.string().optional(),
+  companySimBootstrapTargetWorkspaceId: z.string().optional(),
+  companySimBootstrapTargetInviteCode: z.string().optional(),
   // Legacy nested forms still accepted at runtime via passthrough
   // (resolveDecentChatAccount reads ch.replyToModeByChatType, ch.thread, ch.channels)
   // but excluded from schema so Control UI can render all fields cleanly.
@@ -161,9 +163,13 @@ export function resolveDecentChatAccount(cfg: any, accountId?: string | null): R
   const bootstrapEnabledRaw = (ch as any).companySimBootstrapEnabled ?? ch.companySimBootstrap?.enabled;
   const bootstrapModeRaw = (ch as any).companySimBootstrapMode ?? ch.companySimBootstrap?.mode;
   const bootstrapManifestPathRaw = (ch as any).companySimBootstrapManifestPath ?? ch.companySimBootstrap?.manifestPath;
+  const bootstrapTargetWorkspaceIdRaw = (ch as any).companySimBootstrapTargetWorkspaceId ?? ch.companySimBootstrap?.targetWorkspaceId;
+  const bootstrapTargetInviteCodeRaw = (ch as any).companySimBootstrapTargetInviteCode ?? ch.companySimBootstrap?.targetInviteCode;
   const hasBootstrapConfig = bootstrapEnabledRaw !== undefined
     || bootstrapModeRaw !== undefined
-    || typeof bootstrapManifestPathRaw === "string";
+    || typeof bootstrapManifestPathRaw === "string"
+    || typeof bootstrapTargetWorkspaceIdRaw === "string"
+    || typeof bootstrapTargetInviteCodeRaw === "string";
 
   return {
     accountId: resolvedAccountId,
@@ -209,6 +215,12 @@ export function resolveDecentChatAccount(cfg: any, accountId?: string | null): R
       enabled: bootstrapEnabledRaw !== false,
       mode: bootstrapModeRaw === "off" ? "off" : "runtime",
       manifestPath: typeof bootstrapManifestPathRaw === "string" ? bootstrapManifestPathRaw : undefined,
+      targetWorkspaceId: typeof bootstrapTargetWorkspaceIdRaw === "string" && bootstrapTargetWorkspaceIdRaw.trim()
+        ? bootstrapTargetWorkspaceIdRaw.trim()
+        : undefined,
+      targetInviteCode: typeof bootstrapTargetInviteCodeRaw === "string" && bootstrapTargetInviteCodeRaw.trim()
+        ? bootstrapTargetInviteCodeRaw.trim()
+        : undefined,
     } : undefined,
   };
 }
@@ -281,6 +293,8 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       companySimBootstrapEnabled: { label: "Company bootstrap enabled", advanced: true },
       companySimBootstrapMode: { label: "Company bootstrap mode", advanced: true, help: "runtime = materialize company workspace on account startup" },
       companySimBootstrapManifestPath: { label: "Company manifest path", advanced: true, help: "Path to company.yaml (supports relative paths from current working directory)" },
+      companySimBootstrapTargetWorkspaceId: { label: "Company target workspace id", advanced: true, help: "Pinned workspace id for runtime company bootstrap membership" },
+      companySimBootstrapTargetInviteCode: { label: "Company target invite code", advanced: true, help: "Pinned invite code for runtime company bootstrap membership" },
       invites: { label: "Invite URLs", advanced: true, help: "DecentChat invite URIs for workspaces to join on startup" },
     },
   },
@@ -302,6 +316,8 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       companySimBootstrap: account.companySimBootstrap?.enabled ? {
         mode: account.companySimBootstrap.mode,
         manifestPath: account.companySimBootstrap.manifestPath,
+        targetWorkspaceId: account.companySimBootstrap.targetWorkspaceId,
+        targetInviteCode: account.companySimBootstrap.targetInviteCode,
       } : undefined,
     }),
   },
@@ -438,6 +454,8 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       companySimBootstrap: account.companySimBootstrap?.enabled ? {
         mode: account.companySimBootstrap.mode,
         manifestPath: account.companySimBootstrap.manifestPath,
+        targetWorkspaceId: account.companySimBootstrap.targetWorkspaceId,
+        targetInviteCode: account.companySimBootstrap.targetInviteCode,
       } : undefined,
     }),
   },

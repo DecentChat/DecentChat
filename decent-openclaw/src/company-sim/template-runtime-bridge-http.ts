@@ -307,6 +307,12 @@ export function createCompanyTemplateBridgeHttpHandler(params: CompanyTemplateBr
 
       const template = getCompanySimTemplate(templateId, { templatesRoot: params.templatesRoot });
       const answers = normalizeAnswers(body.answers);
+      const targetWorkspaceId = typeof body.workspaceId === 'string' && body.workspaceId.trim()
+        ? body.workspaceId.trim()
+        : undefined;
+      const targetInviteCode = typeof body.inviteCode === 'string' && body.inviteCode.trim()
+        ? body.inviteCode.trim()
+        : undefined;
 
       const existingConfig = params.runtimeConfig.loadConfig();
       if (!isRecord(existingConfig)) {
@@ -317,6 +323,8 @@ export function createCompanyTemplateBridgeHttpHandler(params: CompanyTemplateBr
         template,
         config: existingConfig,
         answers,
+        targetWorkspaceId,
+        targetInviteCode,
         workspaceRootDir: params.workspaceRootDir,
         companySimsRootDir: params.companySimsRootDir,
       });

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SeedPhraseManager } from 'decent-protocol';
+import { InviteURI, SeedPhraseManager } from 'decent-protocol';
 
 import { planCompanyAgentTopology } from '../../src/company-sim/agent-topology.ts';
 import { parseCompanyManifestFile } from '../../src/company-sim/manifest.ts';
@@ -99,6 +99,74 @@ describe('company bootstrap runtime startup', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+
+  test('binds runtime bootstrap to invited workspace context instead of synthesized manifest workspace id', async () => {
+    const channel = await import('../../src/channel.ts');
+    const runtime = await import('../../src/runtime.ts');
+
+    const startupBootstrap = (channel as any).bootstrapDecentChatCompanySimForStartup as BootstrapFn | undefined;
+    const resetBootstrapState = (runtime as any).resetDecentChatRuntimeBootstrapStateForTests as ResetFn | undefined;
+
+    expect(typeof startupBootstrap).toBe('function');
+    expect(typeof resetBootstrapState).toBe('function');
+
+    const seedManager = new SeedPhraseManager();
+    const seeds = {
+      'team-manager': seedManager.generate().mnemonic,
+      'backend-dev': seedManager.generate().mnemonic,
+      tester: seedManager.generate().mnemonic,
+    };
+
+    const targetWorkspaceId = 'afcdbd3d-0473-4204-a72f-6b3b33271903';
+    const targetInviteCode = 'TV3KL5RW';
+    const inviteUri = InviteURI.create({
+      host: 'decentchat.app',
+      port: 443,
+      inviteCode: targetInviteCode,
+      workspaceId: targetWorkspaceId,
+      workspaceName: 'Live Workspace',
+    });
+
+    const root = mkdtempSync(join(tmpdir(), 'company-bootstrap-runtime-invite-workspace-'));
+    try {
+      const cfg = installCompanyAgentTopology(makeConfig(root, seeds), root);
+      for (const accountId of ['team-manager', 'backend-dev', 'tester']) {
+        cfg.channels.decentchat.accounts[accountId].invites = [inviteUri];
+      }
+
+      const account = channel.resolveDecentChatAccount(cfg, 'team-manager');
+      const logs: string[] = [];
+
+      await startupBootstrap!({
+        cfg,
+        accountId: 'team-manager',
+        account,
+        log: {
+          info: (message: string) => logs.push(message),
+        },
+      });
+
+      const dirs = {
+        'team-manager': join(root, 'team-manager'),
+        'backend-dev': join(root, 'backend-dev'),
+        tester: join(root, 'tester'),
+      };
+
+      for (const dir of Object.values(dirs)) {
+        const workspaces = readWorkspaces(dir);
+        expect(workspaces).toHaveLength(1);
+        expect(workspaces[0].id).toBe(targetWorkspaceId);
+        expect(workspaces[0].inviteCode).toBe(targetInviteCode);
+      }
+
+      expect(logs.some((entry) => entry.includes(`workspace=${targetWorkspaceId}`))).toBeTrue();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      resetBootstrapState?.();
+    }
+  });
+
 
   test('materializes deterministic workspace/channel membership and stays idempotent across restart', async () => {
     const channel = await import('../../src/channel.ts');

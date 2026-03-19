@@ -18,6 +18,8 @@ describe('company template installer', () => {
     try {
       const template = getCompanySimTemplate('software-studio', { templatesRoot: bundledTemplatesRoot });
       const managerSeed = seedManager.generate().mnemonic;
+      const targetWorkspaceId = 'afcdbd3d-0473-4204-a72f-6b3b33271903';
+      const targetInviteCode = 'TV3KL5RW';
 
       const baseConfig = {
         channels: {
@@ -52,6 +54,8 @@ describe('company template installer', () => {
           workspaceName: 'Acme HQ',
           backendAlias: 'Devon API',
         },
+        targetWorkspaceId,
+        targetInviteCode,
         workspaceRootDir: root,
         companySimsRootDir: join(root, 'company-sims'),
       });
@@ -72,10 +76,14 @@ describe('company template installer', () => {
         enabled: true,
         mode: 'runtime',
         manifestPath: firstInstall.manifestPath,
+        targetWorkspaceId,
+        targetInviteCode,
       });
       expect(decentchatConfig.companySimBootstrapEnabled).toBeTrue();
       expect(decentchatConfig.companySimBootstrapMode).toBe('runtime');
       expect(decentchatConfig.companySimBootstrapManifestPath).toBe(firstInstall.manifestPath);
+      expect(decentchatConfig.companySimBootstrapTargetWorkspaceId).toBe(targetWorkspaceId);
+      expect(decentchatConfig.companySimBootstrapTargetInviteCode).toBe(targetInviteCode);
 
       const accounts = decentchatConfig.accounts;
       expect(accounts.manager.alias).toBe('Mira Existing');
@@ -148,6 +156,8 @@ describe('company template installer', () => {
           workspaceName: 'Acme HQ',
           backendAlias: 'Devon API',
         },
+        targetWorkspaceId,
+        targetInviteCode,
         workspaceRootDir: root,
         companySimsRootDir: join(root, 'company-sims'),
       });

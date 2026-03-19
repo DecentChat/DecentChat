@@ -170,6 +170,7 @@ describe('company template runtime bridge http handler', () => {
       const req = createMockRequest('POST', COMPANY_TEMPLATE_BRIDGE_HTTP_PATH, {
         templateId: 'software-studio',
         workspaceId: 'ws-local-shell',
+        inviteCode: 'TV3KL5RW',
         answers: {
           companyName: 'Acme Platform',
           workspaceName: 'Acme HQ',
@@ -201,6 +202,10 @@ describe('company template runtime bridge http handler', () => {
       expect(writtenConfig.channels.decentchat.accounts.backend).toBeDefined();
       expect(writtenConfig.channels.decentchat.accounts.qa).toBeDefined();
       expect(writtenConfig.channels.decentchat.companySimBootstrap.mode).toBe('runtime');
+      expect(writtenConfig.channels.decentchat.companySimBootstrap.targetWorkspaceId).toBe('ws-local-shell');
+      expect(writtenConfig.channels.decentchat.companySimBootstrap.targetInviteCode).toBe('TV3KL5RW');
+      expect(writtenConfig.channels.decentchat.companySimBootstrapTargetWorkspaceId).toBe('ws-local-shell');
+      expect(writtenConfig.channels.decentchat.companySimBootstrapTargetInviteCode).toBe('TV3KL5RW');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -861,6 +861,7 @@ export class NodeXenaPeer {
       template,
       config: existingConfig,
       answers: normalizeTemplateInstallAnswers(params.answers),
+      targetWorkspaceId: params.workspaceId,
       ...(control.workspaceRootDir ? { workspaceRootDir: control.workspaceRootDir } : {}),
       ...(control.companySimsRootDir ? { companySimsRootDir: control.companySimsRootDir } : {}),
     });

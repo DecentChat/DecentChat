@@ -29,6 +29,8 @@ export type DecentChatCompanySimBootstrapConfig = {
   enabled?: boolean;
   mode?: 'runtime' | 'off';
   manifestPath?: string;
+  targetWorkspaceId?: string;
+  targetInviteCode?: string;
 };
 
 export type DecentChatCompanySimConfig = {
@@ -76,6 +78,8 @@ export type DecentChatChannelConfig = {
   companySimBootstrapEnabled?: boolean;
   companySimBootstrapMode?: 'runtime' | 'off';
   companySimBootstrapManifestPath?: string;
+  companySimBootstrapTargetWorkspaceId?: string;
+  companySimBootstrapTargetInviteCode?: string;
   defaultAccount?: string;
   accounts?: Record<string, Omit<DecentChatChannelConfig, 'accounts'>>;
 };
@@ -124,5 +128,7 @@ export type ResolvedDecentChatAccount = {
     enabled: boolean;
     mode: 'runtime' | 'off';
     manifestPath?: string;
+    targetWorkspaceId?: string;
+    targetInviteCode?: string;
   };
 };

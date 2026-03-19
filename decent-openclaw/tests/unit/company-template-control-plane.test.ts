@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -179,6 +179,94 @@ describe('NodeXenaPeer company-template control plane', () => {
     expect(response?.msg?.sync?.ok).toBeFalse();
     expect(response?.msg?.sync?.error?.code).toBe('forbidden');
   });
+
+
+  test('default control-plane installer pins bootstrap target workspace id from authorized install request', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'openclaw-company-control-default-install-'));
+
+    const loadConfig = mock(() => ({
+      channels: {
+        decentchat: {
+          accounts: {
+            manager: {
+              seedPhrase: VALID_SEED,
+              alias: 'Manager',
+              dataDir: join(root, 'manager-data'),
+            },
+          },
+        },
+      },
+    }));
+    const writeConfigFile = mock(async (_next: Record<string, unknown>) => {});
+
+    const peer = new NodeXenaPeer({
+      account: makeAccount(),
+      onIncomingMessage: async () => {},
+      onReply: () => {},
+      companyTemplateControl: {
+        loadConfig,
+        writeConfigFile,
+        workspaceRootDir: root,
+        companySimsRootDir: join(root, 'company-sims'),
+      },
+    });
+
+    const sent: Array<{ peerId: string; msg: any }> = [];
+    (peer as any).transport = {
+      send: (peerId: string, msg: any) => {
+        sent.push({ peerId, msg });
+        return true;
+      },
+    };
+    (peer as any).syncProtocol = {
+      handleMessage: async () => {},
+    };
+    (peer as any).messageProtocol = {};
+    (peer as any).workspaceManager = {
+      getWorkspace: (workspaceId: string) => workspaceId === 'afcdbd3d-0473-4204-a72f-6b3b33271903'
+        ? {
+          id: workspaceId,
+          createdBy: 'owner-peer',
+          members: [
+            { peerId: 'owner-peer', role: 'owner' },
+            { peerId: 'host-peer', role: 'member' },
+          ],
+        }
+        : null,
+      isBanned: () => false,
+    };
+
+    try {
+      await (peer as any).handlePeerMessage('owner-peer', {
+        type: 'workspace-sync',
+        workspaceId: 'afcdbd3d-0473-4204-a72f-6b3b33271903',
+        sync: {
+          type: 'company-template-install-request',
+          requestId: 'req-default-install',
+          templateId: 'software-studio',
+          answers: {
+            companyName: 'Acme Platform',
+            workspaceName: 'Acme HQ',
+          },
+        },
+      });
+
+      expect(loadConfig).toHaveBeenCalledTimes(1);
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+
+      const writtenConfig = writeConfigFile.mock.calls[0]?.[0] as any;
+      expect(writtenConfig.channels.decentchat.companySimBootstrap.targetWorkspaceId)
+        .toBe('afcdbd3d-0473-4204-a72f-6b3b33271903');
+      expect(writtenConfig.channels.decentchat.companySimBootstrapTargetWorkspaceId)
+        .toBe('afcdbd3d-0473-4204-a72f-6b3b33271903');
+
+      const response = sent.find((entry) => entry.msg?.type === 'workspace-sync' && entry.msg?.sync?.requestId === 'req-default-install');
+      expect(response?.msg?.sync?.ok).toBeTrue();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
 
   test('serializes concurrent install requests to avoid config write races', async () => {
     const events: string[] = [];

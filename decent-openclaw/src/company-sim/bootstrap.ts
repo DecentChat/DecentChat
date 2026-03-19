@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { SeedPhraseManager } from 'decent-protocol';
+import { InviteURI, SeedPhraseManager } from 'decent-protocol';
 import type { OpenClawConfigShape, OpenClawRouteBindingConfig, ResolvedDecentChatAccount } from '../types.ts';
 import { planCompanyAgentTopology } from './agent-topology.ts';
 import { parseCompanyManifestFile } from './manifest.ts';
@@ -35,6 +35,13 @@ export interface CompanyBootstrapRuntimeResult {
   memberPeerIds: Record<string, string>;
   accountIds: string[];
 }
+
+
+type WorkspaceBootstrapTarget = {
+  workspaceId: string;
+  inviteCode?: string;
+  source: 'config' | 'invite' | 'derived';
+};
 
 export function resolveCompanyManifestPath(manifestPath: string): string {
   const trimmed = manifestPath.trim();
@@ -143,6 +150,89 @@ function uniqueStrings(values: string[]): string[] {
   return out;
 }
 
+
+function readNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function parseInviteWorkspaceContext(inviteUri: string): { workspaceId: string; inviteCode?: string } | undefined {
+  const normalizedInvite = readNonEmptyString(inviteUri);
+  if (!normalizedInvite) return undefined;
+
+  try {
+    const decoded = InviteURI.decode(normalizedInvite);
+    const workspaceId = readNonEmptyString(decoded.workspaceId);
+    if (!workspaceId) return undefined;
+    return {
+      workspaceId,
+      inviteCode: readNonEmptyString(decoded.inviteCode),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveWorkspaceBootstrapTarget(plan: CompanyBootstrapPlan): WorkspaceBootstrapTarget {
+  const configuredTargets = uniqueStrings(
+    plan.employees
+      .map((employee) => readNonEmptyString(employee.account.companySimBootstrap?.targetWorkspaceId) ?? '')
+      .filter(Boolean),
+  );
+
+  if (configuredTargets.length > 1) {
+    throw new Error(
+      `Company bootstrap found conflicting target workspace ids across configured accounts: ${configuredTargets.join(', ')}`,
+    );
+  }
+
+  if (configuredTargets.length === 1) {
+    const configuredWorkspaceId = configuredTargets[0] as string;
+    const configuredInviteCode = plan.employees
+      .map((employee) => readNonEmptyString(employee.account.companySimBootstrap?.targetInviteCode))
+      .find((value): value is string => Boolean(value));
+
+    return {
+      workspaceId: configuredWorkspaceId,
+      ...(configuredInviteCode ? { inviteCode: configuredInviteCode } : {}),
+      source: 'config',
+    };
+  }
+
+  const inviteTargets = new Map<string, { workspaceId: string; inviteCode?: string }>();
+  for (const employee of plan.employees) {
+    for (const invite of employee.account.invites) {
+      const parsedInvite = parseInviteWorkspaceContext(invite);
+      if (!parsedInvite) continue;
+
+      const existing = inviteTargets.get(parsedInvite.workspaceId);
+      if (!existing) {
+        inviteTargets.set(parsedInvite.workspaceId, parsedInvite);
+      } else if (!existing.inviteCode && parsedInvite.inviteCode) {
+        inviteTargets.set(parsedInvite.workspaceId, {
+          workspaceId: existing.workspaceId,
+          inviteCode: parsedInvite.inviteCode,
+        });
+      }
+    }
+  }
+
+  if (inviteTargets.size === 1) {
+    const inviteTarget = [...inviteTargets.values()][0];
+    return {
+      workspaceId: inviteTarget.workspaceId,
+      ...(inviteTarget.inviteCode ? { inviteCode: inviteTarget.inviteCode } : {}),
+      source: 'invite',
+    };
+  }
+
+  return {
+    workspaceId: stableId('ws', plan.companyId, plan.workspaceName),
+    source: 'derived',
+  };
+}
+
 function resolveCompanyWorkspaceRootFromAccount(account: ResolvedDecentChatAccount): string | undefined {
   const manifestPath = account.companySim?.manifestPath?.trim();
   if (!manifestPath) return undefined;
@@ -238,7 +328,8 @@ export async function ensureCompanyBootstrapRuntime(params: {
     accountIds: params.accountIds,
   });
 
-  const workspaceId = stableId('ws', plan.companyId, plan.workspaceName);
+  const workspaceTarget = resolveWorkspaceBootstrapTarget(plan);
+  const workspaceId = workspaceTarget.workspaceId;
   const workspaceChannels = uniqueStrings(plan.channels);
   const channelIds = Object.fromEntries(
     workspaceChannels.map((channelName) => [channelName, stableId('ch', workspaceId, channelName)]),
@@ -279,14 +370,16 @@ export async function ensureCompanyBootstrapRuntime(params: {
     const workspaces = readWorkspaces(dataDir);
 
     const workspaceById = workspaces.find((workspace) => workspace && typeof workspace === 'object' && workspace.id === workspaceId);
-    const workspaceByName = workspaces
-      .filter((workspace) => workspace && typeof workspace === 'object' && workspace.name === plan.workspaceName)
-      .sort((a, b) => Number(a?.createdAt ?? 0) - Number(b?.createdAt ?? 0))[0];
+    const workspaceByName = workspaceTarget.source === 'derived'
+      ? workspaces
+        .filter((workspace) => workspace && typeof workspace === 'object' && workspace.name === plan.workspaceName)
+        .sort((a, b) => Number(a?.createdAt ?? 0) - Number(b?.createdAt ?? 0))[0]
+      : undefined;
 
     const workspace = workspaceById ?? workspaceByName ?? {
       id: workspaceId,
       name: plan.workspaceName,
-      inviteCode: inviteCodeForWorkspace(workspaceId),
+      inviteCode: workspaceTarget.inviteCode ?? inviteCodeForWorkspace(workspaceId),
       createdBy: ownerPeerId,
       createdAt: Date.now(),
       members: [],
@@ -301,6 +394,9 @@ export async function ensureCompanyBootstrapRuntime(params: {
 
     if (!Array.isArray(workspace.members)) workspace.members = [];
     if (!Array.isArray(workspace.channels)) workspace.channels = [];
+    if (!readNonEmptyString(workspace.inviteCode)) {
+      workspace.inviteCode = workspaceTarget.inviteCode ?? inviteCodeForWorkspace(workspaceId);
+    }
 
     const memberByPeerId = new Map<string, any>();
     for (const member of workspace.members) {

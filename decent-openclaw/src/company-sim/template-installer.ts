@@ -29,6 +29,8 @@ export interface InstallCompanyTemplateParams<TConfig extends Record<string, unk
   roleSelection?: CompanyTemplateRoleSelection;
   roleOverrides?: Record<string, CompanyTemplateRoleOverrides>;
   companyId?: string;
+  targetWorkspaceId?: string;
+  targetInviteCode?: string;
   workspaceRootDir?: string;
   companySimsRootDir?: string;
 }
@@ -251,6 +253,8 @@ function ensureDecentChatAccounts<TConfig extends Record<string, unknown>>(param
   manifest: CompanyManifest;
   manifestPath: string;
   companyDirPath: string;
+  targetWorkspaceId?: string;
+  targetInviteCode?: string;
 }): {
   config: TConfig;
   createdAccountIds: string[];
@@ -367,6 +371,8 @@ function ensureDecentChatAccounts<TConfig extends Record<string, unknown>>(param
   const bootstrapEnabledRaw = (decentchat as any).companySimBootstrapEnabled ?? existingBootstrap.enabled;
   const bootstrapModeRaw = (decentchat as any).companySimBootstrapMode ?? existingBootstrap.mode;
   const bootstrapManifestPathRaw = (decentchat as any).companySimBootstrapManifestPath ?? existingBootstrap.manifestPath;
+  const bootstrapTargetWorkspaceIdRaw = (decentchat as any).companySimBootstrapTargetWorkspaceId ?? existingBootstrap.targetWorkspaceId;
+  const bootstrapTargetInviteCodeRaw = (decentchat as any).companySimBootstrapTargetInviteCode ?? existingBootstrap.targetInviteCode;
 
   const bootstrapEnabled = bootstrapEnabledRaw === undefined
     ? true
@@ -377,6 +383,10 @@ function ensureDecentChatAccounts<TConfig extends Record<string, unknown>>(param
     : 'runtime';
 
   const bootstrapManifestPath = readNonEmptyString(bootstrapManifestPathRaw) ?? params.manifestPath;
+  const bootstrapTargetWorkspaceId = readNonEmptyString(params.targetWorkspaceId)
+    ?? readNonEmptyString(bootstrapTargetWorkspaceIdRaw);
+  const bootstrapTargetInviteCode = readNonEmptyString(params.targetInviteCode)
+    ?? readNonEmptyString(bootstrapTargetInviteCodeRaw);
 
   decentchat.accounts = accounts;
   decentchat.companySimBootstrap = {
@@ -384,6 +394,8 @@ function ensureDecentChatAccounts<TConfig extends Record<string, unknown>>(param
     enabled: bootstrapEnabled,
     mode: bootstrapMode,
     manifestPath: bootstrapManifestPath,
+    ...(bootstrapTargetWorkspaceId ? { targetWorkspaceId: bootstrapTargetWorkspaceId } : {}),
+    ...(bootstrapTargetInviteCode ? { targetInviteCode: bootstrapTargetInviteCode } : {}),
   };
 
   if ((decentchat as any).companySimBootstrapEnabled === undefined) {
@@ -394,6 +406,12 @@ function ensureDecentChatAccounts<TConfig extends Record<string, unknown>>(param
   }
   if (!readNonEmptyString((decentchat as any).companySimBootstrapManifestPath)) {
     (decentchat as any).companySimBootstrapManifestPath = bootstrapManifestPath;
+  }
+  if (bootstrapTargetWorkspaceId) {
+    (decentchat as any).companySimBootstrapTargetWorkspaceId = bootstrapTargetWorkspaceId;
+  }
+  if (bootstrapTargetInviteCode) {
+    (decentchat as any).companySimBootstrapTargetInviteCode = bootstrapTargetInviteCode;
   }
 
   channels.decentchat = decentchat;
@@ -444,6 +462,8 @@ export function installCompanyTemplate<TConfig extends Record<string, unknown>>(
     manifest,
     manifestPath,
     companyDirPath,
+    targetWorkspaceId: params.targetWorkspaceId,
+    targetInviteCode: params.targetInviteCode,
   });
 
   const mergedConfig = materializeCompanyOpenClawConfig({
