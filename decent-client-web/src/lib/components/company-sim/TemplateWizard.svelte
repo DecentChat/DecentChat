@@ -61,7 +61,6 @@
     advancedJson = JSON.stringify({
       templateId: template.id,
       answers,
-    workspaceName = null,
     }, null, 2);
     advancedJsonError = null;
   }
