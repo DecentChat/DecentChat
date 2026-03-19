@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ChannelPlugin } from "openclaw/plugin-sdk";
 import { z } from "zod";
 
@@ -87,6 +88,39 @@ export function resolveDefaultDecentChatAccountId(cfg: any): string {
   if (preferred && ids.includes(preferred)) return preferred;
   if (ids.includes(DEFAULT_ACCOUNT_ID)) return DEFAULT_ACCOUNT_ID;
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
+}
+
+function normalizeStringList(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function buildCompanyBootstrapRuntimeScope(cfg: any, manifestPath: string): string {
+  const accounts = listDecentChatAccountIds(cfg).map((accountId) => {
+    const account = resolveDecentChatAccount(cfg, accountId);
+    const bootstrap = account.companySimBootstrap;
+    return {
+      accountId,
+      seedFingerprint: account.seedPhrase
+        ? createHash('sha256').update(account.seedPhrase).digest('hex').slice(0, 16)
+        : '',
+      dataDir: account.dataDir?.trim() ?? '',
+      companySimManifestPath: account.companySim?.manifestPath?.trim() ?? '',
+      invites: normalizeStringList(account.invites),
+      bootstrap: bootstrap ? {
+        enabled: bootstrap.enabled !== false,
+        mode: bootstrap.mode,
+        manifestPath: bootstrap.manifestPath?.trim() ?? '',
+        targetWorkspaceId: bootstrap.targetWorkspaceId?.trim() ?? '',
+        targetInviteCode: bootstrap.targetInviteCode?.trim() ?? '',
+      } : null,
+    };
+  });
+
+  return createHash('sha256')
+    .update(JSON.stringify({ manifestPath, accounts }))
+    .digest('hex')
+    .slice(0, 20);
 }
 
 function mergeObject<T extends Record<string, any> | undefined>(base: T, override: T): T | undefined {
@@ -245,7 +279,9 @@ export async function bootstrapDecentChatCompanySimForStartup(params: {
   }
 
   const resolvedManifestPath = resolveCompanyManifestPath(manifestPath);
-  await runDecentChatBootstrapOnce(buildDecentChatRuntimeBootstrapKey(resolvedManifestPath), async () => {
+  const runtimeScope = buildCompanyBootstrapRuntimeScope(params.cfg, resolvedManifestPath);
+
+  await runDecentChatBootstrapOnce(buildDecentChatRuntimeBootstrapKey(resolvedManifestPath, runtimeScope), async () => {
     assertCompanyBootstrapAgentInstallation({
       manifestPath: resolvedManifestPath,
       cfg: params.cfg as OpenClawConfigShape,

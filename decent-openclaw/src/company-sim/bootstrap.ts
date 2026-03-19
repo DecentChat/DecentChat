@@ -330,6 +330,10 @@ export async function ensureCompanyBootstrapRuntime(params: {
 
   const workspaceTarget = resolveWorkspaceBootstrapTarget(plan);
   const workspaceId = workspaceTarget.workspaceId;
+  const derivedWorkspaceId = stableId('ws', plan.companyId, plan.workspaceName);
+  const staleSyntheticWorkspaceId = workspaceTarget.source !== 'derived' && derivedWorkspaceId !== workspaceId
+    ? derivedWorkspaceId
+    : undefined;
   const workspaceChannels = uniqueStrings(plan.channels);
   const channelIds = Object.fromEntries(
     workspaceChannels.map((channelName) => [channelName, stableId('ch', workspaceId, channelName)]),
@@ -367,7 +371,13 @@ export async function ensureCompanyBootstrapRuntime(params: {
 
   for (const identity of identities) {
     const dataDir = resolveAccountDataDir(identity.account);
-    const workspaces = readWorkspaces(dataDir);
+    let workspaces = readWorkspaces(dataDir);
+
+    if (staleSyntheticWorkspaceId) {
+      workspaces = workspaces.filter(
+        (workspace) => !(workspace && typeof workspace === 'object' && workspace.id === staleSyntheticWorkspaceId),
+      );
+    }
 
     const workspaceById = workspaces.find((workspace) => workspace && typeof workspace === 'object' && workspace.id === workspaceId);
     const workspaceByName = workspaceTarget.source === 'derived'

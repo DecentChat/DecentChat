@@ -168,6 +168,65 @@ describe('company bootstrap runtime startup', () => {
   });
 
 
+  test('re-runs bootstrap when workspace target changes and prunes stale derived workspace state', async () => {
+    const channel = await import('../../src/channel.ts');
+    const runtime = await import('../../src/runtime.ts');
+
+    const startupBootstrap = (channel as any).bootstrapDecentChatCompanySimForStartup as BootstrapFn | undefined;
+    const resetBootstrapState = (runtime as any).resetDecentChatRuntimeBootstrapStateForTests as ResetFn | undefined;
+
+    expect(typeof startupBootstrap).toBe('function');
+    expect(typeof resetBootstrapState).toBe('function');
+
+    const seedManager = new SeedPhraseManager();
+    const seeds = {
+      'team-manager': seedManager.generate().mnemonic,
+      'backend-dev': seedManager.generate().mnemonic,
+      tester: seedManager.generate().mnemonic,
+    };
+
+    const targetWorkspaceId = 'afcdbd3d-0473-4204-a72f-6b3b33271903';
+    const targetInviteCode = 'TV3KL5RW';
+
+    const root = mkdtempSync(join(tmpdir(), 'company-bootstrap-runtime-target-migration-'));
+    try {
+      const cfg = installCompanyAgentTopology(makeConfig(root, seeds), root);
+
+      const firstAccount = channel.resolveDecentChatAccount(cfg, 'team-manager');
+      await startupBootstrap!({ cfg, accountId: 'team-manager', account: firstAccount });
+
+      const dirs = {
+        'team-manager': join(root, 'team-manager'),
+        'backend-dev': join(root, 'backend-dev'),
+        tester: join(root, 'tester'),
+      };
+
+      const derivedWorkspaceId = (() => {
+        const workspaces = readWorkspaces(dirs['team-manager']);
+        expect(workspaces).toHaveLength(1);
+        return workspaces[0].id;
+      })();
+
+      cfg.channels.decentchat.companySimBootstrapTargetWorkspaceId = targetWorkspaceId;
+      cfg.channels.decentchat.companySimBootstrapTargetInviteCode = targetInviteCode;
+
+      const migratedAccount = channel.resolveDecentChatAccount(cfg, 'team-manager');
+      await startupBootstrap!({ cfg, accountId: 'team-manager', account: migratedAccount });
+
+      for (const dir of Object.values(dirs)) {
+        const workspaces = readWorkspaces(dir);
+        expect(workspaces).toHaveLength(1);
+        expect(workspaces[0].id).toBe(targetWorkspaceId);
+        expect(workspaces[0].inviteCode).toBe(targetInviteCode);
+        expect(workspaces[0].id).not.toBe(derivedWorkspaceId);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      resetBootstrapState?.();
+    }
+  });
+
+
   test('materializes deterministic workspace/channel membership and stays idempotent across restart', async () => {
     const channel = await import('../../src/channel.ts');
     const runtime = await import('../../src/runtime.ts');

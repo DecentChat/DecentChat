@@ -16,7 +16,11 @@ export function getDecentChatRuntime(): PluginRuntime {
   return runtime;
 }
 
-export function buildDecentChatRuntimeBootstrapKey(manifestPath: string): string {
+export function buildDecentChatRuntimeBootstrapKey(manifestPath: string, scope?: string): string {
+  const normalizedScope = scope?.trim();
+  if (normalizedScope) {
+    return `runtime:${manifestPath}:${normalizedScope}`;
+  }
   return `runtime:${manifestPath}`;
 }
 

@@ -3,7 +3,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { NodeXenaPeer } from "./peer/NodeXenaPeer.js";
 import { getDecentChatRuntime } from "./runtime.js";
 import { resolveCompanyPromptContextForAccount } from "./company-sim/prompt-context.js";
 import { decideCompanyParticipation } from "./company-sim/router.js";
