@@ -61,6 +61,9 @@ describe('company template operator install flow', () => {
       expect(install.manifest.name).toBe('Acme Platform');
       expect(install.manifest.workspace.name).toBe('Acme HQ');
       expect(install.summary.createdAccountIds).toEqual(['backend', 'qa']);
+      expect(install.summary.provisionedAccountIds).toEqual(['backend', 'qa']);
+      expect(install.summary.onlineReadyAccountIds).toEqual(['backend', 'manager', 'qa']);
+      expect(install.summary.manualActionRequiredAccountIds).toEqual([]);
 
       const channelConfig = (install.config.channels as any).decentchat;
       expect(channelConfig.companySimBootstrap).toMatchObject({
@@ -69,15 +72,9 @@ describe('company template operator install flow', () => {
         manifestPath: install.manifestPath,
       });
 
-      const accountSeeds: Record<string, string> = {
-        backend: seedManager.generate().mnemonic,
-        qa: seedManager.generate().mnemonic,
-      };
-
       const accounts = channelConfig.accounts as Record<string, any>;
-      for (const accountId of install.summary.createdAccountIds) {
-        accounts[accountId].seedPhrase = accountSeeds[accountId];
-      }
+      expect(seedManager.validate(accounts.backend.seedPhrase).valid).toBeTrue();
+      expect(seedManager.validate(accounts.qa.seedPhrase).valid).toBeTrue();
 
       accounts.backend.dataDir = join(root, 'backend-data');
       accounts.qa.dataDir = join(root, 'qa-data');
@@ -88,6 +85,12 @@ describe('company template operator install flow', () => {
       });
 
       const managerAccount = resolveDecentChatAccount(install.config, 'manager');
+      const backendAccount = resolveDecentChatAccount(install.config, 'backend');
+      const qaAccount = resolveDecentChatAccount(install.config, 'qa');
+      expect(managerAccount.configured).toBeTrue();
+      expect(backendAccount.configured).toBeTrue();
+      expect(qaAccount.configured).toBeTrue();
+
       await bootstrapDecentChatCompanySimForStartup({
         cfg: install.config,
         accountId: 'manager',

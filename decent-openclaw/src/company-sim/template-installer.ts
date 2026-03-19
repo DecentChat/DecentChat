@@ -1,6 +1,8 @@
+import { createHash, createHmac } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
+import { SeedPhraseManager } from 'decent-protocol';
 
 import {
   planCompanyAgentTopology,
@@ -37,6 +39,9 @@ export interface CompanyTemplateInstallSummary {
   manifestPath: string;
   createdAgentIds: string[];
   createdAccountIds: string[];
+  provisionedAccountIds: string[];
+  onlineReadyAccountIds: string[];
+  manualActionRequiredAccountIds: string[];
   createdChannels: string[];
 }
 
@@ -156,12 +161,103 @@ function readNonEmptyString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+type SeedPhraseManagerWithInternals = SeedPhraseManager & {
+  entropyToMnemonic?: (entropy: Uint8Array) => string;
+};
+
+function listConfiguredSeedPhrases(config: Record<string, unknown>): string[] {
+  const channels = isRecord(config.channels) ? config.channels : undefined;
+  const decentchat = channels && isRecord(channels.decentchat) ? channels.decentchat : undefined;
+  if (!decentchat) return [];
+
+  const seedPhrases: string[] = [];
+
+  const channelSeedPhrase = readNonEmptyString(decentchat.seedPhrase);
+  if (channelSeedPhrase) seedPhrases.push(channelSeedPhrase);
+
+  const accounts = isRecord(decentchat.accounts) ? decentchat.accounts : undefined;
+  if (accounts) {
+    for (const account of Object.values(accounts)) {
+      if (!isRecord(account)) continue;
+      const seedPhrase = readNonEmptyString(account.seedPhrase);
+      if (seedPhrase) seedPhrases.push(seedPhrase);
+    }
+  }
+
+  return uniqueSorted(seedPhrases);
+}
+
+function buildProvisioningSalt(params: {
+  config: Record<string, unknown>;
+  manifest: CompanyManifest;
+  manifestPath: string;
+  companyDirPath: string;
+}): string {
+  const hash = createHash('sha256');
+  hash.update('company-sim-account-provisioning:v1\n');
+  hash.update(params.manifest.id);
+  hash.update('\n');
+
+  const configuredSeedPhrases = listConfiguredSeedPhrases(params.config);
+  if (configuredSeedPhrases.length > 0) {
+    hash.update('seed-material\n');
+    for (const seedPhrase of configuredSeedPhrases) {
+      hash.update(seedPhrase);
+      hash.update('\n');
+    }
+  } else {
+    hash.update('manifest-path-fallback\n');
+    hash.update(params.manifestPath);
+    hash.update('\n');
+    hash.update(params.companyDirPath);
+    hash.update('\n');
+  }
+
+  return hash.digest('hex');
+}
+
+function deriveDeterministicSeedPhrase(params: {
+  seedManager: SeedPhraseManager;
+  provisioningSalt: string;
+  manifest: CompanyManifest;
+  employeeId: string;
+  accountId: string;
+}): string {
+  const entropy = createHmac('sha256', params.provisioningSalt)
+    .update('company-sim-account:v1\n')
+    .update(params.manifest.id)
+    .update('\n')
+    .update(params.employeeId)
+    .update('\n')
+    .update(params.accountId)
+    .digest()
+    .subarray(0, 16);
+
+  const seedManagerWithInternals = params.seedManager as SeedPhraseManagerWithInternals;
+  if (typeof seedManagerWithInternals.entropyToMnemonic !== 'function') {
+    throw new Error('SeedPhraseManager entropy encoder unavailable for deterministic account provisioning');
+  }
+
+  return seedManagerWithInternals.entropyToMnemonic(new Uint8Array(entropy));
+}
+
+function isSeedPhraseValid(seedManager: SeedPhraseManager, seedPhrase: string | undefined): boolean {
+  if (!seedPhrase) return false;
+  return seedManager.validate(seedPhrase).valid;
+}
+
 function ensureDecentChatAccounts<TConfig extends Record<string, unknown>>(params: {
   config: TConfig;
   manifest: CompanyManifest;
   manifestPath: string;
   companyDirPath: string;
-}): { config: TConfig; createdAccountIds: string[] } {
+}): {
+  config: TConfig;
+  createdAccountIds: string[];
+  provisionedAccountIds: string[];
+  onlineReadyAccountIds: string[];
+  manualActionRequiredAccountIds: string[];
+} {
   const nextConfig: Record<string, unknown> = {
     ...params.config,
   };
@@ -186,7 +282,18 @@ function ensureDecentChatAccounts<TConfig extends Record<string, unknown>>(param
     ...existingAccounts,
   };
 
+  const seedManager = new SeedPhraseManager();
+  const provisioningSalt = buildProvisioningSalt({
+    config: params.config,
+    manifest: params.manifest,
+    manifestPath: params.manifestPath,
+    companyDirPath: params.companyDirPath,
+  });
+
   const createdAccountIds: string[] = [];
+  const provisionedAccountIds: string[] = [];
+  const onlineReadyAccountIds: string[] = [];
+  const manualActionRequiredAccountIds: string[] = [];
 
   for (const employee of params.manifest.employees) {
     const existingAccount = isRecord(accounts[employee.accountId])
@@ -203,8 +310,29 @@ function ensureDecentChatAccounts<TConfig extends Record<string, unknown>>(param
 
     const roleFilesDir = join(params.companyDirPath, 'employees', employee.id);
 
+    const existingSeedPhrase = readNonEmptyString(existingAccount?.seedPhrase);
+    const seedPhrase = existingSeedPhrase
+      ?? deriveDeterministicSeedPhrase({
+        seedManager,
+        provisioningSalt,
+        manifest: params.manifest,
+        employeeId: employee.id,
+        accountId: employee.accountId,
+      });
+
+    if (!existingSeedPhrase) {
+      provisionedAccountIds.push(employee.accountId);
+    }
+
+    if (isSeedPhraseValid(seedManager, seedPhrase)) {
+      onlineReadyAccountIds.push(employee.accountId);
+    } else {
+      manualActionRequiredAccountIds.push(employee.accountId);
+    }
+
     accounts[employee.accountId] = {
       ...(existingAccount ?? {}),
+      seedPhrase,
       alias: typeof existingAccount?.alias === 'string' && existingAccount.alias.trim()
         ? existingAccount.alias
         : employee.alias,
@@ -274,6 +402,9 @@ function ensureDecentChatAccounts<TConfig extends Record<string, unknown>>(param
   return {
     config: nextConfig as TConfig,
     createdAccountIds: uniqueSorted(createdAccountIds),
+    provisionedAccountIds: uniqueSorted(provisionedAccountIds),
+    onlineReadyAccountIds: uniqueSorted(onlineReadyAccountIds),
+    manualActionRequiredAccountIds: uniqueSorted(manualActionRequiredAccountIds),
   };
 }
 
@@ -334,6 +465,9 @@ export function installCompanyTemplate<TConfig extends Record<string, unknown>>(
     manifestPath,
     createdAgentIds,
     createdAccountIds: accountMaterialization.createdAccountIds,
+    provisionedAccountIds: accountMaterialization.provisionedAccountIds,
+    onlineReadyAccountIds: accountMaterialization.onlineReadyAccountIds,
+    manualActionRequiredAccountIds: accountMaterialization.manualActionRequiredAccountIds,
     createdChannels: uniqueSorted(manifest.workspace.channels),
   };
 

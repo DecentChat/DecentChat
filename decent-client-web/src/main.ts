@@ -79,6 +79,12 @@ import {
   getLocalCompanyTemplate,
   listLocalCompanyTemplates,
 } from './lib/company-sim/templateCatalog';
+import { describeCompanyTemplateInstallStatus } from './lib/company-sim/installStatus';
+import {
+  normalizeRuntimeBridgeInstallResult,
+  resolveCompanyTemplateRuntimeBridge,
+} from './lib/company-sim/runtimeBridge';
+import type { CompanyTemplateProvisioningMode } from './ui/types';
 import type { AppSettings } from './storage/types';
 import { SeedPhraseManager as _SeedPhraseManager, IdentityManager as _IdentityManager } from 'decent-protocol';
 const _spm = new _SeedPhraseManager();
@@ -368,40 +374,24 @@ async function init(): Promise<void> {
       state.activeChannelId = previousChannelId;
     }
 
-    if (!Array.isArray(workspace.members)) workspace.members = [];
+    const runtimeBridge = resolveCompanyTemplateRuntimeBridge();
+    const runtimeInstall = runtimeBridge?.installTemplate
+      ? normalizeRuntimeBridgeInstallResult(await runtimeBridge.installTemplate(request))
+      : null;
 
-    const createdMemberPeerIds: string[] = [];
-    const existingMemberIds = new Set(workspace.members.map((member: any) => member.peerId));
-    const managerByRoleId = new Map(preview.members.map((member) => [member.roleId, member.peerId]));
+    const provisioningMode: CompanyTemplateProvisioningMode = runtimeInstall?.provisioningMode ?? 'workspace-shell';
+    const createdAccountIds = runtimeInstall?.createdAccountIds ?? [];
+    const provisionedAccountIds = runtimeInstall?.provisionedAccountIds ?? [];
+    const onlineReadyAccountIds = runtimeInstall?.onlineReadyAccountIds ?? [];
+    const manualActionRequiredAccountIds = runtimeInstall?.manualActionRequiredAccountIds ?? [];
 
-    for (const member of preview.members) {
-      if (existingMemberIds.has(member.peerId)) continue;
-
-      const managerPeerId = member.managerRoleId
-        ? managerByRoleId.get(member.managerRoleId)
-        : undefined;
-
-      workspace.members.push({
-        peerId: member.peerId,
-        alias: member.alias,
-        publicKey: `pk-${member.peerId}`,
-        signingPublicKey: `spk-${member.peerId}`,
-        identityId: member.peerId,
-        devices: [],
-        role: 'member',
-        isBot: true,
-        allowWorkspaceDMs: false,
-        companySim: {
-          automationKind: 'openclaw-agent',
-          roleTitle: member.roleTitle,
-          teamId: member.teamId,
-          managerPeerId,
-        },
-      } as any);
-
-      existingMemberIds.add(member.peerId);
-      createdMemberPeerIds.push(member.peerId);
-    }
+    const status = describeCompanyTemplateInstallStatus({
+      provisioningMode,
+      provisionedAccountIds,
+      onlineReadyAccountIds,
+      manualActionRequiredAccountIds,
+      manualActionItems: runtimeInstall?.manualActionItems,
+    });
 
     await ctrl.persistWorkspace(workspace.id);
 
@@ -412,9 +402,17 @@ async function init(): Promise<void> {
       workspaceName: preview.workspaceName,
       companyName: preview.companyName,
       createdChannelNames,
-      createdMemberPeerIds,
+      createdMemberPeerIds: [],
       channelNames: preview.channelNames,
       members: preview.members,
+      provisioningMode,
+      statusHeadline: status.statusHeadline,
+      statusDetail: status.statusDetail,
+      createdAccountIds,
+      provisionedAccountIds,
+      onlineReadyAccountIds,
+      manualActionRequiredAccountIds,
+      manualActionItems: status.manualActionItems,
     };
   };
 
@@ -530,7 +528,13 @@ async function init(): Promise<void> {
     getMessageReceiptInfo: (messageId) => ctrl.getMessageReceiptInfo(messageId),
     getConnectionStatus: () => ctrl.getConnectionStatus(),
     retryReconnect: () => ctrl.retryReconnectNow(),
-    listCompanyTemplates: () => listLocalCompanyTemplates(),
+    listCompanyTemplates: async () => {
+      const runtimeBridge = resolveCompanyTemplateRuntimeBridge();
+      if (runtimeBridge?.listTemplates) {
+        return await runtimeBridge.listTemplates();
+      }
+      return listLocalCompanyTemplates();
+    },
     installCompanyTemplate: async (request) => {
       const result = await installCompanyTemplateToWorkspace(request);
       ui.updateSidebar();

@@ -95,12 +95,25 @@
 <div class="template-wizard" data-testid="template-wizard">
   {#if installResult}
     <section class="template-install-result" data-testid="template-install-result">
-      <h3>✅ Team installed</h3>
+      <h3>{installResult.statusHeadline}</h3>
       <p><strong>{installResult.companyName}</strong> in workspace <strong>{installResult.workspaceName}</strong>.</p>
+      <p class="install-status-detail">{installResult.statusDetail}</p>
       <ul>
-        <li>Created channels: {installResult.createdChannelNames.length}</li>
-        <li>Created members: {installResult.createdMemberPeerIds.length}</li>
+        <li>Created channels in this workspace: {installResult.createdChannelNames.length}</li>
+        <li>Provisioned accounts: {installResult.provisionedAccountIds.length}</li>
+        <li>Online-ready accounts: {installResult.onlineReadyAccountIds.length}</li>
+        <li>Planned roles: {installResult.members.length}</li>
       </ul>
+
+      {#if installResult.manualActionItems.length > 0}
+        <p class="install-manual-heading">Manual follow-up</p>
+        <ul class="install-manual-actions" data-testid="template-install-manual-actions">
+          {#each installResult.manualActionItems as actionItem}
+            <li>{actionItem}</li>
+          {/each}
+        </ul>
+      {/if}
+
       <button class="btn-primary" type="button" onclick={() => onDone?.()}>Done</button>
     </section>
   {:else}
@@ -285,6 +298,21 @@
 
   .template-install-result p {
     margin: 8px 0 0;
+  }
+
+  .install-status-detail {
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .install-manual-heading {
+    margin-top: 12px;
+    font-weight: 600;
+  }
+
+  .install-manual-actions {
+    margin-top: 6px;
   }
 
   .template-install-result button {

@@ -119,6 +119,11 @@ export interface CompanyTemplateInstallRequest {
   answers: Record<string, string>;
 }
 
+export type CompanyTemplateProvisioningMode =
+  | 'runtime-provisioned'
+  | 'config-provisioned'
+  | 'workspace-shell';
+
 export interface CompanyTemplateInstallResult {
   templateId: string;
   templateLabel: string;
@@ -129,6 +134,30 @@ export interface CompanyTemplateInstallResult {
   createdMemberPeerIds: string[];
   channelNames: string[];
   members: CompanyTemplateInstallPreviewMember[];
+  provisioningMode: CompanyTemplateProvisioningMode;
+  statusHeadline: string;
+  statusDetail: string;
+  createdAccountIds: string[];
+  provisionedAccountIds: string[];
+  onlineReadyAccountIds: string[];
+  manualActionRequiredAccountIds: string[];
+  manualActionItems: string[];
+}
+
+export interface CompanyTemplateRuntimeBridgeResult {
+  provisioningMode?: Exclude<CompanyTemplateProvisioningMode, 'workspace-shell'>;
+  createdAccountIds?: string[];
+  provisionedAccountIds?: string[];
+  onlineReadyAccountIds?: string[];
+  manualActionRequiredAccountIds?: string[];
+  manualActionItems?: string[];
+}
+
+export interface CompanyTemplateRuntimeBridge {
+  listTemplates?: () => Promise<CompanyTemplateDefinition[]> | CompanyTemplateDefinition[];
+  installTemplate?: (
+    request: CompanyTemplateInstallRequest,
+  ) => Promise<CompanyTemplateRuntimeBridgeResult> | CompanyTemplateRuntimeBridgeResult;
 }
 
 export interface UICallbacks {

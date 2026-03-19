@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SeedPhraseManager } from 'decent-protocol';
 
 import { getCompanySimTemplate } from '../../src/company-sim/template-registry.ts';
 import { installCompanyTemplate } from '../../src/company-sim/template-installer.ts';
@@ -12,20 +13,22 @@ const bundledTemplatesRoot = fileURLToPath(new URL('../../../company-sims/templa
 describe('company template installer', () => {
   test('generates deterministic missing accounts, scaffolds workspaces, merges topology, and returns install summary', () => {
     const root = mkdtempSync(join(tmpdir(), 'company-template-installer-'));
+    const seedManager = new SeedPhraseManager();
 
     try {
       const template = getCompanySimTemplate('software-studio', { templatesRoot: bundledTemplatesRoot });
+      const managerSeed = seedManager.generate().mnemonic;
 
       const baseConfig = {
         channels: {
           decentchat: {
             accounts: {
               manager: {
-                seedPhrase: 'seed-manager',
+                seedPhrase: managerSeed,
                 alias: 'Mira Existing',
               },
               ops: {
-                seedPhrase: 'seed-ops',
+                seedPhrase: seedManager.generate().mnemonic,
                 alias: 'Ops Bot',
               },
             },
@@ -54,6 +57,9 @@ describe('company template installer', () => {
       });
 
       expect(firstInstall.summary.createdAccountIds).toEqual(['backend', 'qa']);
+      expect(firstInstall.summary.provisionedAccountIds).toEqual(['backend', 'qa']);
+      expect(firstInstall.summary.onlineReadyAccountIds).toEqual(['backend', 'manager', 'qa']);
+      expect(firstInstall.summary.manualActionRequiredAccountIds).toEqual([]);
       expect(firstInstall.summary.createdAgentIds).toEqual([
         'software-studio-backend',
         'software-studio-manager',
@@ -73,6 +79,7 @@ describe('company template installer', () => {
 
       const accounts = decentchatConfig.accounts;
       expect(accounts.manager.alias).toBe('Mira Existing');
+      expect(accounts.manager.seedPhrase).toBe(managerSeed);
       expect(accounts.backend).toMatchObject({
         alias: 'Devon API',
         companySim: {
@@ -91,6 +98,12 @@ describe('company template installer', () => {
           manifestPath: firstInstall.manifestPath,
         },
       });
+
+      for (const accountId of ['manager', 'backend', 'qa']) {
+        const seedPhrase = accounts[accountId].seedPhrase;
+        expect(typeof seedPhrase).toBe('string');
+        expect(seedManager.validate(seedPhrase).valid).toBeTrue();
+      }
 
       const agentsById = new Map((firstInstall.config.agents?.list ?? []).map((entry: any) => [entry.id, entry]));
       expect(agentsById.get('main')).toMatchObject({ id: 'main', workspace: '/tmp/main', default: true });
@@ -140,6 +153,9 @@ describe('company template installer', () => {
       });
 
       expect(replayInstall.summary.createdAccountIds).toEqual(['backend', 'qa']);
+      expect(replayInstall.summary.provisionedAccountIds).toEqual(['backend', 'qa']);
+      expect(replayInstall.summary.onlineReadyAccountIds).toEqual(['backend', 'manager', 'qa']);
+      expect(replayInstall.summary.manualActionRequiredAccountIds).toEqual([]);
       expect(replayInstall.config.channels).toEqual(firstInstall.config.channels);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -186,6 +202,89 @@ describe('company template installer', () => {
       expect(decentchatConfig.companySimBootstrapEnabled).toBeFalse();
       expect(decentchatConfig.companySimBootstrapMode).toBe('off');
       expect(decentchatConfig.companySimBootstrapManifestPath).toBe(existingManifestPath);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('backfills missing seed phrases for existing employee account entries', () => {
+    const root = mkdtempSync(join(tmpdir(), 'company-template-installer-backfill-seed-'));
+    const seedManager = new SeedPhraseManager();
+
+    try {
+      const template = getCompanySimTemplate('software-studio', { templatesRoot: bundledTemplatesRoot });
+      const managerSeed = seedManager.generate().mnemonic;
+
+      const install = installCompanyTemplate({
+        template,
+        config: {
+          channels: {
+            decentchat: {
+              accounts: {
+                manager: { seedPhrase: managerSeed, alias: 'Mira Existing' },
+                backend: { alias: 'Devon Existing' },
+              },
+            },
+          },
+        } as any,
+        answers: {
+          companyName: 'Acme Platform',
+          workspaceName: 'Acme HQ',
+        },
+        workspaceRootDir: root,
+        companySimsRootDir: join(root, 'company-sims'),
+      });
+
+      expect(install.summary.createdAccountIds).toEqual(['qa']);
+      expect(install.summary.provisionedAccountIds).toEqual(['backend', 'qa']);
+      expect(install.summary.onlineReadyAccountIds).toEqual(['backend', 'manager', 'qa']);
+      expect(install.summary.manualActionRequiredAccountIds).toEqual([]);
+
+      const accounts = (install.config.channels as any).decentchat.accounts;
+      expect(seedManager.validate(accounts.backend.seedPhrase).valid).toBeTrue();
+      expect(seedManager.validate(accounts.qa.seedPhrase).valid).toBeTrue();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('reports manual action when an existing employee account has an invalid seed phrase', () => {
+    const root = mkdtempSync(join(tmpdir(), 'company-template-installer-invalid-seed-'));
+    const seedManager = new SeedPhraseManager();
+
+    try {
+      const template = getCompanySimTemplate('software-studio', { templatesRoot: bundledTemplatesRoot });
+      const managerSeed = seedManager.generate().mnemonic;
+      const invalidBackendSeed = 'totally invalid seed phrase not valid checksum words';
+
+      const install = installCompanyTemplate({
+        template,
+        config: {
+          channels: {
+            decentchat: {
+              accounts: {
+                manager: { seedPhrase: managerSeed, alias: 'Mira Existing' },
+                backend: { seedPhrase: invalidBackendSeed, alias: 'Devon Existing' },
+              },
+            },
+          },
+        } as any,
+        answers: {
+          companyName: 'Acme Platform',
+          workspaceName: 'Acme HQ',
+        },
+        workspaceRootDir: root,
+        companySimsRootDir: join(root, 'company-sims'),
+      });
+
+      expect(install.summary.createdAccountIds).toEqual(['qa']);
+      expect(install.summary.provisionedAccountIds).toEqual(['qa']);
+      expect(install.summary.onlineReadyAccountIds).toEqual(['manager', 'qa']);
+      expect(install.summary.manualActionRequiredAccountIds).toEqual(['backend']);
+
+      const accounts = (install.config.channels as any).decentchat.accounts;
+      expect(accounts.backend.seedPhrase).toBe(invalidBackendSeed);
+      expect(seedManager.validate(accounts.qa.seedPhrase).valid).toBeTrue();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

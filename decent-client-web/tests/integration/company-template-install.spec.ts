@@ -29,8 +29,12 @@ test.describe('company template installation', () => {
       await expect(result).toBeVisible();
       await expect(result).toContainText('Acme Platform');
       await expect(result).toContainText('Acme HQ');
-      await expect(result).toContainText('Created channels: 3');
-      await expect(result).toContainText('Created members: 3');
+      await expect(result).toContainText('Runtime provisioning pending');
+      await expect(result).toContainText('Created channels in this workspace: 3');
+      await expect(result).toContainText('Provisioned accounts: 0');
+
+      const manualActions = user.page.getByTestId('template-install-manual-actions');
+      await expect(manualActions).toContainText('Run the decent-openclaw company template installer to provision real accounts/agents.');
 
       await user.page.getByRole('button', { name: /done/i }).click();
       await expect(user.page.locator('.modal-overlay')).toHaveCount(0);
@@ -38,11 +42,6 @@ test.describe('company template installation', () => {
       await expect(user.page.locator('#sidebar-nav')).toContainText('engineering');
       await expect(user.page.locator('#sidebar-nav')).toContainText('qa');
       await expect(user.page.locator('#sidebar-nav')).toContainText('leadership');
-
-      const membersSection = user.page.locator('#workspace-members-section');
-      await expect(membersSection).toContainText('Mira PM');
-      await expect(membersSection).toContainText('Devon API');
-      await expect(membersSection).toContainText('Iva QA');
     } finally {
       await closeUser(user);
     }

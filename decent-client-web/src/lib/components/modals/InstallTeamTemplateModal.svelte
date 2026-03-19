@@ -114,15 +114,29 @@
           workspaceName: preview.workspaceName,
           companyName: preview.companyName,
           createdChannelNames: preview.channelNames.slice(1),
-          createdMemberPeerIds: preview.members.map((member) => member.peerId),
+          createdMemberPeerIds: [],
           channelNames: preview.channelNames,
           members: preview.members,
+          provisioningMode: 'workspace-shell',
+          statusHeadline: '⚠️ Runtime provisioning pending',
+          statusDetail: 'Created local workspace channels only. Real employee accounts/agents were not provisioned by this client.',
+          createdAccountIds: [],
+          provisionedAccountIds: [],
+          onlineReadyAccountIds: [],
+          manualActionRequiredAccountIds: [],
+          manualActionItems: [
+            'Run the decent-openclaw company template installer to provision real accounts/agents.',
+            'Apply/restart OpenClaw runtime so provisioned accounts can bootstrap and appear online.',
+          ],
         };
       }
 
       installResult = result;
       await onInstalled?.(result);
-      onToast?.(`Installed ${result.templateLabel} team.`, 'success');
+      const toastMessage = result.provisioningMode === 'runtime-provisioned'
+        ? `Installed ${result.templateLabel} team.`
+        : `Prepared ${result.templateLabel} team setup.`;
+      onToast?.(toastMessage, result.provisioningMode === 'runtime-provisioned' ? 'success' : 'info');
     } catch (error) {
       installError = (error as Error).message;
     } finally {
