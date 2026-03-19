@@ -202,7 +202,17 @@ interface DeferredOutboxPayload {
   attachments?: AttachmentMeta[];
 }
 
+interface PendingPreKeyBundleFetch {
+  ownerPeerId: string;
+  workspaceId?: string;
+  pendingPeerIds: Set<string>;
+  resolve: (value: boolean) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 const NEGENTROPY_QUERY_TIMEOUT_MS = 10_000;
+const PRE_KEY_FETCH_TIMEOUT_MS = 2_500;
+const PRE_KEY_CUSTODIAN_TARGET = 2;
 const DIRECT_SYNC_CHANNEL_KEY = '__direct__';
 const DIRECT_SYNC_WORKSPACE_PREFIX = '__direct__:';
 
@@ -255,6 +265,7 @@ export class MobileController {
     string,
     { peerId: string; resolve: (value: NegentropyResponse) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
   >();
+  private readonly pendingPreKeyBundleFetches = new Map<string, PendingPreKeyBundleFetch>();
   private readonly pendingMediaTransfers = new Map<string, { peerId: string; receiver: ChunkedReceiver }>();
   private readonly localAttachmentBlobs = new Map<string, ArrayBuffer>();
   private readonly attachmentMessageIndex = new Map<string, { channelId: string; messageId: string }>();
@@ -286,6 +297,11 @@ export class MobileController {
 
     await this.keyStore.init();
     await this.persistentStore.init();
+    try {
+      await this.persistentStore.prunePreKeyBundles();
+    } catch (error) {
+      console.warn('[MobileController] pre-key bundle cleanup failed:', (error as Error).message);
+    }
 
     await this.bootstrapIdentity(options);
     await this.restoreLocalState();
@@ -327,6 +343,13 @@ export class MobileController {
       pending.reject(new Error('Controller destroyed'));
     }
     this.pendingNegentropyQueries.clear();
+
+    for (const pending of this.pendingPreKeyBundleFetches.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve(false);
+    }
+    this.pendingPreKeyBundleFetches.clear();
+
     appState.typingByChannel.set({});
     this.transportReady = false;
     this.initialized = false;
@@ -1001,7 +1024,19 @@ export class MobileController {
     this.writeLocalStorage('decentchat-alias', alias);
 
     this.messageProtocol = new MessageProtocol(this.cryptoManager, derived.peerId);
+    this.messageProtocol.setPersistence({
+      save: (peerId, state) => this.persistentStore.saveRatchetState(peerId, state),
+      load: async (peerId) => this.persistentStore.getRatchetState(peerId) ?? null,
+      delete: (peerId) => this.persistentStore.deleteRatchetState(peerId),
+      savePreKeyBundle: (peerId, bundle) => this.persistentStore.savePreKeyBundle(peerId, bundle),
+      loadPreKeyBundle: async (peerId) => (await this.persistentStore.getPreKeyBundle(peerId)) ?? null,
+      deletePreKeyBundle: (peerId) => this.persistentStore.deletePreKeyBundle(peerId),
+      saveLocalPreKeyState: (ownerPeerId, state) => this.persistentStore.saveLocalPreKeyState(ownerPeerId, state),
+      loadLocalPreKeyState: async (ownerPeerId) => (await this.persistentStore.getLocalPreKeyState(ownerPeerId)) ?? null,
+      deleteLocalPreKeyState: (ownerPeerId) => this.persistentStore.deleteLocalPreKeyState(ownerPeerId),
+    });
     await this.messageProtocol.init(ecdsaKeyPair);
+    await this.messageProtocol.createPreKeyBundle();
   }
 
   private normalizeSeedPhrase(value: unknown): string | null {
@@ -1136,6 +1171,15 @@ export class MobileController {
         this.pendingNegentropyQueries.delete(requestId);
       }
 
+      for (const pending of this.pendingPreKeyBundleFetches.values()) {
+        if (!pending.pendingPeerIds.has(peerId)) continue;
+        pending.pendingPeerIds.delete(peerId);
+        if (pending.pendingPeerIds.size === 0) {
+          clearTimeout(pending.timer);
+          pending.resolve(false);
+        }
+      }
+
       this.updateConnectedPeersStore();
       this.updateConnectionState();
       void this.callManager.handlePeerDisconnect(peerId);
@@ -1152,6 +1196,10 @@ export class MobileController {
 
       if (data.type === 'handshake') {
         await this.handleHandshake(peerId, data as unknown as HandshakeData);
+        return;
+      }
+
+      if (await this.handlePreKeyControlMessage(peerId, data)) {
         return;
       }
 
@@ -1235,6 +1283,316 @@ export class MobileController {
     };
   }
 
+  private shouldAttemptPreKeyBootstrap(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    return message.includes('No shared secret with peer');
+  }
+
+  private resolveSharedWorkspaceIds(peerId: string): string[] {
+    const myPeerId = get(appState.myPeerId);
+    if (!peerId || !myPeerId) return [];
+
+    return this.workspaceManager
+      .getAllWorkspaces()
+      .filter((workspace) => (
+        workspace.members.some((member) => member.peerId === myPeerId)
+        && workspace.members.some((member) => member.peerId === peerId)
+      ))
+      .map((workspace) => workspace.id);
+  }
+
+  private isWorkspaceMember(peerId: string, workspaceId: string): boolean {
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) return false;
+    return workspace.members.some((member) => member.peerId === peerId);
+  }
+
+  private selectCustodianPeers(workspaceId: string, recipientPeerId: string, limit = PRE_KEY_CUSTODIAN_TARGET): string[] {
+    const myPeerId = get(appState.myPeerId);
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace || !myPeerId) return [];
+
+    return workspace.members
+      .map((member) => member.peerId)
+      .filter((peerId) => peerId !== myPeerId && peerId !== recipientPeerId)
+      .filter((peerId) => this.readyPeers.has(peerId))
+      .map((peerId) => {
+        let score = 100;
+        const alias = this.getPeerDisplayName(peerId, workspaceId).toLowerCase();
+        if (alias.includes('mobile') || alias.includes('iphone') || alias.includes('android')) score -= 20;
+        if (alias.includes('desktop') || alias.includes('server') || alias.includes('bot')) score += 20;
+        if (this.connectedPeers.has(peerId)) score += 5;
+        return { peerId, score };
+      })
+      .sort((a, b) => b.score - a.score || a.peerId.localeCompare(b.peerId))
+      .slice(0, Math.max(0, limit))
+      .map((entry) => entry.peerId);
+  }
+
+  private resolveLikelyPreKeyCustodians(ownerPeerId: string, workspaceId?: string): string[] {
+    if (!workspaceId) return [];
+    return this.selectCustodianPeers(workspaceId, ownerPeerId);
+  }
+
+  private resolvePreKeyLookupCandidates(ownerPeerId: string, workspaceId?: string): string[] {
+    const myPeerId = get(appState.myPeerId);
+    if (!ownerPeerId || !myPeerId) return [];
+
+    if (workspaceId) {
+      const workspace = this.workspaceManager.getWorkspace(workspaceId);
+      return (workspace?.members ?? [])
+        .map((member) => member.peerId)
+        .filter((peerId) => peerId && peerId !== myPeerId && peerId !== ownerPeerId && this.readyPeers.has(peerId));
+    }
+
+    return Array.from(this.readyPeers)
+      .filter((peerId) => peerId !== myPeerId && peerId !== ownerPeerId);
+  }
+
+  private async requestPreKeyBundleFromPeers(
+    ownerPeerId: string,
+    workspaceId?: string,
+    opts?: {
+      candidatePeerIds?: string[];
+      timeoutMs?: number;
+      querySource?: 'custodian-targeted' | 'peer-broadcast';
+    },
+  ): Promise<boolean> {
+    if (!this.messageProtocol || !ownerPeerId) return false;
+
+    const myPeerId = get(appState.myPeerId);
+    const resolvedWorkspaceId = workspaceId || this.resolveSharedWorkspaceIds(ownerPeerId)[0];
+    const requestedCandidates = opts?.candidatePeerIds ?? this.resolvePreKeyLookupCandidates(ownerPeerId, resolvedWorkspaceId);
+
+    const candidates = Array.from(new Set(requestedCandidates))
+      .filter((peerId) => peerId && peerId !== myPeerId && peerId !== ownerPeerId && this.readyPeers.has(peerId))
+      .filter((peerId) => !resolvedWorkspaceId || this.isWorkspaceMember(peerId, resolvedWorkspaceId));
+
+    if (candidates.length === 0) return false;
+
+    const requestId = crypto.randomUUID();
+    const timeoutMs = Math.max(250, opts?.timeoutMs ?? PRE_KEY_FETCH_TIMEOUT_MS);
+    const querySource = opts?.querySource ?? 'peer-broadcast';
+
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingPreKeyBundleFetches.delete(requestId);
+        resolve(false);
+      }, timeoutMs);
+
+      const pending: PendingPreKeyBundleFetch = {
+        ownerPeerId,
+        ...(resolvedWorkspaceId ? { workspaceId: resolvedWorkspaceId } : {}),
+        pendingPeerIds: new Set(candidates),
+        resolve: (value: boolean) => {
+          clearTimeout(timer);
+          this.pendingPreKeyBundleFetches.delete(requestId);
+          resolve(value);
+        },
+        timer,
+      };
+      this.pendingPreKeyBundleFetches.set(requestId, pending);
+
+      let sentCount = 0;
+      for (const peerId of candidates) {
+        const accepted = this.transport.send(peerId, {
+          type: 'pre-key-bundle.fetch',
+          requestId,
+          ownerPeerId,
+          ...(resolvedWorkspaceId ? { workspaceId: resolvedWorkspaceId } : {}),
+          querySource,
+        });
+
+        if (accepted) {
+          sentCount += 1;
+        } else {
+          pending.pendingPeerIds.delete(peerId);
+        }
+      }
+
+      if (sentCount === 0 || pending.pendingPeerIds.size === 0) {
+        clearTimeout(timer);
+        this.pendingPreKeyBundleFetches.delete(requestId);
+        resolve(false);
+      }
+    });
+  }
+
+  private async ensurePeerPreKeyBundle(peerId: string, workspaceId?: string): Promise<boolean> {
+    if (!this.messageProtocol || !peerId) return false;
+
+    const existing = await this.messageProtocol.getPeerPreKeyBundle(peerId);
+    if (existing) return true;
+
+    const resolvedWorkspaceId = workspaceId || this.resolveSharedWorkspaceIds(peerId)[0];
+    const likelyCustodians = this.resolveLikelyPreKeyCustodians(peerId, resolvedWorkspaceId);
+
+    if (likelyCustodians.length > 0) {
+      const hydratedViaCustodians = await this.requestPreKeyBundleFromPeers(peerId, resolvedWorkspaceId, {
+        candidatePeerIds: likelyCustodians,
+        timeoutMs: 1_200,
+        querySource: 'custodian-targeted',
+      });
+      if (hydratedViaCustodians) return true;
+    }
+
+    const fallbackCandidates = this.resolvePreKeyLookupCandidates(peerId, resolvedWorkspaceId)
+      .filter((candidatePeerId) => !likelyCustodians.includes(candidatePeerId));
+
+    if (fallbackCandidates.length === 0) {
+      return this.requestPreKeyBundleFromPeers(peerId, resolvedWorkspaceId, {
+        candidatePeerIds: likelyCustodians,
+        querySource: 'peer-broadcast',
+      });
+    }
+
+    return this.requestPreKeyBundleFromPeers(peerId, resolvedWorkspaceId, {
+      candidatePeerIds: fallbackCandidates,
+      querySource: 'peer-broadcast',
+    });
+  }
+
+  private async encryptMessageWithPreKeyBootstrap(
+    peerId: string,
+    content: string,
+    type: 'text' | 'file' | 'system' | 'handshake' = 'text',
+    metadata?: PlaintextMessage['metadata'],
+    workspaceId?: string,
+  ): Promise<any> {
+    if (!this.messageProtocol) {
+      throw new Error('Message protocol unavailable');
+    }
+
+    try {
+      return await this.messageProtocol.encryptMessage(peerId, content, type, metadata);
+    } catch (error) {
+      if (!this.shouldAttemptPreKeyBootstrap(error)) throw error;
+
+      const hydrated = await this.ensurePeerPreKeyBundle(peerId, workspaceId);
+      if (!hydrated) throw error;
+
+      return this.messageProtocol.encryptMessage(peerId, content, type, metadata);
+    }
+  }
+
+  private async publishPreKeyBundle(peerId: string): Promise<void> {
+    if (!this.messageProtocol) return;
+
+    const myPeerId = get(appState.myPeerId);
+    if (!myPeerId) return;
+
+    try {
+      const bundle = await this.messageProtocol.createPreKeyBundle();
+      const workspaceId = this.resolveSharedWorkspaceIds(peerId)[0];
+      this.transport.send(peerId, {
+        type: 'pre-key-bundle.publish',
+        ...(workspaceId ? { workspaceId } : {}),
+        ownerPeerId: myPeerId,
+        bundle,
+      });
+    } catch (error) {
+      console.warn('[MobileController] failed to publish pre-key bundle:', error);
+    }
+  }
+
+  private async handlePreKeyControlMessage(peerId: string, data: Record<string, unknown>): Promise<boolean> {
+    if (!this.messageProtocol) return false;
+
+    if (data.type === 'pre-key-bundle.publish') {
+      if ((data as any).bundle) {
+        const ownerPeerId = typeof (data as any).ownerPeerId === 'string' ? (data as any).ownerPeerId : peerId;
+        await this.messageProtocol.storePeerPreKeyBundle(ownerPeerId, (data as any).bundle);
+      }
+      return true;
+    }
+
+    if (data.type === 'pre-key-bundle.request') {
+      const myPeerId = get(appState.myPeerId);
+      if (!myPeerId) return true;
+
+      try {
+        const bundle = await this.messageProtocol.createPreKeyBundle();
+        this.transport.send(peerId, {
+          type: 'pre-key-bundle.response',
+          ownerPeerId: myPeerId,
+          ...(typeof (data as any).workspaceId === 'string' ? { workspaceId: (data as any).workspaceId } : {}),
+          bundle,
+        });
+      } catch (error) {
+        console.warn('[MobileController] failed to respond with pre-key bundle:', error);
+      }
+      return true;
+    }
+
+    if (data.type === 'pre-key-bundle.response') {
+      if ((data as any).bundle) {
+        const ownerPeerId = typeof (data as any).ownerPeerId === 'string' ? (data as any).ownerPeerId : peerId;
+        await this.messageProtocol.storePeerPreKeyBundle(ownerPeerId, (data as any).bundle);
+      }
+      return true;
+    }
+
+    if (data.type === 'pre-key-bundle.fetch') {
+      const requestId = typeof (data as any).requestId === 'string' ? (data as any).requestId : '';
+      const ownerPeerId = typeof (data as any).ownerPeerId === 'string' ? (data as any).ownerPeerId : '';
+      if (!requestId || !ownerPeerId) return true;
+
+      const workspaceId = typeof (data as any).workspaceId === 'string' ? (data as any).workspaceId : undefined;
+      if (workspaceId) {
+        const myPeerId = get(appState.myPeerId);
+        if (!myPeerId) return true;
+        if (!this.isWorkspaceMember(peerId, workspaceId)) return true;
+        if (!this.isWorkspaceMember(ownerPeerId, workspaceId)) return true;
+        if (!this.isWorkspaceMember(myPeerId, workspaceId)) return true;
+      }
+
+      const querySource = ((data as any).querySource === 'custodian-targeted' || (data as any).querySource === 'peer-broadcast')
+        ? (data as any).querySource
+        : undefined;
+      const bundle = await this.messageProtocol.getPeerPreKeyBundle(ownerPeerId);
+
+      this.transport.send(peerId, {
+        type: 'pre-key-bundle.fetch-response',
+        requestId,
+        ownerPeerId,
+        ...(workspaceId ? { workspaceId } : {}),
+        ...(querySource ? { querySource } : {}),
+        ...(bundle ? { bundle } : { notAvailable: true }),
+      });
+      return true;
+    }
+
+    if (data.type === 'pre-key-bundle.fetch-response') {
+      const requestId = typeof (data as any).requestId === 'string' ? (data as any).requestId : '';
+      if (!requestId) return true;
+
+      const pending = this.pendingPreKeyBundleFetches.get(requestId);
+      if (!pending) return true;
+
+      if (!pending.pendingPeerIds.has(peerId)) return true;
+
+      const ownerPeerId = typeof (data as any).ownerPeerId === 'string' ? (data as any).ownerPeerId : pending.ownerPeerId;
+      if (ownerPeerId !== pending.ownerPeerId) return true;
+
+      pending.pendingPeerIds.delete(peerId);
+
+      if ((data as any).bundle) {
+        const stored = await this.messageProtocol.storePeerPreKeyBundle(ownerPeerId, (data as any).bundle);
+        if (stored) {
+          pending.resolve(true);
+          return true;
+        }
+      }
+
+      if (pending.pendingPeerIds.size === 0) {
+        pending.resolve(false);
+      }
+      return true;
+    }
+
+    return false;
+  }
+
   private isEncryptedEnvelope(data: Record<string, unknown>): data is EncryptedEnvelope {
     return 'encrypted' in data || 'ratchet' in data;
   }
@@ -1250,6 +1608,7 @@ export class MobileController {
 
     if (sent) {
       this.handshakeSent.add(peerId);
+      await this.publishPreKeyBundle(peerId);
     }
   }
 
@@ -1259,6 +1618,10 @@ export class MobileController {
     const wasReady = this.readyPeers.has(peerId);
 
     await this.messageProtocol.processHandshake(peerId, handshake);
+    if (handshake.preKeySupport) {
+      this.transport.send(peerId, { type: 'pre-key-bundle.request' });
+    }
+    await this.publishPreKeyBundle(peerId);
     await this.keyStore.storePeerPublicKey(peerId, handshake.publicKey);
     await this.persistentStore.savePeer({
       peerId,
@@ -2053,7 +2416,13 @@ export class MobileController {
     }
 
     try {
-      const envelope = await this.messageProtocol.encryptMessage(peerId, payload.content, payload.type, payload.metadata);
+      const envelope = await this.encryptMessageWithPreKeyBootstrap(
+        peerId,
+        payload.content,
+        payload.type,
+        payload.metadata,
+        payload.workspaceId,
+      );
       const sent = this.transport.send(peerId, {
         ...envelope,
         messageId: payload.message.id,
@@ -2085,11 +2454,12 @@ export class MobileController {
 
       if (envelope._deferred) {
         try {
-          const encrypted = await this.messageProtocol.encryptMessage(
+          const encrypted = await this.encryptMessageWithPreKeyBootstrap(
             peerId,
             envelope.content,
             envelope.type,
             envelope.metadata,
+            envelope.workspaceId,
           );
           envelope = {
             ...encrypted,

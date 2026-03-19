@@ -15,7 +15,8 @@ export type SyncDomain =
   | 'channel-message'
   | 'thread'
   | 'receipt'
-  | 'attachment';
+  | 'attachment'
+  | 'pre-key-bundle';
 
 export interface DeliveryReceipt {
   receiptId: string;

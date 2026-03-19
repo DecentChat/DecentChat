@@ -11,13 +11,35 @@ import {
   DoubleRatchet,
   serializeRatchetState,
   deserializeRatchetState,
+  PRE_KEY_BUNDLE_VERSION,
+  DEFAULT_PRE_KEY_LIFECYCLE_POLICY,
+  decideSignedPreKeyLifecycle,
+  planLocalOneTimePreKeyLifecycle,
+  normalizePeerPreKeyBundle as normalizePeerPreKeyBundlePolicy,
+  hasPeerPreKeyBundleChanged,
 } from 'decent-protocol';
 import type {
   KeyPair,
   RatchetState,
   RatchetMessage,
   SerializedRatchetState,
+  PreKeyBundle,
+  PersistedLocalPreKeyState,
+  PreKeySessionInitPayload,
+  PreKeyType,
 } from 'decent-protocol';
+
+interface EnvelopeMetadata {
+  fileName?: string;
+  fileSize?: number;
+  mimeType?: string;
+  assistant?: {
+    modelId?: string;
+    modelName?: string;
+    modelAlias?: string;
+    modelLabel?: string;
+  };
+}
 
 /** Wire format for ratchet-encrypted messages */
 export interface RatchetEnvelope {
@@ -31,17 +53,23 @@ export interface RatchetEnvelope {
   signature: string;
   /** Protocol version: 2 = DoubleRatchet */
   protocolVersion: 2;
-  metadata?: {
-    fileName?: string;
-    fileSize?: number;
-    mimeType?: string;
-    assistant?: {
-      modelId?: string;
-      modelName?: string;
-      modelAlias?: string;
-      modelLabel?: string;
-    };
-  };
+  metadata?: EnvelopeMetadata;
+}
+
+/** Wire format for pre-key session-init messages */
+export interface PreKeySessionEnvelope {
+  id: string;
+  timestamp: number;
+  sender: string;
+  type: 'text' | 'file' | 'system' | 'handshake';
+  /** First ratchet-encrypted payload after pre-key bootstrap */
+  ratchet: RatchetMessage;
+  /** ECDSA signature over plaintext */
+  signature: string;
+  /** Protocol version: 3 = pre-key bootstrap + DoubleRatchet */
+  protocolVersion: 3;
+  sessionInit: PreKeySessionInitPayload;
+  metadata?: EnvelopeMetadata;
 }
 
 /** Legacy wire format (v1: static shared secret) */
@@ -57,20 +85,10 @@ export interface LegacyEnvelope {
   };
   signature: string;
   protocolVersion?: 1 | undefined;
-  metadata?: {
-    fileName?: string;
-    fileSize?: number;
-    mimeType?: string;
-    assistant?: {
-      modelId?: string;
-      modelName?: string;
-      modelAlias?: string;
-      modelLabel?: string;
-    };
-  };
+  metadata?: EnvelopeMetadata;
 }
 
-export type MessageEnvelope = RatchetEnvelope | LegacyEnvelope;
+export type MessageEnvelope = RatchetEnvelope | PreKeySessionEnvelope | LegacyEnvelope;
 
 export interface HandshakeData {
   publicKey: string;  // Base64 ECDH public key (identity key, for ratchet key exchange)
@@ -80,6 +98,8 @@ export interface HandshakeData {
   protocolVersion?: number;
   /** Base64 ECDSA signing public key (for message signature verification) */
   signingPublicKey?: string;
+  /** Advertise support for pre-key bundle based bootstrap */
+  preKeySupport?: boolean;
 }
 
 /** Persistence interface for ratchet state */
@@ -87,7 +107,27 @@ export interface RatchetPersistence {
   save(peerId: string, state: SerializedRatchetState): Promise<void>;
   load(peerId: string): Promise<SerializedRatchetState | null>;
   delete(peerId: string): Promise<void>;
+  savePreKeyBundle?(peerId: string, bundle: PreKeyBundle): Promise<void>;
+  loadPreKeyBundle?(peerId: string): Promise<PreKeyBundle | null>;
+  deletePreKeyBundle?(peerId: string): Promise<void>;
+  saveLocalPreKeyState?(ownerPeerId: string, state: PersistedLocalPreKeyState): Promise<void>;
+  loadLocalPreKeyState?(ownerPeerId: string): Promise<PersistedLocalPreKeyState | null>;
+  deleteLocalPreKeyState?(ownerPeerId: string): Promise<void>;
 }
+
+interface LocalPreKeyRuntimeRecord {
+  keyId: number;
+  publicKey: CryptoKey;
+  privateKey: CryptoKey;
+  createdAt: number;
+}
+
+interface LocalSignedPreKeyRuntimeRecord extends LocalPreKeyRuntimeRecord {
+  signature: string;
+  expiresAt: number;
+}
+
+const PRE_KEY_POLICY = DEFAULT_PRE_KEY_LIFECYCLE_POLICY;
 
 export class NodeMessageProtocol {
   private cryptoManager: CryptoManager;
@@ -107,8 +147,22 @@ export class NodeMessageProtocol {
   /** Per-peer ECDSA signing public keys (for message signature verification) */
   private signingPublicKeys = new Map<string, CryptoKey>();
 
+  /** Cached peer pre-key bundles (public only) */
+  private peerPreKeyBundles = new Map<string, PreKeyBundle>();
+
+  /** Local signed pre-key + one-time pre-keys (includes private key material) */
+  private localSignedPreKey: LocalSignedPreKeyRuntimeRecord | null = null;
+  private localOneTimePreKeys = new Map<number, LocalPreKeyRuntimeRecord>();
+  private nextOneTimePreKeyId = 1;
+
   /** Persistence backend (optional) */
   private persistence: RatchetPersistence | null = null;
+  private preKeyReady: Promise<void> | null = null;
+
+  /** Get a peer's ECDSA signing public key (for auth verification) */
+  getSigningPublicKey(peerId: string): CryptoKey | undefined {
+    return this.signingPublicKeys.get(peerId);
+  }
 
   constructor(cryptoManager: CryptoManager, myPeerId: string) {
     this.cryptoManager = cryptoManager;
@@ -124,30 +178,28 @@ export class NodeMessageProtocol {
       true,
       ['deriveBits'],
     );
+    await this.ensureLocalPreKeyMaterial();
   }
 
   setPersistence(persistence: RatchetPersistence): void {
     this.persistence = persistence;
+    // If init already generated local pre-keys before persistence was wired,
+    // persist them now so restarts can consume one-time keys correctly.
+    void this.persistLocalPreKeyState();
   }
 
   async createHandshake(): Promise<HandshakeData> {
     const keyPair = await this.cryptoManager.getKeyPair();
     const publicKey = await this.cryptoManager.exportPublicKey(keyPair.publicKey);
 
-    // Export our ratchet DH public key so the other side can init as Alice
-    if (!this.ratchetDHKeyPair) {
-      this.ratchetDHKeyPair = await crypto.subtle.generateKey(
-        { name: 'ECDH', namedCurve: 'P-256' },
-        true,
-        ['deriveBits'],
-      );
+    let ratchetDHPublicKey: string | undefined;
+    if (this.ratchetDHKeyPair) {
+      const ratchetPubRaw = await crypto.subtle.exportKey('raw', this.ratchetDHKeyPair.publicKey);
+      ratchetDHPublicKey = arrayBufferToBase64(ratchetPubRaw);
     }
-    const ratchetPubRaw = await crypto.subtle.exportKey('raw', this.ratchetDHKeyPair.publicKey);
-    const ratchetDHPublicKey = arrayBufferToBase64(ratchetPubRaw);
 
-    // Export ECDSA signing public key so peers can verify our message signatures
     let signingPublicKey: string | undefined;
-    if (this._signingKeyPair?.publicKey) {
+    if (this._signingKeyPair) {
       signingPublicKey = await this.cryptoManager.exportPublicKey(this._signingKeyPair.publicKey);
     }
 
@@ -157,6 +209,7 @@ export class NodeMessageProtocol {
       ratchetDHPublicKey,
       protocolVersion: 2,
       signingPublicKey,
+      preKeySupport: true,
     };
   }
 
@@ -238,139 +291,180 @@ export class NodeMessageProtocol {
     }
   }
 
-  async encryptMessage(
-    peerId: string,
-    content: string,
-    type: 'text' | 'file' | 'system' | 'handshake' = 'text',
-    metadata?: {
-      fileName?: string;
-      fileSize?: number;
-      mimeType?: string;
-      assistant?: {
-        modelId?: string;
-        modelName?: string;
-        modelAlias?: string;
-        modelLabel?: string;
-      };
-    },
-  ): Promise<MessageEnvelope> {
-    if (!this._signingKeyPair) throw new Error('Signing key pair not initialized');
-    const signature = await this.cipher.sign(content, this._signingKeyPair.privateKey);
+  async createPreKeyBundle(): Promise<PreKeyBundle> {
+    await this.ensureLocalPreKeyMaterial();
+    const changed = await this.applyLocalPreKeyLifecyclePolicy();
+    if (changed) {
+      await this.persistLocalPreKeyState();
+    }
+    return this.snapshotLocalPreKeyBundle();
+  }
 
-    // Try DoubleRatchet first
-    const ratchetState = this.ratchetStates.get(peerId);
-    if (ratchetState && ratchetState.sendChainKey !== null) {
-      const ratchetMsg = await DoubleRatchet.encrypt(ratchetState, content);
-      await this.persistState(peerId);
+  async storePeerPreKeyBundle(peerId: string, bundle: PreKeyBundle): Promise<boolean> {
+    const sanitized = await this.sanitizeAndVerifyPeerPreKeyBundle(peerId, bundle);
+    if (!sanitized) return false;
 
-      const envelope: RatchetEnvelope = {
-        id: this.generateMessageId(),
-        timestamp: Date.now(),
-        sender: this.myPeerId,
-        type,
-        ratchet: ratchetMsg,
-        signature,
-        protocolVersion: 2,
-        metadata,
-      };
-      return envelope;
+    this.peerPreKeyBundles.set(peerId, sanitized);
+    await this.persistPeerPreKeyBundle(peerId, sanitized);
+    return true;
+  }
+
+  async getPeerPreKeyBundle(peerId: string): Promise<PreKeyBundle | null> {
+    const cached = this.peerPreKeyBundles.get(peerId);
+    if (cached) {
+      const normalized = this.normalizePeerPreKeyBundle(cached);
+      if (!normalized) {
+        await this.clearPeerPreKeyBundle(peerId);
+        return null;
+      }
+
+      if (this.hasPeerBundleChanged(cached, normalized)) {
+        this.peerPreKeyBundles.set(peerId, normalized);
+        await this.persistPeerPreKeyBundle(peerId, normalized);
+      }
+
+      return normalized;
     }
 
-    // Fallback to legacy (Bob before first ratchet message, or old peers)
-    const envelope = await this.encryptLegacy(peerId, content, type, signature, metadata);
-    return envelope;
-  }
+    if (!this.persistence?.loadPreKeyBundle) return null;
 
-  private async encryptLegacy(
-    peerId: string,
-    content: string,
-    type: 'text' | 'file' | 'system' | 'handshake',
-    signature: string,
-    metadata?: {
-      fileName?: string;
-      fileSize?: number;
-      mimeType?: string;
-      assistant?: {
-        modelId?: string;
-        modelName?: string;
-        modelAlias?: string;
-        modelLabel?: string;
-      };
-    },
-  ): Promise<LegacyEnvelope> {
-    const sharedSecret = this.sharedSecrets.get(peerId);
-    if (!sharedSecret) throw new Error(`No shared secret for peer: ${peerId}`);
-
-    const encrypted = await this.cipher.encrypt(content, sharedSecret);
-
-    return {
-      id: this.generateMessageId(),
-      timestamp: Date.now(),
-      sender: this.myPeerId,
-      type,
-      encrypted,
-      signature,
-      metadata,
-    };
-  }
-
-  async decryptMessage(
-    peerId: string,
-    envelope: MessageEnvelope | any,
-    peerPublicKey: CryptoKey
-  ): Promise<string | null> {
     try {
-      // Detect protocol version
-      if (envelope.protocolVersion === 2 && envelope.ratchet) {
-        return await this.decryptRatchet(peerId, envelope as RatchetEnvelope, peerPublicKey);
+      const loaded = await this.persistence.loadPreKeyBundle(peerId);
+      if (!loaded) return null;
+
+      const sanitized = await this.sanitizeAndVerifyPeerPreKeyBundle(peerId, loaded);
+      if (!sanitized) {
+        if (this.persistence?.deletePreKeyBundle) {
+          try {
+            await this.persistence.deletePreKeyBundle(peerId);
+          } catch (deleteError) {
+            console.warn(`[PreKey] Failed to delete stale peer bundle for ${peerId.slice(0, 8)}:`, deleteError);
+          }
+        }
+        return null;
       }
 
-      // Legacy path
-      return await this.decryptLegacy(peerId, envelope as LegacyEnvelope, peerPublicKey);
-    } catch (e) {
-      // If ratchet decrypt fails, try legacy as final fallback
-      if (envelope.encrypted) {
-        try {
-          return await this.decryptLegacy(peerId, envelope as any, peerPublicKey);
-        } catch {}
+      this.peerPreKeyBundles.set(peerId, sanitized);
+      if (this.hasPeerBundleChanged(loaded, sanitized)) {
+        await this.persistPeerPreKeyBundle(peerId, sanitized);
       }
-      console.error(`[Ratchet] Decrypt failed for ${peerId.slice(0, 8)}:`, e);
+      return sanitized;
+    } catch (e) {
+      console.warn(`[PreKey] Failed to load peer bundle for ${peerId.slice(0, 8)}:`, e);
       return null;
     }
   }
 
-  private async decryptRatchet(
-    peerId: string,
-    envelope: RatchetEnvelope,
-    peerPublicKey: CryptoKey,
-  ): Promise<string | null> {
-    const state = this.ratchetStates.get(peerId);
-    if (!state) {
-      throw new Error(`No ratchet state for peer: ${peerId}`);
+  async clearPeerPreKeyBundle(peerId: string): Promise<void> {
+    this.peerPreKeyBundles.delete(peerId);
+    if (!this.persistence?.deletePreKeyBundle) return;
+    try {
+      await this.persistence.deletePreKeyBundle(peerId);
+    } catch (e) {
+      console.warn(`[PreKey] Failed to delete peer bundle for ${peerId.slice(0, 8)}:`, e);
     }
-
-    const content = await DoubleRatchet.decrypt(state, envelope.ratchet);
-    await this.persistState(peerId);
-
-    // Verify signature using ECDSA signing key (not the ECDH identity key)
-    const signingKey = this.signingPublicKeys.get(peerId) ?? peerPublicKey;
-    const isValid = await this.cipher.verify(content, envelope.signature, signingKey);
-    if (!isValid) return null;
-
-    return content;
   }
 
-  private async decryptLegacy(
+  async encryptMessage(
     peerId: string,
-    envelope: LegacyEnvelope,
-    peerPublicKey: CryptoKey,
-  ): Promise<string | null> {
+    content: string,
+    type: 'text' | 'file' | 'system' | 'handshake' = 'text',
+    metadata?: EnvelopeMetadata,
+  ): Promise<MessageEnvelope> {
+    const signature = this._signingKeyPair
+      ? await this.cipher.sign(content, this._signingKeyPair.privateKey)
+      : '';
+
+    // Prefer ratchet when the sending chain is ready.
+    // Bob-side handshake states start with sendChainKey = null until the first receive.
+    const state = this.ratchetStates.get(peerId);
+    if (state?.sendChainKey) {
+      const ratchet = await DoubleRatchet.encrypt(state, content);
+      await this.persistState(peerId);
+      return {
+        id: this.generateMessageId(),
+        timestamp: Date.now(),
+        sender: this.myPeerId,
+        type,
+        ratchet,
+        signature,
+        protocolVersion: 2,
+        metadata,
+      };
+    }
+
+    // Fallback: legacy static shared secret
     const sharedSecret = this.sharedSecrets.get(peerId);
-    if (!sharedSecret) throw new Error(`No shared secret for peer: ${peerId}`);
+    if (sharedSecret) {
+      const encrypted = await this.cipher.encrypt(content, sharedSecret);
+      return {
+        id: this.generateMessageId(),
+        timestamp: Date.now(),
+        sender: this.myPeerId,
+        type,
+        encrypted,
+        signature,
+        protocolVersion: 1,
+        metadata,
+      };
+    }
+
+    // No shared secret and no ratchet: try pre-key bootstrap from cached bundle.
+    const bootstrapped = await this.encryptWithPreKeyBootstrap(peerId, content, type, signature, metadata);
+    if (bootstrapped) return bootstrapped;
+
+    throw new Error(`No shared secret with peer ${peerId.slice(0, 8)}`);
+  }
+
+  async decryptMessage(peerId: string, envelope: MessageEnvelope, peerPublicKey: CryptoKey): Promise<string | null> {
+    // Pre-key session init (protocol v3)
+    if ((envelope as PreKeySessionEnvelope).protocolVersion === 3 && (envelope as PreKeySessionEnvelope).sessionInit) {
+      return this.decryptPreKeySessionInit(peerId, envelope as PreKeySessionEnvelope, peerPublicKey);
+    }
+
+    // Ratchet envelope (v2)
+    if (envelope.protocolVersion === 2 && 'ratchet' in envelope) {
+      let state = this.ratchetStates.get(peerId);
+
+      // Try restoring from persistence if not in memory
+      if (!state && this.persistence) {
+        const saved = await this.persistence.load(peerId);
+        if (saved) {
+          try {
+            state = await deserializeRatchetState(saved);
+            this.ratchetStates.set(peerId, state);
+          } catch (e) {
+            console.warn(`[Ratchet] Failed to restore state for ${peerId.slice(0, 8)}:`, e);
+          }
+        }
+      }
+
+      if (!state) {
+        throw new Error(`No ratchet state with peer ${peerId.slice(0, 8)}`);
+      }
+
+      const content = await DoubleRatchet.decrypt(state, envelope.ratchet);
+      await this.persistState(peerId);
+
+      // Verify ECDSA signature (use dedicated signing key if known)
+      const signingKey = this.signingPublicKeys.get(peerId) ?? peerPublicKey;
+      const isValid = await this.cipher.verify(content, envelope.signature, signingKey);
+      if (!isValid) return null;
+
+      return content;
+    }
+
+    // Legacy v1
+    if (!('encrypted' in envelope)) {
+      throw new Error('Unsupported envelope format');
+    }
+
+    const sharedSecret = this.sharedSecrets.get(peerId);
+    if (!sharedSecret) throw new Error(`No shared secret with peer ${peerId.slice(0, 8)}`);
 
     const content = await this.cipher.decrypt(envelope.encrypted, sharedSecret);
 
-    // Use ECDSA signing key for verification if available, fallback to ECDH identity key
+    // Verify ECDSA signature (use dedicated signing key if known)
     const signingKey = this.signingPublicKeys.get(peerId) ?? peerPublicKey;
     const isValid = await this.cipher.verify(content, envelope.signature, signingKey);
     if (!isValid) return null;
@@ -429,6 +523,459 @@ export class NodeMessageProtocol {
     } catch (e) {
       console.warn(`[Ratchet] Failed to persist state for ${peerId.slice(0, 8)}:`, e);
     }
+  }
+
+  private async encryptWithPreKeyBootstrap(
+    peerId: string,
+    content: string,
+    type: 'text' | 'file' | 'system' | 'handshake',
+    signature: string,
+    metadata?: EnvelopeMetadata,
+  ): Promise<PreKeySessionEnvelope | null> {
+    const bundle = await this.getPeerPreKeyBundle(peerId);
+    if (!bundle) return null;
+
+    const oneTimeKey = bundle.oneTimePreKeys[0];
+    const selectedType: PreKeyType = oneTimeKey ? 'one-time' : 'signed';
+    const selectedKeyId = oneTimeKey?.keyId ?? bundle.signedPreKey.keyId;
+    const selectedPublic = oneTimeKey?.publicKey ?? bundle.signedPreKey.publicKey;
+
+    if (!selectedPublic) return null;
+    if (!oneTimeKey && bundle.signedPreKey.expiresAt <= Date.now()) {
+      return null;
+    }
+
+    const selectedPublicKey = await this.importEcdhPublicKey(selectedPublic);
+    const senderEphemeral = await crypto.subtle.generateKey(
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      ['deriveBits'],
+    );
+
+    const initialSecret = await crypto.subtle.deriveBits(
+      { name: 'ECDH', public: selectedPublicKey },
+      senderEphemeral.privateKey,
+      256,
+    );
+
+    const state = await DoubleRatchet.initAlice(initialSecret, selectedPublicKey);
+    const ratchet = await DoubleRatchet.encrypt(state, content);
+    this.ratchetStates.set(peerId, state);
+    await this.persistState(peerId);
+
+    const senderEphemeralPublicKey = await this.exportEcdhPublicKey(senderEphemeral.publicKey);
+
+    if (oneTimeKey) {
+      const consumedBundle: PreKeyBundle = {
+        ...bundle,
+        oneTimePreKeys: bundle.oneTimePreKeys.slice(1),
+      };
+      const normalized = this.normalizePeerPreKeyBundle(consumedBundle);
+      if (normalized) {
+        this.peerPreKeyBundles.set(peerId, normalized);
+        await this.persistPeerPreKeyBundle(peerId, normalized, 'consumed peer bundle');
+      } else {
+        await this.clearPeerPreKeyBundle(peerId);
+      }
+    }
+
+    return {
+      id: this.generateMessageId(),
+      timestamp: Date.now(),
+      sender: this.myPeerId,
+      type,
+      ratchet,
+      signature,
+      protocolVersion: 3,
+      sessionInit: {
+        type: 'pre-key-session-init',
+        bundleVersion: PRE_KEY_BUNDLE_VERSION,
+        selectedPreKeyId: selectedKeyId,
+        selectedPreKeyType: selectedType,
+        senderEphemeralPublicKey,
+        createdAt: Date.now(),
+      },
+      metadata,
+    };
+  }
+
+  private async decryptPreKeySessionInit(
+    peerId: string,
+    envelope: PreKeySessionEnvelope,
+    peerPublicKey: CryptoKey,
+  ): Promise<string | null> {
+    if (this.ratchetStates.has(peerId)) {
+      throw new Error(`Ratchet already established with peer ${peerId.slice(0, 8)}`);
+    }
+
+    await this.ensureLocalPreKeyMaterial();
+
+    const init = envelope.sessionInit;
+    if (!init || init.type !== 'pre-key-session-init') {
+      throw new Error('Invalid pre-key session-init payload');
+    }
+
+    const localPreKey = this.resolveLocalPreKey(init.selectedPreKeyType, init.selectedPreKeyId);
+    if (!localPreKey) {
+      throw new Error(`Pre-key ${init.selectedPreKeyType}:${init.selectedPreKeyId} unavailable`);
+    }
+
+    const senderEphemeral = await this.importEcdhPublicKey(init.senderEphemeralPublicKey);
+    const initialSecret = await crypto.subtle.deriveBits(
+      { name: 'ECDH', public: senderEphemeral },
+      localPreKey.privateKey,
+      256,
+    );
+
+    const state = await DoubleRatchet.initBob(initialSecret, {
+      publicKey: localPreKey.publicKey,
+      privateKey: localPreKey.privateKey,
+    });
+
+    const content = await DoubleRatchet.decrypt(state, envelope.ratchet);
+
+    // Verify signature before mutating durable state.
+    const signingKey = this.signingPublicKeys.get(peerId) ?? peerPublicKey;
+    const isValid = await this.cipher.verify(content, envelope.signature, signingKey);
+    if (!isValid) return null;
+
+    this.ratchetStates.set(peerId, state);
+    await this.persistState(peerId);
+
+    let localStateChanged = false;
+    if (init.selectedPreKeyType === 'one-time') {
+      this.localOneTimePreKeys.delete(init.selectedPreKeyId);
+      localStateChanged = true;
+    }
+
+    if (await this.applyLocalPreKeyLifecyclePolicy()) {
+      localStateChanged = true;
+    }
+
+    if (localStateChanged) {
+      await this.persistLocalPreKeyState();
+    }
+
+    return content;
+  }
+
+  private resolveLocalPreKey(type: PreKeyType, keyId: number): LocalPreKeyRuntimeRecord | null {
+    if (type === 'signed') {
+      if (!this.localSignedPreKey || this.localSignedPreKey.keyId !== keyId) return null;
+      return this.localSignedPreKey;
+    }
+    return this.localOneTimePreKeys.get(keyId) ?? null;
+  }
+
+  private async ensureLocalPreKeyMaterial(): Promise<void> {
+    if (this.preKeyReady) {
+      await this.preKeyReady;
+      return;
+    }
+
+    this.preKeyReady = (async () => {
+      let restored = false;
+
+      // Try restore persisted local state first.
+      if (this.persistence?.loadLocalPreKeyState) {
+        try {
+          const persisted = await this.persistence.loadLocalPreKeyState(this.myPeerId);
+          if (persisted) {
+            await this.loadLocalPreKeyState(persisted);
+            restored = true;
+          }
+        } catch (e) {
+          console.warn('[PreKey] Failed to load local pre-key state:', e);
+        }
+      }
+
+      if (!restored) {
+        await this.generateFreshLocalPreKeys();
+      }
+
+      const changed = await this.applyLocalPreKeyLifecyclePolicy();
+      if (!restored || changed) {
+        await this.persistLocalPreKeyState();
+      }
+    })();
+
+    await this.preKeyReady;
+  }
+
+  private async loadLocalPreKeyState(state: PersistedLocalPreKeyState): Promise<void> {
+    this.localSignedPreKey = {
+      keyId: state.signedPreKey.keyId,
+      createdAt: state.signedPreKey.createdAt,
+      expiresAt: state.signedPreKey.expiresAt,
+      signature: state.signedPreKey.signature,
+      publicKey: await this.importEcdhPublicKey(state.signedPreKey.publicKey),
+      privateKey: await this.importEcdhPrivateKey(state.signedPreKey.privateKey),
+    };
+
+    this.localOneTimePreKeys.clear();
+    for (const key of state.oneTimePreKeys) {
+      this.localOneTimePreKeys.set(key.keyId, {
+        keyId: key.keyId,
+        createdAt: key.createdAt,
+        publicKey: await this.importEcdhPublicKey(key.publicKey),
+        privateKey: await this.importEcdhPrivateKey(key.privateKey),
+      });
+    }
+
+    this.nextOneTimePreKeyId = Math.max(
+      state.nextOneTimePreKeyId,
+      ...Array.from(this.localOneTimePreKeys.keys(), (id) => id + 1),
+      1,
+    );
+  }
+
+  private async generateFreshLocalPreKeys(): Promise<void> {
+    if (!this._signingKeyPair) throw new Error('MessageProtocol not initialized with signing keys');
+
+    const now = Date.now();
+    const signedPair = await crypto.subtle.generateKey(
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      ['deriveBits'],
+    );
+    const signedPub = await this.exportEcdhPublicKey(signedPair.publicKey);
+
+    this.localSignedPreKey = {
+      keyId: now,
+      publicKey: signedPair.publicKey,
+      privateKey: signedPair.privateKey,
+      createdAt: now,
+      expiresAt: now + PRE_KEY_POLICY.signedPreKeyTtlMs,
+      signature: await this.cipher.sign(signedPub, this._signingKeyPair.privateKey),
+    };
+
+    this.localOneTimePreKeys.clear();
+    this.nextOneTimePreKeyId = 1;
+    await this.generateMoreOneTimePreKeys(PRE_KEY_POLICY.targetOneTimePreKeys);
+  }
+
+  private async rotateLocalSignedPreKey(now = Date.now()): Promise<void> {
+    if (!this._signingKeyPair) throw new Error('MessageProtocol not initialized with signing keys');
+
+    const signedPair = await crypto.subtle.generateKey(
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      ['deriveBits'],
+    );
+    const signedPub = await this.exportEcdhPublicKey(signedPair.publicKey);
+
+    this.localSignedPreKey = {
+      keyId: Math.max(now, (this.localSignedPreKey?.keyId ?? 0) + 1),
+      publicKey: signedPair.publicKey,
+      privateKey: signedPair.privateKey,
+      createdAt: now,
+      expiresAt: now + PRE_KEY_POLICY.signedPreKeyTtlMs,
+      signature: await this.cipher.sign(signedPub, this._signingKeyPair.privateKey),
+    };
+  }
+
+  private async applyLocalPreKeyLifecyclePolicy(now = Date.now()): Promise<boolean> {
+    const signedDecision = decideSignedPreKeyLifecycle(this.localSignedPreKey, {
+      now,
+      refreshWindowMs: PRE_KEY_POLICY.signedPreKeyRefreshWindowMs,
+    });
+
+    if (signedDecision.regenerateAll) {
+      await this.generateFreshLocalPreKeys();
+      return true;
+    }
+
+    let changed = false;
+
+    if (signedDecision.rotateSignedPreKey) {
+      await this.rotateLocalSignedPreKey(now);
+      changed = true;
+    }
+
+    const oneTimePlan = planLocalOneTimePreKeyLifecycle(this.localOneTimePreKeys.values(), {
+      now,
+      maxAgeMs: PRE_KEY_POLICY.maxOneTimePreKeyAgeMs,
+      targetCount: PRE_KEY_POLICY.targetOneTimePreKeys,
+      lowWatermark: PRE_KEY_POLICY.lowWatermarkOneTimePreKeys,
+    });
+
+    if (oneTimePlan.staleKeyIds.length > 0) {
+      for (const keyId of oneTimePlan.staleKeyIds) {
+        this.localOneTimePreKeys.delete(keyId);
+      }
+      changed = true;
+    }
+
+    if (oneTimePlan.replenishCount > 0) {
+      await this.generateMoreOneTimePreKeys(oneTimePlan.replenishCount);
+      changed = true;
+    }
+
+    return changed;
+  }
+
+  private async generateMoreOneTimePreKeys(count: number): Promise<void> {
+    for (let i = 0; i < count; i++) {
+      const keyId = this.nextOneTimePreKeyId++;
+      const pair = await crypto.subtle.generateKey(
+        { name: 'ECDH', namedCurve: 'P-256' },
+        true,
+        ['deriveBits'],
+      );
+      this.localOneTimePreKeys.set(keyId, {
+        keyId,
+        publicKey: pair.publicKey,
+        privateKey: pair.privateKey,
+        createdAt: Date.now(),
+      });
+    }
+  }
+
+  private async snapshotLocalPreKeyBundle(): Promise<PreKeyBundle> {
+    if (!this.localSignedPreKey || !this._signingKeyPair) {
+      throw new Error('Local pre-key state unavailable');
+    }
+
+    const oneTimePreKeys = await Promise.all(
+      Array.from(this.localOneTimePreKeys.values())
+        .sort((a, b) => a.keyId - b.keyId)
+        .map(async (record) => ({
+          keyId: record.keyId,
+          publicKey: await this.exportEcdhPublicKey(record.publicKey),
+          createdAt: record.createdAt,
+        })),
+    );
+
+    return {
+      version: PRE_KEY_BUNDLE_VERSION,
+      peerId: this.myPeerId,
+      generatedAt: Date.now(),
+      signingPublicKey: await this.cryptoManager.exportPublicKey(this._signingKeyPair.publicKey),
+      signedPreKey: {
+        keyId: this.localSignedPreKey.keyId,
+        publicKey: await this.exportEcdhPublicKey(this.localSignedPreKey.publicKey),
+        signature: this.localSignedPreKey.signature,
+        createdAt: this.localSignedPreKey.createdAt,
+        expiresAt: this.localSignedPreKey.expiresAt,
+      },
+      oneTimePreKeys,
+    };
+  }
+
+  private async persistLocalPreKeyState(): Promise<void> {
+    if (!this.persistence?.saveLocalPreKeyState || !this.localSignedPreKey) return;
+
+    try {
+      const state: PersistedLocalPreKeyState = {
+        version: PRE_KEY_BUNDLE_VERSION,
+        generatedAt: Date.now(),
+        signedPreKey: {
+          keyId: this.localSignedPreKey.keyId,
+          publicKey: await this.exportEcdhPublicKey(this.localSignedPreKey.publicKey),
+          privateKey: await this.exportEcdhPrivateKey(this.localSignedPreKey.privateKey),
+          signature: this.localSignedPreKey.signature,
+          createdAt: this.localSignedPreKey.createdAt,
+          expiresAt: this.localSignedPreKey.expiresAt,
+        },
+        oneTimePreKeys: await Promise.all(
+          Array.from(this.localOneTimePreKeys.values())
+            .sort((a, b) => a.keyId - b.keyId)
+            .map(async (record) => ({
+              keyId: record.keyId,
+              publicKey: await this.exportEcdhPublicKey(record.publicKey),
+              privateKey: await this.exportEcdhPrivateKey(record.privateKey),
+              createdAt: record.createdAt,
+            })),
+        ),
+        nextOneTimePreKeyId: this.nextOneTimePreKeyId,
+      };
+
+      await this.persistence.saveLocalPreKeyState(this.myPeerId, state);
+    } catch (e) {
+      console.warn('[PreKey] Failed to persist local pre-key state:', e);
+    }
+  }
+
+  private async persistPeerPreKeyBundle(
+    peerId: string,
+    bundle: PreKeyBundle,
+    context: string = 'peer bundle',
+  ): Promise<void> {
+    if (!this.persistence?.savePreKeyBundle) return;
+
+    try {
+      await this.persistence.savePreKeyBundle(peerId, bundle);
+    } catch (e) {
+      console.warn(`[PreKey] Failed to persist ${context} for ${peerId.slice(0, 8)}:`, e);
+    }
+  }
+
+  private normalizePeerPreKeyBundle(bundle: PreKeyBundle, now = Date.now()): PreKeyBundle | null {
+    return normalizePeerPreKeyBundlePolicy(bundle, {
+      now,
+      expectedVersion: PRE_KEY_BUNDLE_VERSION,
+      maxBundleAgeMs: PRE_KEY_POLICY.maxPeerBundleAgeMs,
+      maxOneTimePreKeyAgeMs: PRE_KEY_POLICY.maxOneTimePreKeyAgeMs,
+    });
+  }
+
+  private hasPeerBundleChanged(before: PreKeyBundle, after: PreKeyBundle): boolean {
+    return hasPeerPreKeyBundleChanged(before, after);
+  }
+
+  private async sanitizeAndVerifyPeerPreKeyBundle(peerId: string, bundle: PreKeyBundle): Promise<PreKeyBundle | null> {
+    const normalized = this.normalizePeerPreKeyBundle(bundle);
+    if (!normalized) return null;
+    if (normalized.peerId !== peerId) return null;
+
+    try {
+      const signingKey = await this.cryptoManager.importSigningPublicKey(normalized.signingPublicKey);
+      const isValid = await this.cipher.verify(
+        normalized.signedPreKey.publicKey,
+        normalized.signedPreKey.signature,
+        signingKey,
+      );
+      if (!isValid) return null;
+
+      // Validate public keys are importable ECDH keys.
+      await this.importEcdhPublicKey(normalized.signedPreKey.publicKey);
+      for (const entry of normalized.oneTimePreKeys) {
+        await this.importEcdhPublicKey(entry.publicKey);
+      }
+      return normalized;
+    } catch {
+      return null;
+    }
+  }
+
+  private async exportEcdhPublicKey(key: CryptoKey): Promise<string> {
+    const raw = await crypto.subtle.exportKey('raw', key);
+    return arrayBufferToBase64(raw);
+  }
+
+  private async exportEcdhPrivateKey(key: CryptoKey): Promise<string> {
+    const pkcs8 = await crypto.subtle.exportKey('pkcs8', key);
+    return arrayBufferToBase64(pkcs8);
+  }
+
+  private async importEcdhPublicKey(rawBase64: string): Promise<CryptoKey> {
+    return crypto.subtle.importKey(
+      'raw',
+      base64ToArrayBuffer(rawBase64),
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      [],
+    );
+  }
+
+  private async importEcdhPrivateKey(pkcs8Base64: string): Promise<CryptoKey> {
+    return crypto.subtle.importKey(
+      'pkcs8',
+      base64ToArrayBuffer(pkcs8Base64),
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      ['deriveBits'],
+    );
   }
 
   private generateMessageId(): string {

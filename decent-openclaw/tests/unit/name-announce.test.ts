@@ -37,16 +37,26 @@ describe('NodeXenaPeer name-announce flow', () => {
       },
     };
     (peer as any).messageProtocol = {
-      createHandshake: async () => ({ publicKey: 'pk', peerId: 'me' }),
+      createHandshake: async () => ({ publicKey: 'pk', peerId: 'me', preKeySupport: true }),
+      createPreKeyBundle: async () => ({
+        version: 1,
+        peerId: 'me',
+        generatedAt: Date.now(),
+        signingPublicKey: 'sig',
+        signedPreKey: { keyId: 1, publicKey: 'spk', signature: 'sig', createdAt: Date.now(), expiresAt: Date.now() + 1000 },
+        oneTimePreKeys: [],
+      }),
     };
 
     await (peer as any).sendHandshake('peer-1');
 
-    expect(sent).toHaveLength(2);
+    expect(sent).toHaveLength(3);
     expect(sent[0]?.peerId).toBe('peer-1');
     expect(sent[0]?.msg.type).toBe('handshake');
     expect(sent[1]?.peerId).toBe('peer-1');
-    expect(sent[1]?.msg).toEqual({ type: 'name-announce', alias: 'Xena', isBot: true });
+    expect(sent[1]?.msg.type).toBe('pre-key-bundle.publish');
+    expect(sent[2]?.peerId).toBe('peer-1');
+    expect(sent[2]?.msg).toEqual({ type: 'name-announce', alias: 'Xena', isBot: true });
   });
 
   test('resolveSenderName prefers cached alias over peer ID', () => {

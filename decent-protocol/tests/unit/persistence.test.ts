@@ -563,3 +563,120 @@ describe('Offline Queue - Full Flow', () => {
     expect(queue.getQueuedCount('bob')).toBe(0);
   });
 });
+
+describe('PersistentStore pre-key persistence', () => {
+  test('saves and restores peer bundles + local pre-key state', async () => {
+    const store = new PersistentStore({ dbName: `prekey-persistence-${Date.now()}` });
+    await store.init();
+
+    const now = Date.now();
+    const bundle = {
+      version: 1 as const,
+      peerId: 'peer-b',
+      generatedAt: now,
+      signingPublicKey: 'signing-pub',
+      signedPreKey: {
+        keyId: 99,
+        publicKey: 'signed-pre-key',
+        signature: 'signed-pre-key-signature',
+        createdAt: now,
+        expiresAt: now + 60_000,
+      },
+      oneTimePreKeys: [
+        { keyId: 1, publicKey: 'otpk-1', createdAt: now },
+        { keyId: 2, publicKey: 'otpk-2', createdAt: now },
+      ],
+    };
+
+    await store.savePreKeyBundle('peer-b', bundle);
+    expect(await store.getPreKeyBundle('peer-b')).toEqual(bundle);
+
+    const localState = {
+      version: 1 as const,
+      generatedAt: now,
+      signedPreKey: {
+        keyId: 99,
+        publicKey: 'signed-pre-key',
+        privateKey: 'signed-pre-key-private',
+        signature: 'signed-pre-key-signature',
+        createdAt: now,
+        expiresAt: now + 60_000,
+      },
+      oneTimePreKeys: [
+        { keyId: 1, publicKey: 'otpk-1', privateKey: 'otpk-1-priv', createdAt: now },
+      ],
+      nextOneTimePreKeyId: 3,
+    };
+
+    await store.saveLocalPreKeyState('peer-a', localState);
+    expect(await store.getLocalPreKeyState('peer-a')).toEqual(localState);
+
+    await store.deletePreKeyBundle('peer-b');
+    expect(await store.getPreKeyBundle('peer-b')).toBeUndefined();
+
+    await store.deleteLocalPreKeyState('peer-a');
+    expect(await store.getLocalPreKeyState('peer-a')).toBeUndefined();
+
+    await store.close();
+  });
+
+
+  test('prunes expired bundles and stale one-time pre-keys', async () => {
+    const store = new PersistentStore({ dbName: `prekey-prune-${Date.now()}` });
+    await store.init();
+
+    const now = Date.now();
+
+    await store.savePreKeyBundle('peer-expired', {
+      version: 1 as const,
+      peerId: 'peer-expired',
+      generatedAt: now - 1_000,
+      signingPublicKey: 'signing-expired',
+      signedPreKey: {
+        keyId: 1,
+        publicKey: 'signed-expired',
+        signature: 'sig-expired',
+        createdAt: now - 120_000,
+        expiresAt: now - 60_000,
+      },
+      oneTimePreKeys: [
+        { keyId: 1, publicKey: 'expired-otk', createdAt: now - 120_000 },
+      ],
+    });
+
+    await store.savePreKeyBundle('peer-fresh', {
+      version: 1 as const,
+      peerId: 'peer-fresh',
+      generatedAt: now - 1_000,
+      signingPublicKey: 'signing-fresh',
+      signedPreKey: {
+        keyId: 5,
+        publicKey: 'signed-fresh',
+        signature: 'sig-fresh',
+        createdAt: now - 10_000,
+        expiresAt: now + 120_000,
+      },
+      oneTimePreKeys: [
+        { keyId: 4, publicKey: 'fresh-4', createdAt: now - 1_000 },
+        { keyId: 2, publicKey: 'stale-2', createdAt: now - 90_000 },
+        { keyId: 4, publicKey: 'duplicate-4', createdAt: now - 500 },
+        { keyId: 3, publicKey: 'fresh-3', createdAt: now - 2_000 },
+      ],
+    });
+
+    const pruned = await store.prunePreKeyBundles({
+      now,
+      maxBundleAgeMs: 10_000,
+      maxOneTimePreKeyAgeMs: 30_000,
+    });
+
+    expect(pruned.deleted).toBe(1);
+    expect(pruned.updated).toBe(1);
+    expect(await store.getPreKeyBundle('peer-expired')).toBeUndefined();
+
+    const fresh = await store.getPreKeyBundle('peer-fresh');
+    expect(fresh?.oneTimePreKeys.map((entry) => entry.keyId)).toEqual([3, 4]);
+
+    await store.close();
+  });
+});

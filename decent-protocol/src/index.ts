@@ -32,6 +32,14 @@ export type { ServerStats } from './workspace/ServerDiscovery';
 export { MessageStore } from './messages/MessageStore';
 export { OfflineQueue } from './messages/OfflineQueue';
 export { CustodyStore } from './messages/CustodyStore';
+export { PRE_KEY_BUNDLE_VERSION } from './messages/PreKeyTypes';
+export {
+  DEFAULT_PRE_KEY_LIFECYCLE_POLICY,
+  decideSignedPreKeyLifecycle,
+  planLocalOneTimePreKeyLifecycle,
+  normalizePeerPreKeyBundle,
+  hasPeerPreKeyBundleChanged,
+} from './messages/PreKeyLifecyclePolicy';
 export { ManifestStore, MANIFEST_STORE_STATE_SCHEMA_VERSION } from './sync/ManifestStore';
 
 // ─── Storage ────────────────────────────────────────────────────────────────
@@ -164,6 +172,29 @@ export type {
 } from './workspace/PresenceProtocol';
 export type { SyncEvent, SendFn, OnEvent } from './workspace/SyncProtocol';
 export type { ChatMessage, PlaintextMessage, MessageMetadata, AssistantMessageMetadata } from './messages/types';
+export type {
+  PreKeyType,
+  SignedPreKeyBundleEntry,
+  OneTimePreKeyBundleEntry,
+  PreKeyBundle,
+  PersistedLocalPreKeyRecord,
+  PersistedSignedPreKeyRecord,
+  PersistedLocalPreKeyState,
+  PreKeySessionInitPayload,
+  PreKeyBundlePublishMessage,
+  PreKeyBundleRequestMessage,
+  PreKeyBundleResponseMessage,
+  PreKeyBundleFetchQuerySource,
+  PreKeyBundleFetchMessage,
+  PreKeyBundleFetchResponseMessage,
+} from './messages/PreKeyTypes';
+export type {
+  PreKeyLifecyclePolicyConfig,
+  SignedPreKeyLifecycleDecision,
+  OneTimePreKeyLifecycleEntry,
+  LocalOneTimePreKeyLifecyclePlan,
+  NormalizePeerPreKeyBundleOptions,
+} from './messages/PreKeyLifecyclePolicy';
 export type {
   CustodyReplicationClass,
   CustodyDeliveryState,

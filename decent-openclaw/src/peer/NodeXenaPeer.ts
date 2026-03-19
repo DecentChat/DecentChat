@@ -119,6 +119,13 @@ type PendingMediaRequest = {
   timeout: ReturnType<typeof setTimeout>;
 };
 
+type PendingPreKeyBundleFetch = {
+  ownerPeerId: string;
+  workspaceId?: string;
+  pendingPeerIds: Set<string>;
+  resolve: (value: boolean) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
 
 type DirectoryEntry = {
   kind: 'user' | 'group';
@@ -131,6 +138,7 @@ type DirectoryEntry = {
 
 export class NodeXenaPeer {
   private static readonly CUSTODIAN_REPLICATION_TARGET = 2;
+  private static readonly PRE_KEY_FETCH_TIMEOUT_MS = 2_500;
 
   private readonly store: FileStore;
   private readonly workspaceManager: WorkspaceManager;
@@ -150,6 +158,8 @@ export class NodeXenaPeer {
   private readonly pendingCustodyOffers = new Map<string, string[]>();
   private readonly opts: NodeXenaPeerOptions;
   private readonly pendingMediaRequests = new Map<string, PendingMediaRequest>();
+  private readonly pendingPreKeyBundleFetches = new Map<string, PendingPreKeyBundleFetch>();
+  private readonly publishedPreKeyVersionByWorkspace = new Map<string, string>();
   private readonly mediaChunkTimeout = 30000;
   private manifestPersistTimer: ReturnType<typeof setTimeout> | null = null;
   public botHuddle: BotHuddleManager | null = null;
@@ -464,7 +474,7 @@ export class NodeXenaPeer {
 
     for (const peerId of recipients) {
       try {
-        const encrypted = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text', modelMeta);
+        const encrypted = await this.encryptMessageWithPreKeyBootstrap(peerId, content.trim(), modelMeta, workspaceId);
         (encrypted as any).channelId = channelId;
         (encrypted as any).workspaceId = workspaceId;
         (encrypted as any).senderId = this.myPeerId;
@@ -505,7 +515,7 @@ export class NodeXenaPeer {
                 ...(replyToId ? { replyToId } : {}),
               },
             });
-            await this.replicateToCustodians(peerId, workspaceId, channelId, msg.id);
+            await this.replicateToCustodians(peerId, { workspaceId, channelId, opId: msg.id, domain: 'channel-message' });
           }
           continue;
         }
@@ -526,7 +536,7 @@ export class NodeXenaPeer {
             ...(replyToId ? { replyToId } : {}),
           },
         });
-        await this.replicateToCustodians(peerId, workspaceId, channelId, msg.id);
+        await this.replicateToCustodians(peerId, { workspaceId, channelId, opId: msg.id, domain: 'channel-message' });
       } catch (err) {
         this.opts.log?.error?.(`[xena-peer] failed to prepare outbound for ${peerId}: ${String(err)}`);
         await this.enqueueOffline(peerId, {
@@ -596,6 +606,12 @@ export class NodeXenaPeer {
       clearTimeout(pending.timeout);
     }
     this.pendingMediaRequests.clear();
+
+    for (const pending of this.pendingPreKeyBundleFetches.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve(false);
+    }
+    this.pendingPreKeyBundleFetches.clear();
     this.botHuddle?.destroy();
     this.botHuddle = null;
     this.transport?.destroy();
@@ -680,7 +696,11 @@ export class NodeXenaPeer {
     if (msg?.type === 'handshake') {
       await this.messageProtocol.processHandshake(fromPeerId, msg);
       if (msg.preKeySupport) {
-        this.transport.send(fromPeerId, { type: 'pre-key-bundle.request' });
+        const preKeyWorkspaceId = this.resolveSharedWorkspaceIds(fromPeerId)[0];
+        this.transport.send(fromPeerId, {
+          type: 'pre-key-bundle.request',
+          ...(preKeyWorkspaceId ? { workspaceId: preKeyWorkspaceId } : {}),
+        });
       }
       await this.publishPreKeyBundle(fromPeerId);
       const knownKeys = this.store.get<Record<string, string>>('peer-public-keys', {});
@@ -953,13 +973,272 @@ export class NodeXenaPeer {
     this.opts.log?.info?.(`[xena-peer] Fetch request from ${fromPeerId.slice(0, 8)}: sent ${allMessages.length} messages`);
   }
 
+  private resolveSharedWorkspaceIds(peerId: string): string[] {
+    if (!peerId) return [];
+    const ids: string[] = [];
+    for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+      const memberPeerIds = new Set(workspace.members.map((member) => member.peerId));
+      if (memberPeerIds.has(peerId) && memberPeerIds.has(this.myPeerId)) {
+        ids.push(workspace.id);
+      }
+    }
+    return ids;
+  }
+
+  private isWorkspaceMember(peerId: string, workspaceId?: string): boolean {
+    if (!workspaceId || !peerId) return false;
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) return false;
+    return workspace.members.some((member) => member.peerId === peerId);
+  }
+
+  private preKeyBundleVersionToken(bundle: any): string {
+    const signedPreKeyId = typeof bundle?.signedPreKey?.keyId === 'number' ? bundle.signedPreKey.keyId : 0;
+    const oneTimeCount = Array.isArray(bundle?.oneTimePreKeys) ? bundle.oneTimePreKeys.length : 0;
+    const firstOneTimeId = Array.isArray(bundle?.oneTimePreKeys) && typeof bundle.oneTimePreKeys[0]?.keyId === 'number'
+      ? bundle.oneTimePreKeys[0].keyId
+      : 0;
+    const lastOneTimeId = Array.isArray(bundle?.oneTimePreKeys) && oneTimeCount > 0
+      && typeof bundle.oneTimePreKeys[oneTimeCount - 1]?.keyId === 'number'
+      ? bundle.oneTimePreKeys[oneTimeCount - 1].keyId
+      : 0;
+
+    // Ignore generatedAt so repeated publishes of identical key material are deduped.
+    return `${signedPreKeyId}:${oneTimeCount}:${firstOneTimeId}:${lastOneTimeId}`;
+  }
+
+  private async publishPreKeyBundleToDomain(workspaceId: string, bundle: any): Promise<void> {
+    if (!workspaceId || !this.transport) return;
+
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) return;
+
+    const versionToken = this.preKeyBundleVersionToken(bundle);
+    if (this.publishedPreKeyVersionByWorkspace.get(workspaceId) === versionToken) {
+      return;
+    }
+
+    const recipients = workspace.members
+      .map((member) => member.peerId)
+      .filter((peerId) => peerId && peerId !== this.myPeerId);
+    if (recipients.length === 0) return;
+
+    const payload = {
+      type: 'pre-key-bundle.publish' as const,
+      workspaceId,
+      ownerPeerId: this.myPeerId,
+      bundle,
+    };
+    const opId = `pre-key-bundle:${this.myPeerId}:${versionToken}`;
+
+    for (const recipientPeerId of recipients) {
+      await this.custodyStore.storeEnvelope({
+        opId,
+        recipientPeerIds: [recipientPeerId],
+        workspaceId,
+        domain: 'pre-key-bundle',
+        ciphertext: payload,
+        metadata: {
+          ownerPeerId: this.myPeerId,
+          preKeyVersion: versionToken,
+          bundleGeneratedAt: bundle?.generatedAt,
+          signedPreKeyId: bundle?.signedPreKey?.keyId,
+        },
+      });
+
+      await this.replicateToCustodians(recipientPeerId, {
+        workspaceId,
+        opId,
+        domain: 'pre-key-bundle',
+      });
+
+      if (this.transport.getConnectedPeers().includes(recipientPeerId)) {
+        this.transport.send(recipientPeerId, payload);
+      }
+    }
+
+    this.recordManifestDomain('pre-key-bundle', workspaceId, {
+      operation: 'update',
+      subject: this.myPeerId,
+      itemCount: recipients.length,
+      data: {
+        ownerPeerId: this.myPeerId,
+        preKeyVersion: versionToken,
+        bundleGeneratedAt: bundle?.generatedAt,
+        signedPreKeyId: bundle?.signedPreKey?.keyId,
+      },
+    });
+
+    this.publishedPreKeyVersionByWorkspace.set(workspaceId, versionToken);
+  }
+
   private async publishPreKeyBundle(peerId: string): Promise<void> {
     if (!this.transport || !this.messageProtocol) return;
     try {
       const bundle = await this.messageProtocol.createPreKeyBundle();
-      this.transport.send(peerId, { type: 'pre-key-bundle.publish', bundle });
+      const sharedWorkspaceIds = this.resolveSharedWorkspaceIds(peerId);
+      const workspaceId = sharedWorkspaceIds[0];
+      this.transport.send(peerId, {
+        type: 'pre-key-bundle.publish',
+        ...(workspaceId ? { workspaceId } : {}),
+        ownerPeerId: this.myPeerId,
+        bundle,
+      });
+
+      for (const sharedWorkspaceId of sharedWorkspaceIds) {
+        await this.publishPreKeyBundleToDomain(sharedWorkspaceId, bundle);
+      }
     } catch (error) {
       this.opts.log?.warn?.(`[xena-peer] failed to publish pre-key bundle to ${peerId.slice(0, 8)}: ${String(error)}`);
+    }
+  }
+
+  private shouldAttemptPreKeyBootstrap(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    return message.includes('No shared secret with peer');
+  }
+
+  private resolvePreKeyLookupCandidates(ownerPeerId: string, workspaceId?: string): string[] {
+    if (!this.transport || !ownerPeerId) return [];
+
+    const connectedPeers = new Set(this.transport.getConnectedPeers());
+    if (workspaceId) {
+      const workspace = this.workspaceManager.getWorkspace(workspaceId);
+      return (workspace?.members ?? [])
+        .map((member) => member.peerId)
+        .filter((peerId) => peerId && peerId !== this.myPeerId && peerId !== ownerPeerId && connectedPeers.has(peerId));
+    }
+
+    return Array.from(connectedPeers).filter((peerId) => peerId !== this.myPeerId && peerId !== ownerPeerId);
+  }
+
+  private resolveLikelyPreKeyCustodians(ownerPeerId: string, workspaceId?: string): string[] {
+    if (!workspaceId) return [];
+    return this.selectCustodianPeers(workspaceId, ownerPeerId);
+  }
+
+  private async requestPreKeyBundleFromPeers(
+    ownerPeerId: string,
+    workspaceId?: string,
+    opts?: {
+      candidatePeerIds?: string[];
+      timeoutMs?: number;
+      querySource?: 'custodian-targeted' | 'peer-broadcast';
+    },
+  ): Promise<boolean> {
+    if (!this.transport || !this.messageProtocol || !ownerPeerId) return false;
+
+    const resolvedWorkspaceId = workspaceId || this.resolveSharedWorkspaceIds(ownerPeerId)[0];
+    const connectedPeers = new Set(this.transport.getConnectedPeers());
+    const requestedCandidates = opts?.candidatePeerIds ?? this.resolvePreKeyLookupCandidates(ownerPeerId, resolvedWorkspaceId);
+    const candidates = Array.from(new Set(requestedCandidates))
+      .filter((peerId) => peerId && peerId !== this.myPeerId && peerId !== ownerPeerId && connectedPeers.has(peerId))
+      .filter((peerId) => !resolvedWorkspaceId || this.isWorkspaceMember(peerId, resolvedWorkspaceId));
+
+    if (candidates.length === 0) return false;
+
+    const requestId = randomUUID();
+    const timeoutMs = Math.max(250, opts?.timeoutMs ?? NodeXenaPeer.PRE_KEY_FETCH_TIMEOUT_MS);
+    const querySource = opts?.querySource ?? 'peer-broadcast';
+
+    const result = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingPreKeyBundleFetches.delete(requestId);
+        resolve(false);
+      }, timeoutMs);
+
+      const pending: PendingPreKeyBundleFetch = {
+        ownerPeerId,
+        ...(resolvedWorkspaceId ? { workspaceId: resolvedWorkspaceId } : {}),
+        pendingPeerIds: new Set(candidates),
+        resolve: (value) => {
+          clearTimeout(timer);
+          this.pendingPreKeyBundleFetches.delete(requestId);
+          resolve(value);
+        },
+        timer,
+      };
+      this.pendingPreKeyBundleFetches.set(requestId, pending);
+
+      let sentCount = 0;
+      for (const peerId of candidates) {
+        const accepted = this.transport!.send(peerId, {
+          type: 'pre-key-bundle.fetch',
+          requestId,
+          ownerPeerId,
+          ...(resolvedWorkspaceId ? { workspaceId: resolvedWorkspaceId } : {}),
+          querySource,
+        });
+        if (accepted) {
+          sentCount += 1;
+        } else {
+          pending.pendingPeerIds.delete(peerId);
+        }
+      }
+
+      if (sentCount === 0 || pending.pendingPeerIds.size === 0) {
+        clearTimeout(timer);
+        this.pendingPreKeyBundleFetches.delete(requestId);
+        resolve(false);
+      }
+    });
+
+    return result;
+  }
+
+  private async ensurePeerPreKeyBundle(peerId: string, workspaceId?: string): Promise<boolean> {
+    if (!this.messageProtocol || !peerId) return false;
+
+    const existing = await this.messageProtocol.getPeerPreKeyBundle(peerId);
+    if (existing) return true;
+
+    const resolvedWorkspaceId = workspaceId || this.resolveSharedWorkspaceIds(peerId)[0];
+    const likelyCustodians = this.resolveLikelyPreKeyCustodians(peerId, resolvedWorkspaceId);
+
+    if (likelyCustodians.length > 0) {
+      const hydratedViaCustodians = await this.requestPreKeyBundleFromPeers(peerId, resolvedWorkspaceId, {
+        candidatePeerIds: likelyCustodians,
+        timeoutMs: 1_200,
+        querySource: 'custodian-targeted',
+      });
+      if (hydratedViaCustodians) return true;
+    }
+
+    const fallbackCandidates = this.resolvePreKeyLookupCandidates(peerId, resolvedWorkspaceId)
+      .filter((candidatePeerId) => !likelyCustodians.includes(candidatePeerId));
+
+    if (fallbackCandidates.length === 0) {
+      return this.requestPreKeyBundleFromPeers(peerId, resolvedWorkspaceId, {
+        candidatePeerIds: likelyCustodians,
+        querySource: 'peer-broadcast',
+      });
+    }
+
+    return this.requestPreKeyBundleFromPeers(peerId, resolvedWorkspaceId, {
+      candidatePeerIds: fallbackCandidates,
+      querySource: 'peer-broadcast',
+    });
+  }
+
+  private async encryptMessageWithPreKeyBootstrap(
+    peerId: string,
+    content: string,
+    metadata?: MessageMetadata,
+    workspaceId?: string,
+  ): Promise<any> {
+    if (!this.messageProtocol) {
+      throw new Error('Message protocol unavailable');
+    }
+
+    try {
+      return await this.messageProtocol.encryptMessage(peerId, content, 'text', metadata);
+    } catch (error) {
+      if (!this.shouldAttemptPreKeyBootstrap(error)) throw error;
+
+      const hydrated = await this.ensurePeerPreKeyBundle(peerId, workspaceId);
+      if (!hydrated) throw error;
+
+      return this.messageProtocol.encryptMessage(peerId, content, 'text', metadata);
     }
   }
 
@@ -967,8 +1246,22 @@ export class NodeXenaPeer {
     if (!this.transport || !this.messageProtocol) return false;
 
     if (msg?.type === 'pre-key-bundle.publish') {
-      if (msg.bundle) {
-        await this.messageProtocol.storePeerPreKeyBundle(fromPeerId, msg.bundle);
+      if (!msg.bundle) return true;
+      const ownerPeerId = typeof msg?.ownerPeerId === 'string' ? msg.ownerPeerId : fromPeerId;
+      const stored = await this.messageProtocol.storePeerPreKeyBundle(ownerPeerId, msg.bundle);
+      const workspaceId = typeof msg?.workspaceId === 'string' ? msg.workspaceId : this.resolveSharedWorkspaceIds(ownerPeerId)[0];
+      if (stored && workspaceId) {
+        this.recordManifestDomain('pre-key-bundle', workspaceId, {
+          operation: 'update',
+          subject: ownerPeerId,
+          itemCount: 1,
+          data: {
+            ownerPeerId,
+            source: 'publish',
+            bundleGeneratedAt: msg.bundle?.generatedAt,
+            signedPreKeyId: msg.bundle?.signedPreKey?.keyId,
+          },
+        });
       }
       return true;
     }
@@ -976,7 +1269,12 @@ export class NodeXenaPeer {
     if (msg?.type === 'pre-key-bundle.request') {
       try {
         const bundle = await this.messageProtocol.createPreKeyBundle();
-        this.transport.send(fromPeerId, { type: 'pre-key-bundle.response', bundle });
+        this.transport.send(fromPeerId, {
+          type: 'pre-key-bundle.response',
+          ownerPeerId: this.myPeerId,
+          ...(typeof msg?.workspaceId === 'string' ? { workspaceId: msg.workspaceId } : {}),
+          bundle,
+        });
       } catch (error) {
         this.opts.log?.warn?.(`[xena-peer] failed to respond with pre-key bundle to ${fromPeerId.slice(0, 8)}: ${String(error)}`);
       }
@@ -984,8 +1282,95 @@ export class NodeXenaPeer {
     }
 
     if (msg?.type === 'pre-key-bundle.response') {
-      if (msg.bundle) {
-        await this.messageProtocol.storePeerPreKeyBundle(fromPeerId, msg.bundle);
+      if (!msg.bundle) return true;
+      const ownerPeerId = typeof msg?.ownerPeerId === 'string' ? msg.ownerPeerId : fromPeerId;
+      const stored = await this.messageProtocol.storePeerPreKeyBundle(ownerPeerId, msg.bundle);
+      const workspaceId = typeof msg?.workspaceId === 'string' ? msg.workspaceId : this.resolveSharedWorkspaceIds(ownerPeerId)[0];
+      if (stored && workspaceId) {
+        this.recordManifestDomain('pre-key-bundle', workspaceId, {
+          operation: 'update',
+          subject: ownerPeerId,
+          itemCount: 1,
+          data: {
+            ownerPeerId,
+            source: 'response',
+            bundleGeneratedAt: msg.bundle?.generatedAt,
+            signedPreKeyId: msg.bundle?.signedPreKey?.keyId,
+          },
+        });
+      }
+      return true;
+    }
+
+    if (msg?.type === 'pre-key-bundle.fetch') {
+      const requestId = typeof msg?.requestId === 'string' ? msg.requestId : '';
+      const ownerPeerId = typeof msg?.ownerPeerId === 'string' ? msg.ownerPeerId : '';
+      if (!requestId || !ownerPeerId) return true;
+
+      const workspaceId = typeof msg?.workspaceId === 'string' ? msg.workspaceId : undefined;
+      if (workspaceId) {
+        const workspace = this.workspaceManager.getWorkspace(workspaceId);
+        const memberPeerIds = new Set((workspace?.members ?? []).map((member) => member.peerId));
+        if (!workspace || !memberPeerIds.has(fromPeerId) || !memberPeerIds.has(ownerPeerId) || !memberPeerIds.has(this.myPeerId)) {
+          return true;
+        }
+      }
+
+      const querySource = (msg?.querySource === 'custodian-targeted' || msg?.querySource === 'peer-broadcast')
+        ? msg.querySource
+        : undefined;
+      const bundle = await this.messageProtocol.getPeerPreKeyBundle(ownerPeerId);
+
+      this.transport.send(fromPeerId, {
+        type: 'pre-key-bundle.fetch-response',
+        requestId,
+        ownerPeerId,
+        ...(workspaceId ? { workspaceId } : {}),
+        ...(querySource ? { querySource } : {}),
+        ...(bundle ? { bundle } : { notAvailable: true }),
+      });
+      return true;
+    }
+
+    if (msg?.type === 'pre-key-bundle.fetch-response') {
+      const requestId = typeof msg?.requestId === 'string' ? msg.requestId : '';
+      if (!requestId) return true;
+
+      const pending = this.pendingPreKeyBundleFetches.get(requestId);
+      if (!pending) return true;
+
+      if (!pending.pendingPeerIds.has(fromPeerId)) return true;
+
+      const ownerPeerId = typeof msg?.ownerPeerId === 'string' ? msg.ownerPeerId : pending.ownerPeerId;
+      if (ownerPeerId !== pending.ownerPeerId) return true;
+
+      pending.pendingPeerIds.delete(fromPeerId);
+
+      if (msg?.bundle) {
+        const stored = await this.messageProtocol.storePeerPreKeyBundle(ownerPeerId, msg.bundle);
+        const workspaceId = typeof msg?.workspaceId === 'string' ? msg.workspaceId : pending.workspaceId;
+        if (stored && workspaceId) {
+          this.recordManifestDomain('pre-key-bundle', workspaceId, {
+            operation: 'update',
+            subject: ownerPeerId,
+            itemCount: 1,
+            data: {
+              ownerPeerId,
+              source: 'fetch-response',
+              bundleGeneratedAt: msg.bundle?.generatedAt,
+              signedPreKeyId: msg.bundle?.signedPreKey?.keyId,
+            },
+          });
+        }
+
+        if (stored) {
+          pending.resolve(true);
+          return true;
+        }
+      }
+
+      if (pending.pendingPeerIds.size === 0) {
+        pending.resolve(false);
       }
       return true;
     }
@@ -1490,7 +1875,7 @@ export class NodeXenaPeer {
     const outboundMessageId = messageId || randomUUID();
 
     try {
-      const encrypted = await this.messageProtocol.encryptMessage(peerId, content.trim(), 'text', modelMeta);
+      const encrypted = await this.encryptMessageWithPreKeyBootstrap(peerId, content.trim(), modelMeta, this.resolveSharedWorkspaceIds(peerId)[0]);
       (encrypted as any).isDirect = true;
       (encrypted as any).senderId = this.myPeerId;
       (encrypted as any).senderName = this.opts.account.alias;
@@ -2408,16 +2793,27 @@ export class NodeXenaPeer {
 
   private async replicateToCustodians(
     recipientPeerId: string,
-    workspaceId: string,
-    channelId: string,
-    messageId: string,
+    params: {
+      workspaceId?: string | null;
+      channelId?: string | null;
+      opId?: string | null;
+      domain?: SyncDomain;
+    },
   ): Promise<void> {
-    if (!this.transport || !workspaceId) return;
+    const workspaceId = params.workspaceId ?? undefined;
+    const opId = params.opId ?? undefined;
+    if (!this.transport || !workspaceId || !opId) return;
+
     const custodians = this.selectCustodianPeers(workspaceId, recipientPeerId);
     if (custodians.length === 0) return;
 
     const pending = await this.custodyStore.getPendingForRecipient(recipientPeerId);
-    const envelopes = pending.filter((envelope) => envelope.opId === messageId && envelope.workspaceId === workspaceId);
+    const envelopes = pending.filter((envelope) => {
+      if (envelope.opId !== opId || envelope.workspaceId !== workspaceId) return false;
+      if (params.domain && envelope.domain !== params.domain) return false;
+      if (params.channelId && envelope.channelId !== params.channelId) return false;
+      return true;
+    });
     if (envelopes.length === 0) return;
 
     for (const envelope of envelopes) {
@@ -2427,7 +2823,7 @@ export class NodeXenaPeer {
           type: 'custody.offer',
           workspaceId,
           recipientPeerId,
-          channelId,
+          ...(envelope.channelId ? { channelId: envelope.channelId } : {}),
           envelope: {
             envelopeId: envelope.envelopeId,
             opId: envelope.opId,
@@ -2653,7 +3049,7 @@ export class NodeXenaPeer {
         }
 
         if (typeof item.content !== 'string') continue;
-        const envelope = await this.messageProtocol.encryptMessage(peerId, item.content, 'text', item.metadata);
+        const envelope = await this.encryptMessageWithPreKeyBootstrap(peerId, item.content, item.metadata, item.workspaceId);
         (envelope as any).senderId = item.senderId ?? this.myPeerId;
         (envelope as any).senderName = item.senderName ?? this.opts.account.alias;
         (envelope as any).messageId = item.messageId;
@@ -2698,7 +3094,7 @@ export class NodeXenaPeer {
 
       if (typeof payload?.content === 'string' && this.messageProtocol) {
         try {
-          const encrypted = await this.messageProtocol.encryptMessage(peerId, payload.content, 'text', payload.metadata);
+          const encrypted = await this.encryptMessageWithPreKeyBootstrap(peerId, payload.content, payload.metadata, workspaceId);
           (encrypted as any).senderId = payload.senderId ?? this.myPeerId;
           (encrypted as any).senderName = payload.senderName ?? this.opts.account.alias;
           (encrypted as any).messageId = payload.messageId ?? randomUUID();
@@ -2833,7 +3229,7 @@ export class NodeXenaPeer {
 
         if (!item.messageId) item.messageId = randomUUID();
         await this.queuePendingAck(peerId, item);
-        const envelope = await this.messageProtocol.encryptMessage(peerId, item.content, 'text', item.metadata);
+        const envelope = await this.encryptMessageWithPreKeyBootstrap(peerId, item.content, item.metadata, item.workspaceId);
         (envelope as any).senderId = item.senderId ?? this.myPeerId;
         (envelope as any).senderName = item.senderName ?? this.opts.account.alias;
         (envelope as any).messageId = item.messageId;

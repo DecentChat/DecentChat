@@ -656,15 +656,22 @@ async function init(): Promise<void> {
       ctrl.cryptoManager,
       myPeerId,
     );
-    await ctrl.messageProtocol.init(ecdsaKeyPair);
-    ctrl.setSigningKeyPair(ecdsaKeyPair);
 
-    // Wire Double Ratchet state persistence via PersistentStore
+    // Wire Double Ratchet + pre-key persistence via PersistentStore
     ctrl.messageProtocol.setPersistence({
       save: (peerId, state) => ctrl.persistentStore.saveRatchetState(peerId, state),
-      load: (peerId) => ctrl.persistentStore.getRatchetState(peerId),
+      load: async (peerId) => ctrl.persistentStore.getRatchetState(peerId) ?? null,
       delete: (peerId) => ctrl.persistentStore.deleteRatchetState(peerId),
+      savePreKeyBundle: (peerId, bundle) => ctrl.persistentStore.savePreKeyBundle(peerId, bundle),
+      loadPreKeyBundle: async (peerId) => (await ctrl.persistentStore.getPreKeyBundle(peerId)) ?? null,
+      deletePreKeyBundle: (peerId) => ctrl.persistentStore.deletePreKeyBundle(peerId),
+      saveLocalPreKeyState: (ownerPeerId, state) => ctrl.persistentStore.saveLocalPreKeyState(ownerPeerId, state),
+      loadLocalPreKeyState: async (ownerPeerId) => (await ctrl.persistentStore.getLocalPreKeyState(ownerPeerId)) ?? null,
+      deleteLocalPreKeyState: (ownerPeerId) => ctrl.persistentStore.deleteLocalPreKeyState(ownerPeerId),
     });
+
+    await ctrl.messageProtocol.init(ecdsaKeyPair);
+    ctrl.setSigningKeyPair(ecdsaKeyPair);
 
     // Wire transport event handlers BEFORE restoring storage so onConnect/onDisconnect
     // fire correctly even if a connection completes during the restore phase.

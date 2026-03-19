@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { AttachmentMeta } from 'decent-protocol';
 import { get } from 'svelte/store';
 import { MobileController } from '../src/app/MobileController';
@@ -524,6 +524,207 @@ describe('MobileController outbox + sync + receipts', () => {
     });
 
     expect(controller.messageStore.getMessages(channelId)[0]?.content).toBe('real');
+  });
+
+  test('pre-key bootstrap targets custodians first for sender-side first-contact encryption', async () => {
+    const controller = createController();
+    const transport = controller.transport as unknown as MockTransport;
+
+    const workspace = controller.workspaceManager.createWorkspace('PreKey', 'me-peer', 'Me', 'pub-me');
+    controller.workspaceManager.addMember(workspace.id, {
+      peerId: 'peer-target',
+      alias: 'Target',
+      publicKey: 'pub-target',
+      role: 'member',
+    });
+    controller.workspaceManager.addMember(workspace.id, {
+      peerId: 'custodian-1',
+      alias: 'Server Custodian',
+      publicKey: 'pub-custodian',
+      role: 'member',
+    });
+    controller.workspaceManager.addMember(workspace.id, {
+      peerId: 'peer-relay',
+      alias: 'Relay',
+      publicKey: 'pub-relay',
+      role: 'member',
+    });
+
+    (controller as any).readyPeers.add('custodian-1');
+    (controller as any).readyPeers.add('peer-relay');
+
+    let hasBundle = false;
+    const storePeerPreKeyBundle = mock(async (ownerPeerId: string) => {
+      if (ownerPeerId === 'peer-target') hasBundle = true;
+      return true;
+    });
+
+    controller.messageProtocol = {
+      encryptMessage: mock(async (peerId: string) => {
+        if (peerId === 'peer-target' && !hasBundle) {
+          throw new Error('No shared secret with peer peer-target');
+        }
+        return { encrypted: { body: 'cipher' }, ratchet: { counter: 1 } };
+      }),
+      getPeerPreKeyBundle: mock(async () => null),
+      storePeerPreKeyBundle,
+    } as any;
+
+    (controller as any).selectCustodianPeers = mock(() => ['custodian-1']);
+
+    const fetchTargets: string[] = [];
+    transport.send = (peerId: string, payload: any) => {
+      if (payload?.type === 'pre-key-bundle.fetch') {
+        fetchTargets.push(`${peerId}:${payload.querySource}`);
+        if (peerId === 'custodian-1') {
+          setTimeout(() => {
+            void (controller as any).handlePreKeyControlMessage('custodian-1', {
+              type: 'pre-key-bundle.fetch-response',
+              requestId: payload.requestId,
+              ownerPeerId: 'peer-target',
+              workspaceId: workspace.id,
+              querySource: payload.querySource,
+              bundle: {
+                version: 1,
+                peerId: 'peer-target',
+                generatedAt: Date.now(),
+                signingPublicKey: 'signing',
+                signedPreKey: {
+                  keyId: 1,
+                  publicKey: 'signed',
+                  signature: 'sig',
+                  createdAt: Date.now(),
+                  expiresAt: Date.now() + 60_000,
+                },
+                oneTimePreKeys: [],
+              },
+            });
+          }, 0);
+        }
+      }
+      return true;
+    };
+
+    const envelope = await (controller as any).encryptMessageWithPreKeyBootstrap(
+      'peer-target',
+      'hello',
+      'text',
+      undefined,
+      workspace.id,
+    );
+
+    expect(envelope).toEqual({ encrypted: { body: 'cipher' }, ratchet: { counter: 1 } });
+    expect(fetchTargets).toEqual(['custodian-1:custodian-targeted']);
+    expect(storePeerPreKeyBundle).toHaveBeenCalledWith('peer-target', expect.any(Object));
+  });
+
+  test('pre-key bootstrap falls back to broader peer fetch when custodians do not have bundle', async () => {
+    const controller = createController();
+    const transport = controller.transport as unknown as MockTransport;
+
+    const workspace = controller.workspaceManager.createWorkspace('PreKeyFallback', 'me-peer', 'Me', 'pub-me');
+    controller.workspaceManager.addMember(workspace.id, {
+      peerId: 'peer-target',
+      alias: 'Target',
+      publicKey: 'pub-target',
+      role: 'member',
+    });
+    controller.workspaceManager.addMember(workspace.id, {
+      peerId: 'custodian-1',
+      alias: 'Server Custodian',
+      publicKey: 'pub-custodian',
+      role: 'member',
+    });
+    controller.workspaceManager.addMember(workspace.id, {
+      peerId: 'peer-relay',
+      alias: 'Relay',
+      publicKey: 'pub-relay',
+      role: 'member',
+    });
+
+    (controller as any).readyPeers.add('custodian-1');
+    (controller as any).readyPeers.add('peer-relay');
+
+    let hasBundle = false;
+    const storePeerPreKeyBundle = mock(async (ownerPeerId: string) => {
+      if (ownerPeerId === 'peer-target') hasBundle = true;
+      return true;
+    });
+
+    controller.messageProtocol = {
+      encryptMessage: mock(async (peerId: string) => {
+        if (peerId === 'peer-target' && !hasBundle) {
+          throw new Error('No shared secret with peer peer-target');
+        }
+        return { encrypted: { body: 'cipher' }, ratchet: { counter: 1 } };
+      }),
+      getPeerPreKeyBundle: mock(async () => null),
+      storePeerPreKeyBundle,
+    } as any;
+
+    (controller as any).selectCustodianPeers = mock(() => ['custodian-1']);
+
+    const fetchTargets: string[] = [];
+    transport.send = (peerId: string, payload: any) => {
+      if (payload?.type === 'pre-key-bundle.fetch') {
+        fetchTargets.push(`${peerId}:${payload.querySource}`);
+
+        if (peerId === 'custodian-1') {
+          setTimeout(() => {
+            void (controller as any).handlePreKeyControlMessage('custodian-1', {
+              type: 'pre-key-bundle.fetch-response',
+              requestId: payload.requestId,
+              ownerPeerId: 'peer-target',
+              workspaceId: workspace.id,
+              querySource: payload.querySource,
+              notAvailable: true,
+            });
+          }, 0);
+        }
+
+        if (peerId === 'peer-relay') {
+          setTimeout(() => {
+            void (controller as any).handlePreKeyControlMessage('peer-relay', {
+              type: 'pre-key-bundle.fetch-response',
+              requestId: payload.requestId,
+              ownerPeerId: 'peer-target',
+              workspaceId: workspace.id,
+              querySource: payload.querySource,
+              bundle: {
+                version: 1,
+                peerId: 'peer-target',
+                generatedAt: Date.now(),
+                signingPublicKey: 'signing',
+                signedPreKey: {
+                  keyId: 2,
+                  publicKey: 'signed-2',
+                  signature: 'sig-2',
+                  createdAt: Date.now(),
+                  expiresAt: Date.now() + 60_000,
+                },
+                oneTimePreKeys: [],
+              },
+            });
+          }, 0);
+        }
+      }
+      return true;
+    };
+
+    const envelope = await (controller as any).encryptMessageWithPreKeyBootstrap(
+      'peer-target',
+      'hello',
+      'text',
+      undefined,
+      workspace.id,
+    );
+
+    expect(envelope).toEqual({ encrypted: { body: 'cipher' }, ratchet: { counter: 1 } });
+    expect(fetchTargets).toEqual([
+      'custodian-1:custodian-targeted',
+      'peer-relay:peer-broadcast',
+    ]);
+    expect(storePeerPreKeyBundle).toHaveBeenCalledWith('peer-target', expect.any(Object));
   });
 
 });

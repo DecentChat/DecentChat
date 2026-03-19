@@ -175,6 +175,26 @@ const v8_manifestRecords: Migration = {
   },
 };
 
+
+/**
+ * v9: Add preKeyBundles/preKeyStates stores for async session bootstrap
+ * The IndexedDB object stores are created by PersistentStore.init() (version bump).
+ */
+const v9_preKeyBundles: Migration = {
+  version: 9,
+  description: 'Add preKeyBundles and preKeyStates stores for pre-key session bootstrapping',
+  up: async (ctx) => {
+    ctx.log('preKeyBundles and preKeyStates stores added (created by IndexedDB upgrade)');
+  },
+  down: async (ctx) => {
+    try {
+      await ctx.clear('preKeyBundles');
+      await ctx.clear('preKeyStates');
+    } catch {}
+    ctx.log('Cleared preKeyBundles and preKeyStates stores');
+  },
+};
+
 /**
  * All migrations in order
  */
@@ -187,7 +207,8 @@ export const ALL_MIGRATIONS: Migration[] = [
   v6_contacts,
   v7_manifestState,
   v8_manifestRecords,
+  v9_preKeyBundles,
 ];
 
 /** Current schema version */
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;

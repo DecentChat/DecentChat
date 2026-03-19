@@ -7,6 +7,7 @@
 
 import { AtRestEncryption } from './AtRestEncryption';
 import type { DeliveryReceipt } from '../messages/CustodyTypes';
+import type { PersistedLocalPreKeyState, PreKeyBundle } from '../messages/PreKeyTypes';
 import type { ManifestStoreState, ManifestStoreWorkspaceState } from '../sync/ManifestStore';
 import type {
   ChannelAccessPolicy,
@@ -32,6 +33,8 @@ export interface PersistentStoreConfig {
 
 const MANIFEST_STORE_STATE_KEY = 'default';
 const MANIFESTS_STORE = 'manifests';
+const PRE_KEY_MAX_ONE_TIME_AGE_MS = 21 * 24 * 60 * 60 * 1000;
+const PRE_KEY_MAX_BUNDLE_AGE_MS = 45 * 24 * 60 * 60 * 1000;
 
 export class PersistentStore {
   private db: IDBDatabase | null = null;
@@ -42,7 +45,7 @@ export class PersistentStore {
 
   constructor(config: PersistentStoreConfig = {}) {
     this.dbName = config.dbName || 'decent-protocol';
-    this.version = config.version || 8;
+    this.version = config.version || 9;
   }
 
   async init(): Promise<void> {
@@ -88,6 +91,16 @@ export class PersistentStore {
         // Ratchet states (per-peer Double Ratchet state for forward secrecy)
         if (!db.objectStoreNames.contains('ratchetStates')) {
           db.createObjectStore('ratchetStates', { keyPath: 'peerId' });
+        }
+
+        // Peer pre-key bundle cache (for async/offline session bootstrap)
+        if (!db.objectStoreNames.contains('preKeyBundles')) {
+          db.createObjectStore('preKeyBundles', { keyPath: 'peerId' });
+        }
+
+        // Local pre-key material (private keys for session-init consumption)
+        if (!db.objectStoreNames.contains('preKeyStates')) {
+          db.createObjectStore('preKeyStates', { keyPath: 'ownerPeerId' });
         }
 
         // Delivery receipts (durable custody/receipt reconciliation)
@@ -544,6 +557,111 @@ export class PersistentStore {
     return this.getAll('ratchetStates');
   }
 
+  // === Pre-key Bundles / Local Pre-key State ===
+
+  async savePreKeyBundle(peerId: string, bundle: PreKeyBundle): Promise<void> {
+    await this.put('preKeyBundles', { peerId, bundle, updatedAt: Date.now() });
+  }
+
+  async getPreKeyBundle(peerId: string): Promise<PreKeyBundle | undefined> {
+    const result = await this.get('preKeyBundles', peerId);
+    return result?.bundle as PreKeyBundle | undefined;
+  }
+
+  async deletePreKeyBundle(peerId: string): Promise<void> {
+    await this.delete('preKeyBundles', peerId);
+  }
+
+  async prunePreKeyBundles(opts?: {
+    now?: number;
+    maxBundleAgeMs?: number;
+    maxOneTimePreKeyAgeMs?: number;
+  }): Promise<{ deleted: number; updated: number }> {
+    if (!this.hasStore('preKeyBundles')) return { deleted: 0, updated: 0 };
+
+    const now = opts?.now ?? Date.now();
+    const maxBundleAgeMs = opts?.maxBundleAgeMs ?? PRE_KEY_MAX_BUNDLE_AGE_MS;
+    const maxOneTimePreKeyAgeMs = opts?.maxOneTimePreKeyAgeMs ?? PRE_KEY_MAX_ONE_TIME_AGE_MS;
+    const minOneTimeCreatedAt = now - maxOneTimePreKeyAgeMs;
+
+    const records = await this.getAll('preKeyBundles') as Array<{ peerId: string; bundle: PreKeyBundle; updatedAt?: number }>;
+    if (records.length === 0) return { deleted: 0, updated: 0 };
+
+    return new Promise((resolve, reject) => {
+      const tx = this.getDB().transaction('preKeyBundles', 'readwrite');
+      const store = tx.objectStore('preKeyBundles');
+
+      let deleted = 0;
+      let updated = 0;
+
+      for (const record of records) {
+        const peerId = typeof record?.peerId === 'string' ? record.peerId : '';
+        const bundle = record?.bundle;
+
+        const signedExpiresAt = Number(bundle?.signedPreKey?.expiresAt);
+        const generatedAt = Number(bundle?.generatedAt);
+
+        const shouldDelete = (
+          !peerId
+          || !bundle
+          || !Number.isFinite(signedExpiresAt)
+          || signedExpiresAt <= now
+          || !Number.isFinite(generatedAt)
+          || generatedAt < (now - maxBundleAgeMs)
+        );
+
+        if (shouldDelete) {
+          store.delete(peerId || (record as any)?.peerId);
+          deleted += 1;
+          continue;
+        }
+
+        const seen = new Set<number>();
+        const sanitizedOneTime = bundle.oneTimePreKeys
+          .slice()
+          .sort((a, b) => a.keyId - b.keyId)
+          .filter((entry) => {
+            if (!entry?.publicKey) return false;
+            if (!Number.isFinite(entry.keyId) || entry.keyId <= 0) return false;
+            if (!Number.isFinite(entry.createdAt) || entry.createdAt < minOneTimeCreatedAt) return false;
+            if (seen.has(entry.keyId)) return false;
+            seen.add(entry.keyId);
+            return true;
+          });
+
+        if (sanitizedOneTime.length === bundle.oneTimePreKeys.length) continue;
+
+        store.put({
+          ...record,
+          peerId,
+          bundle: {
+            ...bundle,
+            oneTimePreKeys: sanitizedOneTime,
+          },
+          updatedAt: now,
+        });
+        updated += 1;
+      }
+
+      tx.oncomplete = () => resolve({ deleted, updated });
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  }
+
+  async saveLocalPreKeyState(ownerPeerId: string, state: PersistedLocalPreKeyState): Promise<void> {
+    await this.put('preKeyStates', { ownerPeerId, state, updatedAt: Date.now() });
+  }
+
+  async getLocalPreKeyState(ownerPeerId: string): Promise<PersistedLocalPreKeyState | undefined> {
+    const result = await this.get('preKeyStates', ownerPeerId);
+    return result?.state as PersistedLocalPreKeyState | undefined;
+  }
+
+  async deleteLocalPreKeyState(ownerPeerId: string): Promise<void> {
+    await this.delete('preKeyStates', ownerPeerId);
+  }
+
   // === Sync Manifest State ===
 
   async saveManifestStoreState(state: ManifestStoreState): Promise<void> {
@@ -721,6 +839,8 @@ export class PersistentStore {
       'outbox',
       'settings',
       'ratchetStates',
+      'preKeyBundles',
+      'preKeyStates',
       'deliveryReceipts',
       'contacts',
       'directConversations',

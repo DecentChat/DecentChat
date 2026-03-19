@@ -390,4 +390,256 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
     expect(diffRequest?.msg?.requests?.[0]?.toVersion).toBe(2);
   });
 
+  test('handshake publishes pre-key bundles into custody-backed domain and offers replication', async () => {
+    const peer = new NodeXenaPeer({
+      account: makeAccount(),
+      onIncomingMessage: async () => {},
+      onReply: () => {},
+    });
+
+    (peer as any).myPeerId = 'peer-self';
+    const workspace = {
+      id: 'ws-prekey',
+      members: [
+        { peerId: 'peer-self' },
+        { peerId: 'peer-target' },
+        { peerId: 'custodian-1' },
+      ],
+      channels: [],
+    };
+
+    const sent: Array<{ peerId: string; msg: any }> = [];
+    (peer as any).transport = {
+      send: mock((peerId: string, msg: any) => {
+        sent.push({ peerId, msg });
+        return true;
+      }),
+      getConnectedPeers: mock(() => ['peer-target', 'custodian-1'] as string[]),
+    };
+    (peer as any).syncProtocol = { requestSync: mock(() => {}) };
+    (peer as any).messageProtocol = {
+      processHandshake: mock(async () => {}),
+      createPreKeyBundle: mock(async () => ({
+        version: 1,
+        peerId: 'peer-self',
+        generatedAt: 123,
+        signingPublicKey: 'signing-key',
+        signedPreKey: {
+          keyId: 7,
+          publicKey: 'signed-key',
+          signature: 'sig',
+          createdAt: 100,
+          expiresAt: 9999,
+        },
+        oneTimePreKeys: [{ keyId: 11, publicKey: 'otk-11' }],
+      })),
+    };
+    (peer as any).workspaceManager.getAllWorkspaces = () => [workspace];
+    (peer as any).workspaceManager.getWorkspace = () => workspace;
+
+    await (peer as any).publishPreKeyBundle('peer-target');
+
+    const storedForTarget = await (peer as any).custodyStore.listAllForRecipient('peer-target');
+    expect(storedForTarget.some((envelope: any) => envelope.domain === 'pre-key-bundle')).toBe(true);
+
+    const preKeyOffers = sent.filter((entry) => (
+      entry.msg?.type === 'custody.offer' && entry.msg?.envelope?.domain === 'pre-key-bundle'
+    ));
+    expect(preKeyOffers.length).toBeGreaterThan(0);
+    expect((peer as any).manifestStore.getVersion('ws-prekey', 'pre-key-bundle')).toBeGreaterThan(0);
+  });
+
+  test('offline first send fetches peer pre-key bundle before falling back to deferred plaintext queue', async () => {
+    const peer = new NodeXenaPeer({
+      account: makeAccount(),
+      onIncomingMessage: async () => {},
+      onReply: () => {},
+    });
+
+    (peer as any).myPeerId = 'peer-self';
+    const workspace = {
+      id: 'ws-send',
+      members: [
+        { peerId: 'peer-self' },
+        { peerId: 'peer-target' },
+        { peerId: 'peer-relay' },
+      ],
+      channels: [{ id: 'channel-1', name: 'General', type: 'channel' }],
+    };
+
+    let hasTargetBundle = false;
+    const targetBundle = {
+      version: 1,
+      peerId: 'peer-target',
+      generatedAt: 456,
+      signingPublicKey: 'signing-key-target',
+      signedPreKey: {
+        keyId: 9,
+        publicKey: 'signed-key-target',
+        signature: 'sig',
+        createdAt: 120,
+        expiresAt: 10_000,
+      },
+      oneTimePreKeys: [{ keyId: 12, publicKey: 'otk-12' }],
+    };
+
+    const storePeerPreKeyBundle = mock(async (ownerPeerId: string) => {
+      if (ownerPeerId === 'peer-target') hasTargetBundle = true;
+      return true;
+    });
+
+    (peer as any).messageProtocol = {
+      encryptMessage: mock(async (recipientPeerId: string) => {
+        if (recipientPeerId === 'peer-target' && !hasTargetBundle) {
+          throw new Error('No shared secret with peer peer-target. Exchange handshakes first.');
+        }
+        return { id: `env-${recipientPeerId}-${Date.now()}`, encrypted: 'ciphertext', ratchet: { n: 1 } };
+      }),
+      getPeerPreKeyBundle: mock(async () => null),
+      storePeerPreKeyBundle,
+    };
+
+    const sent: Array<{ peerId: string; msg: any }> = [];
+    (peer as any).transport = {
+      send: mock((recipientPeerId: string, msg: any) => {
+        sent.push({ peerId: recipientPeerId, msg });
+        if (msg?.type === 'pre-key-bundle.fetch') {
+          setTimeout(() => {
+            void (peer as any).handlePeerMessage('peer-relay', {
+              type: 'pre-key-bundle.fetch-response',
+              requestId: msg.requestId,
+              ownerPeerId: 'peer-target',
+              workspaceId: 'ws-send',
+              bundle: targetBundle,
+            });
+          }, 0);
+        }
+        return true;
+      }),
+      getConnectedPeers: mock(() => ['peer-relay'] as string[]),
+    };
+
+    (peer as any).syncProtocol = {};
+    (peer as any).workspaceManager.getWorkspace = () => workspace;
+    (peer as any).workspaceManager.getAllWorkspaces = () => [workspace];
+
+    await peer.sendMessage('channel-1', 'ws-send', 'hello offline first contact');
+
+    expect(storePeerPreKeyBundle).toHaveBeenCalledWith('peer-target', targetBundle);
+    expect(sent.some((entry) => entry.msg?.type === 'pre-key-bundle.fetch')).toBe(true);
+
+    const pendingTarget = await (peer as any).custodyStore.getPendingForRecipient('peer-target');
+    const channelEnvelope = pendingTarget.find((envelope: any) => envelope.domain === 'channel-message');
+    expect(channelEnvelope).toBeDefined();
+    expect((channelEnvelope as any).ciphertext?.encrypted).toBe('ciphertext');
+
+    const queuedForTarget = await (peer as any).offlineQueue.listQueued('peer-target');
+    expect(queuedForTarget.length).toBeGreaterThan(0);
+    expect(queuedForTarget.some((entry: any) => (entry?.data ?? entry)?._deferred === true)).toBe(false);
+  });
+
+
+  test('pre-key bootstrap falls back from custodian-targeted lookup to broader peer lookup', async () => {
+    const peer = new NodeXenaPeer({
+      account: makeAccount(),
+      onIncomingMessage: async () => {},
+      onReply: () => {},
+    });
+
+    (peer as any).myPeerId = 'peer-self';
+
+    const workspace = {
+      id: 'ws-send',
+      members: [
+        { peerId: 'peer-self' },
+        { peerId: 'peer-target' },
+        { peerId: 'custodian-1' },
+        { peerId: 'peer-relay' },
+      ],
+      channels: [],
+    };
+
+    let hasTargetBundle = false;
+    const targetBundle = {
+      version: 1,
+      peerId: 'peer-target',
+      generatedAt: 999,
+      signingPublicKey: 'signing-key-target',
+      signedPreKey: {
+        keyId: 42,
+        publicKey: 'signed-key-target',
+        signature: 'sig',
+        createdAt: 120,
+        expiresAt: 10_000,
+      },
+      oneTimePreKeys: [{ keyId: 13, publicKey: 'otk-13' }],
+    };
+
+    const storePeerPreKeyBundle = mock(async (ownerPeerId: string) => {
+      if (ownerPeerId === 'peer-target') hasTargetBundle = true;
+      return true;
+    });
+
+    (peer as any).messageProtocol = {
+      encryptMessage: mock(async (recipientPeerId: string) => {
+        if (recipientPeerId === 'peer-target' && !hasTargetBundle) {
+          throw new Error('No shared secret with peer peer-target. Exchange handshakes first.');
+        }
+        return { id: 'env-target', encrypted: 'ciphertext', ratchet: { n: 1 } };
+      }),
+      getPeerPreKeyBundle: mock(async () => null),
+      storePeerPreKeyBundle,
+    };
+
+    const fetchTargets: string[] = [];
+    (peer as any).transport = {
+      send: mock((recipientPeerId: string, msg: any) => {
+        if (msg?.type === 'pre-key-bundle.fetch') {
+          fetchTargets.push(`${recipientPeerId}:${msg.querySource}`);
+          if (recipientPeerId === 'custodian-1') {
+            setTimeout(() => {
+              void (peer as any).handlePeerMessage('custodian-1', {
+                type: 'pre-key-bundle.fetch-response',
+                requestId: msg.requestId,
+                ownerPeerId: 'peer-target',
+                workspaceId: 'ws-send',
+                querySource: msg.querySource,
+                notAvailable: true,
+              });
+            }, 0);
+          }
+          if (recipientPeerId === 'peer-relay') {
+            setTimeout(() => {
+              void (peer as any).handlePeerMessage('peer-relay', {
+                type: 'pre-key-bundle.fetch-response',
+                requestId: msg.requestId,
+                ownerPeerId: 'peer-target',
+                workspaceId: 'ws-send',
+                querySource: msg.querySource,
+                bundle: targetBundle,
+              });
+            }, 0);
+          }
+        }
+        return true;
+      }),
+      getConnectedPeers: mock(() => ['custodian-1', 'peer-relay'] as string[]),
+    };
+
+    (peer as any).syncProtocol = {};
+    (peer as any).workspaceManager.getWorkspace = () => workspace;
+    (peer as any).workspaceManager.getAllWorkspaces = () => [workspace];
+    (peer as any).selectCustodianPeers = mock(() => ['custodian-1']);
+
+    const envelope = await (peer as any).encryptMessageWithPreKeyBootstrap('peer-target', 'hello', undefined, 'ws-send');
+
+    expect(envelope).toEqual({ id: 'env-target', encrypted: 'ciphertext', ratchet: { n: 1 } });
+    expect(fetchTargets).toEqual([
+      'custodian-1:custodian-targeted',
+      'peer-relay:peer-broadcast',
+    ]);
+    expect(storePeerPreKeyBundle).toHaveBeenCalledWith('peer-target', targetBundle);
+  });
+
+
 });
