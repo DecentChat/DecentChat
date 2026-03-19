@@ -592,6 +592,9 @@ async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
   let xenaPeer: InstanceType<typeof NodeXenaPeer>;
   let finalizeStream: () => Promise<void> = async () => {};
 
+  const openClawWorkspaceRoot = process.env.OPENCLAW_WORKSPACE_DIR?.trim()
+    || path.join(os.homedir(), '.openclaw', 'workspace');
+
   xenaPeer = new NodeXenaPeer({
     account: ctx.account,
     onIncomingMessage: async (params) => {
@@ -606,6 +609,14 @@ async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
       });
     },
     onReply: () => { void finalizeStream(); },
+    companyTemplateControl: {
+      loadConfig: () => core.config.loadConfig() as Record<string, unknown>,
+      writeConfigFile: async (config) => {
+        await core.config.writeConfigFile(config);
+      },
+      workspaceRootDir: openClawWorkspaceRoot,
+      companySimsRootDir: path.join(openClawWorkspaceRoot, 'company-sims'),
+    },
     onHuddleTranscription: async (text, peerId, channelId, senderName) => {
       // Route voice transcription through the standard LLM pipeline,
       // but capture the response text instead of sending it over the data channel.
