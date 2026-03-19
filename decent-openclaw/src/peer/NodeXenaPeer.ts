@@ -1016,7 +1016,13 @@ export class NodeXenaPeer {
       this.updateWorkspaceMemberKey(fromPeerId, msg.publicKey);
       // Save sender's display name if provided
       if (msg.alias) {
-        this.updateWorkspaceMemberAlias(fromPeerId, msg.alias as string, msg.companySim as any, msg.isBot === true);
+        this.applyNameAnnounce(fromPeerId, {
+          alias: msg.alias as string,
+          workspaceId: typeof msg.workspaceId === 'string' ? msg.workspaceId : undefined,
+          companySim: msg.companySim as any,
+          isBot: msg.isBot === true,
+          publicKey: typeof msg.publicKey === 'string' ? msg.publicKey : undefined,
+        });
       }
       // Resend previously pending ACK-tracked messages first, then flush newly queued
       // offline payloads to avoid immediate duplicate sends in the same handshake cycle.
@@ -1032,7 +1038,15 @@ export class NodeXenaPeer {
     // Handle name-announce (unencrypted) — must be before the encrypted guard
     if (msg?.type === 'name-announce' && msg.alias) {
       const alias = msg.alias as string;
-      this.updateWorkspaceMemberAlias(fromPeerId, alias, msg.companySim as any, msg.isBot === true);
+      const result = this.applyNameAnnounce(fromPeerId, {
+        alias,
+        workspaceId: typeof msg.workspaceId === 'string' ? msg.workspaceId : undefined,
+        companySim: msg.companySim as any,
+        isBot: msg.isBot === true,
+      });
+      if (result.memberAdded && result.workspaceId && this.syncProtocol) {
+        this.syncProtocol.requestSync(fromPeerId, result.workspaceId);
+      }
       // Also cache directly so resolveSenderName can find it even before workspace sync
       this.store.set(`peer-alias-${fromPeerId}`, alias);
       return;
@@ -1304,6 +1318,102 @@ export class NodeXenaPeer {
     const workspace = this.workspaceManager.getWorkspace(workspaceId);
     if (!workspace) return false;
     return workspace.members.some((member) => member.peerId === peerId);
+  }
+
+  private resolveNameAnnounceWorkspaceId(peerId: string): string | undefined {
+    const allWorkspaces = this.workspaceManager.getAllWorkspaces();
+    const workspaceWithPeer = allWorkspaces.find((ws) => ws.members.some((m) => m.peerId === peerId));
+    if (workspaceWithPeer) return workspaceWithPeer.id;
+
+    const configuredWorkspaceId = this.opts.account.companySimBootstrap?.targetWorkspaceId;
+    if (configuredWorkspaceId && this.workspaceManager.getWorkspace(configuredWorkspaceId)) {
+      return configuredWorkspaceId;
+    }
+
+    if (allWorkspaces.length === 1) return allWorkspaces[0]?.id;
+    return undefined;
+  }
+
+  private applyNameAnnounce(peerId: string, params: {
+    alias: string;
+    workspaceId?: string;
+    companySim?: WorkspaceMember['companySim'];
+    isBot?: boolean;
+    publicKey?: string;
+  }): { changed: boolean; memberAdded: boolean; workspaceId?: string } {
+    const alias = params.alias.trim();
+    if (!alias) return { changed: false, memberAdded: false, workspaceId: params.workspaceId };
+
+    const allWorkspaces = this.workspaceManager.getAllWorkspaces();
+    const hintedWorkspace = params.workspaceId
+      ? this.workspaceManager.getWorkspace(params.workspaceId)
+      : undefined;
+    const existingWorkspace = allWorkspaces.find((ws) => ws.members.some((member) => member.peerId === peerId));
+    const configuredWorkspaceId = this.opts.account.companySimBootstrap?.targetWorkspaceId;
+    const configuredWorkspace = configuredWorkspaceId
+      ? this.workspaceManager.getWorkspace(configuredWorkspaceId)
+      : undefined;
+    const fallbackWorkspace = allWorkspaces.length === 1 ? allWorkspaces[0] : undefined;
+
+    const targetWorkspace = hintedWorkspace ?? existingWorkspace ?? configuredWorkspace ?? fallbackWorkspace;
+
+    let changed = false;
+    let memberAdded = false;
+
+    if (targetWorkspace) {
+      let member = targetWorkspace.members.find((entry) => entry.peerId === peerId);
+      if (!member) {
+        member = {
+          peerId,
+          alias,
+          publicKey: params.publicKey ?? '',
+          role: 'member',
+          joinedAt: Date.now(),
+          ...(params.isBot ? { isBot: true } : {}),
+          ...(params.companySim ? { companySim: params.companySim } : {}),
+        } as WorkspaceMember;
+        targetWorkspace.members.push(member);
+        changed = true;
+        memberAdded = true;
+      } else {
+        const incomingLooksLikeId = /^[a-f0-9]{8}$/i.test(alias);
+        const currentAlias = String(member.alias || '').trim();
+        const currentLooksLikeId = /^[a-f0-9]{8}$/i.test(currentAlias);
+        if (!incomingLooksLikeId || currentLooksLikeId || !currentAlias) {
+          if (member.alias !== alias) {
+            member.alias = alias;
+            changed = true;
+          }
+        }
+      }
+
+      if (params.publicKey && member.publicKey !== params.publicKey) {
+        member.publicKey = params.publicKey;
+        changed = true;
+      }
+      if (params.isBot === true && !member.isBot) {
+        member.isBot = true;
+        changed = true;
+      }
+      if (params.companySim) {
+        const before = JSON.stringify(member.companySim || null);
+        const after = JSON.stringify(params.companySim);
+        if (before !== after) {
+          member.companySim = params.companySim;
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        this.persistWorkspaces();
+      }
+
+      return { changed, memberAdded, workspaceId: targetWorkspace.id };
+    }
+
+    // No deterministic workspace mapping: only update aliases where this peer already exists.
+    this.updateWorkspaceMemberAlias(peerId, alias, params.companySim, params.isBot);
+    return { changed: false, memberAdded: false, workspaceId: params.workspaceId };
   }
 
   private preKeyBundleVersionToken(bundle: any): string {
@@ -1706,16 +1816,13 @@ export class NodeXenaPeer {
       // Include workspaceId so the peer can deterministically add us to the correct workspace
       // (critical when the peer has multiple workspaces — without this, we'd only update
       // existing members, never add new ones)
-      const allWorkspaces = this.workspaceManager.getAllWorkspaces();
-      const workspaceWithPeer = allWorkspaces.find(ws =>
-        ws.members.some(m => m.peerId === peerId)
-      );
+      const announceWorkspaceId = this.resolveNameAnnounceWorkspaceId(peerId);
       this.transport.send(peerId, {
         type: 'name-announce',
         alias: this.opts.account.alias,
         isBot: true,
         companySim: this.getMyCompanySimProfile(),
-        ...(workspaceWithPeer ? { workspaceId: workspaceWithPeer.id } : {}),
+        ...(announceWorkspaceId ? { workspaceId: announceWorkspaceId } : {}),
       });
     } catch (err) {
       this.opts.log?.error?.(`[xena-peer] handshake failed for ${peerId}: ${String(err)}`);
@@ -1987,20 +2094,39 @@ export class NodeXenaPeer {
         }
       }
 
-      // Merge channels
+      // Merge channels (prefer canonical IDs, avoid duplicate same-name channels)
       for (const remoteCh of (sync.channels || [])) {
-        const localCh = ws.channels.find((ch: any) => ch.id === remoteCh.id);
-        if (!localCh) {
-          ws.channels.push({
-            id: remoteCh.id,
-            workspaceId,
-            name: remoteCh.name,
-            type: remoteCh.type || 'channel',
-            members: [],
-            createdBy: fromPeerId,
-            createdAt: Date.now(),
-          });
+        const remoteId = typeof remoteCh.id === 'string' ? remoteCh.id : '';
+        const remoteType = remoteCh.type || 'channel';
+        const remoteName = typeof remoteCh.name === 'string' ? remoteCh.name : '';
+        if (!remoteId || !remoteName) continue;
+
+        const localById = ws.channels.find((ch: any) => ch.id === remoteId);
+        if (localById) {
+          if (localById.name !== remoteName) localById.name = remoteName;
+          if ((localById.type || 'channel') !== remoteType) localById.type = remoteType;
+          continue;
         }
+
+        const localByName = ws.channels.find((ch: any) => ch.name === remoteName && (ch.type || 'channel') === remoteType);
+        if (localByName) {
+          const hasLocalHistory = this.messageStore.getMessages(localByName.id).length > 0;
+          if (!hasLocalHistory) {
+            localByName.id = remoteId;
+            localByName.workspaceId = workspaceId;
+          }
+          continue;
+        }
+
+        ws.channels.push({
+          id: remoteId,
+          workspaceId,
+          name: remoteName,
+          type: remoteType,
+          members: [],
+          createdBy: fromPeerId,
+          createdAt: Date.now(),
+        });
       }
 
       this.opts.log?.info(`[xena-peer] updated workspace ${workspaceId.slice(0, 8)} "${ws.name}" — now ${ws.members.length} members, ${ws.channels.length} channels`);

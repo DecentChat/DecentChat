@@ -1523,7 +1523,7 @@ export class ChatController {
           // the member list (e.g. a restored device joining via invite — the
           // invite adds membership on the joiner's side, but the host hasn't
           // seen the join yet).
-          this.sendWorkspaceState(peerId, undefined, { forceInclude: true });
+          this.sendWorkspaceState(peerId, this.state.activeWorkspaceId ?? undefined, { forceInclude: true });
 
           // Shell-first + paged directory sync path for scalable public workspaces.
           if (this.state.activeWorkspaceId) {
@@ -2358,6 +2358,19 @@ export class ChatController {
     }
     if (!ws) {
       ws = this.workspaceManager.getAllWorkspaces().find((w) => w.members.some(m => m.peerId === peerId));
+    }
+
+    if (!ws && options?.forceInclude) {
+      // Force-include bootstrap path: if membership has not converged yet,
+      // fall back to the active workspace so peers can exchange canonical
+      // workspace-state and converge member/channel graphs.
+      if (this.state.activeWorkspaceId) {
+        ws = this.workspaceManager.getWorkspace(this.state.activeWorkspaceId);
+      }
+      if (!ws) {
+        const all = this.workspaceManager.getAllWorkspaces();
+        if (all.length === 1) ws = all[0];
+      }
     }
 
     if (!ws) {
