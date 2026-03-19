@@ -3584,3 +3584,4 @@ export class NodeXenaPeer {
   }
 
 }
+export const DecentChatNodePeer = NodeXenaPeer;

@@ -3,13 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { NodeXenaPeer } from "./peer/NodeXenaPeer.js";
 import { getDecentChatRuntime } from "./runtime.js";
 import { resolveCompanyPromptContextForAccount } from "./company-sim/prompt-context.js";
 import { decideCompanyParticipation } from "./company-sim/router.js";
 import { setActivePeer } from "./peer-registry.js";
 import type { ResolvedDecentChatAccount } from "./types.js";
-
-
 
 type ReplyPrefixOptions = {
   responsePrefix?: string;
@@ -576,6 +575,35 @@ export async function relayInboundMessageToPeer(params: {
   }
 }
 
+
+type DecentChatNodePeerCtor = new (...args: any[]) => {
+  start: () => Promise<void>;
+  stop: () => void | Promise<void>;
+  sendMessage: (...args: any[]) => Promise<any>;
+  markRead?: (...args: any[]) => Promise<any>;
+  listDirectory?: (...args: any[]) => Promise<any>;
+};
+
+let decentChatNodePeerCtorPromise: Promise<DecentChatNodePeerCtor> | null = null;
+
+async function loadDecentChatNodePeerCtor(): Promise<DecentChatNodePeerCtor> {
+  if (!decentChatNodePeerCtorPromise) {
+    decentChatNodePeerCtorPromise = import('./peer/NodeXenaPeer.js').then((mod) => {
+      const candidate = (mod as any).DecentChatNodePeer
+        ?? (mod as any).NodeXenaPeer
+        ?? ((mod as any).default && ((mod as any).default.DecentChatNodePeer ?? (mod as any).default.NodeXenaPeer))
+        ?? (typeof (mod as any).default === 'function' ? (mod as any).default : undefined);
+
+      if (typeof candidate !== 'function') {
+        const keys = mod && typeof mod === 'object' ? Object.keys(mod as object).join(', ') : typeof mod;
+        throw new Error(`DecentChat node peer constructor export missing (module keys: ${keys})`);
+      }
+      return candidate as DecentChatNodePeerCtor;
+    });
+  }
+  return decentChatNodePeerCtorPromise;
+}
+
 export async function startDecentChatPeer(ctx: PeerContext): Promise<void> {
   const seedPhrase = ctx.account.seedPhrase?.trim();
   if (!seedPhrase) {
@@ -586,16 +614,16 @@ export async function startDecentChatPeer(ctx: PeerContext): Promise<void> {
 }
 
 async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
-  const { NodeXenaPeer } = await import("./peer/NodeXenaPeer.js");
   const core = getDecentChatRuntime();
+  const DecentChatNodePeer = await loadDecentChatNodePeerCtor();
 
-  let xenaPeer: InstanceType<typeof NodeXenaPeer>;
+  let xenaPeer: InstanceType<DecentChatNodePeerCtor>;
   let finalizeStream: () => Promise<void> = async () => {};
 
   const openClawWorkspaceRoot = process.env.OPENCLAW_WORKSPACE_DIR?.trim()
     || path.join(os.homedir(), '.openclaw', 'workspace');
 
-  xenaPeer = new NodeXenaPeer({
+  xenaPeer = new DecentChatNodePeer({
     account: ctx.account,
     onIncomingMessage: async (params) => {
       await relayInboundMessageToPeer({
@@ -1121,4 +1149,3 @@ async function processInboundMessage(
 
   await xenaPeer.sendReadReceipt?.(msg.senderId, msg.channelId, msg.messageId);
 }
-
