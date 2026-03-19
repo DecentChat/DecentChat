@@ -338,7 +338,7 @@ function ensureDecentChatAccounts<TConfig extends Record<string, unknown>>(param
         : employee.alias,
       dataDir: typeof existingAccount?.dataDir === 'string' && existingAccount.dataDir.trim()
         ? existingAccount.dataDir
-        : join('.company-sim', 'accounts', params.manifest.id, employee.accountId),
+        : resolve(params.companyDirPath, '..', '..', '.company-sim', 'accounts', params.manifest.id, employee.accountId),
       companySim: {
         ...existingCompanySim,
         enabled: typeof existingCompanySim.enabled === 'boolean'

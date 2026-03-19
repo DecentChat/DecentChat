@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { SeedPhraseManager } from 'decent-protocol';
 import type { OpenClawConfigShape, OpenClawRouteBindingConfig, ResolvedDecentChatAccount } from '../types.ts';
 import { planCompanyAgentTopology } from './agent-topology.ts';
@@ -143,10 +143,23 @@ function uniqueStrings(values: string[]): string[] {
   return out;
 }
 
+function resolveCompanyWorkspaceRootFromAccount(account: ResolvedDecentChatAccount): string | undefined {
+  const manifestPath = account.companySim?.manifestPath?.trim();
+  if (!manifestPath) return undefined;
+
+  const resolvedManifestPath = resolveCompanyManifestPath(manifestPath);
+  const companyDir = dirname(resolvedManifestPath);
+  const companySimsDir = dirname(companyDir);
+  return dirname(companySimsDir);
+}
+
 function resolveAccountDataDir(account: ResolvedDecentChatAccount): string {
   if (!account.dataDir?.trim()) return DEFAULT_DATA_DIR;
   const trimmed = account.dataDir.trim();
-  return isAbsolute(trimmed) ? trimmed : resolve(process.cwd(), trimmed);
+  if (isAbsolute(trimmed)) return trimmed;
+
+  const workspaceRootDir = resolveCompanyWorkspaceRootFromAccount(account);
+  return resolve(workspaceRootDir ?? process.cwd(), trimmed);
 }
 
 function readWorkspaces(dataDir: string): any[] {
