@@ -45,6 +45,17 @@
       : null,
   );
 
+  function sanitizeTemplate(template: CompanyTemplateDefinition): CompanyTemplateDefinition {
+    return {
+      ...template,
+      roles: template.roles.map((role) => ({ ...role })),
+      channels: [...template.channels],
+      questions: template.questions
+        .filter((question) => question.id !== 'workspaceName')
+        .map((question) => ({ ...question })),
+    };
+  }
+
   function closeOnEscape(event: KeyboardEvent): void {
     if (event.key === 'Escape') onClose();
   }
@@ -62,7 +73,7 @@
         const loaded = listTemplates
           ? await listTemplates()
           : listLocalCompanyTemplates();
-        templates = loaded;
+        templates = loaded.map((template) => sanitizeTemplate(template));
       } catch (error) {
         loadError = (error as Error).message;
       } finally {
@@ -80,9 +91,6 @@
     const defaults: Record<string, string> = {};
     for (const question of template.questions) {
       defaults[question.id] = question.defaultValue ?? '';
-    }
-    if (workspaceName?.trim()) {
-      defaults.workspaceName = defaults.workspaceName || workspaceName;
     }
     answers = defaults;
   }
@@ -106,7 +114,7 @@
           answers: installAnswers,
         });
       } else {
-        const preview = buildCompanyTemplatePreview(selectedTemplate, installAnswers);
+        const preview = buildCompanyTemplatePreview(selectedTemplate, installAnswers, { workspaceName });
         result = {
           templateId: selectedTemplate.id,
           templateLabel: selectedTemplate.label,
@@ -169,6 +177,7 @@
       <TemplateWizard
         template={selectedTemplate}
         answers={answers}
+        workspaceName={workspaceName}
         installing={installing}
         installError={installError}
         installResult={installResult}

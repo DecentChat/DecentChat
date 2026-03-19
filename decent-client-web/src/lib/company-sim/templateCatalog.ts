@@ -47,14 +47,6 @@ export const SOFTWARE_STUDIO_TEMPLATE: CompanyTemplateDefinition = {
       description: 'Displayed in installer summaries and generated company metadata.',
     },
     {
-      id: 'workspaceName',
-      label: 'Workspace name',
-      required: true,
-      placeholder: 'Acme HQ',
-      defaultValue: 'Acme HQ',
-      description: 'Workspace label visible to all team members in DecentChat.',
-    },
-    {
       id: 'managerAlias',
       label: 'Manager alias',
       required: true,
@@ -110,6 +102,7 @@ function readAnswer(answers: Record<string, string>, questionId: string, fallbac
 export function buildCompanyTemplatePreview(
   template: CompanyTemplateDefinition,
   answers: Record<string, string>,
+  options?: { workspaceName?: string | null },
 ): CompanyTemplateInstallPreview {
   const companyName = readAnswer(
     answers,
@@ -117,11 +110,16 @@ export function buildCompanyTemplatePreview(
     template.questions.find((question) => question.id === 'companyName')?.defaultValue ?? 'Company',
   );
 
-  const workspaceName = readAnswer(
-    answers,
-    'workspaceName',
-    template.questions.find((question) => question.id === 'workspaceName')?.defaultValue ?? 'Workspace',
-  );
+  const workspaceName = (() => {
+    const explicitWorkspaceName = typeof options?.workspaceName === 'string' ? options.workspaceName.trim() : '';
+    if (explicitWorkspaceName) return explicitWorkspaceName;
+
+    return readAnswer(
+      answers,
+      'workspaceName',
+      'Workspace',
+    );
+  })();
 
   const members = template.roles.map((role) => {
     const alias = role.aliasQuestionId

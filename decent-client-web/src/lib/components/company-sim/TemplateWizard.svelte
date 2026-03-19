@@ -8,6 +8,7 @@
   interface Props {
     template: CompanyTemplateDefinition;
     answers: Record<string, string>;
+    workspaceName?: string | null;
     installing?: boolean;
     installError?: string | null;
     installResult?: CompanyTemplateInstallResult | null;
@@ -20,6 +21,7 @@
   let {
     template,
     answers,
+    workspaceName = null,
     installing = false,
     installError = null,
     installResult = null,
@@ -43,7 +45,7 @@
     onChangeAnswers?.(next);
   }
 
-  const preview = $derived(buildCompanyTemplatePreview(template, answers));
+  const preview = $derived(buildCompanyTemplatePreview(template, answers, { workspaceName }));
   const missingRequired = $derived(
     template.questions.some((question) => {
       if (!question.required) return false;
@@ -59,6 +61,7 @@
     advancedJson = JSON.stringify({
       templateId: template.id,
       answers,
+    workspaceName = null,
     }, null, 2);
     advancedJsonError = null;
   }

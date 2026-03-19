@@ -343,9 +343,13 @@ async function init(): Promise<void> {
     const workspace = ctrl.workspaceManager.getWorkspace(request.workspaceId);
     if (!workspace) throw new Error(`Workspace not found: ${request.workspaceId}`);
 
-    const preview = buildCompanyTemplatePreview(template, request.answers);
+    const installAnswers = { ...request.answers, workspaceName: workspace.name };
+    const preview = buildCompanyTemplatePreview(template, installAnswers, { workspaceName: workspace.name });
 
-    const runtimeInstall = await ctrl.installCompanyTemplateViaControlPlane(request)
+    const runtimeInstall = await ctrl.installCompanyTemplateViaControlPlane({
+      ...request,
+      answers: installAnswers,
+    })
       .then((result) => normalizeRuntimeBridgeInstallResult(result))
       .catch((controlError) => {
         const controlMessage = (controlError as Error)?.message || String(controlError);
@@ -403,7 +407,7 @@ async function init(): Promise<void> {
       templateId: template.id,
       templateLabel: template.label,
       workspaceId: workspace.id,
-      workspaceName: preview.workspaceName,
+      workspaceName: workspace.name,
       companyName: preview.companyName,
       createdChannelNames,
       createdMemberPeerIds: [],

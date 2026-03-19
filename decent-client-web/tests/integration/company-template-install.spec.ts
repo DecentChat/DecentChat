@@ -18,7 +18,6 @@ test.describe('company template installation', () => {
         .click();
 
       await user.page.getByLabel('Company name').fill('Acme Platform');
-      await user.page.getByLabel('Workspace name').fill('Acme HQ');
       await user.page.getByLabel('Manager alias').fill('Mira PM');
       await user.page.getByLabel('Backend alias').fill('Devon API');
       await user.page.getByLabel('QA alias').fill('Iva QA');
@@ -28,7 +27,7 @@ test.describe('company template installation', () => {
       const result = user.page.getByTestId('template-install-result');
       await expect(result).toBeVisible();
       await expect(result).toContainText('Acme Platform');
-      await expect(result).toContainText('Acme HQ');
+      await expect(result).toContainText('Template Install');
       await expect(result).toContainText('Runtime provisioning pending');
       await expect(result).toContainText('Created channels in this workspace: 3');
       await expect(result).toContainText('Provisioned accounts: 0');

@@ -29,7 +29,6 @@ test.describe('company template advanced export/import', () => {
         templateId: 'software-studio',
         answers: {
           companyName: 'Imported Company',
-          workspaceName: 'Imported Workspace',
           managerAlias: 'Imported Manager',
           backendAlias: 'Imported Backend',
           qaAlias: 'Imported QA',
@@ -39,7 +38,6 @@ test.describe('company template advanced export/import', () => {
       await user.page.getByRole('button', { name: /import setup json/i }).click();
 
       await expect(user.page.getByLabel('Company name')).toHaveValue('Imported Company');
-      await expect(user.page.getByLabel('Workspace name')).toHaveValue('Imported Workspace');
       await expect(user.page.getByLabel('Manager alias')).toHaveValue('Imported Manager');
     } finally {
       await closeUser(user);

@@ -950,7 +950,10 @@ export class NodeXenaPeer {
       const result = await this.withCompanyTemplateInstallLock(() => this.installCompanyTemplateViaControlPlane({
         workspaceId,
         templateId,
-        answers: sync?.answers,
+        answers: {
+          ...(isRecord(sync?.answers) ? sync.answers : {}),
+          workspaceName: workspace.name,
+        },
         requestedByPeerId: fromPeerId,
       }));
 

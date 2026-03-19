@@ -45,12 +45,6 @@ questions:
     type: text
     required: true
     default: Software Studio
-  - id: workspaceName
-    label: Workspace name
-    description: Friendly name for the shared workspace.
-    type: text
-    required: true
-    default: Studio HQ
   - id: managerAlias
     label: Manager display name
     type: text

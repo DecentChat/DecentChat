@@ -26,7 +26,7 @@ test.describe('company template picker', () => {
 
       await expect(user.page.getByTestId('template-wizard')).toBeVisible();
       await expect(user.page.getByLabel('Company name')).toBeVisible();
-      await expect(user.page.getByLabel('Workspace name')).toBeVisible();
+      await expect(user.page.getByLabel('Workspace name')).toHaveCount(0);
 
       await user.page.getByLabel('Company name').fill('Acme Platform');
 
