@@ -206,6 +206,91 @@ describe('Workspace DM privacy — receiver enforcement', () => {
     }));
   });
 
+
+  test('receiver rejects malformed fallback-to-DM message when conversation originated from workspace and own preference is disabled', async () => {
+    const ctrl = Object.create(ChatController.prototype) as any;
+
+    ctrl.state = {
+      myPeerId: 'me',
+      myAlias: 'me',
+      readyPeers: new Set<string>(),
+      connectedPeers: new Set<string>(),
+      connectingPeers: new Set<string>(),
+      activeWorkspaceId: 'ws-1',
+      activeChannelId: null,
+      activeThreadId: null,
+      threadOpen: false,
+      sidebarOpen: false,
+      activeDirectConversationId: null,
+      workspaceAliases: {},
+    };
+
+    ctrl.transport = { send: mock(() => {}) };
+    ctrl.sendControlWithRetry = mock(() => {});
+    ctrl.messageGuard = { check: mock(() => ({ allowed: true })) };
+    ctrl.presence = { handleTypingEvent: mock(() => {}), handleReadReceipt: mock(() => {}) };
+    ctrl.workspaceManager = {
+      getWorkspace: mock((wsId: string) => {
+        if (wsId !== 'ws-1') return null;
+        return {
+          id: 'ws-1',
+          members: [
+            { peerId: 'me', allowWorkspaceDMs: false, alias: 'Me', role: 'member' },
+            { peerId: 'alice', alias: 'Alice', role: 'member' },
+          ],
+          channels: [],
+        };
+      }),
+      getAllWorkspaces: mock(() => []),
+      isOwner: mock(() => false),
+    };
+    ctrl.persistentStore = {
+      getPeer: mock(async () => ({ publicKey: 'pub-key' })),
+      saveMessage: mock(async () => {}),
+      saveDirectConversation: mock(async () => {}),
+    };
+    ctrl.cryptoManager = { importPublicKey: mock(async () => ({})) };
+    ctrl.messageProtocol = {
+      decryptMessage: mock(async () => 'hello'),
+      clearSharedSecret: mock(() => {}),
+    };
+    ctrl.directConversationStore = {
+      getByContact: mock(async () => ({ id: 'conv-1', contactPeerId: 'alice', originWorkspaceId: 'ws-1', createdAt: Date.now(), lastMessageAt: 0 })),
+      create: mock(async () => ({ id: 'conv-1', contactPeerId: 'alice', createdAt: Date.now(), lastMessageAt: 0 })),
+      updateLastMessage: mock(async () => {}),
+      get: mock(async () => ({ id: 'conv-1', contactPeerId: 'alice', createdAt: Date.now(), lastMessageAt: 0 })),
+    };
+    ctrl.messageStore = {
+      createMessage: mock(async () => ({ id: 'm1' })),
+      addMessage: mock(async () => ({ success: true })),
+      getMessages: mock(() => []),
+    };
+    ctrl.mediaStore = { registerMeta: mock(() => {}) };
+    ctrl.notifications = { notify: mock(() => {}) };
+    ctrl.ui = { updateSidebar: mock(() => {}), appendMessageToDOM: mock(() => {}), showToast: mock(() => {}) };
+    ctrl.multiDeviceDedup = { isDuplicate: mock(() => false), markSeen: mock(() => {}) };
+    ctrl._gossipSeen = new Set<string>();
+    ctrl.getDisplayNameForPeer = mock(() => 'Alice');
+    ctrl.getOrCreateCRDT = mock(() => ({ addMessage: mock(() => {}) }));
+    ctrl.persistMessage = mock(async () => {});
+    ctrl.recordManifestDomain = mock(() => {});
+    ctrl.getChannelMessageCount = mock(() => 1);
+
+    ChatController.prototype.setupTransportHandlers.call(ctrl);
+
+    await ctrl.transport.onMessage('alice', {
+      messageId: 'msg-fallback-1',
+      timestamp: Date.now(),
+    });
+
+    expect(ctrl.sendControlWithRetry).toHaveBeenCalledTimes(1);
+    const denialPayload = ctrl.sendControlWithRetry.mock.calls[0][1];
+    expect(denialPayload.type).toBe('direct-denied');
+    expect(denialPayload.workspaceId).toBe('ws-1');
+    expect(denialPayload.reason).toBe('workspace-dm-disabled');
+    expect(ctrl.messageStore.addMessage).not.toHaveBeenCalled();
+  });
+
   test('receiver rejects workspace-context direct message when own preference is disabled', async () => {
     const ctrl = Object.create(ChatController.prototype) as any;
 

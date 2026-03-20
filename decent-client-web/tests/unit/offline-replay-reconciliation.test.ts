@@ -227,6 +227,35 @@ describe('ChatController offline replay reconciliation', () => {
   });
 
 
+
+  test('isValidInboundReceipt rejects unresolved legacy message for peer-specific fallback receipt validation', () => {
+    const ctrl = makeBaseController();
+    const outgoing = {
+      id: 'msg-legacy-receipt',
+      channelId: 'unknown-channel',
+      senderId: 'me',
+      content: 'legacy unresolved recipients',
+      timestamp: 1700000003600,
+      type: 'text',
+      prevHash: 'legacy',
+      status: 'pending',
+      ackedBy: [],
+      ackedAt: {},
+      readBy: [],
+      readAt: {},
+    };
+
+    ctrl.messageStore = {
+      getMessages: mock(() => [outgoing]),
+    };
+    ctrl.findWorkspaceByChannelId = mock(() => null);
+    ctrl.directConversationStore = { conversations: new Map() };
+
+    const result = (ChatController.prototype as any).isValidInboundReceipt.call(ctrl, 'peer-a', 'unknown-channel', 'msg-legacy-receipt', 'ack');
+
+    expect(result.valid).toBe(false);
+  });
+
   test('retryUnackedOutgoingForPeer does not replay unresolved legacy message to peer-specific fallback recipient', async () => {
     const ctrl = makeBaseController();
     const outgoing = {

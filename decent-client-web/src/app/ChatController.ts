@@ -2006,6 +2006,21 @@ export class ChatController {
             // where isDirect flag was lost in transit or sender used wrong send path).
             const fallbackConv = await this.directConversationStore.getByContact(peerId);
             if (fallbackConv) {
+              const fallbackWorkspaceId = (fallbackConv as any).originWorkspaceId;
+              if (typeof fallbackWorkspaceId === 'string') {
+                const ws = this.workspaceManager.getWorkspace(fallbackWorkspaceId);
+                const me = ws?.members.find((m: any) => m.peerId === this.state.myPeerId);
+                if (me && me.allowWorkspaceDMs === false) {
+                  this.sendControlWithRetry(peerId, {
+                    type: 'direct-denied',
+                    workspaceId: fallbackWorkspaceId,
+                    reason: 'workspace-dm-disabled',
+                  }, { label: 'direct-denied' });
+                  console.warn(`[Privacy] Rejected fallback DM from ${peerId.slice(0, 8)} in ${fallbackWorkspaceId.slice(0, 8)} (recipient disabled workspace DMs)`);
+                  return;
+                }
+              }
+
               console.warn(`[Security] Message from ${peerId.slice(0, 8)} missing isDirect/workspace — falling back to DM`, data);
               const channelId = fallbackConv.id;
               const msg = await this.messageStore.createMessage(channelId, peerId, content);
@@ -9893,7 +9908,7 @@ export class ChatController {
       return { valid: false };
     }
 
-    const recipients = this.getMessageRecipients(msg, peerId);
+    const recipients = this.getStableMessageRecipients(msg);
     if (!recipients.includes(peerId)) {
       console.warn(`[Security] Rejecting ${type}: peer ${peerId.slice(0, 8)} is not an intended recipient for ${messageId}`);
       return { valid: false };
