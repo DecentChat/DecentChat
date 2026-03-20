@@ -2016,6 +2016,28 @@ export class NodeXenaPeer {
    */
   private handleWorkspaceState(fromPeerId: string, workspaceId: string, sync: any): void {
     let ws = this.workspaceManager.getWorkspace(workspaceId);
+    const remoteMembers = Array.isArray(sync?.members) ? sync.members : [];
+    const remoteChannels = Array.isArray(sync?.channels) ? sync.channels : [];
+    const senderListedInSync = remoteMembers.some((member: any) => member?.peerId === fromPeerId);
+
+    if (!senderListedInSync) {
+      this.opts.log?.warn?.(`[xena-peer] ignoring workspace-state for ${workspaceId.slice(0, 8)}: sender ${fromPeerId.slice(0, 8)} missing from member list`);
+      return;
+    }
+
+    if (ws && !ws.members.some((member: any) => member.peerId === fromPeerId)) {
+      this.opts.log?.warn?.(`[xena-peer] ignoring workspace-state for ${workspaceId.slice(0, 8)} from non-member ${fromPeerId.slice(0, 8)}`);
+      return;
+    }
+
+    if (ws && this.workspaceManager.isBanned(workspaceId, fromPeerId)) {
+      this.opts.log?.warn?.(`[xena-peer] ignoring workspace-state for ${workspaceId.slice(0, 8)} from banned peer ${fromPeerId.slice(0, 8)}`);
+      return;
+    }
+
+    const senderPayload = remoteMembers.find((member: any) => member?.peerId === fromPeerId);
+    const senderIsOwner = ws?.members.some((member: any) => member.peerId === fromPeerId && member.role === 'owner')
+      || senderPayload?.role === 'owner';
 
     if (!ws) {
       // First time receiving this workspace — create it
@@ -2023,27 +2045,31 @@ export class NodeXenaPeer {
         id: workspaceId,
         name: sync.name || workspaceId.slice(0, 8),
         description: sync.description || '',
-        channels: (sync.channels || []).map((ch: any) => ({
+        channels: remoteChannels.map((ch: any) => ({
           id: ch.id,
           workspaceId,
           name: ch.name,
           type: ch.type || 'channel',
-          members: [],
-          createdBy: fromPeerId,
-          createdAt: Date.now(),
+          members: Array.isArray(ch.members)
+            ? ch.members.filter((memberId: unknown): memberId is string => typeof memberId === 'string')
+            : [],
+          ...(ch.accessPolicy ? { accessPolicy: JSON.parse(JSON.stringify(ch.accessPolicy)) } : {}),
+          createdBy: ch.createdBy || fromPeerId,
+          createdAt: Number.isFinite(ch.createdAt) ? ch.createdAt : Date.now(),
         })),
-        members: (sync.members || []).map((m: any) => ({
+        members: remoteMembers.map((m: any) => ({
           peerId: m.peerId,
           alias: m.alias || m.peerId.slice(0, 8),
           publicKey: m.publicKey || '',
           signingPublicKey: m.signingPublicKey || undefined,
-          role: m.role || 'member',
+          role: senderIsOwner && ['owner', 'admin', 'member'].includes(m.role) ? m.role : (m.peerId === fromPeerId && senderPayload?.role === 'owner' ? 'owner' : 'member'),
           isBot: m.isBot === true,
           companySim: m.companySim || undefined,
+          allowWorkspaceDMs: m.allowWorkspaceDMs !== false,
           joinedAt: Date.now(),
         })),
         inviteCode: sync.inviteCode || '',
-        permissions: sync.permissions || {},
+        permissions: senderIsOwner ? (sync.permissions || {}) : {},
         createdAt: Date.now(),
         createdBy: fromPeerId,
       };
@@ -2068,9 +2094,11 @@ export class NodeXenaPeer {
       // Update existing workspace: sync members and channels
       if (sync.name && ws.name !== sync.name) ws.name = sync.name;
       if (sync.description !== undefined) ws.description = sync.description;
+      if (senderIsOwner && sync.permissions) ws.permissions = sync.permissions;
 
       // Merge members
-      for (const remoteMember of (sync.members || [])) {
+      for (const remoteMember of remoteMembers) {
+        if (this.workspaceManager.isBanned(workspaceId, remoteMember.peerId)) continue;
         const existing = ws.members.find((m: any) => m.peerId === remoteMember.peerId);
         if (!existing) {
           ws.members.push({
@@ -2078,30 +2106,46 @@ export class NodeXenaPeer {
             alias: remoteMember.alias || remoteMember.peerId.slice(0, 8),
             publicKey: remoteMember.publicKey || '',
             signingPublicKey: remoteMember.signingPublicKey || undefined,
-            role: remoteMember.role || 'member',
+            role: senderIsOwner && ['owner', 'admin', 'member'].includes(remoteMember.role) ? remoteMember.role : 'member',
             isBot: remoteMember.isBot === true,
             companySim: remoteMember.companySim || undefined,
+            allowWorkspaceDMs: remoteMember.allowWorkspaceDMs !== false,
             joinedAt: Date.now(),
           });
-        } else if (remoteMember.alias && !/^[a-f0-9]{8}$/i.test(remoteMember.alias)) {
-          existing.alias = remoteMember.alias;
+        } else {
+          if (remoteMember.alias && !/^[a-f0-9]{8}$/i.test(remoteMember.alias)) {
+            existing.alias = remoteMember.alias;
+          }
           if (remoteMember.publicKey) existing.publicKey = remoteMember.publicKey;
+          if (remoteMember.signingPublicKey && !existing.signingPublicKey) existing.signingPublicKey = remoteMember.signingPublicKey;
+          if (senderIsOwner && ['owner', 'admin', 'member'].includes(remoteMember.role)) existing.role = remoteMember.role;
           if (remoteMember.isBot === true) existing.isBot = true;
           if (remoteMember.companySim) existing.companySim = remoteMember.companySim;
+          if (typeof remoteMember.allowWorkspaceDMs === 'boolean') existing.allowWorkspaceDMs = remoteMember.allowWorkspaceDMs;
         }
       }
 
       // Merge channels (prefer canonical IDs, avoid duplicate same-name channels)
-      for (const remoteCh of (sync.channels || [])) {
+      for (const remoteCh of remoteChannels) {
         const remoteId = typeof remoteCh.id === 'string' ? remoteCh.id : '';
         const remoteType = remoteCh.type || 'channel';
         const remoteName = typeof remoteCh.name === 'string' ? remoteCh.name : '';
+        const remoteMembersForChannel = Array.isArray(remoteCh.members)
+          ? remoteCh.members.filter((memberId: unknown): memberId is string => typeof memberId === 'string')
+          : [];
+        const remoteAccessPolicy = remoteCh.accessPolicy
+          ? JSON.parse(JSON.stringify(remoteCh.accessPolicy))
+          : (remoteType === 'channel' ? { mode: 'public-workspace', workspaceId } : undefined);
         if (!remoteId || !remoteName) continue;
 
         const localById = ws.channels.find((ch: any) => ch.id === remoteId);
         if (localById) {
           if (localById.name !== remoteName) localById.name = remoteName;
           if ((localById.type || 'channel') !== remoteType) localById.type = remoteType;
+          if (remoteMembersForChannel.length > 0) localById.members = [...new Set(remoteMembersForChannel)];
+          if (remoteAccessPolicy) (localById as any).accessPolicy = remoteAccessPolicy;
+          if (remoteCh.createdBy && !localById.createdBy) localById.createdBy = remoteCh.createdBy;
+          if (Number.isFinite(remoteCh.createdAt) && !Number.isFinite(localById.createdAt)) localById.createdAt = remoteCh.createdAt;
           continue;
         }
 
@@ -2112,6 +2156,10 @@ export class NodeXenaPeer {
             localByName.id = remoteId;
             localByName.workspaceId = workspaceId;
           }
+          if (remoteMembersForChannel.length > 0) localByName.members = [...new Set(remoteMembersForChannel)];
+          if (remoteAccessPolicy) (localByName as any).accessPolicy = remoteAccessPolicy;
+          if (remoteCh.createdBy && !localByName.createdBy) localByName.createdBy = remoteCh.createdBy;
+          if (Number.isFinite(remoteCh.createdAt) && !Number.isFinite(localByName.createdAt)) localByName.createdAt = remoteCh.createdAt;
           continue;
         }
 
@@ -2120,9 +2168,10 @@ export class NodeXenaPeer {
           workspaceId,
           name: remoteName,
           type: remoteType,
-          members: [],
-          createdBy: fromPeerId,
-          createdAt: Date.now(),
+          members: remoteMembersForChannel,
+          ...(remoteAccessPolicy ? { accessPolicy: remoteAccessPolicy } : {}),
+          createdBy: remoteCh.createdBy || fromPeerId,
+          createdAt: Number.isFinite(remoteCh.createdAt) ? remoteCh.createdAt : Date.now(),
         });
       }
 
