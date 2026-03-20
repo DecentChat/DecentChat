@@ -108,11 +108,17 @@ export function createUIService(
     renderMessages();
   }
 
+  let contactsCacheRefreshSeq = 0;
+
   async function refreshContactsCache(): Promise<void> {
+    const requestSeq = ++contactsCacheRefreshSeq;
     const [contacts, conversations] = await Promise.all([
       callbacks.getContacts?.() || Promise.resolve([]),
       callbacks.getDirectConversations?.() || Promise.resolve([]),
     ]);
+
+    if (requestSeq !== contactsCacheRefreshSeq) return;
+
     cachedData.contacts = contacts;
     cachedData.directConversations = conversations.slice().sort((a, b) => b.lastMessageAt - a.lastMessageAt);
   }
@@ -183,6 +189,17 @@ export function createUIService(
   }
 
   function switchToDirectConversation(conversationId: string): void {
+    const alreadyActive = state.activeDirectConversationId === conversationId
+      && state.activeChannelId === conversationId
+      && state.activeWorkspaceId === null;
+
+    if (alreadyActive && !state.threadOpen) {
+      callbacks.markChannelRead?.(conversationId);
+      void callbacks.onChannelViewed?.(conversationId);
+      closeMobileSidebar();
+      return;
+    }
+
     state.activeDirectConversationId = conversationId;
     state.activeChannelId = conversationId;
     state.activeWorkspaceId = null;
@@ -291,7 +308,8 @@ export function createUIService(
   }
 
   function updateSidebar(): void {
-    refreshContactsCache().catch(() => {}).finally(() => syncShellSidebar());
+    syncShellSidebar();
+    refreshContactsCache().then(() => syncShellSidebar()).catch(() => {});
   }
 
   function updateChannelHeader(): void {

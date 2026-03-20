@@ -194,7 +194,6 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
     const messages = state.activeChannelId
       ? messageStore.getMessages(state.activeChannelId)
           .filter((m: PlaintextMessage) => !m.threadId)
-          .map((m: PlaintextMessage) => ({ ...m }))
       : [];
 
     shellData.messages.messages = messages;
@@ -222,12 +221,12 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
       const allMsgs = messageStore.getMessages(state.activeChannelId);
       let parent = allMsgs.find((m: PlaintextMessage) => m.id === state.activeThreadId);
       if (!parent) parent = messageStore.getThreadRoot(state.activeThreadId);
-      const replies = messageStore.getThread(state.activeChannelId, state.activeThreadId!).map((m: PlaintextMessage) => ({ ...m }));
+      const replies = messageStore.getThread(state.activeChannelId, state.activeThreadId!);
 
       shellData.thread.open = state.threadOpen;
       shellData.thread.threadId = state.activeThreadId;
       shellData.thread.channelId = state.activeChannelId;
-      shellData.thread.parentMessage = parent ? { ...parent } : null;
+      shellData.thread.parentMessage = parent ?? null;
       shellData.thread.replies = replies;
     }
     shellData.thread.myPeerId = state.myPeerId;
