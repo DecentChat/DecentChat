@@ -709,11 +709,11 @@ describe("runtime streaming relay integration", () => {
     expect(recorded[0]?.sessionKey).toContain(":thread:root-777");
     expect(recorded[0]?.ctx?.ParentSessionKey).toBe("session:group:ws:chan");
   });
-  test("rapid partials are coalesced into a single final streamed delta", async () => {
+  test("rapid partials are coalesced into a single final streamed delta and one canonical final DM", async () => {
     const streamStarts: Array<{ peerId: string; messageId: string }> = [];
     const streamDeltas: Array<{ peerId: string; messageId: string; content: string }> = [];
     const streamDone: Array<{ peerId: string; messageId: string }> = [];
-    const persistedReplies: Array<{ peerId: string; content: string; threadId?: string; replyToId?: string }> = [];
+    const persistedReplies: Array<{ peerId: string; content: string; threadId?: string; replyToId?: string; messageId?: string }> = [];
 
     const xenaPeer = {
       startStream: async () => {},
@@ -728,8 +728,8 @@ describe("runtime streaming relay integration", () => {
       sendDirectStreamDone: async (args: { peerId: string; messageId: string }) => {
         streamDone.push(args);
       },
-      sendDirectToPeer: async (peerId: string, content: string, threadId?: string, replyToId?: string) => {
-        persistedReplies.push({ peerId, content, threadId, replyToId });
+      sendDirectToPeer: async (peerId: string, content: string, threadId?: string, replyToId?: string, messageId?: string) => {
+        persistedReplies.push({ peerId, content, threadId, replyToId, messageId });
       },
       sendToChannel: async () => {},
       persistMessageLocally: async () => {},
@@ -750,8 +750,87 @@ describe("runtime streaming relay integration", () => {
     expect(streamDeltas.map((d) => d.content)).toEqual(["Hello world"]);
     expect(streamDone).toHaveLength(1);
     expect(streamDone[0]?.messageId).toBe(streamStarts[0]?.messageId);
-    // Deliver(final text) is skipped in stream mode after partials became active.
-    expect(persistedReplies).toEqual([]);
+    expect(persistedReplies).toEqual([
+      {
+        peerId: "peer-user",
+        content: "Hello world",
+        threadId: undefined,
+        replyToId: "inbound-1",
+        messageId: streamStarts[0]?.messageId,
+      },
+    ]);
+  });
+
+  test("streamed channel thread replies also send one canonical final channel message", async () => {
+    const streamStarts: Array<{ channelId: string; workspaceId: string; messageId: string; threadId?: string; replyToId?: string }> = [];
+    const streamDeltas: Array<{ channelId: string; workspaceId: string; messageId: string; content: string }> = [];
+    const streamDone: Array<{ channelId: string; workspaceId: string; messageId: string }> = [];
+    const persistedReplies: Array<{ channelId: string; content: string; threadId?: string; replyToId?: string; messageId?: string }> = [];
+
+    const xenaPeer = {
+      startStream: async (args: { channelId: string; workspaceId: string; messageId: string; threadId?: string; replyToId?: string }) => {
+        streamStarts.push(args);
+      },
+      startDirectStream: async () => {},
+      sendStreamDelta: async (args: { channelId: string; workspaceId: string; messageId: string; content: string }) => {
+        streamDeltas.push(args);
+      },
+      sendDirectStreamDelta: async () => {},
+      sendStreamDone: async (args: { channelId: string; workspaceId: string; messageId: string }) => {
+        streamDone.push(args);
+      },
+      sendDirectStreamDone: async () => {},
+      sendDirectToPeer: async () => {},
+      sendToChannel: async (channelId: string, content: string, threadId?: string, replyToId?: string, messageId?: string) => {
+        persistedReplies.push({ channelId, content, threadId, replyToId, messageId });
+      },
+      persistMessageLocally: async () => {},
+      sendTyping: async () => {},
+    };
+
+    await relayInboundMessageToPeer({
+      incoming: makeIncoming({
+        messageId: 'inbound-thread-1',
+        chatType: 'channel',
+        channelId: 'chan-1',
+        workspaceId: 'ws-1',
+        threadId: 'thread-root-1',
+      }),
+      ctx: {
+        account: { streamEnabled: true } as any,
+        accountId: 'acct-1',
+      },
+      core: makeRuntime({ partials: ['Hey there'], finalText: 'Hey there' }),
+      xenaPeer: xenaPeer as any,
+    });
+
+    expect(streamStarts).toHaveLength(1);
+    expect(streamStarts[0]?.threadId).toBe('thread-root-1');
+    expect(streamStarts[0]?.replyToId).toBe('inbound-thread-1');
+    expect(streamDeltas).toEqual([
+      {
+        channelId: 'chan-1',
+        workspaceId: 'ws-1',
+        messageId: streamStarts[0]!.messageId,
+        content: 'Hey there',
+      },
+    ]);
+    expect(streamDone).toEqual([
+      {
+        channelId: 'chan-1',
+        workspaceId: 'ws-1',
+        messageId: streamStarts[0]!.messageId,
+      },
+    ]);
+    expect(persistedReplies).toEqual([
+      {
+        channelId: 'chan-1',
+        content: 'Hey there',
+        threadId: 'thread-root-1',
+        replyToId: 'inbound-thread-1',
+        messageId: streamStarts[0]?.messageId,
+      },
+    ]);
   });
 
   test("channel replies send typing start immediately and stop after first streamed output", async () => {

@@ -17,7 +17,9 @@ export interface CompanyTemplateAssets {
   templateYamlPath: string;
   companyMdPath: string;
   orgMdPath: string;
+  communicationMdPath: string;
   workflowsMdPath: string;
+  teams: Record<string, string>;
   employees: Record<string, CompanyTemplateRoleAssets>;
 }
 
@@ -59,6 +61,17 @@ function readTemplateMetadata(templateDir: string): CompanyTemplateMetadata {
   return CompanyTemplateMetadataSchema.parse(parsed);
 }
 
+function buildTeamAssets(templateDir: string): Record<string, string> {
+  const teamsDir = join(templateDir, 'teams');
+  if (!existsSync(teamsDir) || !statSync(teamsDir).isDirectory()) return {};
+
+  return Object.fromEntries(
+    readdirSync(teamsDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+      .map((entry) => [entry.name.replace(/\.md$/, ''), join(teamsDir, entry.name)]),
+  );
+}
+
 function buildRoleAssets(templateId: string, templateDir: string, roleId: string): CompanyTemplateRoleAssets {
   const directoryPath = join(templateDir, 'employees', roleId);
   const identityMdPath = join(directoryPath, 'IDENTITY.md');
@@ -87,15 +100,18 @@ function loadTemplateFromDirectory(templateDir: string): CompanySimTemplate {
   const templateYamlPath = join(templateDir, 'template.yaml');
   const companyMdPath = join(templateDir, 'COMPANY.md');
   const orgMdPath = join(templateDir, 'ORG.md');
+  const communicationMdPath = join(templateDir, 'COMMUNICATION.md');
   const workflowsMdPath = join(templateDir, 'WORKFLOWS.md');
 
   assertRequiredFile(metadata.id, companyMdPath);
   assertRequiredFile(metadata.id, orgMdPath);
+  assertRequiredFile(metadata.id, communicationMdPath);
   assertRequiredFile(metadata.id, workflowsMdPath);
 
   const employees = Object.fromEntries(
     metadata.roles.map((role) => [role.id, buildRoleAssets(metadata.id, templateDir, role.id)]),
   );
+  const teams = buildTeamAssets(templateDir);
 
   return {
     ...metadata,
@@ -104,7 +120,9 @@ function loadTemplateFromDirectory(templateDir: string): CompanySimTemplate {
       templateYamlPath,
       companyMdPath,
       orgMdPath,
+      communicationMdPath,
       workflowsMdPath,
+      teams,
       employees,
     },
   };

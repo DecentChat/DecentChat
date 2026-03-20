@@ -68,6 +68,42 @@ describe('company routing', () => {
     expect(decision.preferredReply).toBe('channel');
   });
 
+
+  test('explicit task owner routing pulls in the intended specialist', () => {
+    const decision = decideCompanyParticipation({
+      context: makeContext(),
+      chatType: 'channel',
+      channelNameOrId: 'engineering',
+      text: '[TASK pricing-api] Owner=Backend Engineer; Draft first endpoint',
+    });
+
+    expect(decision.shouldRespond).toBe(true);
+    expect(decision.reason).toBe('task-owner');
+    expect(decision.preferredReply).toBe('thread');
+  });
+
+  test('non-owner specialist stays silent on explicitly assigned task', () => {
+    const decision = decideCompanyParticipation({
+      context: makeContext({
+        id: 'tester',
+        accountId: 'tester',
+        alias: 'Iva QA',
+        title: 'QA Engineer',
+        teamId: 'qa',
+        channels: ['qa', 'engineering'],
+        participation: { mode: 'specialist', respondWhenMentioned: true, replyInThreadsOnly: true },
+      }),
+      chatType: 'channel',
+      channelNameOrId: 'engineering',
+      text: '[TASK pricing-api] Owner=Backend Engineer; Draft first endpoint',
+      threadId: 'thread-1',
+    });
+
+    expect(decision.shouldRespond).toBe(false);
+    expect(decision.reason).toBe('not-task-owner');
+    expect(decision.preferredReply).toBe('thread');
+  });
+
   test('unmentioned irrelevant employees stay silent', () => {
     const decision = decideCompanyParticipation({
       context: makeContext({
@@ -87,7 +123,7 @@ describe('company routing', () => {
     expect(decision.reason).toBe('not-owned-channel');
   });
 
-  test('manager can summarize when specialists talk in owned threads', () => {
+  test('manager can summarize when specialists emit state-change tags in owned threads', () => {
     const decision = decideCompanyParticipation({
       context: makeContext({
         id: 'team-manager',
@@ -103,12 +139,37 @@ describe('company routing', () => {
       }),
       chatType: 'channel',
       channelNameOrId: 'engineering',
-      text: 'Implementation done, tests passing',
+      text: '[DONE pricing-api] Implementation done, tests passing',
       threadId: 'thread-1',
     });
 
     expect(decision.shouldRespond).toBe(true);
     expect(decision.reason).toBe('summary-thread');
+    expect(decision.preferredReply).toBe('thread');
+  });
+
+  test('manager stays silent on routine specialist chatter inside owned threads', () => {
+    const decision = decideCompanyParticipation({
+      context: makeContext({
+        id: 'team-manager',
+        accountId: 'team-manager',
+        alias: 'Mira PM',
+        title: 'Team Manager',
+        channels: ['engineering', 'general'],
+        participation: {
+          mode: 'summary-first',
+          respondWhenMentioned: true,
+          respondToChannelTopics: ['status'],
+        },
+      }),
+      chatType: 'channel',
+      channelNameOrId: 'engineering',
+      text: 'I am still checking one edge case before I push',
+      threadId: 'thread-1',
+    });
+
+    expect(decision.shouldRespond).toBe(false);
+    expect(decision.reason).toBe('awaiting-summary-signal');
     expect(decision.preferredReply).toBe('thread');
   });
 });

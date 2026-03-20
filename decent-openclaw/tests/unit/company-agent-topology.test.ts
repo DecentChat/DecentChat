@@ -16,6 +16,7 @@ describe('company agent topology planner', () => {
 
       writeFileSync(join(companyDir, 'COMPANY.md'), '# Company\nStudio');
       writeFileSync(join(companyDir, 'ORG.md'), '# Org\nStructure');
+      writeFileSync(join(companyDir, 'COMMUNICATION.md'), '# Communication\nUse concise task-state tags.');
       writeFileSync(join(companyDir, 'WORKFLOWS.md'), '# Workflows\nRules');
       writeFileSync(join(companyDir, 'teams', 'engineering.md'), '# Engineering\nTeam');
 
@@ -82,6 +83,7 @@ describe('company agent topology planner', () => {
       ]);
       expect(backend.contextSources.company.companyMdPath).toBe(join(companyDir, 'COMPANY.md'));
       expect(backend.contextSources.company.orgMdPath).toBe(join(companyDir, 'ORG.md'));
+      expect(backend.contextSources.company.communicationMdPath).toBe(join(companyDir, 'COMMUNICATION.md'));
       expect(backend.contextSources.company.workflowsMdPath).toBe(join(companyDir, 'WORKFLOWS.md'));
       expect(backend.contextSources.teamMdPath).toBe(join(companyDir, 'teams', 'engineering.md'));
       expect(backend.contextSources.employeeDirPath).toBe(join(companyDir, 'employees', 'backend-dev'));

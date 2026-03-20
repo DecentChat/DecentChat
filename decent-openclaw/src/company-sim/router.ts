@@ -1,5 +1,5 @@
 import type { LoadedCompanyContext } from './context-loader.ts';
-import { isAssignedChannel, isEmployeeMentioned, matchesParticipationTopic } from './participation.ts';
+import { hasExplicitTaskOwner, hasSummaryTriggerTag, isAssignedChannel, isEmployeeMentioned, isTaskOwnedByEmployee, matchesParticipationTopic } from './participation.ts';
 
 export interface CompanyRoutingDecision {
   shouldRespond: boolean;
@@ -14,7 +14,10 @@ export interface CompanyRoutingDecision {
     | 'silent-unless-routed'
     | 'not-mentioned'
     | 'not-owned-channel'
-    | 'threads-only';
+    | 'threads-only'
+    | 'awaiting-summary-signal'
+    | 'task-owner'
+    | 'not-task-owner';
   preferredReply: 'channel' | 'thread';
 }
 
@@ -36,6 +39,9 @@ export function decideCompanyParticipation(params: {
   const assignedChannel = isAssignedChannel(employee, params.channelNameOrId);
   const topicMatch = matchesParticipationTopic(params.text, participation.respondToChannelTopics);
   const inThread = Boolean(params.threadId);
+  const summaryTrigger = hasSummaryTriggerTag(params.text);
+  const explicitTaskOwner = hasExplicitTaskOwner(params.text);
+  const taskOwnerMatch = isTaskOwnedByEmployee(params.text, employee);
 
   if (params.chatType === 'direct') {
     return { shouldRespond: true, reason: 'direct-message', preferredReply: 'channel' };
@@ -45,11 +51,18 @@ export function decideCompanyParticipation(params: {
     return { shouldRespond: true, reason: 'mentioned', preferredReply: inThread ? 'thread' : 'thread' };
   }
 
+  if (explicitTaskOwner && taskOwnerMatch) {
+    return { shouldRespond: true, reason: 'task-owner', preferredReply: 'thread' };
+  }
+
   switch (participation.mode) {
     case 'mention-only':
       return { shouldRespond: false, reason: 'not-mentioned', preferredReply: 'thread' };
 
     case 'silent-unless-routed':
+      if (explicitTaskOwner && !taskOwnerMatch) {
+        return { shouldRespond: false, reason: 'not-task-owner', preferredReply: 'thread' };
+      }
       if (inThread && assignedChannel) {
         return { shouldRespond: true, reason: 'specialist-thread', preferredReply: 'thread' };
       }
@@ -59,14 +72,20 @@ export function decideCompanyParticipation(params: {
       if (!assignedChannel) {
         return { shouldRespond: false, reason: 'not-owned-channel', preferredReply: 'thread' };
       }
+      if (explicitTaskOwner && !taskOwnerMatch) {
+        return { shouldRespond: false, reason: 'not-task-owner', preferredReply: 'thread' };
+      }
       if (participation.replyInThreadsOnly && !inThread) {
         return { shouldRespond: false, reason: 'threads-only', preferredReply: 'thread' };
       }
       return { shouldRespond: true, reason: 'specialist-thread', preferredReply: 'thread' };
 
     case 'summary-first':
-      if (inThread && assignedChannel) {
+      if (inThread && assignedChannel && summaryTrigger) {
         return { shouldRespond: true, reason: 'summary-thread', preferredReply: 'thread' };
+      }
+      if (inThread && assignedChannel) {
+        return { shouldRespond: false, reason: 'awaiting-summary-signal', preferredReply: 'thread' };
       }
       if (assignedChannel && topicMatch) {
         return { shouldRespond: true, reason: 'summary-topic', preferredReply: 'channel' };

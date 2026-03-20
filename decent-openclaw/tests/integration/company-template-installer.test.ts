@@ -70,6 +70,8 @@ describe('company template installer', () => {
         'software-studio-qa',
       ]);
       expect(firstInstall.summary.createdChannels).toEqual(['engineering', 'general', 'leadership', 'qa']);
+      expect(existsSync(join(firstInstall.companyDirPath, 'teams', 'engineering.md'))).toBeTrue();
+      expect(existsSync(join(firstInstall.companyDirPath, 'teams', 'qa.md'))).toBeTrue();
 
       const decentchatConfig = (firstInstall.config.channels as any).decentchat;
       expect(decentchatConfig.companySimBootstrap).toMatchObject({
@@ -141,6 +143,9 @@ describe('company template installer', () => {
         expect(existsSync(join(scaffold.workspacePath, 'SOUL.md'))).toBeTrue();
         expect(existsSync(join(scaffold.workspacePath, 'USER.md'))).toBeTrue();
         expect(existsSync(join(scaffold.workspacePath, 'company', 'COMPANY.md'))).toBeTrue();
+        expect(existsSync(join(scaffold.workspacePath, 'company', 'COMMUNICATION.md'))).toBeTrue();
+        const expectedTeamDoc = scaffold.agentId.endsWith('-qa') ? 'qa.md' : 'engineering.md';
+        expect(existsSync(join(scaffold.workspacePath, 'company', 'teams', expectedTeamDoc))).toBeTrue();
         expect(existsSync(join(scaffold.workspacePath, 'employee', 'MEMORY.md'))).toBeTrue();
         expect(existsSync(join(scaffold.workspacePath, 'employee', 'PLAYBOOK.md'))).toBeTrue();
       }

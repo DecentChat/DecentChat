@@ -3,11 +3,15 @@
 ## Feature delivery
 
 1. Manager defines scope and acceptance criteria.
-2. Backend role proposes implementation plan and ships change.
-3. QA role validates behavior and reports pass/fail with evidence.
+2. Manager assigns an owner with `[TASK] Owner=...;`.
+3. Backend role proposes implementation plan and ships change.
+4. QA role validates behavior and reports pass/fail with evidence.
+5. Use `[QUESTION]`, `[BLOCKED]`, `[HANDOFF]`, and `[DONE]` only when the task state changes.
+6. Manager reacts mainly to `[BLOCKED]`, `[HANDOFF]`, or `[DONE]`, not routine chatter.
 
 ## Incident response
 
 1. Capture issue summary and impact.
-2. Backend investigates and proposes fix.
-3. QA verifies fix before closure.
+2. Manager names the current owner.
+3. Backend investigates and proposes fix.
+4. QA verifies fix before closure.

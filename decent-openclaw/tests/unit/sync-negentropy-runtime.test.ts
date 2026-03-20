@@ -164,6 +164,38 @@ describe('SyncProtocol runtime Negentropy sync', () => {
     expect(aliceSent).not.toContain('negentropy-query');
   });
 
+  test('falls back to legacy sync when Negentropy reconciliation rejects', async () => {
+    const wm = new WorkspaceManager();
+    const ms = new MessageStore();
+
+    const ws = wm.createWorkspace('Team', 'alice', 'Alice', 'alice-key');
+
+    const sync = new SyncProtocol(
+      wm,
+      ms,
+      () => true,
+      () => {},
+      'alice',
+      undefined,
+      { capabilityWaitMs: 40 },
+    );
+
+    const sendLegacySyncRequest = mock(() => {});
+    (sync as any).sendLegacySyncRequest = sendLegacySyncRequest;
+    (sync as any).startNegentropySync = mock(async () => {
+      throw new Error('negentropy failed');
+    });
+    (sync as any).peerCapabilities.set('bob', {
+      negentropy: true,
+      updatedAt: Date.now(),
+    });
+
+    sync.requestSync('bob', ws.id);
+    await waitFor(() => sendLegacySyncRequest.mock.calls.length === 1);
+
+    expect(sendLegacySyncRequest).toHaveBeenCalledWith('bob', ws.id);
+  });
+
   test('NodeXenaPeer reconnect flow requests sync for shared workspaces', async () => {
     const peer = new NodeXenaPeer({
       account: makeAccount(),

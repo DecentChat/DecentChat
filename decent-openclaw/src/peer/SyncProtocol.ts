@@ -243,7 +243,7 @@ export class SyncProtocol {
 
     const known = this.peerCapabilities.get(targetPeerId);
     if (known?.negentropy) {
-      void this.startNegentropySync(targetPeerId, workspaceId);
+      this.startNegentropySyncSafely(targetPeerId, workspaceId);
       return;
     }
 
@@ -257,7 +257,7 @@ export class SyncProtocol {
       this.pendingCapabilityFallback.delete(key);
       const current = this.peerCapabilities.get(targetPeerId);
       if (current?.negentropy) {
-        void this.startNegentropySync(targetPeerId, workspaceId);
+        this.startNegentropySyncSafely(targetPeerId, workspaceId);
       } else {
         this.sendLegacySyncRequest(targetPeerId, workspaceId);
       }
@@ -313,10 +313,16 @@ export class SyncProtocol {
     this.pendingCapabilityFallback.delete(key);
 
     if (msg.features?.negentropy && this.enableNegentropy) {
-      void this.startNegentropySync(fromPeerId, msg.workspaceId);
+      this.startNegentropySyncSafely(fromPeerId, msg.workspaceId);
     } else {
       this.sendLegacySyncRequest(fromPeerId, msg.workspaceId);
     }
+  }
+
+  private startNegentropySyncSafely(targetPeerId: string, workspaceId: string): void {
+    void this.startNegentropySync(targetPeerId, workspaceId).catch(() => {
+      this.sendLegacySyncRequest(targetPeerId, workspaceId);
+    });
   }
 
   private async startNegentropySync(targetPeerId: string, workspaceId: string): Promise<void> {

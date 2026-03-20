@@ -20,13 +20,20 @@ type ResetFn = () => void;
 const repoRoot = new URL('../../../', import.meta.url).pathname;
 const manifestPath = join(repoRoot, 'company-sims/software-studio/company.yaml');
 const originalCwd = process.cwd();
+const originalWorkspaceDir = process.env.OPENCLAW_WORKSPACE_DIR;
 
 beforeAll(() => {
   process.chdir(repoRoot);
+  process.env.OPENCLAW_WORKSPACE_DIR = repoRoot;
 });
 
 afterAll(() => {
   process.chdir(originalCwd);
+  if (originalWorkspaceDir === undefined) {
+    delete process.env.OPENCLAW_WORKSPACE_DIR;
+  } else {
+    process.env.OPENCLAW_WORKSPACE_DIR = originalWorkspaceDir;
+  }
 });
 
 function readWorkspaces(dataDir: string): any[] {

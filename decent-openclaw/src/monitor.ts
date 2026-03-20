@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { resolveDecentChatAccount } from "./channel.js";
 import { getDecentChatRuntime } from "./runtime.js";
 import { resolveCompanyPromptContextForAccount } from "./company-sim/prompt-context.js";
 import { decideCompanyParticipation } from "./company-sim/router.js";
@@ -50,6 +51,20 @@ async function resolveReplyPrefixOptions(params: {
   }
 
   return cachedCreateReplyPrefixOptions(params);
+}
+
+
+function isCompanySimChannelMuted(account: ResolvedDecentChatAccount | undefined, chatType: IncomingPeerMessage['chatType'], channelId: string): boolean {
+  if (!account?.companySim?.enabled) return false;
+  if (chatType === 'direct') return false;
+  const silentChannelIds = account.companySim.silentChannelIds;
+  if (!Array.isArray(silentChannelIds) || silentChannelIds.length === 0) return false;
+
+  return silentChannelIds.some((value) => {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (!trimmed) return false;
+    return trimmed === channelId || trimmed === `decentchat:channel:${channelId}`;
+  });
 }
 
 function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string): string | undefined {
@@ -847,6 +862,7 @@ async function processInboundMessage(
   const peerId = msg.chatType === "direct"
     ? msg.senderId
     : `${msg.workspaceId}:${msg.channelId}`;
+  const effectiveAccount = resolveDecentChatAccount(cfg, ctx.accountId);
 
   const route = core.channel.routing.resolveAgentRoute({
     cfg,
@@ -854,6 +870,13 @@ async function processInboundMessage(
     accountId: ctx.accountId,
     peer: { kind: msg.chatType === "direct" ? "direct" : "group", id: peerId },
   });
+
+  if (isCompanySimChannelMuted(effectiveAccount, msg.chatType, msg.channelId)) {
+    ctx.log?.info?.(`[decentchat] company routing: silent account=${ctx.accountId} reason=muted-channel channel=${msg.channelId}`);
+    await xenaPeer.sendReadReceipt?.(msg.senderId, msg.channelId, msg.messageId);
+    return;
+  }
+
   const agentWorkspaceDir = resolveAgentWorkspaceDir(cfg, route.agentId);
 
   let companyContext = null;

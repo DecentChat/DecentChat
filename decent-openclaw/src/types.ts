@@ -39,6 +39,7 @@ export type DecentChatCompanySimConfig = {
   companyId?: string;
   employeeId?: string;
   roleFilesDir?: string;
+  silentChannelIds?: string[];
 };
 
 export type DecentChatChannelConfig = {
@@ -123,6 +124,7 @@ export type ResolvedDecentChatAccount = {
     companyId?: string;
     employeeId?: string;
     roleFilesDir?: string;
+    silentChannelIds?: string[];
   };
   companySimBootstrap?: {
     enabled: boolean;

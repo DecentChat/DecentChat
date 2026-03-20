@@ -49,3 +49,39 @@ export function isAssignedChannel(employee: CompanyEmployeeConfig, channelNameOr
   const normalized = normalize(channelNameOrId);
   return employee.channels.some((channel) => normalize(channel) === normalized);
 }
+
+const SUMMARY_TRIGGER_TAGS = new Set(['blocked', 'handoff', 'done']);
+
+export function extractCommunicationTag(text: string): string | null {
+  const match = text.match(/^\s*\[([A-Za-z-]+)/);
+  if (!match) return null;
+  const tag = normalize(match[1] ?? '');
+  return tag || null;
+}
+
+export function hasSummaryTriggerTag(text: string): boolean {
+  const tag = extractCommunicationTag(text);
+  return Boolean(tag && SUMMARY_TRIGGER_TAGS.has(tag));
+}
+
+export function extractTaskOwnerToken(text: string): string | null {
+  if (extractCommunicationTag(text) !== 'task') return null;
+
+  const ownerMatch = text.match(/\bowner\s*[:=]\s*([^;,.\n\r]+)/i);
+  if (!ownerMatch) return null;
+
+  const owner = normalize(ownerMatch[1] ?? '');
+  return owner || null;
+}
+
+export function isTaskOwnedByEmployee(text: string, employee: CompanyEmployeeConfig): boolean {
+  const owner = extractTaskOwnerToken(text);
+  if (!owner) return false;
+
+  const known = buildEmployeeMentionTokens(employee);
+  return known.has(owner);
+}
+
+export function hasExplicitTaskOwner(text: string): boolean {
+  return extractTaskOwnerToken(text) !== null;
+}

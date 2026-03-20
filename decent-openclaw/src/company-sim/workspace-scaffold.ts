@@ -31,6 +31,7 @@ function buildAgentsMd(plan: CompanyAgentWorkspacePlan): string {
     'Load these local context files first:',
     '- company/COMPANY.md',
     '- company/ORG.md',
+    '- company/COMMUNICATION.md',
     '- company/WORKFLOWS.md',
     '- employee/IDENTITY.md',
     '- employee/ROLE.md',
@@ -80,6 +81,7 @@ export function scaffoldCompanyAgentWorkspace(plan: CompanyAgentWorkspacePlan): 
 
   copyFileTracked(plan.contextSources.company.companyMdPath, join(workspacePath, 'company', 'COMPANY.md'), written);
   copyFileTracked(plan.contextSources.company.orgMdPath, join(workspacePath, 'company', 'ORG.md'), written);
+  copyFileTracked(plan.contextSources.company.communicationMdPath, join(workspacePath, 'company', 'COMMUNICATION.md'), written);
   copyFileTracked(plan.contextSources.company.workflowsMdPath, join(workspacePath, 'company', 'WORKFLOWS.md'), written);
 
   if (plan.contextSources.teamMdPath && existsSync(plan.contextSources.teamMdPath)) {

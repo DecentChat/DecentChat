@@ -31,6 +31,7 @@ const context: LoadedCompanyContext = {
   documents: [
     { id: 'company', path: '/tmp/company/COMPANY.md', content: 'Company doc' },
     { id: 'org', path: '/tmp/company/ORG.md', content: 'Org doc' },
+    { id: 'communication', path: '/tmp/company/COMMUNICATION.md', content: 'Communication doc' },
     { id: 'workflows', path: '/tmp/company/WORKFLOWS.md', content: 'Workflow doc' },
     { id: 'identity', path: '/tmp/company/employees/backend-dev/IDENTITY.md', content: 'Identity doc' },
     { id: 'role', path: '/tmp/company/employees/backend-dev/ROLE.md', content: 'Role doc' },
@@ -49,13 +50,15 @@ describe('company prompt context', () => {
 
     const companyIdx = prompt.indexOf('## COMPANY');
     const orgIdx = prompt.indexOf('## ORG');
+    const communicationIdx = prompt.indexOf('## COMMUNICATION');
     const workflowsIdx = prompt.indexOf('## WORKFLOWS');
     const identityIdx = prompt.indexOf('## IDENTITY');
     const roleIdx = prompt.indexOf('## ROLE');
 
     expect(companyIdx).toBeGreaterThan(-1);
     expect(companyIdx).toBeLessThan(orgIdx);
-    expect(orgIdx).toBeLessThan(workflowsIdx);
+    expect(orgIdx).toBeLessThan(communicationIdx);
+    expect(communicationIdx).toBeLessThan(workflowsIdx);
     expect(workflowsIdx).toBeLessThan(identityIdx);
     expect(identityIdx).toBeLessThan(roleIdx);
   });

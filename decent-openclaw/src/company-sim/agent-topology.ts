@@ -14,6 +14,7 @@ export interface CompanyAgentContextSourcePaths {
   company: {
     companyMdPath: string;
     orgMdPath: string;
+    communicationMdPath: string;
     workflowsMdPath: string;
   };
   teamMdPath?: string;
@@ -98,6 +99,7 @@ function buildContextSources(params: {
     company: {
       companyMdPath: join(companyDirPath, 'COMPANY.md'),
       orgMdPath: join(companyDirPath, 'ORG.md'),
+      communicationMdPath: join(companyDirPath, 'COMMUNICATION.md'),
       workflowsMdPath: join(companyDirPath, 'WORKFLOWS.md'),
     },
     teamMdPath: employee.teamId ? join(companyDirPath, 'teams', `${employee.teamId}.md`) : undefined,

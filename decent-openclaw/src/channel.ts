@@ -244,6 +244,9 @@ export function resolveDecentChatAccount(cfg: any, accountId?: string | null): R
       companyId: ch.companySim.companyId,
       employeeId: ch.companySim.employeeId,
       roleFilesDir: ch.companySim.roleFilesDir,
+      silentChannelIds: Array.isArray(ch.companySim.silentChannelIds)
+        ? normalizeStringList(ch.companySim.silentChannelIds.filter((value): value is string => typeof value === 'string'))
+        : undefined,
     } : undefined,
     companySimBootstrap: hasBootstrapConfig ? {
       enabled: bootstrapEnabledRaw !== false,

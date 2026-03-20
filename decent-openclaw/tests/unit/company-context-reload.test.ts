@@ -27,6 +27,7 @@ teams:
 employees:
   - id: backend-dev
     accountId: backend-dev
+    agentId: software-studio-backend-dev
     alias: Rian Backend
     teamId: engineering
     title: Backend Engineer
@@ -35,6 +36,7 @@ employees:
       mode: specialist
   - id: tester
     accountId: tester
+    agentId: software-studio-tester
     alias: Iva QA
     teamId: engineering
     title: QA Engineer
@@ -44,6 +46,7 @@ employees:
 `);
   writeFileSync(join(root, 'COMPANY.md'), '# Company\nCompany doc');
   writeFileSync(join(root, 'ORG.md'), '# Org\nOrg doc');
+  writeFileSync(join(root, 'COMMUNICATION.md'), '# Communication\nUse [TASK], [QUESTION], [BLOCKED], [HANDOFF], [DONE].');
   writeFileSync(join(root, 'WORKFLOWS.md'), '# Workflows\nWorkflow doc');
   writeFileSync(join(root, 'teams', 'engineering.md'), '# Team\nEngineering team doc');
 
@@ -97,6 +100,7 @@ describe('company context reload', () => {
       expect(resolved?.context.documents.map((doc) => doc.id)).toEqual([
         'company',
         'org',
+        'communication',
         'workflows',
         'team',
         'identity',
@@ -108,7 +112,8 @@ describe('company context reload', () => {
 
       const prompt = resolved?.prompt ?? '';
       expect(prompt.indexOf('## COMPANY')).toBeLessThan(prompt.indexOf('## ORG'));
-      expect(prompt.indexOf('## ORG')).toBeLessThan(prompt.indexOf('## WORKFLOWS'));
+      expect(prompt.indexOf('## ORG')).toBeLessThan(prompt.indexOf('## COMMUNICATION'));
+      expect(prompt.indexOf('## COMMUNICATION')).toBeLessThan(prompt.indexOf('## WORKFLOWS'));
       expect(prompt.indexOf('## WORKFLOWS')).toBeLessThan(prompt.indexOf('## TEAM'));
       expect(prompt.indexOf('## TEAM')).toBeLessThan(prompt.indexOf('## IDENTITY'));
       expect(prompt.indexOf('## IDENTITY')).toBeLessThan(prompt.indexOf('## ROLE'));

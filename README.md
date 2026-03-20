@@ -168,6 +168,16 @@ See [specs/deps/](specs/deps/) for all proposals and submission process.
 └── persistence (27)   — IndexedDB, offline queue, restart survival
 ```
 
+## Support / Sponsorship
+
+If DecentChat is useful to you and you want to help fund development, protocol work, and infrastructure, donations are welcome:
+
+- **Bitcoin (BTC):** `bc1qj7rf9vc0nvk8maux6gc6dwzpelj2d3ck0krlm7`
+- **Litecoin (LTC):** `ltc1qjhsl7eztls8l557vrtmhlm4g86hlql2qq4x5jz`
+- **Ethereum (ETH):** `0x33e98006401fE7298a255f5890380403e57cdf67`
+- **Monero (XMR):** `42uEmNUt3Jp5qNpP8sg2rQf45eNEthvMadZutxT6z2eR3opSZepkN93cQ5wxdstyA2MfkyRjB93tgis6a5DBhqgh3u8PnZh`
+- **Zcash (ZEC):** `u1deqeprze5jdwz2ywmr3q9kmgdf4vel5shr8jeamm9upvrjlc08yqx55a0w2zq2kggaa4e7ctymw3nthqdv329l6vygypqd9228r9628y70anfk78mj9tld4hrjsh9zrlq7ekth6q23zhjlw7tsdrvsvcx53ggsclmuk6q7wl3cht9m5p`
+
 ## License
 
 MIT

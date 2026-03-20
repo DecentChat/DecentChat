@@ -47,6 +47,7 @@ employees:
 
   writeFileSync(join(root, 'COMPANY.md'), '# Company\nCanonical company doc');
   writeFileSync(join(root, 'ORG.md'), '# Org\nCanonical org doc');
+  writeFileSync(join(root, 'COMMUNICATION.md'), '# Communication\nCanonical communication doc');
   writeFileSync(join(root, 'WORKFLOWS.md'), '# Workflows\nCanonical workflows doc');
   writeFileSync(join(root, 'teams', 'engineering.md'), '# Team\nCanonical engineering team doc');
 
@@ -71,6 +72,7 @@ function writeScaffoldedWorkspace(root: string, marker: string): string {
 
   writeFileSync(join(root, 'company', 'COMPANY.md'), `# Company\n${marker} company doc`);
   writeFileSync(join(root, 'company', 'ORG.md'), `# Org\n${marker} org doc`);
+  writeFileSync(join(root, 'company', 'COMMUNICATION.md'), `# Communication\n${marker} communication doc`);
   writeFileSync(join(root, 'company', 'WORKFLOWS.md'), `# Workflows\n${marker} workflows doc`);
   writeFileSync(join(root, 'company', 'teams', 'engineering.md'), `# Team\n${marker} team doc`);
 

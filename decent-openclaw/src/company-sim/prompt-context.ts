@@ -11,6 +11,7 @@ function titleForDocument(id: LoadedCompanyContext['documents'][number]['id']): 
   switch (id) {
     case 'company': return 'COMPANY';
     case 'org': return 'ORG';
+    case 'communication': return 'COMMUNICATION';
     case 'workflows': return 'WORKFLOWS';
     case 'team': return 'TEAM';
     case 'identity': return 'IDENTITY';

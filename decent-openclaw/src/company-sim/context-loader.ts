@@ -8,6 +8,7 @@ import type { CompanyEmployeeConfig, CompanyManifest, CompanyTeamConfig } from '
 export type CompanyContextDocumentId =
   | 'company'
   | 'org'
+  | 'communication'
   | 'workflows'
   | 'team'
   | 'identity'
@@ -78,6 +79,7 @@ function hasScaffoldedWorkspaceContext(workspaceDir: string): boolean {
   const requiredPaths = [
     join(workspaceDir, 'company', 'COMPANY.md'),
     join(workspaceDir, 'company', 'ORG.md'),
+    join(workspaceDir, 'company', 'COMMUNICATION.md'),
     join(workspaceDir, 'company', 'WORKFLOWS.md'),
     join(workspaceDir, 'employee', 'IDENTITY.md'),
     join(workspaceDir, 'employee', 'ROLE.md'),
@@ -158,11 +160,13 @@ export function loadCompanyContextForAccount(
 
   const companyDoc = readRequiredFile(join(companyDir, 'COMPANY.md'));
   const orgDoc = readRequiredFile(join(companyDir, 'ORG.md'));
+  const communicationDoc = readRequiredFile(join(companyDir, 'COMMUNICATION.md'));
   const workflowsDoc = readRequiredFile(join(companyDir, 'WORKFLOWS.md'));
 
   const documents: CompanyContextDocument[] = [
     { id: 'company', path: join(companyDir, 'COMPANY.md'), content: companyDoc.content, snapshot: companyDoc.snapshot },
     { id: 'org', path: join(companyDir, 'ORG.md'), content: orgDoc.content, snapshot: orgDoc.snapshot },
+    { id: 'communication', path: join(companyDir, 'COMMUNICATION.md'), content: communicationDoc.content, snapshot: communicationDoc.snapshot },
     { id: 'workflows', path: join(companyDir, 'WORKFLOWS.md'), content: workflowsDoc.content, snapshot: workflowsDoc.snapshot },
   ];
 

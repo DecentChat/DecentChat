@@ -84,6 +84,34 @@ describe('decent-openclaw multi-account company-sim', () => {
     });
   });
 
+  test('resolves company-sim silent channel ids from account overrides', () => {
+    const cfg = {
+      channels: {
+        decentchat: {
+          companySim: {
+            enabled: true,
+            manifestPath: '/company-sims/software-studio/company.yaml',
+            companyId: 'software-studio',
+            silentChannelIds: ['channel-global'],
+          },
+          accounts: {
+            'backend-dev': {
+              seedPhrase: 'seed-backend',
+              alias: 'Rian Backend',
+              companySim: {
+                employeeId: 'backend-dev',
+                silentChannelIds: ['cf190f68-fe5f-45f6-b731-4ef3286fecd7'],
+              },
+            },
+          },
+        },
+      },
+    } as any;
+
+    const account = resolveDecentChatAccount(cfg, 'backend-dev');
+    expect(account.companySim?.silentChannelIds).toEqual(['cf190f68-fe5f-45f6-b731-4ef3286fecd7']);
+  });
+
   test('peer registry stores active peers per account id', () => {
     const managerPeer = { peerId: 'peer-manager' } as any;
     const backendPeer = { peerId: 'peer-backend' } as any;

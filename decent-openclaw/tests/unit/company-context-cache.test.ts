@@ -27,6 +27,7 @@ teams:
 employees:
   - id: backend-dev
     accountId: backend-dev
+    agentId: software-studio-backend-dev
     alias: Rian Backend
     teamId: engineering
     title: Backend Engineer
@@ -35,6 +36,7 @@ employees:
       mode: specialist
   - id: tester
     accountId: tester
+    agentId: software-studio-tester
     alias: Iva QA
     teamId: engineering
     title: QA Engineer
@@ -44,6 +46,7 @@ employees:
 `);
   writeFileSync(join(root, 'COMPANY.md'), '# Company\nCompany doc');
   writeFileSync(join(root, 'ORG.md'), '# Org\nOrg doc');
+  writeFileSync(join(root, 'COMMUNICATION.md'), '# Communication\nUse [TASK], [QUESTION], [BLOCKED], [HANDOFF], [DONE].');
   writeFileSync(join(root, 'WORKFLOWS.md'), '# Workflows\nWorkflow doc');
   writeFileSync(join(root, 'teams', 'engineering.md'), '# Team\nEngineering team doc');
 

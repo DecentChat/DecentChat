@@ -95,8 +95,9 @@ function buildPlaybookMd(params: { alias: string; title: string }): string {
     `## ${params.alias} (${params.title})`,
     '',
     '- Track active priorities for this role.',
+    '- Use the shared tags from COMMUNICATION.md for task-state updates.',
     '- Escalate blockers quickly.',
-    '- Align decisions with COMPANY.md, ORG.md, and WORKFLOWS.md.',
+    '- Align decisions with COMPANY.md, ORG.md, COMMUNICATION.md, and WORKFLOWS.md.',
   ].join('\n');
 }
 
@@ -108,7 +109,11 @@ function materializeCompanyTemplateFiles(params: {
 }): void {
   copyFileEnsured(params.template.assets.companyMdPath, join(params.companyDirPath, 'COMPANY.md'));
   copyFileEnsured(params.template.assets.orgMdPath, join(params.companyDirPath, 'ORG.md'));
+  copyFileEnsured(params.template.assets.communicationMdPath, join(params.companyDirPath, 'COMMUNICATION.md'));
   copyFileEnsured(params.template.assets.workflowsMdPath, join(params.companyDirPath, 'WORKFLOWS.md'));
+  for (const [teamId, teamMdPath] of Object.entries(params.template.assets.teams)) {
+    copyFileEnsured(teamMdPath, join(params.companyDirPath, 'teams', `${teamId}.md`));
+  }
   writeFileEnsured(params.manifestPath, stringifyYaml(params.manifest));
 
   for (const employee of params.manifest.employees) {

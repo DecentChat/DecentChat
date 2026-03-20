@@ -4,4 +4,4 @@
 - Identify acceptance criteria
 - Check likely failure modes
 - Report pass/fail with evidence
-- Recommend release/no-release status
+- Recommend release/no-release status with `[DONE]` when verification is complete

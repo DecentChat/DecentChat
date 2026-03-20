@@ -26,7 +26,7 @@ teams:
     managerEmployeeId: team-manager
 employees:
   - id: team-manager
-    agentId: team-manager
+    agentId: software-studio-team-manager
     accountId: team-manager
     alias: Mira PM
     teamId: engineering
@@ -36,7 +36,7 @@ employees:
       mode: summary-first
       respondWhenMentioned: true
   - id: backend-dev
-    agentId: backend-dev
+    agentId: software-studio-backend-dev
     accountId: backend-dev
     alias: Rian Backend
     teamId: engineering
@@ -54,7 +54,7 @@ employees:
     expect(manifest.workspace.channels).toEqual(['general', 'engineering']);
     expect(getCompanyTeamById(manifest, 'engineering')?.name).toBe('Engineering');
     expect(getCompanyEmployeeById(manifest, 'team-manager')?.title).toBe('Team Manager');
-    expect(getCompanyEmployeeById(manifest, 'team-manager')?.agentId).toBe('team-manager');
+    expect(getCompanyEmployeeById(manifest, 'team-manager')?.agentId).toBe('software-studio-team-manager');
     expect(getCompanyEmployeeById(manifest, 'missing')).toBeUndefined();
   });
 
@@ -114,7 +114,7 @@ teams:
     name: Engineering
 employees:
   - id: backend-dev
-    agentId: software-studio-backend
+    agentId: software-studio-backend-dev
     accountId: backend-dev
     alias: Rian Backend
     teamId: engineering
@@ -262,7 +262,7 @@ teams:
     name: Engineering
 employees:
   - id: backend-dev
-    agentId: software-studio-backend
+    agentId: software-studio-backend-dev
     accountId: backend-dev
     alias: Rian Backend
     teamId: missing-team
@@ -287,7 +287,7 @@ teams:
     managerEmployeeId: missing-manager
 employees:
   - id: backend-dev
-    agentId: software-studio-backend
+    agentId: software-studio-backend-dev
     accountId: backend-dev
     alias: Rian Backend
     teamId: engineering
@@ -312,7 +312,7 @@ teams:
     name: Engineering
 employees:
   - id: backend-dev
-    agentId: software-studio-backend
+    agentId: software-studio-backend-dev
     accountId: backend-dev
     alias: Rian Backend
     teamId: engineering

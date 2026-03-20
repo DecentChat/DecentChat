@@ -21,6 +21,7 @@ teams:
 employees:
   - id: backend-dev
     accountId: backend-dev
+    agentId: software-studio-backend-dev
     alias: Rian Backend
     teamId: engineering
     title: Backend Engineer
@@ -30,6 +31,7 @@ employees:
 `);
   writeFileSync(join(root, 'COMPANY.md'), 'company');
   writeFileSync(join(root, 'ORG.md'), 'org');
+  writeFileSync(join(root, 'COMMUNICATION.md'), 'communication');
   writeFileSync(join(root, 'WORKFLOWS.md'), 'workflows');
   for (const name of ['IDENTITY.md', 'ROLE.md', 'RULES.md', 'MEMORY.md', 'PLAYBOOK.md']) {
     writeFileSync(join(root, 'employees', 'backend-dev', name), name);

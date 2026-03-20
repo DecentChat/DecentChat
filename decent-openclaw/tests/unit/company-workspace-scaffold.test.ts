@@ -18,6 +18,7 @@ describe('company workspace scaffold', () => {
 
       writeFileSync(join(companyDir, 'COMPANY.md'), '# Company\nSoftware Studio mission.');
       writeFileSync(join(companyDir, 'ORG.md'), '# Org\nEngineering org chart.');
+      writeFileSync(join(companyDir, 'COMMUNICATION.md'), '# Communication\nUse concise task-state tags.');
       writeFileSync(join(companyDir, 'WORKFLOWS.md'), '# Workflows\nDaily standup + sprint.');
       writeFileSync(join(companyDir, 'teams', 'engineering.md'), '# Engineering Team\nOwn backend APIs.');
 
@@ -70,6 +71,7 @@ describe('company workspace scaffold', () => {
 
       expect(existsSync(join(workspacePath, 'company', 'COMPANY.md'))).toBeTrue();
       expect(existsSync(join(workspacePath, 'company', 'ORG.md'))).toBeTrue();
+      expect(existsSync(join(workspacePath, 'company', 'COMMUNICATION.md'))).toBeTrue();
       expect(existsSync(join(workspacePath, 'company', 'WORKFLOWS.md'))).toBeTrue();
       expect(existsSync(join(workspacePath, 'company', 'teams', 'engineering.md'))).toBeTrue();
       expect(existsSync(join(workspacePath, 'employee', 'ROLE.md'))).toBeTrue();
@@ -81,6 +83,7 @@ describe('company workspace scaffold', () => {
       expect(readFileSync(join(workspacePath, 'company', 'COMPANY.md'), 'utf8')).toContain('Software Studio mission');
       expect(readFileSync(join(workspacePath, 'employee', 'ROLE.md'), 'utf8')).toContain('Backend Engineer');
       expect(readFileSync(join(workspacePath, 'AGENTS.md'), 'utf8')).toContain('company/COMPANY.md');
+      expect(readFileSync(join(workspacePath, 'AGENTS.md'), 'utf8')).toContain('company/COMMUNICATION.md');
       expect(readFileSync(join(workspacePath, 'SOUL.md'), 'utf8')).toContain('Backend Engineer');
       expect(readFileSync(join(workspacePath, 'USER.md'), 'utf8')).toContain('team-manager');
     } finally {

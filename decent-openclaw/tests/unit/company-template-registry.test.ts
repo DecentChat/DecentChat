@@ -41,6 +41,9 @@ describe('company template registry', () => {
     });
 
     expect(softwareStudio.assets.companyMdPath.endsWith('/company-sims/templates/software-studio/COMPANY.md')).toBeTrue();
+    expect(softwareStudio.assets.communicationMdPath.endsWith('/company-sims/templates/software-studio/COMMUNICATION.md')).toBeTrue();
+    expect(softwareStudio.assets.teams.engineering.endsWith('/company-sims/templates/software-studio/teams/engineering.md')).toBeTrue();
+    expect(softwareStudio.assets.teams.qa.endsWith('/company-sims/templates/software-studio/teams/qa.md')).toBeTrue();
     expect(softwareStudio.assets.employees.manager.roleMdPath.endsWith('/company-sims/templates/software-studio/employees/manager/ROLE.md')).toBeTrue();
   });
 
@@ -66,6 +69,7 @@ defaults:
 `);
       writeFileSync(join(brokenTemplateDir, 'COMPANY.md'), '# Broken Co');
       writeFileSync(join(brokenTemplateDir, 'ORG.md'), '# Org');
+      writeFileSync(join(brokenTemplateDir, 'COMMUNICATION.md'), '# Communication');
       writeFileSync(join(brokenTemplateDir, 'WORKFLOWS.md'), '# Workflows');
       writeFileSync(join(brokenTemplateDir, 'employees', 'manager', 'IDENTITY.md'), '# Identity');
       writeFileSync(join(brokenTemplateDir, 'employees', 'manager', 'ROLE.md'), '# Role');
@@ -100,6 +104,7 @@ defaults:
 `);
       writeFileSync(join(brokenTemplateDir, 'COMPANY.md'), '# Broken Co');
       writeFileSync(join(brokenTemplateDir, 'ORG.md'), '# Org');
+      writeFileSync(join(brokenTemplateDir, 'COMMUNICATION.md'), '# Communication');
       writeFileSync(join(brokenTemplateDir, 'WORKFLOWS.md'), '# Workflows');
       writeFileSync(join(brokenTemplateDir, 'employees', 'manager', 'IDENTITY.md'), '# Identity');
       writeFileSync(join(brokenTemplateDir, 'employees', 'manager', 'ROLE.md'), '# Role');

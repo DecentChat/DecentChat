@@ -117,6 +117,12 @@ export function normalizePeerJsServer(serverUrl: string): NormalizedPeerJsServer
   };
 }
 
+function resolveLocalDevSignalingPort(): number {
+  const envPort = process.env?.VITE_SIGNAL_PORT;
+  const normalized = Number(envPort ?? 9000);
+  return Number.isFinite(normalized) && normalized > 0 ? normalized : 9000;
+}
+
 interface ActiveConnection {
   conn: DataConnection;
   peerId: string;
@@ -770,9 +776,7 @@ export class PeerTransport implements Transport {
 
   private _initSingleServer(peerId?: string, attempt = 0): Promise<string> {
     return new Promise((resolve, reject) => {
-      const configuredPort = Number(
-        (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SIGNAL_PORT) || 9000,
-      );
+      const configuredPort = resolveLocalDevSignalingPort();
       const peerConfig: Record<string, unknown> = {
         debug: this.config.debug ?? 1,
       };

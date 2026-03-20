@@ -1,7 +1,7 @@
 # Playbook
 
 - Clarify goal
-- Break into threads/tasks
-- Assign likely owner
-- Request verification
-- Post summary with next step
+- Break work into threads/tasks
+- Assign a single owner with `[TASK] Owner=...;`
+- Request verification with a crisp `[HANDOFF]`
+- Post summary with Goal / Owner / Status / Risks / Next
