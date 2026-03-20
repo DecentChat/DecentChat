@@ -1892,13 +1892,45 @@ export class MobileController {
       await this.persistentStore.deleteWorkspace(previousId);
     }
 
+    const senderListedInPayload = payload.members.some((member) => member?.peerId === peerId);
+    if (!senderListedInPayload) {
+      console.warn(`[Security] Mobile ignoring workspace-state from ${peerId.slice(0, 8)}: sender not present in member list for ${remoteWorkspaceId.slice(0, 8)}`);
+      return;
+    }
+
+    if (this.workspaceManager.isBanned(workspace.id, peerId)) {
+      console.warn(`[Security] Mobile ignoring workspace-state from banned peer ${peerId.slice(0, 8)} for workspace ${workspace.id.slice(0, 8)}`);
+      return;
+    }
+
+    const senderIsKnownMember = workspace.members.some((member) => member.peerId === peerId);
+    if (!senderIsKnownMember) {
+      console.warn(`[Security] Mobile ignoring workspace-state from non-member ${peerId.slice(0, 8)} for workspace ${workspace.id.slice(0, 8)}`);
+      return;
+    }
+
+    const senderPayload = payload.members.find((member) => member?.peerId === peerId);
+    const senderIsOwner = workspace.members.some((member) => member.peerId === peerId && member.role === 'owner')
+      || senderPayload?.role === 'owner';
+
     workspace.name = payload.name || workspace.name;
     workspace.description = payload.description;
     workspace.inviteCode = payload.inviteCode || workspace.inviteCode;
-    workspace.permissions = payload.permissions || workspace.permissions;
-    workspace.bans = payload.bans || workspace.bans;
+    if (senderIsOwner && payload.permissions) {
+      workspace.permissions = payload.permissions;
+    }
+    if (senderIsOwner && payload.bans) {
+      workspace.bans = payload.bans;
+    }
 
     for (const remoteChannel of payload.channels) {
+      const remoteMembers = Array.isArray(remoteChannel.members)
+        ? remoteChannel.members.filter((memberId): memberId is string => typeof memberId === 'string')
+        : [];
+      const remoteAccessPolicy = remoteChannel.accessPolicy
+        ? JSON.parse(JSON.stringify(remoteChannel.accessPolicy))
+        : (remoteChannel.type === 'channel' ? { mode: 'public-workspace', workspaceId: workspace.id } : undefined);
+
       const localChannel = workspace.channels.find(
         (item) => item.id === remoteChannel.id || (item.name === remoteChannel.name && item.type === remoteChannel.type),
       );
@@ -1909,9 +1941,10 @@ export class MobileController {
           workspaceId: workspace.id,
           name: remoteChannel.name,
           type: remoteChannel.type,
-          members: workspace.members.map((member) => member.peerId),
-          createdBy: peerId,
-          createdAt: Date.now(),
+          members: remoteMembers.length > 0 ? remoteMembers : workspace.members.map((member) => member.peerId),
+          ...(remoteAccessPolicy ? { accessPolicy: remoteAccessPolicy } : {}),
+          createdBy: remoteChannel.createdBy || peerId,
+          createdAt: Number.isFinite(remoteChannel.createdAt) ? remoteChannel.createdAt : Date.now(),
         });
         continue;
       }
@@ -1926,12 +1959,31 @@ export class MobileController {
       localChannel.name = remoteChannel.name;
       localChannel.type = remoteChannel.type;
       localChannel.workspaceId = workspace.id;
+      if (remoteMembers.length > 0) {
+        localChannel.members = [...new Set(remoteMembers)];
+      }
+      if (remoteAccessPolicy) {
+        localChannel.accessPolicy = remoteAccessPolicy as any;
+      }
+      if (remoteChannel.createdBy && !localChannel.createdBy) {
+        localChannel.createdBy = remoteChannel.createdBy;
+      }
+      if (Number.isFinite(remoteChannel.createdAt) && !Number.isFinite(localChannel.createdAt)) {
+        localChannel.createdAt = remoteChannel.createdAt;
+      }
     }
 
     for (const remoteMember of payload.members) {
+      if (this.workspaceManager.isBanned(workspace.id, remoteMember.peerId)) {
+        continue;
+      }
+
       const existingMember = workspace.members.find((member) => member.peerId === remoteMember.peerId);
 
       if (!existingMember) {
+        const safeRole = senderIsOwner && ['owner', 'admin', 'member'].includes(remoteMember.role || '')
+          ? remoteMember.role || 'member'
+          : 'member';
         workspace.members.push({
           peerId: remoteMember.peerId,
           alias: remoteMember.alias || remoteMember.peerId.slice(0, 8),
@@ -1940,9 +1992,9 @@ export class MobileController {
           identityId: remoteMember.identityId,
           devices: remoteMember.devices,
           joinedAt: Date.now(),
-          role: remoteMember.role || 'member',
+          role: safeRole as WorkspaceMember['role'],
           isBot: remoteMember.isBot,
-          allowWorkspaceDMs: true,
+          allowWorkspaceDMs: remoteMember.allowWorkspaceDMs !== false,
         });
       } else {
         existingMember.alias = remoteMember.alias || existingMember.alias;
@@ -1950,8 +2002,13 @@ export class MobileController {
         existingMember.signingPublicKey = remoteMember.signingPublicKey || existingMember.signingPublicKey;
         existingMember.identityId = remoteMember.identityId || existingMember.identityId;
         existingMember.devices = remoteMember.devices || existingMember.devices;
-        existingMember.role = remoteMember.role || existingMember.role;
+        if (senderIsOwner && remoteMember.role && ['owner', 'admin', 'member'].includes(remoteMember.role)) {
+          existingMember.role = remoteMember.role;
+        }
         existingMember.isBot = remoteMember.isBot || existingMember.isBot;
+        if (typeof remoteMember.allowWorkspaceDMs === 'boolean') {
+          existingMember.allowWorkspaceDMs = remoteMember.allowWorkspaceDMs;
+        }
       }
     }
 
