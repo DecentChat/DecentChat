@@ -12,6 +12,7 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import { startRelayServer, type RelayServer } from '../mocks/mock-relay-server';
 import { getMockTransportScript } from '../mocks/MockTransport';
+import { createBrowserContext } from '../integration/context-permissions';
 
 // ─── Relay setup ──────────────────────────────────────────────────────────────
 
@@ -35,9 +36,7 @@ interface TestUser {
 }
 
 async function createUser(browser: Browser, name: string): Promise<TestUser> {
-  const context = await browser.newContext({
-    permissions: ['clipboard-read', 'clipboard-write'],
-  });
+  const context = await createBrowserContext(browser);
   const page = await context.newPage();
 
   // Inject MockTransport before any app JS runs

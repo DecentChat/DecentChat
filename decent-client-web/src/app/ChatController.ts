@@ -688,6 +688,7 @@ export class ChatController {
 
   private resolveSharedWorkspaceIds(peerId: string): string[] {
     if (!peerId) return [];
+    if (!this.workspaceManager || typeof this.workspaceManager.getAllWorkspaces !== 'function') return [];
     const ids: string[] = [];
     for (const workspace of this.workspaceManager.getAllWorkspaces()) {
       const memberPeerIds = new Set(workspace.members.map((member: any) => member.peerId));
@@ -1513,6 +1514,9 @@ export class ChatController {
           // Connection toast removed — too noisy for end users
           console.debug(`[P2P] ${ratchetActive ? "Forward-secret" : "Encrypted"} connection with ${peerId.slice(0, 8)}`);
 
+          // Retry missed historical sends before flushing the queued outbox so we don't
+          // immediately re-send items that were just removed from the queue.
+          await this.retryUnackedOutgoingForPeer(peerId);
           await this.flushOfflineQueue(peerId);
           this.requestMessageSync(peerId).catch(err => console.warn('[Sync] Message sync request failed:', err));
           this.sendManifestSummary(peerId);
@@ -1898,6 +1902,9 @@ export class ChatController {
             const lastLocalTs = this.messageStore.getMessages(channelId).slice(-1)[0]?.timestamp ?? 0;
             msg.timestamp = Math.max(data.timestamp ?? Date.now(), lastLocalTs + 1);
           }
+          // Keep the sender's canonical message ID so delivery/read receipts for DMs
+          // refer to the same message on both sides.
+          if (data.messageId) msg.id = data.messageId;
           (msg as any).vectorClock = data.vectorClock;
           // Carry attachment metadata from the envelope so the receiver renders thumbnails
           if ((data as any).attachments?.length) {
@@ -6604,6 +6611,8 @@ export class ChatController {
       (envelope as any).channelId = conversationId;
       (envelope as any).threadId = threadId;
       (envelope as any).vectorClock = (msg as any).vectorClock;
+      (envelope as any).messageId = msg.id;
+      (envelope as any).timestamp = msg.timestamp;
       (envelope as any).isDirect = true;
       if ((conv as any).originWorkspaceId) {
         (envelope as any).workspaceContextId = (conv as any).originWorkspaceId;
@@ -8977,6 +8986,202 @@ export class ChatController {
     return this.messageCRDTs.get(channelId)!;
   }
 
+  private extractQueuedOpId(item: any): string | null {
+    const payload = item?.data ?? item;
+    if (this.isCustodyEnvelope(payload)) {
+      return typeof payload.opId === 'string' && payload.opId.length > 0 ? payload.opId : null;
+    }
+
+    const envelope = payload?.ciphertext ?? payload;
+    const messageId = (envelope as any)?.messageId ?? (payload as any)?.messageId;
+    return typeof messageId === 'string' && messageId.length > 0 ? messageId : null;
+  }
+
+  private async buildReplayEnvelopeForOutgoingMessage(
+    peerId: string,
+    msg: PlaintextMessage,
+  ): Promise<{ envelope: any; queueWorkspaceId: string; metadata: Record<string, unknown> }> {
+    const workspace = this.findWorkspaceByChannelId(msg.channelId);
+    const convMap = (this.directConversationStore as any).conversations as Map<string, { contactPeerId: string; originWorkspaceId?: string }> | undefined;
+    const directConversation = convMap?.get(msg.channelId);
+    const isDirect = !workspace && directConversation?.contactPeerId === peerId;
+
+    const encryptionWorkspaceId = workspace?.id ?? directConversation?.originWorkspaceId ?? this.resolveSharedWorkspaceIds(peerId)[0];
+    const queueWorkspaceId = workspace?.id || directConversation?.originWorkspaceId || 'direct';
+
+    const envelope = await this.encryptMessageWithPreKeyBootstrap(peerId, msg.content, encryptionWorkspaceId);
+    (envelope as any).channelId = msg.channelId;
+    if (workspace?.id) {
+      (envelope as any).workspaceId = workspace.id;
+    }
+    (envelope as any).threadId = msg.threadId;
+    (envelope as any).vectorClock = (msg as any).vectorClock;
+    (envelope as any).messageId = msg.id;
+    (envelope as any).timestamp = msg.timestamp;
+
+    if ((msg as any).metadata) {
+      (envelope as any).metadata = (msg as any).metadata;
+    }
+
+    const attachments = Array.isArray((msg as any).attachments) ? (msg as any).attachments : [];
+    if (attachments.length > 0) {
+      (envelope as any).attachments = attachments;
+    }
+
+    if (isDirect) {
+      (envelope as any).isDirect = true;
+      if (directConversation?.originWorkspaceId) {
+        (envelope as any).workspaceContextId = directConversation.originWorkspaceId;
+      }
+    }
+
+    if (msg.threadId) {
+      const threadRoot = this.messageStore.getThreadRoot(msg.threadId);
+      if (threadRoot) {
+        (envelope as any).threadRootSnapshot = {
+          senderId: threadRoot.senderId,
+          senderIdentityId: (threadRoot as any).senderIdentityId,
+          content: threadRoot.content,
+          timestamp: threadRoot.timestamp,
+          attachments: (threadRoot as any).attachments,
+        };
+      }
+    }
+
+    return {
+      envelope,
+      queueWorkspaceId,
+      metadata: {
+        messageId: msg.id,
+        senderId: this.state.myPeerId,
+        senderName: this.getDisplayNameForPeer(this.state.myPeerId),
+        ...(isDirect ? { isDirect: true } : {}),
+        ...(attachments.length > 0 ? { hasAttachment: true } : {}),
+      },
+    };
+  }
+
+  private async reconcileReplayedOutgoingMessage(peerId: string, messageId?: string): Promise<void> {
+    if (!messageId) return;
+
+    const msg = this.findMessageById(messageId);
+    if (!msg || msg.senderId !== this.state.myPeerId) return;
+
+    const explicitRecipients = Array.isArray((msg as any).recipientPeerIds)
+      ? (msg as any).recipientPeerIds.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
+      : [];
+    const inferredRecipients = this.getMessageRecipients(msg, peerId);
+    const recipients = Array.from(new Set([...explicitRecipients, ...inferredRecipients, peerId]))
+      .filter((id) => id !== this.state.myPeerId);
+
+    const ackedBy = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
+    const readBy = new Set<string>(Array.isArray((msg as any).readBy) ? (msg as any).readBy : []);
+    const ackedAt: Record<string, number> = { ...((msg as any).ackedAt || {}) };
+    const readAt: Record<string, number> = { ...((msg as any).readAt || {}) };
+
+    const deliveredToAll = recipients.length > 0 && recipients.every((id) => ackedBy.has(id));
+    const readByAll = recipients.length > 0 && recipients.every((id) => readBy.has(id));
+    const computedStatus: 'pending' | 'sent' | 'delivered' | 'read' = readByAll ? 'read' : (deliveredToAll ? 'delivered' : 'sent');
+    const rank: Record<'pending' | 'sent' | 'delivered' | 'read', number> = {
+      pending: 0,
+      sent: 1,
+      delivered: 2,
+      read: 3,
+    };
+    const currentStatus = (msg.status ?? 'pending') as 'pending' | 'sent' | 'delivered' | 'read';
+    const nextStatus = rank[currentStatus] > rank[computedStatus] ? currentStatus : computedStatus;
+
+    (msg as any).recipientPeerIds = recipients;
+    (msg as any).status = nextStatus;
+
+    await this.persistentStore.saveMessage({
+      ...msg,
+      status: nextStatus,
+      recipientPeerIds: recipients,
+      ackedBy: Array.from(ackedBy),
+      ackedAt,
+      readBy: Array.from(readBy),
+      readAt,
+    });
+
+    this.ui?.updateMessageStatus?.(msg.id, nextStatus, {
+      acked: ackedBy.size,
+      total: recipients.length,
+      read: readBy.size,
+    });
+  }
+
+  private async retryUnackedOutgoingForPeer(peerId: string): Promise<void> {
+    if (!this.state.readyPeers.has(peerId)) return;
+
+    const queued = typeof (this.offlineQueue as any).listQueued === 'function'
+      ? await this.offlineQueue.listQueued(peerId)
+      : await this.offlineQueue.getQueued(peerId);
+    const queuedMessageIds = new Set<string>();
+    for (const item of queued as any[]) {
+      const opId = this.extractQueuedOpId(item);
+      if (opId) queuedMessageIds.add(opId);
+    }
+
+    if (this.custodyStore && typeof this.custodyStore.listAllForRecipient === 'function') {
+      const pendingEnvelopes = await this.custodyStore.listAllForRecipient(peerId);
+      for (const envelope of pendingEnvelopes) {
+        if (typeof envelope?.opId === 'string' && envelope.opId.length > 0) {
+          queuedMessageIds.add(envelope.opId);
+        }
+      }
+    }
+
+    const candidates: PlaintextMessage[] = [];
+    for (const channelId of this.messageStore.getAllChannelIds()) {
+      const channelMessages = this.messageStore.getMessages(channelId) as PlaintextMessage[];
+      for (const msg of channelMessages) {
+        if (msg.senderId !== this.state.myPeerId) continue;
+        if (queuedMessageIds.has(msg.id)) continue;
+
+        const recipients = this.getMessageRecipients(msg, peerId);
+        if (!recipients.includes(peerId)) continue;
+
+        const ackedBy = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
+        const readBy = new Set<string>(Array.isArray((msg as any).readBy) ? (msg as any).readBy : []);
+        if (ackedBy.has(peerId) || readBy.has(peerId)) continue;
+        if (msg.status === 'delivered' || msg.status === 'read') continue;
+
+        candidates.push(msg);
+      }
+    }
+
+    candidates.sort((a, b) => a.timestamp - b.timestamp);
+
+    for (const msg of candidates) {
+      if (!this.state.readyPeers.has(peerId)) break;
+
+      try {
+        const { envelope, queueWorkspaceId, metadata } = await this.buildReplayEnvelopeForOutgoingMessage(peerId, msg);
+        (envelope as any)._offlineReplay = 1;
+        const sent = this.transport.send(peerId, envelope);
+        if (!sent) {
+          await this.queueCustodyEnvelope(peerId, {
+            envelopeId: typeof (envelope as any).id === 'string' ? (envelope as any).id : undefined,
+            opId: msg.id,
+            recipientPeerIds: [peerId],
+            workspaceId: queueWorkspaceId,
+            channelId: msg.channelId,
+            ...(msg.threadId ? { threadId: msg.threadId } : {}),
+            domain: 'channel-message',
+            ciphertext: envelope,
+            metadata,
+          }, envelope);
+          continue;
+        }
+
+        await this.reconcileReplayedOutgoingMessage(peerId, msg.id);
+      } catch (error) {
+        console.warn('[OfflineQueue] resend/reconcile failed for', msg.id, (error as Error)?.message || error);
+      }
+    }
+  }
+
   private async flushOfflineQueue(peerId: string): Promise<void> {
     // Non-destructive replay: never dequeue before successful transport.send().
     // This prevents message loss during reconnect/refresh races.
@@ -9002,6 +9207,19 @@ export class ChatController {
           (encrypted as any).threadId = deferred.threadId;
           (encrypted as any).vectorClock = deferred.vectorClock;
           (encrypted as any).messageId = deferred.messageId;
+          (encrypted as any).timestamp = deferred.timestamp;
+          if (deferred.isDirect) {
+            (encrypted as any).isDirect = true;
+          }
+          if (deferred.workspaceContextId) {
+            (encrypted as any).workspaceContextId = deferred.workspaceContextId;
+          }
+          if (deferred.metadata) {
+            (encrypted as any).metadata = deferred.metadata;
+          }
+          if (Array.isArray(deferred.attachments) && deferred.attachments.length > 0) {
+            (encrypted as any).attachments = deferred.attachments;
+          }
 
           // Include thread root snapshot for thread messages
           if (deferred.threadId) {
@@ -9056,11 +9274,8 @@ export class ChatController {
         }
         delivered += 1;
 
-        // Update message status from pending → sent for deferred messages
         const msgId = custodyEnvelope?.opId ?? (envelope as any)?.messageId ?? (item?.data ?? item)?.messageId;
-        if (msgId) {
-          this.ui?.updateMessageStatus?.(msgId, 'sent', undefined);
-        }
+        await this.reconcileReplayedOutgoingMessage(peerId, msgId);
       } catch (err) {
         failed += 1;
         if (typeof item?.id === 'number') {

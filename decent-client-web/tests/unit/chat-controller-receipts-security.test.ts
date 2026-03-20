@@ -105,6 +105,11 @@ describe('ChatController outbound receipt field initialization', () => {
     expect(msg.ackedBy).toEqual([]);
     expect(msg.readBy).toEqual([]);
     expect(msg.status).toBe('sent');
+    expect(ctrl.transport.send).toHaveBeenCalledWith('alice', expect.objectContaining({
+      messageId: 'dm-1',
+      timestamp: msg.timestamp,
+      isDirect: true,
+    }));
     expect(ctrl.ui.updateMessageStatus).toHaveBeenCalledWith('dm-1', 'sent', { acked: 0, total: 1, read: 0 });
   });
 
