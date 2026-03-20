@@ -22,6 +22,7 @@
   import Lightbox from './shared/Lightbox.svelte';
   import SearchPanel from './layout/SearchPanel.svelte';
   import ActivityPanel from './layout/ActivityPanel.svelte';
+  import CompanySimPanel from './company-sim/CompanySimPanel.svelte';
   // Welcome screen
   import WelcomePage from './layout/WelcomePage.svelte';
 
@@ -179,6 +180,7 @@
           onSwitchToDMs={cb.onSwitchToDMs}
           onSwitchWorkspace={cb.onSwitchWorkspace}
           onAddWorkspace={cb.onAddWorkspace}
+          onOpenCompanySim={cb.onOpenCompanySim}
           onChannelClick={cb.onChannelClick}
           onMemberClick={cb.onMemberClick}
           onDirectConvClick={cb.onDirectConvClick}
@@ -210,67 +212,117 @@
     </div>
 
     <div class="main-content">
-      <div id="channel-header-mount">
-        {#if cb}
-          <ChannelHeader
-            channelName={shellData.header.channelName}
-            memberCount={shellData.header.memberCount}
-            presence={shellData.header.presence}
-            isDirectMessage={shellData.header.isDirectMessage}
-            isHuddleActive={shellData.header.isHuddleActive}
-            onHamburger={cb.onHamburger}
-            onHuddleToggle={cb.onHuddleToggle}
-            onConnectPeer={cb.onHeaderConnectPeer}
-            onShowQR={cb.onHeaderShowQR}
-            onSearch={cb.onSearch}
-            onInvite={cb.onInvite}
-            onSettings={cb.onSettings}
-            onChannelMembers={cb.onChannelMembers}
-            onLoadMorePresence={cb.onLoadMorePresence}
-          />
-        {/if}
-      </div>
+      {#if shellData.companySim.open && cb}
+        <CompanySimPanel onClose={cb.onCloseCompanySim} />
+      {:else}
+        <div id="channel-header-mount">
+          {#if cb}
+            <ChannelHeader
+              channelName={shellData.header.channelName}
+              memberCount={shellData.header.memberCount}
+              presence={shellData.header.presence}
+              isDirectMessage={shellData.header.isDirectMessage}
+              isHuddleActive={shellData.header.isHuddleActive}
+              onHamburger={cb.onHamburger}
+              onHuddleToggle={cb.onHuddleToggle}
+              onConnectPeer={cb.onHeaderConnectPeer}
+              onShowQR={cb.onHeaderShowQR}
+              onSearch={cb.onSearch}
+              onInvite={cb.onInvite}
+              onSettings={cb.onSettings}
+              onChannelMembers={cb.onChannelMembers}
+              onLoadMorePresence={cb.onLoadMorePresence}
+            />
+          {/if}
+        </div>
 
-      <div id="search-mount">
-        {#if cb && shellData.search.open}
-          <SearchPanel
-            myPeerId={shellData.search.myPeerId}
-            myAlias={shellData.search.myAlias}
-            onSearch={cb.onSearchQuery}
-            onScrollToMessage={cb.onScrollToMessage}
-            onClose={cb.onCloseSearch}
-          />
-        {/if}
-      </div>
+        <div id="search-mount">
+          {#if cb && shellData.search.open}
+            <SearchPanel
+              myPeerId={shellData.search.myPeerId}
+              myAlias={shellData.search.myAlias}
+              onSearch={cb.onSearchQuery}
+              onScrollToMessage={cb.onScrollToMessage}
+              onClose={cb.onCloseSearch}
+            />
+          {/if}
+        </div>
 
-      <div id="huddle-mount">
-        {#if cb}
-          <HuddleBar
-            state={shellData.huddle.state}
-            muted={shellData.huddle.muted}
-            participants={shellData.huddle.participants}
-            onToggleMute={cb.onToggleMute}
-            onLeave={cb.onLeaveHuddle}
-            onJoin={cb.onJoinHuddle}
-          />
-        {/if}
-      </div>
+        <div id="huddle-mount">
+          {#if cb}
+            <HuddleBar
+              state={shellData.huddle.state}
+              muted={shellData.huddle.muted}
+              participants={shellData.huddle.participants}
+              onToggleMute={cb.onToggleMute}
+              onLeave={cb.onLeaveHuddle}
+              onJoin={cb.onJoinHuddle}
+            />
+          {/if}
+        </div>
 
-      <div class="messages-area">
-        <div class="messages-pane">
-          <div class="messages-list-wrapper">
-          <div class="messages-list" id="messages-list">
+        <div class="messages-area">
+          <div class="messages-pane">
+            <div class="messages-list-wrapper">
+            <div class="messages-list" id="messages-list">
+              {#if cb}
+                <MessageList
+                  messages={shellData.messages.messages}
+                  channelName={shellData.messages.channelName}
+                  activeChannelId={shellData.messages.activeChannelId}
+                  myPeerId={shellData.messages.myPeerId}
+                  myDisplayName={shellData.messages.myDisplayName}
+                  activeThreadRootId={shellData.thread.open ? shellData.thread.threadId : null}
+                  frequentReactions={shellData.messages.frequentReactions}
+                  scrollTargetMessageId={shellData.messages.scrollTargetMessageId}
+                  scrollTargetNonce={shellData.messages.scrollTargetNonce}
+                  getThread={cb.getThread}
+                  getPeerAlias={cb.getPeerAlias}
+                  isBot={cb.isBot}
+                  getCompanySimProfile={cb.getCompanySimProfile}
+                  onOpenThread={cb.onOpenThread}
+                  onToggleReaction={cb.onToggleReaction}
+                  onRememberReaction={cb.onRememberReaction}
+                  onShowMessageInfo={cb.onShowMessageInfo}
+                  onImageClick={cb.onImageClick}
+                  resolveAttachmentImageUrl={cb.resolveAttachmentImageUrl}
+                />
+              {/if}
+            </div>
+            </div><!-- /.messages-list-wrapper -->
+            <div class="typing-indicator" id="typing-indicator" class:visible={!!shellData.typingText}>
+              {shellData.typingText}
+            </div>
+            <div id="huddle-bar-mount"></div>
+            <div id="compose-mount">
+              {#if cb}
+                <ComposeArea
+                  placeholder={shellData.compose.placeholder}
+                  target="main"
+                  onSend={cb.onSend}
+                  onTyping={cb.onTyping}
+                  onStopTyping={cb.onStopTyping}
+                  getCommandSuggestions={cb.getCommandSuggestions}
+                  getMembers={cb.getMembers}
+                  searchMembers={cb.searchMembers}
+                />
+              {/if}
+            </div>
+          </div>
+
+          <div id="thread-mount">
             {#if cb}
-              <MessageList
-                messages={shellData.messages.messages}
-                channelName={shellData.messages.channelName}
-                activeChannelId={shellData.messages.activeChannelId}
-                myPeerId={shellData.messages.myPeerId}
-                myDisplayName={shellData.messages.myDisplayName}
-                activeThreadRootId={shellData.thread.open ? shellData.thread.threadId : null}
-                frequentReactions={shellData.messages.frequentReactions}
-                scrollTargetMessageId={shellData.messages.scrollTargetMessageId}
-                scrollTargetNonce={shellData.messages.scrollTargetNonce}
+              <ThreadPanel
+                open={shellData.thread.open}
+                threadId={shellData.thread.threadId}
+                channelId={shellData.thread.channelId}
+                parentMessage={shellData.thread.parentMessage}
+                replies={shellData.thread.replies}
+                myPeerId={shellData.thread.myPeerId}
+                myDisplayName={shellData.thread.myDisplayName}
+                frequentReactions={shellData.thread.frequentReactions}
+                scrollTargetMessageId={shellData.thread.scrollTargetMessageId}
+                scrollTargetNonce={shellData.thread.scrollTargetNonce}
                 getThread={cb.getThread}
                 getPeerAlias={cb.getPeerAlias}
                 isBot={cb.isBot}
@@ -279,62 +331,16 @@
                 onToggleReaction={cb.onToggleReaction}
                 onRememberReaction={cb.onRememberReaction}
                 onShowMessageInfo={cb.onShowMessageInfo}
-                onImageClick={cb.onImageClick}
+                onClose={cb.onCloseThread}
+                onSend={cb.onThreadSend}
+                getMembers={cb.getMembers}
+                searchMembers={cb.searchMembers}
                 resolveAttachmentImageUrl={cb.resolveAttachmentImageUrl}
               />
             {/if}
           </div>
-          </div><!-- /.messages-list-wrapper -->
-          <div class="typing-indicator" id="typing-indicator" class:visible={!!shellData.typingText}>
-            {shellData.typingText}
-          </div>
-          <div id="huddle-bar-mount"></div>
-          <div id="compose-mount">
-            {#if cb}
-              <ComposeArea
-                placeholder={shellData.compose.placeholder}
-                target="main"
-                onSend={cb.onSend}
-                onTyping={cb.onTyping}
-                onStopTyping={cb.onStopTyping}
-                getCommandSuggestions={cb.getCommandSuggestions}
-                getMembers={cb.getMembers}
-                searchMembers={cb.searchMembers}
-              />
-            {/if}
-          </div>
         </div>
-
-        <div id="thread-mount">
-          {#if cb}
-            <ThreadPanel
-              open={shellData.thread.open}
-              threadId={shellData.thread.threadId}
-              channelId={shellData.thread.channelId}
-              parentMessage={shellData.thread.parentMessage}
-              replies={shellData.thread.replies}
-              myPeerId={shellData.thread.myPeerId}
-              myDisplayName={shellData.thread.myDisplayName}
-              frequentReactions={shellData.thread.frequentReactions}
-              scrollTargetMessageId={shellData.thread.scrollTargetMessageId}
-              scrollTargetNonce={shellData.thread.scrollTargetNonce}
-              getThread={cb.getThread}
-              getPeerAlias={cb.getPeerAlias}
-              isBot={cb.isBot}
-              getCompanySimProfile={cb.getCompanySimProfile}
-              onOpenThread={cb.onOpenThread}
-              onToggleReaction={cb.onToggleReaction}
-              onRememberReaction={cb.onRememberReaction}
-              onShowMessageInfo={cb.onShowMessageInfo}
-              onClose={cb.onCloseThread}
-              onSend={cb.onThreadSend}
-              getMembers={cb.getMembers}
-              searchMembers={cb.searchMembers}
-              resolveAttachmentImageUrl={cb.resolveAttachmentImageUrl}
-            />
-          {/if}
-        </div>
-      </div>
+      {/if}
     </div>
 
     <div id="lightbox-mount">

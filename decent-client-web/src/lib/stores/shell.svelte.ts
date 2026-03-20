@@ -184,6 +184,13 @@ export const shellData = $state({
     items: [] as ActivityItem[],
   },
 
+  // Company sim panel
+  companySim: {
+    open: false,
+    workspaceId: null as string | null,
+    workspaceName: null as string | null,
+  },
+
   // Typing indicator
   typingText: '',
 });
@@ -202,6 +209,8 @@ export interface ShellCallbacks {
   onSwitchWorkspace: (wsId: string) => void;
   onToggleActivity: () => void;
   onAddWorkspace: () => void;
+  onOpenCompanySim: () => Promise<void> | void;
+  onCloseCompanySim: () => void;
 
   // Sidebar
   onChannelClick: (channelId: string) => void;
@@ -288,3 +297,4 @@ export function setShellCallbacks(callbacks: ShellCallbacks): void {
 export function getShellCallbacks(): ShellCallbacks | null {
   return _callbacks;
 }
+

@@ -1,6 +1,7 @@
 import type { WorkspaceManager, MessageStore } from 'decent-protocol';
 import type { AppState } from '../main';
 import { shellData, setShellCallbacks } from '../lib/stores/shell.svelte';
+import { closeCompanySimPanel, openCompanySimPanel } from '../lib/company-sim/store.svelte';
 import { huddleUI } from '../lib/stores/ui.svelte';
 import type { UICallbacks, WorkspaceMemberDirectoryView } from './types';
 import { MessageSearch } from './MessageSearch';
@@ -167,9 +168,34 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
       syncShellHeader();
       syncShellMessages();
     },
-    onSwitchWorkspace: (wsId) => switchWorkspace(wsId),
+    onSwitchWorkspace: async (wsId) => {
+      switchWorkspace(wsId);
+      if (shellData.companySim.open) {
+        const workspace = workspaceManager.getWorkspace(wsId);
+        try {
+          await openCompanySimPanel(wsId, workspace?.name ?? null);
+        } catch (error) {
+          showToast(`Company Sim: ${(error as Error).message}`, 'error');
+        }
+      }
+    },
     onToggleActivity: () => toggleActivityPanel(),
     onAddWorkspace: () => modalActions.showCreateWorkspaceModal(),
+    onOpenCompanySim: async () => {
+      if (!state.activeWorkspaceId) {
+        showToast('Open a workspace before viewing Company Sim.', 'error');
+        return;
+      }
+      const workspace = workspaceManager.getWorkspace(state.activeWorkspaceId);
+      shellData.activity.panelOpen = false;
+      shellData.search.open = false;
+      try {
+        await openCompanySimPanel(state.activeWorkspaceId, workspace?.name ?? null);
+      } catch (error) {
+        showToast(`Company Sim: ${(error as Error).message}`, 'error');
+      }
+    },
+    onCloseCompanySim: () => closeCompanySimPanel(),
 
     // Sidebar
     onChannelClick: (channelId) => switchChannel(channelId),

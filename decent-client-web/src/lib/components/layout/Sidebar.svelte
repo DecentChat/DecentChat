@@ -79,6 +79,7 @@
     onSwitchToDMs: () => void;
     onSwitchWorkspace: (wsId: string) => void;
     onAddWorkspace: () => void;
+    onOpenCompanySim: () => Promise<void> | void;
     onChannelClick: (channelId: string) => void;
     onMemberClick: (peerId: string) => void;
     onDirectConvClick: (convId: string) => void;
@@ -117,6 +118,7 @@
     onSwitchToDMs,
     onSwitchWorkspace,
     onAddWorkspace,
+    onOpenCompanySim,
     onChannelClick,
     onMemberClick,
     onDirectConvClick,
@@ -224,6 +226,8 @@
       onclick={() => { workspaceMenuOpen = false; onWorkspaceInvite(); }}>Invite people</button>
     <button class="workspace-menu-item" id="workspace-menu-notifications"
       onclick={() => { workspaceMenuOpen = false; onWorkspaceNotifications(); }}>Notification prefs</button>
+    <button class="workspace-menu-item" id="workspace-menu-company-sim"
+      onclick={async () => { workspaceMenuOpen = false; await onOpenCompanySim(); }}>Company Sim</button>
   </div>
 {/if}
 

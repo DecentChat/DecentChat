@@ -4,6 +4,8 @@ import type {
   CompanySimRoutingPreview,
   CompanySimState,
 } from '../../ui/types';
+import { shellData } from '../stores/shell.svelte';
+import { getCompanySimControlPlaneClient } from './controlPlane';
 import type { CompanySimSection } from './types';
 
 export const companySimStore = $state({
@@ -48,4 +50,38 @@ export function setCompanySimWorkspace(workspaceId: string | null): void {
 
 export function setCompanySimSection(section: CompanySimSection): void {
   companySimStore.activeSection = section;
+}
+
+
+export async function loadCompanySimState(workspaceId: string): Promise<void> {
+  const nextWorkspaceId = String(workspaceId ?? '').trim();
+  if (!nextWorkspaceId) throw new Error('workspaceId is required to load company sim');
+  const client = getCompanySimControlPlaneClient();
+  if (!client) throw new Error('Company sim control plane is unavailable');
+
+  companySimStore.loading = true;
+  companySimStore.error = null;
+  try {
+    const state = await client.getState({ workspaceId: nextWorkspaceId });
+    companySimStore.activeWorkspaceId = nextWorkspaceId;
+    companySimStore.state = state;
+    companySimStore.lastLoadedAt = Date.now();
+  } catch (error) {
+    companySimStore.error = (error as Error).message;
+    throw error;
+  } finally {
+    companySimStore.loading = false;
+  }
+}
+
+export async function openCompanySimPanel(workspaceId: string, workspaceName?: string | null): Promise<void> {
+  shellData.companySim.open = true;
+  shellData.companySim.workspaceId = workspaceId;
+  shellData.companySim.workspaceName = workspaceName ?? null;
+  setCompanySimWorkspace(workspaceId);
+  await loadCompanySimState(workspaceId);
+}
+
+export function closeCompanySimPanel(): void {
+  shellData.companySim.open = false;
 }
