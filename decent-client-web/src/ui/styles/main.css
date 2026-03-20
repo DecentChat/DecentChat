@@ -131,6 +131,7 @@ body {
   cursor: pointer;
   transition: border-radius 0.2s, background 0.2s;
   flex-shrink: 0;
+  position: relative;
 }
 
 .ws-rail-icon:hover {
@@ -3609,12 +3610,27 @@ body.compact .messages-list { gap: 0; }
   gap: 18px;
 }
 .lp-support-card {
-  background: rgba(15,15,35,0.92);
-  border: 1px solid rgba(108,92,231,0.2);
-  border-radius: var(--radius-lg);
-  padding: 20px;
-  box-shadow: 0 16px 40px rgba(0,0,0,0.16);
+  position: relative;
+  background: linear-gradient(180deg, rgba(18,18,40,0.96), rgba(11,11,26,0.96));
+  border: 1px solid rgba(108,92,231,0.18);
+  border-radius: 22px;
+  padding: 22px;
+  box-shadow: 0 18px 50px rgba(0,0,0,0.22);
+  overflow: hidden;
 }
+.lp-support-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent);
+  opacity: 0.45;
+}
+.lp-support-card--btc { border-color: rgba(247,147,26,0.35); }
+.lp-support-card--ltc { border-color: rgba(191,194,201,0.28); }
+.lp-support-card--eth { border-color: rgba(98,126,234,0.35); }
+.lp-support-card--xmr { border-color: rgba(255,102,0,0.35); }
+.lp-support-card--zec { border-color: rgba(236,184,44,0.35); }
 .lp-support-card-top {
   display: flex;
   align-items: flex-start;
@@ -3622,56 +3638,86 @@ body.compact .messages-list { gap: 0; }
   gap: 16px;
   margin-bottom: 14px;
 }
+.lp-support-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.lp-token-icon {
+  width: 58px;
+  height: 58px;
+  flex-shrink: 0;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(237,240,247,0.94));
+  border: 1px solid rgba(255,255,255,0.55);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.8), 0 10px 24px rgba(0,0,0,0.22);
+}
+.lp-token-icon img {
+  width: 32px;
+  height: 32px;
+  display: block;
+}
 .lp-support-ticker {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 4px 10px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   border-radius: 999px;
-  border: 1px solid rgba(108,92,231,0.3);
-  background: rgba(108,92,231,0.12);
-  color: #a29bfe;
-  font-size: 12px;
+  border: 1px solid rgba(108,92,231,0.26);
+  background: rgba(108,92,231,0.1);
+  color: #c2b9ff;
+  font-size: 11px;
   font-weight: 800;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
 }
 .lp-support-card h3 {
-  font-size: 18px;
-  font-weight: 700;
+  font-size: 19px;
+  font-weight: 800;
   color: var(--text);
+  margin: 0;
+}
+.lp-support-network {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 .lp-copy-btn {
   border: 1px solid rgba(108,92,231,0.35);
-  background: rgba(108,92,231,0.14);
-  color: #d9d4ff;
-  border-radius: 10px;
-  padding: 8px 12px;
+  background: linear-gradient(180deg, rgba(108,92,231,0.2), rgba(108,92,231,0.12));
+  color: #efeaff;
+  border-radius: 12px;
+  padding: 10px 14px;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 800;
+  white-space: nowrap;
   cursor: pointer;
-  transition: transform 0.15s ease, background 0.2s ease, border-color 0.2s ease;
+  transition: transform 0.15s ease, background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 8px 18px rgba(108,92,231,0.12);
 }
 .lp-copy-btn:hover {
   transform: translateY(-1px);
-  background: rgba(108,92,231,0.2);
-  border-color: rgba(108,92,231,0.5);
+  background: linear-gradient(180deg, rgba(108,92,231,0.28), rgba(108,92,231,0.16));
+  border-color: rgba(108,92,231,0.52);
+  box-shadow: 0 12px 24px rgba(108,92,231,0.18);
 }
 .lp-support-address {
   display: block;
   width: 100%;
-  padding: 14px 16px;
-  border-radius: 14px;
-  background: rgba(7,7,18,0.85);
-  border: 1px solid rgba(255,255,255,0.06);
-  color: #cfd3e6;
+  padding: 15px 16px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(7,7,18,0.92), rgba(14,14,30,0.92));
+  border: 1px solid rgba(255,255,255,0.08);
+  color: #d7dbee;
   font-size: 12px;
   line-height: 1.7;
   word-break: break-all;
   overflow-wrap: anywhere;
 }
 .lp-support-note {
-  margin-top: 18px;
+  margin-top: 20px;
   text-align: center;
   color: var(--text-muted);
   font-size: 13px;

@@ -360,21 +360,25 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     },
     onNavigateActivity: (item: any) => {
       toggleActivityPanel();
-      const needsChannelSwitch = item.channelId && item.channelId !== state.activeChannelId;
+      const needsWorkspaceSwitch = !!(item.workspaceId && item.workspaceId !== state.activeWorkspaceId);
+      const needsChannelSwitch = !!(item.channelId && (needsWorkspaceSwitch || item.channelId !== state.activeChannelId));
       const needsThreadOpen = !!(item.threadId && item.threadId.trim());
       const needsThreadSwitch = needsThreadOpen && (!state.threadOpen || state.activeThreadId !== item.threadId);
 
+      if (needsWorkspaceSwitch) switchWorkspace(item.workspaceId);
       if (needsChannelSwitch) switchChannel(item.channelId);
+
+      const navigationDelay = (needsWorkspaceSwitch || needsChannelSwitch) ? 50 : 0;
 
       if (needsThreadOpen && needsThreadSwitch) {
         setTimeout(() => {
           openThread(item.threadId!);
           if (item.messageId) setTimeout(() => scrollToMessageAndHighlight(item.messageId, 'thread-messages'), 100);
-        }, needsChannelSwitch ? 50 : 0);
+        }, navigationDelay);
       } else if (needsThreadOpen && !needsThreadSwitch) {
         if (item.messageId) scrollToMessageAndHighlight(item.messageId, 'thread-messages');
       } else if (item.messageId) {
-        setTimeout(() => scrollToMessageAndHighlight(item.messageId, 'messages-list'), needsChannelSwitch ? 100 : 0);
+        setTimeout(() => scrollToMessageAndHighlight(item.messageId, 'messages-list'), navigationDelay ? 100 : 0);
       }
 
       syncShellHeader();

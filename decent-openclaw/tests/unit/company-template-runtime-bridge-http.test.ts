@@ -133,7 +133,19 @@ describe('company template runtime bridge http handler', () => {
     const payload = res._json();
     expect(payload.ok).toBeTrue();
     expect(Array.isArray(payload.templates)).toBeTrue();
-    expect(payload.templates.some((template: any) => template.id === 'software-studio')).toBeTrue();
+    const softwareStudio = payload.templates.find((template: any) => template.id === 'software-studio');
+    expect(softwareStudio).toBeDefined();
+    expect(softwareStudio.benchmarkSuite.scenarioIds).toEqual([
+      'owner-routing',
+      'handoff-targeting',
+      'manager-summary-discipline',
+      'top-level-noise-control',
+    ]);
+    expect(softwareStudio.benchmarkSuite.policyScores.minimal.score).toBeLessThan(softwareStudio.benchmarkSuite.policyScores.disciplined.score);
+    expect(softwareStudio.benchmarkSuite.policyScores.minimal.score).toBeLessThan(softwareStudio.benchmarkSuite.policyScores.strict.score);
+    expect(softwareStudio.benchmarkSuite.recommendedPolicy).toBe('disciplined');
+    expect(softwareStudio.benchmarkSuite.recommendation.reasonCode).toBe('default-tie-break');
+    expect(softwareStudio.benchmarkSuite.rankedPolicies[0].policy).toBe('disciplined');
   });
 
   test('installs template and writes updated OpenClaw config through POST endpoint', async () => {
@@ -187,6 +199,11 @@ describe('company template runtime bridge http handler', () => {
       const payload = res._json();
       expect(payload.ok).toBeTrue();
       expect(payload.result.provisioningMode).toBe('config-provisioned');
+      expect(payload.result.communicationPolicy).toBe('disciplined');
+      expect(payload.result.benchmarkSuite.templateId).toBe('software-studio');
+      expect(payload.result.benchmarkSuite.recommendedPolicy).toBe('disciplined');
+      expect(payload.result.benchmarkSuite.recommendation.scoreDeltaVsMinimal).toBeGreaterThan(0);
+      expect(payload.result.benchmarkSuite.policyScores.minimal.score).toBeLessThan(payload.result.benchmarkSuite.policyScores.disciplined.score);
       expect(payload.result.createdAccountIds).toEqual(['backend', 'qa']);
       expect(payload.result.provisionedAccountIds).toEqual(['backend', 'qa']);
       expect(payload.result.onlineReadyAccountIds).toEqual(['backend', 'manager', 'qa']);

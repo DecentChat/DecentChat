@@ -140,6 +140,17 @@ interface CompanyTemplateControlInstallResult {
   companyId?: string;
   manifestPath?: string;
   companyDirPath?: string;
+  communicationPolicy?: string;
+  benchmarkSuite?: {
+    templateId: string;
+    scenarioIds: string[];
+    policyScores: Record<string, {
+      score: number;
+      unexpectedResponders?: number;
+      missingExpectedResponders?: number;
+      silentViolations?: number;
+    }>;
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -877,6 +888,8 @@ export class NodeXenaPeer {
       companyId: install.summary.companyId,
       manifestPath: install.summary.manifestPath,
       companyDirPath: install.summary.companyDirPath,
+      ...(install.summary.communicationPolicy ? { communicationPolicy: install.summary.communicationPolicy } : {}),
+      ...(install.summary.benchmarkSuite ? { benchmarkSuite: install.summary.benchmarkSuite } : {}),
     };
   }
 
@@ -1159,7 +1172,8 @@ export class NodeXenaPeer {
       return;
     }
 
-    const channelId = msg.channelId as string | undefined;
+    const isDirect = msg.isDirect === true;
+    const channelId = (msg.channelId as string | undefined) ?? (isDirect ? fromPeerId : undefined);
     if (!channelId) return;
 
     const created = await this.messageStore.createMessage(
@@ -1183,7 +1197,7 @@ export class NodeXenaPeer {
 
     this.persistMessagesForChannel(channelId);
 
-    const workspaceId = (msg.workspaceId as string | undefined) ?? '';
+    const workspaceId = (msg.workspaceId as string | undefined) ?? (isDirect ? 'direct' : '');
     this.recordManifestDomain('channel-message', workspaceId || this.findWorkspaceIdForChannel(channelId), {
       channelId,
       itemCount: this.messageStore.getMessages(channelId).length,

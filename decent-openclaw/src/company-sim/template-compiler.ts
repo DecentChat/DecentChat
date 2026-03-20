@@ -87,6 +87,22 @@ function stringAnswer(
   return trimmed || undefined;
 }
 
+function resolvePolicyParticipationOverride(params: {
+  template: CompanyTemplateMetadata;
+  answers: Record<string, CompanyTemplateQuestionValue>;
+  roleId: string;
+}): Partial<CompanyParticipationConfig> | undefined {
+  const policyAnswer = stringAnswer(params.answers, 'communicationPolicy');
+  if (!policyAnswer) return undefined;
+
+  const profile = params.template.policyProfiles?.[policyAnswer];
+  if (!profile) return undefined;
+
+  const override = profile.roleParticipation?.[params.roleId];
+  if (!override || Object.keys(override).length === 0) return undefined;
+  return override as Partial<CompanyParticipationConfig>;
+}
+
 function assertKnownRoles(params: {
   roleIds: string[];
   knownRoleIds: Set<string>;
@@ -127,17 +143,22 @@ function selectRoles(params: CompileCompanyTemplateParams): CompanyTemplateRoleD
 }
 
 function resolveParticipation(params: {
+  template: CompanyTemplateMetadata;
+  answers: Record<string, CompanyTemplateQuestionValue>;
   role: CompanyTemplateRoleDefinition;
   override?: CompanyTemplateRoleOverrides;
 }): CompanyParticipationConfig {
   const baseParticipation: CompanyParticipationConfig = params.role.participation ?? { mode: 'mention-only' };
-  if (!params.override?.participation) {
-    return baseParticipation;
-  }
+  const policyParticipation = resolvePolicyParticipationOverride({
+    template: params.template,
+    answers: params.answers,
+    roleId: params.role.id,
+  });
 
   return {
     ...baseParticipation,
-    ...params.override.participation,
+    ...policyParticipation,
+    ...params.override?.participation,
   } as CompanyParticipationConfig;
 }
 
@@ -186,7 +207,7 @@ export function compileCompanyTemplateToManifest(params: CompileCompanyTemplateP
         teamId: (override?.teamId ?? role.teamId)?.trim() || undefined,
         title: override?.title?.trim() || role.title || role.label,
         channels,
-        participation: resolveParticipation({ role, override }),
+        participation: resolveParticipation({ template: params.template, answers, role, override }),
       },
     };
   });

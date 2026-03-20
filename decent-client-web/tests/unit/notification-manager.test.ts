@@ -320,7 +320,7 @@ describe('NotificationManager — desktop notifications', () => {
 
   test('onNotificationClick callback is called on notification click', () => {
     let clickedChannel = '';
-    nm.onNotificationClick = (channelId) => { clickedChannel = channelId; };
+    nm.onNotificationClick = (target: any) => { clickedChannel = target.channelId; };
     nm.setFocusedChannel('other');
     nm.notify('ch1', '#general', 'Alice', 'hello');
 
@@ -328,6 +328,24 @@ describe('NotificationManager — desktop notifications', () => {
     // Simulate click
     notif.onclick?.call(notif);
     expect(clickedChannel).toBe('ch1');
+  });
+
+  test('notification click forwards workspace and thread context', () => {
+    let clickedTarget: any = null;
+    nm.onNotificationClick = (target: any) => { clickedTarget = target; };
+    nm.setFocusedChannel('other');
+    nm.notify('ch1', '#general', 'Alice', 'hello', {
+      workspaceId: 'ws-1',
+      threadId: 'thread-1',
+    });
+
+    const notif = createdNotifications[0] as any;
+    notif.onclick?.call(notif);
+    expect(clickedTarget).toEqual({
+      channelId: 'ch1',
+      workspaceId: 'ws-1',
+      threadId: 'thread-1',
+    });
   });
 });
 

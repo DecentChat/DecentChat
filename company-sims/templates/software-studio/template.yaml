@@ -63,6 +63,18 @@ questions:
     label: QA display name
     type: text
     default: Iva QA
+  - id: communicationPolicy
+    label: Communication policy
+    description: How disciplined the team communication should be by default.
+    type: select
+    default: disciplined
+    options:
+      - value: minimal
+        label: Minimal
+      - value: disciplined
+        label: Disciplined
+      - value: strict
+        label: Strict
 defaults:
   companyName: Software Studio
   workspaceName: Studio HQ
@@ -71,3 +83,30 @@ defaults:
     managerAlias: Mira PM
     backendAlias: Rian Backend
     qaAlias: Iva QA
+    communicationPolicy: disciplined
+
+policyProfiles:
+  minimal:
+    label: Minimal
+    description: Looser communication with proactive specialists on owned channels.
+    roleParticipation:
+      backend:
+        mode: proactive-on-owned-channel
+        replyInThreadsOnly: false
+      qa:
+        mode: proactive-on-owned-channel
+        replyInThreadsOnly: false
+  disciplined:
+    label: Disciplined
+    description: Balanced default with explicit routing, summaries, and thread discipline.
+    roleParticipation: {}
+  strict:
+    label: Strict
+    description: Specialists stay quiet unless explicitly routed or already assigned in-thread.
+    roleParticipation:
+      backend:
+        mode: silent-unless-routed
+        replyInThreadsOnly: true
+      qa:
+        mode: silent-unless-routed
+        replyInThreadsOnly: true

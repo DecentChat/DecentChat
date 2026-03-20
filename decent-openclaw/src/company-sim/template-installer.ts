@@ -1,5 +1,5 @@
 import { createHash, createHmac } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import { SeedPhraseManager } from 'decent-protocol';
@@ -15,6 +15,7 @@ import {
   type CompanyTemplateRoleSelection,
 } from './template-compiler.ts';
 import type { CompanySimTemplate } from './template-registry.ts';
+import { buildTemplateBenchmarkSuiteSummary, resolveSelectedCommunicationPolicyForTemplate, type CompanyTemplateBenchmarkSuiteSummary } from './template-benchmark-summary.ts';
 import type { CompanyTemplateQuestionValue } from './template-types.ts';
 import type { CompanyManifest } from './types.ts';
 import {
@@ -45,6 +46,8 @@ export interface CompanyTemplateInstallSummary {
   onlineReadyAccountIds: string[];
   manualActionRequiredAccountIds: string[];
   createdChannels: string[];
+  communicationPolicy?: string;
+  benchmarkSuite?: CompanyTemplateBenchmarkSuiteSummary;
 }
 
 export interface InstallCompanyTemplateResult<TConfig extends Record<string, unknown> = Record<string, unknown>> {
@@ -101,11 +104,69 @@ function buildPlaybookMd(params: { alias: string; title: string }): string {
   ].join('\n');
 }
 
+function buildPolicyDocumentationOverlay(policy: string | undefined): { communication?: string; workflows?: string } | undefined {
+  const normalized = typeof policy === 'string' ? policy.trim() : '';
+  if (!normalized) return undefined;
+
+  switch (normalized) {
+    case 'strict':
+      return {
+        communication: [
+          '',
+          '## Active communication policy: strict',
+          '',
+          '- Specialists stay quiet unless explicitly routed, assigned in-thread, or directly mentioned.',
+          '- Reassign ownership explicitly with `[TASK] Owner=...;` or `[HANDOFF] Target=...;`.',
+        ].join('\n'),
+        workflows: [
+          '',
+          '## Policy note: strict',
+          '',
+          '- Prefer explicit assignment before specialist work starts.',
+          '- Treat plain top-level chatter as non-actionable unless a manager routes it.',
+        ].join('\n'),
+      };
+    case 'disciplined':
+      return {
+        communication: [
+          '',
+          '## Active communication policy: disciplined',
+          '',
+          '- Default to explicit owners, thread continuity, and summary-first management.',
+        ].join('\n'),
+        workflows: [
+          '',
+          '## Policy note: disciplined',
+          '',
+          '- Use explicit assignment and handoff tags, but allow one deterministic specialist winner in active threads.',
+        ].join('\n'),
+      };
+    case 'minimal':
+      return {
+        communication: [
+          '',
+          '## Active communication policy: minimal',
+          '',
+          '- Specialists may respond more proactively on owned channels, so use explicit owners when you want tighter control.',
+        ].join('\n'),
+        workflows: [
+          '',
+          '## Policy note: minimal',
+          '',
+          '- Expect looser channel participation unless work is explicitly routed.',
+        ].join('\n'),
+      };
+    default:
+      return undefined;
+  }
+}
+
 function materializeCompanyTemplateFiles(params: {
   template: CompanySimTemplate;
   manifest: CompanyManifest;
   companyDirPath: string;
   manifestPath: string;
+  communicationPolicy?: string;
 }): void {
   copyFileEnsured(params.template.assets.companyMdPath, join(params.companyDirPath, 'COMPANY.md'));
   copyFileEnsured(params.template.assets.orgMdPath, join(params.companyDirPath, 'ORG.md'));
@@ -114,6 +175,15 @@ function materializeCompanyTemplateFiles(params: {
   for (const [teamId, teamMdPath] of Object.entries(params.template.assets.teams)) {
     copyFileEnsured(teamMdPath, join(params.companyDirPath, 'teams', `${teamId}.md`));
   }
+
+  const policyOverlay = buildPolicyDocumentationOverlay(params.communicationPolicy);
+  if (policyOverlay?.communication) {
+    appendFileSync(join(params.companyDirPath, 'COMMUNICATION.md'), `${policyOverlay.communication}\n`, 'utf8');
+  }
+  if (policyOverlay?.workflows) {
+    appendFileSync(join(params.companyDirPath, 'WORKFLOWS.md'), `${policyOverlay.workflows}\n`, 'utf8');
+  }
+
   writeFileEnsured(params.manifestPath, stringifyYaml(params.manifest));
 
   for (const employee of params.manifest.employees) {
@@ -447,11 +517,14 @@ export function installCompanyTemplate<TConfig extends Record<string, unknown>>(
   const companyDirPath = resolve(companySimsRootDir, manifest.id);
   const manifestPath = join(companyDirPath, 'company.yaml');
 
+  const selectedCommunicationPolicy = resolveSelectedCommunicationPolicyForTemplate(params.template, params.answers);
+
   materializeCompanyTemplateFiles({
     template: params.template,
     manifest,
     companyDirPath,
     manifestPath,
+    communicationPolicy: selectedCommunicationPolicy,
   });
 
   const topology = planCompanyAgentTopology({
@@ -494,6 +567,8 @@ export function installCompanyTemplate<TConfig extends Record<string, unknown>>(
     onlineReadyAccountIds: accountMaterialization.onlineReadyAccountIds,
     manualActionRequiredAccountIds: accountMaterialization.manualActionRequiredAccountIds,
     createdChannels: uniqueSorted(manifest.workspace.channels),
+    communicationPolicy: selectedCommunicationPolicy,
+    benchmarkSuite: buildTemplateBenchmarkSuiteSummary(params.template, params.answers),
   };
 
   return {

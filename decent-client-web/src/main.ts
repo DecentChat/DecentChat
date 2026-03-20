@@ -72,6 +72,7 @@ import { initTooltips } from './ui/TooltipManager';
 import { ChatController } from './app/ChatController';
 import { LifecycleReconnectGuard } from './app/LifecycleReconnectGuard';
 import { createUIService, type UIService } from './ui/uiService';
+import { navigateFromNotification } from './ui/notificationNavigation';
 import { CommandParser } from './commands/CommandParser';
 import { registerCommands } from './commands/registerCommands';
 import {
@@ -580,27 +581,24 @@ async function init(): Promise<void> {
     },
   });
 
-  // Clicking a desktop notification switches to the correct workspace + channel
-  ctrl.notifications.onNotificationClick = (channelId) => {
-    // Find which workspace owns this channel
-    let targetWorkspaceId: string | null = null;
-    for (const ws of ctrl.workspaceManager.getAllWorkspaces()) {
-      if (ws.channels.some((ch: any) => ch.id === channelId)) {
-        targetWorkspaceId = ws.id;
-        break;
-      }
-    }
-
-    if (targetWorkspaceId) {
-      // Workspace channel or DM — switch workspace first if needed
-      if (targetWorkspaceId !== state.activeWorkspaceId) {
-        ui.switchWorkspace(targetWorkspaceId);
-      }
-      ui.switchChannel(channelId);
-    } else {
-      // Standalone direct conversation (not inside a workspace)
-      ui.switchToDirectConversation(channelId);
-    }
+  // Clicking a desktop notification switches to the correct workspace + channel/thread
+  ctrl.notifications.onNotificationClick = (target) => {
+    navigateFromNotification({
+      notification: target,
+      state,
+      switchWorkspace: (workspaceId) => ui.switchWorkspace(workspaceId),
+      switchChannel: (channelId) => ui.switchChannel(channelId),
+      switchToDirectConversation: (conversationId) => ui.switchToDirectConversation(conversationId),
+      openThread: (threadId) => ui.openThread(threadId),
+      resolveWorkspaceIdByChannelId: (channelId) => {
+        for (const ws of ctrl.workspaceManager.getAllWorkspaces()) {
+          if (ws.channels.some((ch: any) => ch.id === channelId)) {
+            return ws.id;
+          }
+        }
+        return null;
+      },
+    });
   };
 
   // Give the controller a handle to the UI for push updates

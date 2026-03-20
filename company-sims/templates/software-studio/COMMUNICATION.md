@@ -7,7 +7,7 @@ Keep the protocol tiny and consistent.
 - `[TASK]` — assignment or next step with a clear owner (`Owner=...`)
 - `[QUESTION]` — specific info needed to continue
 - `[BLOCKED]` — stuck on a decision or dependency
-- `[HANDOFF]` — ready for the next role
+- `[HANDOFF]` — ready for the next role (`Target=...`)
 - `[DONE]` — finished with outcome and remaining risk
 
 ## Team defaults

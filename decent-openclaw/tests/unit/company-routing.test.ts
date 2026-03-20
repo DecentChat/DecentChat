@@ -12,7 +12,23 @@ function makeContext(overrides: Partial<LoadedCompanyContext['employee']> = {}):
       mode: 'company-sim',
       workspace: { name: 'Studio HQ', channels: ['general', 'engineering', 'qa'] },
       teams: [{ id: 'engineering', name: 'Engineering', managerEmployeeId: 'team-manager' }],
-      employees: [],
+      employees: [
+        {
+          id: 'team-manager', agentId: 'software-studio-manager', accountId: 'team-manager', alias: 'Mira PM',
+          teamId: 'engineering', title: 'Team Manager', channels: ['general', 'engineering'],
+          participation: { mode: 'summary-first', respondWhenMentioned: true, respondToChannelTopics: ['planning', 'blockers', 'status'] },
+        },
+        {
+          id: 'backend-dev', agentId: 'software-studio-backend', accountId: 'backend-dev', alias: 'Rian Backend',
+          teamId: 'engineering', title: 'Backend Engineer', managerEmployeeId: 'team-manager', channels: ['engineering'],
+          participation: { mode: 'specialist', respondWhenMentioned: true, replyInThreadsOnly: true },
+        },
+        {
+          id: 'tester', agentId: 'software-studio-qa', accountId: 'tester', alias: 'Iva QA',
+          teamId: 'qa', title: 'QA Engineer', managerEmployeeId: 'team-manager', channels: ['qa', 'engineering'],
+          participation: { mode: 'specialist', respondWhenMentioned: true, replyInThreadsOnly: true },
+        },
+      ],
     },
     employee: {
       id: 'backend-dev',
@@ -104,6 +120,82 @@ describe('company routing', () => {
     expect(decision.preferredReply).toBe('thread');
   });
 
+  test('explicit handoff target routing pulls in the intended next specialist', () => {
+    const decision = decideCompanyParticipation({
+      context: makeContext({
+        id: 'tester',
+        agentId: 'software-studio-qa',
+        accountId: 'tester',
+        alias: 'Iva QA',
+        title: 'QA Engineer',
+        teamId: 'qa',
+        channels: ['qa', 'engineering'],
+        participation: { mode: 'specialist', respondWhenMentioned: true, replyInThreadsOnly: true },
+      }),
+      chatType: 'channel',
+      channelNameOrId: 'engineering',
+      text: '[HANDOFF pricing-api] Target=QA Engineer; Ready for verification',
+      threadId: 'thread-1',
+    });
+
+    expect(decision.shouldRespond).toBe(true);
+    expect(decision.reason).toBe('handoff-target');
+    expect(decision.preferredReply).toBe('thread');
+  });
+
+  test('thread continuity keeps routing plain follow-up messages to the assigned specialist', () => {
+    const decision = decideCompanyParticipation({
+      context: makeContext(),
+      chatType: 'channel',
+      channelNameOrId: 'engineering',
+      text: 'Can you also cover retry logic?',
+      threadId: 'thread-1',
+      threadAssignedEmployeeId: 'backend-dev',
+    });
+
+    expect(decision.shouldRespond).toBe(true);
+    expect(decision.reason).toBe('thread-assignee');
+    expect(decision.preferredReply).toBe('thread');
+  });
+
+  test('thread continuity keeps non-assigned specialists silent on plain follow-up messages', () => {
+    const decision = decideCompanyParticipation({
+      context: makeContext({
+        id: 'tester',
+        agentId: 'software-studio-qa',
+        accountId: 'tester',
+        alias: 'Iva QA',
+        title: 'QA Engineer',
+        teamId: 'qa',
+        channels: ['qa', 'engineering'],
+        participation: { mode: 'specialist', respondWhenMentioned: true, replyInThreadsOnly: true },
+      }),
+      chatType: 'channel',
+      channelNameOrId: 'engineering',
+      text: 'Can you also cover retry logic?',
+      threadId: 'thread-1',
+      threadAssignedEmployeeId: 'backend-dev',
+    });
+
+    expect(decision.shouldRespond).toBe(false);
+    expect(decision.reason).toBe('not-thread-assignee');
+    expect(decision.preferredReply).toBe('thread');
+  });
+
+  test('non-target specialist stays silent on explicit handoff', () => {
+    const decision = decideCompanyParticipation({
+      context: makeContext(),
+      chatType: 'channel',
+      channelNameOrId: 'engineering',
+      text: '[HANDOFF pricing-api] Target=QA Engineer; Ready for verification',
+      threadId: 'thread-1',
+    });
+
+    expect(decision.shouldRespond).toBe(false);
+    expect(decision.reason).toBe('not-handoff-target');
+    expect(decision.preferredReply).toBe('thread');
+  });
+
   test('unmentioned irrelevant employees stay silent', () => {
     const decision = decideCompanyParticipation({
       context: makeContext({
@@ -121,6 +213,37 @@ describe('company routing', () => {
 
     expect(decision.shouldRespond).toBe(false);
     expect(decision.reason).toBe('not-owned-channel');
+  });
+
+  test('duplicate specialist responders are deterministically suppressed to one winner', () => {
+    const backendDecision = decideCompanyParticipation({
+      context: makeContext(),
+      chatType: 'channel',
+      channelNameOrId: 'engineering',
+      text: 'Can someone check retry logic?',
+      threadId: 'thread-free',
+    });
+    const qaDecision = decideCompanyParticipation({
+      context: makeContext({
+        id: 'tester',
+        agentId: 'software-studio-qa',
+        accountId: 'tester',
+        alias: 'Iva QA',
+        title: 'QA Engineer',
+        teamId: 'qa',
+        channels: ['qa', 'engineering'],
+        participation: { mode: 'specialist', respondWhenMentioned: true, replyInThreadsOnly: true },
+      }),
+      chatType: 'channel',
+      channelNameOrId: 'engineering',
+      text: 'Can someone check retry logic?',
+      threadId: 'thread-free',
+    });
+
+    expect(backendDecision.shouldRespond).toBe(true);
+    expect(backendDecision.reason).toBe('specialist-thread');
+    expect(qaDecision.shouldRespond).toBe(false);
+    expect(qaDecision.reason).toBe('suppressed-by-peer');
   });
 
   test('manager can summarize when specialists emit state-change tags in owned threads', () => {

@@ -5,6 +5,7 @@ import type {
   ChannelAccessPolicy,
   DirectoryShardRef,
   HistoryPageRef,
+  HistoryPageSnapshot,
   MemberDirectoryPage,
   PresenceAggregate,
   WorkspaceShell,
@@ -87,6 +88,80 @@ describe('PersistentStore — public workspace normalized stores', () => {
 
     expect(loaded?.pageId).toBe('page-1');
     expect(loaded?.replicaPeerIds).toEqual(['peer-1', 'peer-2']);
+  });
+
+  test('deletes all normalized public-workspace data for one workspace only', async () => {
+    const shell: WorkspaceShell = {
+      id: 'ws-1',
+      name: 'Big Workspace',
+      createdBy: 'alice',
+      createdAt: 1,
+      version: 5,
+      memberCount: 150000,
+      channelCount: 32,
+    };
+    const page: MemberDirectoryPage = {
+      workspaceId: 'ws-1',
+      pageSize: 100,
+      cursor: 'cursor-0',
+      nextCursor: 'cursor-1',
+      members: [{ peerId: 'bob', alias: 'Bob', role: 'member', joinedAt: 1 }],
+    };
+    const shard: DirectoryShardRef = {
+      workspaceId: 'ws-1',
+      shardId: 'aa',
+      shardPrefix: 'aa',
+      replicaPeerIds: ['peer-a', 'peer-b'],
+      version: 3,
+    };
+    const policy: ChannelAccessPolicy = {
+      mode: 'role-gated',
+      roles: ['owner', 'admin'],
+    };
+    const presence: PresenceAggregate = {
+      workspaceId: 'ws-1',
+      onlineCount: 234,
+      awayCount: 12,
+      updatedAt: 999,
+    };
+    const pageRef: HistoryPageRef = {
+      workspaceId: 'ws-1',
+      channelId: 'ch-1',
+      pageId: 'page-1',
+      startCursor: '0',
+      endCursor: '99',
+      replicaPeerIds: ['peer-1', 'peer-2'],
+    };
+    const pageSnapshot: HistoryPageSnapshot = {
+      workspaceId: 'ws-1',
+      channelId: 'ch-1',
+      pageId: 'page-2',
+      messages: [],
+      generatedAt: 1234,
+      tier: 'recent',
+    };
+
+    await store.saveWorkspaceShell(shell);
+    await store.saveMemberDirectoryPage(page);
+    await store.saveDirectoryShardRef(shard);
+    await store.saveChannelPolicy('ws-1', 'ch-admins', policy);
+    await store.savePresenceAggregate(presence);
+    await store.saveHistoryPageRef(pageRef);
+    await store.saveHistoryPage(pageSnapshot);
+
+    await store.saveWorkspaceShell({ ...shell, id: 'ws-keep' });
+
+    await store.deletePublicWorkspaceData('ws-1');
+
+    expect(await store.getWorkspaceShell('ws-1')).toBeUndefined();
+    expect(await store.getMemberDirectoryPages('ws-1')).toEqual([]);
+    expect(await store.getDirectoryShardRefs('ws-1')).toEqual([]);
+    expect(await store.getChannelPolicy('ws-1', 'ch-admins')).toBeUndefined();
+    expect(await store.getPresenceAggregate('ws-1')).toBeUndefined();
+    expect(await store.getHistoryPageRef('ws-1', 'ch-1', 'page-1')).toBeUndefined();
+    expect(await store.getHistoryPage('ws-1', 'ch-1', 'page-2')).toBeUndefined();
+
+    expect(await store.getWorkspaceShell('ws-keep')).toBeDefined();
   });
 
   test('saves and loads directory shard refs and presence aggregates', async () => {

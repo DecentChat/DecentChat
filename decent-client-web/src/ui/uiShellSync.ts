@@ -47,6 +47,8 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
     shellData.rail.workspaces = callbacks.getAllWorkspaces?.() || [];
     shellData.rail.activeWorkspaceId = state.activeWorkspaceId;
     shellData.rail.activityUnread = callbacks.getActivityUnreadCount?.() || 0;
+    shellData.rail.dmUnread = cachedData.directConversations
+      .reduce((total, conv) => total + (callbacks.getUnreadCount?.(conv.id) || 0), 0);
   }
 
   const buildPresenceSummary = (workspaceId?: string | null, channelId?: string | null) => {

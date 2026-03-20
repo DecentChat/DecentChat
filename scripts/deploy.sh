@@ -31,7 +31,7 @@ if [ "$FORCE" = "true" ]; then
   echo "⚠️  --force: skipping pre-deploy checks. EMERGENCY USE ONLY."
 else
   # ── Gate 0: AI code review (optional) ────────────────────────────────────
-  if [ "${SKIP_REVIEW}" != "1" ] && command -v claude &>/dev/null; then
+  if [ "${SKIP_REVIEW:-}" != "1" ] && command -v claude &>/dev/null; then
     echo "🤖 Running AI code review (SKIP_REVIEW=1 to skip)..."
     ./scripts/review.sh main..HEAD || true
     echo ""

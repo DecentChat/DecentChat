@@ -19,7 +19,7 @@ function makeReceiptController(message: any, workspaces: any[] = []): any {
     workspaceAliases: {},
   };
 
-  ctrl.transport = {};
+  ctrl.transport = { send: mock(() => true) };
   ctrl.offlineQueue = { applyReceipt: mock(async () => true) };
   ctrl.messageGuard = { check: mock(() => ({ allowed: true })) };
   ctrl.messageStore = { getMessages: mock(() => [message]) };
@@ -142,5 +142,98 @@ describe('ChatController outbound receipt field initialization', () => {
     expect(msg.readBy).toEqual([]);
     expect(msg.status).toBe('sent');
     expect(ctrl.ui.updateMessageStatus).toHaveBeenCalledWith('att-1', 'sent', { acked: 0, total: 1, read: 0 });
+  });
+});
+
+
+describe('ChatController gossip receipt routing', () => {
+  test('sendInboundReceipt returns relayed receipt to immediate hop with original sender target', () => {
+    const ctrl = Object.create(ChatController.prototype) as any;
+    ctrl.state = { myPeerId: 'carol' };
+    ctrl.transport = { send: mock(() => true) };
+
+    (ChatController.prototype as any).sendInboundReceipt.call(
+      ctrl,
+      'bob',
+      { _gossipOriginalSender: 'alice' },
+      'ch-1',
+      'm1',
+      'ack',
+    );
+
+    expect(ctrl.transport.send).toHaveBeenCalledWith('bob', {
+      type: 'ack',
+      messageId: 'm1',
+      channelId: 'ch-1',
+      _receiptFromPeerId: 'carol',
+      _receiptTargetPeerId: 'alice',
+    });
+  });
+
+  test('relay forwards forwarded ACK upstream without mutating local state', async () => {
+    const msg = {
+      id: 'm1',
+      channelId: 'ch-1',
+      senderId: 'alice',
+      status: 'sent',
+      recipientPeerIds: ['carol'],
+      ackedBy: [],
+      readBy: [],
+    };
+    const ctrl = makeReceiptController(msg);
+    ctrl.state.myPeerId = 'bob';
+    ctrl._gossipReceiptRoutes = new Map([
+      ['m1', { upstreamPeerId: 'alice', originalSenderId: 'alice', timestamp: Date.now() }],
+    ]);
+
+    await ctrl.transport.onMessage('carol', {
+      type: 'ack',
+      channelId: 'ch-1',
+      messageId: 'm1',
+      _receiptFromPeerId: 'carol',
+      _receiptTargetPeerId: 'alice',
+    });
+
+    expect(ctrl.transport.send).toHaveBeenCalledWith('alice', {
+      type: 'ack',
+      channelId: 'ch-1',
+      messageId: 'm1',
+      _receiptFromPeerId: 'carol',
+      _receiptTargetPeerId: 'alice',
+    });
+    expect(ctrl.persistentStore.saveMessage).not.toHaveBeenCalled();
+    expect(msg.ackedBy).toEqual([]);
+  });
+
+  test('original sender attributes forwarded ACK to logical recipient, not relay peer', async () => {
+    const msg = {
+      id: 'm1',
+      channelId: 'ch-1',
+      senderId: 'alice',
+      status: 'sent',
+      recipientPeerIds: ['carol'],
+      ackedBy: [],
+      ackedAt: {},
+      readBy: [],
+      readAt: {},
+    };
+    const ctrl = makeReceiptController(msg);
+    ctrl.state.myPeerId = 'alice';
+
+    await ctrl.transport.onMessage('bob', {
+      type: 'ack',
+      channelId: 'ch-1',
+      messageId: 'm1',
+      _receiptFromPeerId: 'carol',
+      _receiptTargetPeerId: 'alice',
+    });
+
+    expect(msg.ackedBy).toEqual(['carol']);
+    expect(msg.ackedAt.carol).toEqual(expect.any(Number));
+    expect(msg.ackedBy).not.toContain('bob');
+    expect(ctrl.persistentStore.saveMessage).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'm1',
+      ackedBy: ['carol'],
+    }));
   });
 });

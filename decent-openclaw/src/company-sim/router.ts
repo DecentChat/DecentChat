@@ -1,5 +1,6 @@
 import type { LoadedCompanyContext } from './context-loader.ts';
-import { hasExplicitTaskOwner, hasSummaryTriggerTag, isAssignedChannel, isEmployeeMentioned, isTaskOwnedByEmployee, matchesParticipationTopic } from './participation.ts';
+import { hasExplicitHandoffTarget, hasExplicitTaskOwner, hasSummaryTriggerTag, isAssignedChannel, isEmployeeMentioned, isHandoffTargetedToEmployee, isTaskOwnedByEmployee, matchesParticipationTopic } from './participation.ts';
+import type { CompanyEmployeeConfig } from './types.ts';
 
 export interface CompanyRoutingDecision {
   shouldRespond: boolean;
@@ -17,23 +18,36 @@ export interface CompanyRoutingDecision {
     | 'threads-only'
     | 'awaiting-summary-signal'
     | 'task-owner'
-    | 'not-task-owner';
+    | 'not-task-owner'
+    | 'handoff-target'
+    | 'not-handoff-target'
+    | 'thread-assignee'
+    | 'not-thread-assignee'
+    | 'suppressed-by-peer';
   preferredReply: 'channel' | 'thread';
 }
 
-export function decideCompanyParticipation(params: {
+type RoutingParams = {
   context: LoadedCompanyContext | null;
   chatType: 'direct' | 'channel';
   channelNameOrId?: string;
   text: string;
   threadId?: string;
-}): CompanyRoutingDecision {
+  threadAssignedEmployeeId?: string;
+};
+
+const SUPPRESSIBLE_SPECIALIST_REASONS = new Set<CompanyRoutingDecision['reason']>([
+  'specialist-thread',
+  'owned-channel',
+]);
+
+function decideBaseCompanyParticipationForEmployee(params: RoutingParams, employeeOverride?: CompanyEmployeeConfig): CompanyRoutingDecision {
   const context = params.context;
   if (!context) {
     return { shouldRespond: true, reason: 'not-company-sim', preferredReply: params.threadId ? 'thread' : 'channel' };
   }
 
-  const employee = context.employee;
+  const employee = employeeOverride ?? context.employee;
   const participation = employee.participation;
   const mentioned = isEmployeeMentioned(params.text, employee);
   const assignedChannel = isAssignedChannel(employee, params.channelNameOrId);
@@ -42,6 +56,10 @@ export function decideCompanyParticipation(params: {
   const summaryTrigger = hasSummaryTriggerTag(params.text);
   const explicitTaskOwner = hasExplicitTaskOwner(params.text);
   const taskOwnerMatch = isTaskOwnedByEmployee(params.text, employee);
+  const explicitHandoffTarget = hasExplicitHandoffTarget(params.text);
+  const handoffTargetMatch = isHandoffTargetedToEmployee(params.text, employee);
+  const threadAssignedEmployeeId = params.threadAssignedEmployeeId?.trim() || undefined;
+  const threadAssigneeMatch = Boolean(threadAssignedEmployeeId && threadAssignedEmployeeId === employee.id);
 
   if (params.chatType === 'direct') {
     return { shouldRespond: true, reason: 'direct-message', preferredReply: 'channel' };
@@ -55,6 +73,10 @@ export function decideCompanyParticipation(params: {
     return { shouldRespond: true, reason: 'task-owner', preferredReply: 'thread' };
   }
 
+  if (explicitHandoffTarget && handoffTargetMatch) {
+    return { shouldRespond: true, reason: 'handoff-target', preferredReply: 'thread' };
+  }
+
   switch (participation.mode) {
     case 'mention-only':
       return { shouldRespond: false, reason: 'not-mentioned', preferredReply: 'thread' };
@@ -62,6 +84,15 @@ export function decideCompanyParticipation(params: {
     case 'silent-unless-routed':
       if (explicitTaskOwner && !taskOwnerMatch) {
         return { shouldRespond: false, reason: 'not-task-owner', preferredReply: 'thread' };
+      }
+      if (explicitHandoffTarget && !handoffTargetMatch) {
+        return { shouldRespond: false, reason: 'not-handoff-target', preferredReply: 'thread' };
+      }
+      if (threadAssignedEmployeeId && !threadAssigneeMatch) {
+        return { shouldRespond: false, reason: 'not-thread-assignee', preferredReply: 'thread' };
+      }
+      if (threadAssignedEmployeeId && threadAssigneeMatch) {
+        return { shouldRespond: true, reason: 'thread-assignee', preferredReply: 'thread' };
       }
       if (inThread && assignedChannel) {
         return { shouldRespond: true, reason: 'specialist-thread', preferredReply: 'thread' };
@@ -74,6 +105,15 @@ export function decideCompanyParticipation(params: {
       }
       if (explicitTaskOwner && !taskOwnerMatch) {
         return { shouldRespond: false, reason: 'not-task-owner', preferredReply: 'thread' };
+      }
+      if (explicitHandoffTarget && !handoffTargetMatch) {
+        return { shouldRespond: false, reason: 'not-handoff-target', preferredReply: 'thread' };
+      }
+      if (threadAssignedEmployeeId && !threadAssigneeMatch) {
+        return { shouldRespond: false, reason: 'not-thread-assignee', preferredReply: 'thread' };
+      }
+      if (threadAssignedEmployeeId && threadAssigneeMatch) {
+        return { shouldRespond: true, reason: 'thread-assignee', preferredReply: 'thread' };
       }
       if (participation.replyInThreadsOnly && !inThread) {
         return { shouldRespond: false, reason: 'threads-only', preferredReply: 'thread' };
@@ -98,4 +138,26 @@ export function decideCompanyParticipation(params: {
       }
       return { shouldRespond: false, reason: 'not-owned-channel', preferredReply: inThread ? 'thread' : 'channel' };
   }
+}
+
+function shouldSuppressForPeerWinner(params: RoutingParams, currentDecision: CompanyRoutingDecision): boolean {
+  const context = params.context;
+  if (!context || !currentDecision.shouldRespond) return false;
+  if (!SUPPRESSIBLE_SPECIALIST_REASONS.has(currentDecision.reason)) return false;
+
+  const winner = context.manifest.employees.find((employee) => {
+    const decision = decideBaseCompanyParticipationForEmployee(params, employee);
+    return decision.shouldRespond && SUPPRESSIBLE_SPECIALIST_REASONS.has(decision.reason);
+  });
+
+  if (!winner) return false;
+  return winner.id !== context.employee.id;
+}
+
+export function decideCompanyParticipation(params: RoutingParams): CompanyRoutingDecision {
+  const baseDecision = decideBaseCompanyParticipationForEmployee(params);
+  if (shouldSuppressForPeerWinner(params, baseDecision)) {
+    return { shouldRespond: false, reason: 'suppressed-by-peer', preferredReply: baseDecision.preferredReply };
+  }
+  return baseDecision;
 }

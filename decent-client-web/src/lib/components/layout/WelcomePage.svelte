@@ -28,26 +28,31 @@
     {
       ticker: 'BTC',
       name: 'Bitcoin',
+      icon: '/icons/tokens/bitcoin.svg',
       address: 'bc1qj7rf9vc0nvk8maux6gc6dwzpelj2d3ck0krlm7',
     },
     {
       ticker: 'LTC',
       name: 'Litecoin',
+      icon: '/icons/tokens/litecoin.svg',
       address: 'ltc1qjhsl7eztls8l557vrtmhlm4g86hlql2qq4x5jz',
     },
     {
       ticker: 'ETH',
       name: 'Ethereum',
+      icon: '/icons/tokens/ethereum.svg',
       address: '0x33e98006401fE7298a255f5890380403e57cdf67',
     },
     {
       ticker: 'XMR',
       name: 'Monero',
+      icon: '/icons/tokens/monero.svg',
       address: '42uEmNUt3Jp5qNpP8sg2rQf45eNEthvMadZutxT6z2eR3opSZepkN93cQ5wxdstyA2MfkyRjB93tgis6a5DBhqgh3u8PnZh',
     },
     {
       ticker: 'ZEC',
       name: 'Zcash',
+      icon: '/icons/tokens/zcash.svg',
       address: 'u1deqeprze5jdwz2ywmr3q9kmgdf4vel5shr8jeamm9upvrjlc08yqx55a0w2zq2kggaa4e7ctymw3nthqdv329l6vygypqd9228r9628y70anfk78mj9tld4hrjsh9zrlq7ekth6q23zhjlw7tsdrvsvcx53ggsclmuk6q7wl3cht9m5p',
     },
   ] as const;
@@ -299,11 +304,17 @@
       </div>
       <div class="lp-support-grid">
         {#each donationAddresses as donation}
-          <article class="lp-support-card">
+          <article class="lp-support-card lp-support-card--{donation.ticker.toLowerCase()}">
             <div class="lp-support-card-top">
-              <div>
-                <div class="lp-support-ticker">{donation.ticker}</div>
-                <h3>{donation.name}</h3>
+              <div class="lp-support-identity">
+                <div class="lp-token-icon" aria-hidden="true">
+                  <img src={donation.icon} alt="" loading="lazy" />
+                </div>
+                <div>
+                  <div class="lp-support-ticker">{donation.ticker}</div>
+                  <h3>{donation.name}</h3>
+                  <p class="lp-support-network">Native address</p>
+                </div>
               </div>
               <button
                 class="lp-copy-btn"
@@ -311,7 +322,7 @@
                 aria-label={`Copy ${donation.name} donation address`}
                 onclick={() => copyDonationAddress(donation.name, donation.address)}
               >
-                Copy
+                Copy address
               </button>
             </div>
             <code class="lp-support-address">{donation.address}</code>

@@ -313,6 +313,8 @@ export class ChatController {
   static readonly GOSSIP_TTL = 2;
   /** Deduplicate received messages by their original ID. Maps id → received timestamp */
   private _gossipSeen = new Map<string, number>();
+  /** Reverse-path receipt routing for gossip-relayed messages. Maps message id → upstream relay/origin info. */
+  private _gossipReceiptRoutes = new Map<string, { upstreamPeerId: string; originalSenderId: string; timestamp: number }>();
 
   /** Peers that have completed challenge-response authentication */
   private authenticatedPeers = new Set<string>();
@@ -1170,35 +1172,41 @@ export class ChatController {
           const channelId = data.channelId as string;
           const messageId = data.messageId as string;
           if (channelId && messageId) {
-            const validation = this.isValidInboundReceipt(peerId, channelId, messageId, 'ack');
+            const logicalPeerId = this.getInboundReceiptPeerId(peerId, data);
+            if (this.shouldForwardInboundReceipt(data)) {
+              this.forwardInboundReceipt(messageId, channelId, logicalPeerId, data.type);
+              return;
+            }
+
+            const validation = this.isValidInboundReceipt(logicalPeerId, channelId, messageId, 'ack');
             if (!validation.valid) return;
 
             const { msg, recipients } = validation;
             const ackReceipt: DeliveryReceipt = {
-              receiptId: `ack:${peerId}:${messageId}:${Date.now()}`,
+              receiptId: `ack:${logicalPeerId}:${messageId}:${Date.now()}`,
               kind: 'acknowledged',
               opId: messageId,
-              recipientPeerId: peerId,
+              recipientPeerId: logicalPeerId,
               timestamp: Date.now(),
               metadata: { channelId },
             };
             if (this.custodyStore?.applyReceipt) {
-              await this.custodyStore.applyReceipt(peerId, ackReceipt);
+              await this.custodyStore.applyReceipt(logicalPeerId, ackReceipt);
             } else {
-              await this.offlineQueue?.applyReceipt?.(peerId, ackReceipt);
+              await this.offlineQueue?.applyReceipt?.(logicalPeerId, ackReceipt);
             }
             this.recordManifestDomain('receipt', this.findWorkspaceByChannelId(channelId)?.id, {
               channelId,
               operation: 'create',
               subject: messageId,
-              data: { kind: 'acknowledged', peerId },
+              data: { kind: 'acknowledged', peerId: logicalPeerId },
             });
 
             const ackedBy = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
-            ackedBy.add(peerId);
+            ackedBy.add(logicalPeerId);
             (msg as any).ackedBy = Array.from(ackedBy);
             const ackedAt: Record<string, number> = { ...((msg as any).ackedAt || {}) };
-            ackedAt[peerId] = Date.now();
+            ackedAt[logicalPeerId] = Date.now();
             (msg as any).ackedAt = ackedAt;
 
             const expected = recipients.length;
@@ -1222,45 +1230,51 @@ export class ChatController {
           const channelId = data.channelId as string;
           const messageId = data.messageId as string;
           if (channelId && messageId) {
-            const validation = this.isValidInboundReceipt(peerId, channelId, messageId, 'read');
+            const logicalPeerId = this.getInboundReceiptPeerId(peerId, data);
+            if (this.shouldForwardInboundReceipt(data)) {
+              this.forwardInboundReceipt(messageId, channelId, logicalPeerId, data.type);
+              return;
+            }
+
+            const validation = this.isValidInboundReceipt(logicalPeerId, channelId, messageId, 'read');
             if (!validation.valid) return;
 
             const { msg, recipients } = validation;
             const readReceipt: DeliveryReceipt = {
-              receiptId: `read:${peerId}:${messageId}:${Date.now()}`,
+              receiptId: `read:${logicalPeerId}:${messageId}:${Date.now()}`,
               kind: 'read',
               opId: messageId,
-              recipientPeerId: peerId,
+              recipientPeerId: logicalPeerId,
               timestamp: Date.now(),
               metadata: { channelId },
             };
             if (this.custodyStore?.applyReceipt) {
-              await this.custodyStore.applyReceipt(peerId, readReceipt);
+              await this.custodyStore.applyReceipt(logicalPeerId, readReceipt);
             } else {
-              await this.offlineQueue?.applyReceipt?.(peerId, readReceipt);
+              await this.offlineQueue?.applyReceipt?.(logicalPeerId, readReceipt);
             }
             this.recordManifestDomain('receipt', this.findWorkspaceByChannelId(channelId)?.id, {
               channelId,
               operation: 'create',
               subject: messageId,
-              data: { kind: 'read', peerId },
+              data: { kind: 'read', peerId: logicalPeerId },
             });
 
             const readBy = new Set<string>(Array.isArray((msg as any).readBy) ? (msg as any).readBy : []);
-            readBy.add(peerId);
+            readBy.add(logicalPeerId);
             (msg as any).readBy = Array.from(readBy);
             const readAt: Record<string, number> = { ...((msg as any).readAt || {}) };
-            readAt[peerId] = Date.now();
+            readAt[logicalPeerId] = Date.now();
             (msg as any).readAt = readAt;
 
             // Read implies delivered for this peer.
             const ackedBy = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
-            if (!ackedBy.has(peerId)) {
-              ackedBy.add(peerId);
+            if (!ackedBy.has(logicalPeerId)) {
+              ackedBy.add(logicalPeerId);
               (msg as any).ackedBy = Array.from(ackedBy);
             }
             const ackedAt: Record<string, number> = { ...((msg as any).ackedAt || {}) };
-            if (!ackedAt[peerId]) ackedAt[peerId] = Date.now();
+            if (!ackedAt[logicalPeerId]) ackedAt[logicalPeerId] = Date.now();
             (msg as any).ackedAt = ackedAt;
 
             const readByAll = recipients.length > 0 && recipients.every((id) => readBy.has(id));
@@ -1942,7 +1956,7 @@ export class ChatController {
             });
 
             // DEP-005: Send delivery ACK back to sender
-            this.transport.send(peerId, { type: 'ack', messageId: msg.id, channelId });
+            this.sendInboundReceipt(peerId, data, channelId, msg.id, 'ack');
 
             await this.directConversationStore.updateLastMessage(channelId, msg.timestamp);
             const updatedConv = await this.directConversationStore.get(channelId);
@@ -1953,13 +1967,15 @@ export class ChatController {
             if (channelId === this.state.activeChannelId) {
               this.ui?.appendMessageToDOM(msg, true);
               // Message is immediately visible to user in active channel → emit read receipt.
-              this.transport.send(peerId, { type: 'read', messageId: msg.id, channelId });
+              this.sendInboundReceipt(peerId, data, channelId, msg.id, 'read');
               (msg as any).localReadAt = Date.now();
               await this.persistentStore.saveMessage({ ...(msg as any), localReadAt: (msg as any).localReadAt });
             }
 
             const senderName = this.getDisplayNameForPeer(peerId);
-            this.notifications.notify(channelId, senderName, senderName, content);
+            this.notifications.notify(channelId, senderName, senderName, content, {
+              threadId: msg.threadId || undefined,
+            });
             this.ui?.updateSidebar();
           }
           return;
@@ -2052,18 +2068,20 @@ export class ChatController {
                   itemCount: this.getChannelMessageCount(channelId),
                   data: { messageId: msg.id, senderId: msg.senderId, isDirect: true },
                 });
-                this.transport.send(peerId, { type: 'ack', messageId: msg.id, channelId });
+                this.sendInboundReceipt(peerId, data, channelId, msg.id, 'ack');
                 await this.directConversationStore.updateLastMessage(channelId, msg.timestamp);
                 const updatedConv = await this.directConversationStore.get(channelId);
                 if (updatedConv) await this.persistentStore.saveDirectConversation(updatedConv);
                 if (channelId === this.state.activeChannelId) {
                   this.ui?.appendMessageToDOM(msg, true);
-                  this.transport.send(peerId, { type: 'read', messageId: msg.id, channelId });
+                  this.sendInboundReceipt(peerId, data, channelId, msg.id, 'read');
                   (msg as any).localReadAt = Date.now();
                   await this.persistentStore.saveMessage({ ...(msg as any), localReadAt: (msg as any).localReadAt });
                 }
                 const senderName = this.getDisplayNameForPeer(peerId);
-                this.notifications.notify(channelId, senderName, senderName, content);
+                this.notifications.notify(channelId, senderName, senderName, content, {
+                  threadId: msg.threadId || undefined,
+                });
                 this.ui?.updateSidebar();
               }
               return;
@@ -2175,8 +2193,8 @@ export class ChatController {
             data: { messageId: msg.id, senderId: msg.senderId },
           });
 
-          // DEP-005: Send delivery ACK back to sender
-          this.transport.send(peerId, { type: 'ack', messageId: msg.id, channelId });
+          // DEP-005: Send delivery ACK back to sender (reverse-path for gossip-relayed messages)
+          this.sendInboundReceipt(peerId, data, channelId, msg.id, 'ack');
 
           // Ensure thread root snapshot for thread replies
           if (normalizedThreadId) {
@@ -2191,6 +2209,13 @@ export class ChatController {
           // gossip-relayed copy of this same message (which uses msg.id as _originalMessageId)
           // is caught by the early dedup check and dropped without re-rendering.
           this._gossipSeen.set(msg.id, Date.now());
+          if ((data._gossipOriginalSender as string | undefined) && actualSenderId !== peerId) {
+            this._gossipReceiptRoutes.set(msg.id, {
+              upstreamPeerId: peerId,
+              originalSenderId: actualSenderId,
+              timestamp: Date.now(),
+            });
+          }
 
           // T3.2: Gossip relay — re-encrypt and forward to workspace peers who might not have received this
           void this._gossipRelay(peerId, msg.id, msg.senderId, content, channelId, data);
@@ -2225,7 +2250,7 @@ export class ChatController {
               this.ui?.appendMessageToDOM(msg, true);
             }
             // Message is visible in active channel.
-            this.transport.send(peerId, { type: 'read', messageId: msg.id, channelId });
+            this.sendInboundReceipt(peerId, data, channelId, msg.id, 'read');
             (msg as any).localReadAt = Date.now();
             await this.persistentStore.saveMessage({ ...(msg as any), localReadAt: (msg as any).localReadAt });
 
@@ -2257,6 +2282,10 @@ export class ChatController {
             ch ? (ch.type === 'dm' ? ch.name : '#' + ch.name) : 'channel',
             notifyName,
             content,
+            {
+              workspaceId: notifyWsId || undefined,
+              threadId: msg.threadId || undefined,
+            },
           );
 
           // Always update sidebar so unread badge appears on non-active channels
@@ -4471,6 +4500,86 @@ export class ChatController {
    * to the sender; no session established with relay → skipped). CRDT dedup
    * handles the rare duplicate if two paths both deliver the same message.
    */
+  private buildDeferredGossipRelayPayload(
+    originalMsgId: string,
+    originalSenderId: string,
+    plaintext: string,
+    channelId: string,
+    workspaceId: string | null,
+    hop: number,
+    envelope: any,
+  ): any {
+    return {
+      _deferred: true,
+      _gossipDeferred: true,
+      content: plaintext,
+      channelId,
+      workspaceId,
+      threadId: envelope.threadId,
+      vectorClock: envelope.vectorClock,
+      messageId: originalMsgId,
+      metadata: envelope.metadata,
+      attachments: envelope.attachments,
+      threadRootSnapshot: envelope.threadRootSnapshot,
+      _originalMessageId: originalMsgId,
+      _gossipOriginalSender: originalSenderId,
+      _gossipHop: hop,
+    };
+  }
+
+  private async queueDeferredGossipRelay(
+    targetPeerId: string,
+    originalMsgId: string,
+    originalSenderId: string,
+    plaintext: string,
+    channelId: string,
+    workspaceId: string | null,
+    hop: number,
+    envelope: any,
+  ): Promise<void> {
+    await this.offlineQueue.enqueue(
+      targetPeerId,
+      this.buildDeferredGossipRelayPayload(originalMsgId, originalSenderId, plaintext, channelId, workspaceId, hop, envelope),
+      {
+        opId: originalMsgId,
+        domain: 'channel-message',
+        ...(workspaceId ? { workspaceId } : {}),
+        channelId,
+        ...(envelope.threadId ? { threadId: envelope.threadId } : {}),
+        recipientPeerIds: [targetPeerId],
+      },
+    );
+  }
+
+  private finalizeGossipRelayEnvelope(
+    relayEnv: any,
+    originalMsgId: string,
+    originalSenderId: string,
+    channelId: string,
+    workspaceId: string | null,
+    hop: number,
+    envelope: any,
+  ): any {
+    (relayEnv as any).messageId = originalMsgId;             // canonical ID — ensures all peers store same msg.id for reaction sync
+    (relayEnv as any).channelId = channelId;
+    (relayEnv as any).workspaceId = workspaceId;
+    (relayEnv as any).threadId = envelope.threadId;
+    (relayEnv as any).vectorClock = envelope.vectorClock;
+    if (envelope.metadata) {
+      (relayEnv as any).metadata = envelope.metadata;
+    }
+    if (envelope.attachments?.length) {
+      (relayEnv as any).attachments = envelope.attachments;  // carry thumbnail + metadata through relay hops
+    }
+    if (envelope.threadRootSnapshot) {
+      (relayEnv as any).threadRootSnapshot = envelope.threadRootSnapshot;  // carry thread root through relay
+    }
+    (relayEnv as any)._originalMessageId = originalMsgId;    // dedup key (checked before decryption)
+    (relayEnv as any)._gossipOriginalSender = originalSenderId; // real author
+    (relayEnv as any)._gossipHop = hop;
+    return relayEnv;
+  }
+
   private async _gossipRelay(
     fromPeerId: string,
     originalMsgId: string,
@@ -4501,32 +4610,57 @@ export class ChatController {
       if (targetPeerId === this.state.myPeerId) continue;  // skip self
       if (targetPeerId === fromPeerId) continue;           // don't send back to relay source
       if (targetPeerId === originalSenderId) continue;     // don't send back to original author
-      if (!connectedPeers.has(targetPeerId)) continue;     // must be reachable
-      if (!this.messageProtocol.hasSharedSecret(targetPeerId)) continue; // need session
 
       try {
-        const relayEnv = await this.messageProtocol.encryptMessage(
-          targetPeerId, plaintext, 'text',
-          envelope.metadata,
+        if (!connectedPeers.has(targetPeerId)) {
+          const hasRatchet = typeof this.messageProtocol.hasRatchetState === 'function'
+            ? this.messageProtocol.hasRatchetState(targetPeerId)
+            : false;
+          if (!hasRatchet && typeof this.messageProtocol.restoreRatchetState === 'function') {
+            await this.messageProtocol.restoreRatchetState(targetPeerId);
+          }
+        }
+
+        const relayEnv = this.finalizeGossipRelayEnvelope(
+          await this.encryptMessageWithPreKeyBootstrap(targetPeerId, plaintext, workspaceId ?? undefined),
+          originalMsgId,
+          originalSenderId,
+          channelId,
+          workspaceId,
+          hop,
+          envelope,
         );
-        // Attach relay metadata (unencrypted, alongside the encrypted payload)
-        (relayEnv as any).messageId = originalMsgId;             // canonical ID — ensures all peers store same msg.id for reaction sync
-        (relayEnv as any).channelId = channelId;
-        (relayEnv as any).workspaceId = workspaceId;
-        (relayEnv as any).threadId = envelope.threadId;
-        (relayEnv as any).vectorClock = envelope.vectorClock;
-        if (envelope.attachments?.length) {
-          (relayEnv as any).attachments = envelope.attachments;  // carry thumbnail + metadata through relay hops
+
+        if (connectedPeers.has(targetPeerId)) {
+          const sent = this.transport.send(targetPeerId, relayEnv);
+          if (sent !== false) continue;
         }
-        if (envelope.threadRootSnapshot) {
-          (relayEnv as any).threadRootSnapshot = envelope.threadRootSnapshot;  // carry thread root through relay
+
+        await this.queueCustodyEnvelope(targetPeerId, {
+          envelopeId: typeof (relayEnv as any).id === 'string' ? (relayEnv as any).id : undefined,
+          opId: originalMsgId,
+          recipientPeerIds: [targetPeerId],
+          ...(workspaceId ? { workspaceId } : {}),
+          channelId,
+          ...(envelope.threadId ? { threadId: envelope.threadId } : {}),
+          domain: 'channel-message',
+          ciphertext: relayEnv,
+          metadata: {
+            messageId: originalMsgId,
+            senderId: originalSenderId,
+          },
+        }, relayEnv);
+
+        if (workspaceId) {
+          await this.replicateToCustodians(targetPeerId, {
+            workspaceId,
+            channelId,
+            opId: originalMsgId,
+            domain: 'channel-message',
+          });
         }
-        (relayEnv as any)._originalMessageId = originalMsgId;    // dedup key (checked before decryption)
-        (relayEnv as any)._gossipOriginalSender = originalSenderId; // real author
-        (relayEnv as any)._gossipHop = hop;
-        this.transport.send(targetPeerId, relayEnv);
       } catch {
-        // Best-effort — ignore relay failures silently
+        await this.queueDeferredGossipRelay(targetPeerId, originalMsgId, originalSenderId, plaintext, channelId, workspaceId, hop, envelope);
       }
     }
   }
@@ -4539,6 +4673,9 @@ export class ChatController {
       const cutoff = Date.now() - FIVE_MIN;
       for (const [id, ts] of this._gossipSeen) {
         if (ts < cutoff) this._gossipSeen.delete(id);
+      }
+      for (const [id, route] of this._gossipReceiptRoutes) {
+        if (route.timestamp < cutoff) this._gossipReceiptRoutes.delete(id);
       }
     }, FIVE_MIN);
   }
@@ -5007,8 +5144,10 @@ export class ChatController {
     await this.publicWorkspaceController.restoreFromStorage();
 
     const persistedWorkspaces = await this.persistentStore.getAllWorkspaces();
+    const hydratedWorkspaceIds = new Set<string>();
     console.log('[DecentChat] restoreFromStorage: found', persistedWorkspaces.length, 'full workspaces');
     for (const ws of persistedWorkspaces) {
+      hydratedWorkspaceIds.add(ws.id);
       this.workspaceManager.importWorkspace(ws);
       this.publicWorkspaceController.ingestWorkspaceSnapshot(ws);
       await this.manifestStore.restoreWorkspace(ws.id);
@@ -5058,6 +5197,14 @@ export class ChatController {
           }
         }
       }
+    }
+
+    const staleOwnedShells = this.publicWorkspaceController.findStaleOwnedShellPlaceholders(
+      this.state.myPeerId,
+      hydratedWorkspaceIds,
+    );
+    for (const workspaceId of staleOwnedShells) {
+      await this.publicWorkspaceController.removeWorkspace(workspaceId);
     }
 
     const savedReactions = await this.persistentStore.getSetting('reactions');
@@ -6031,6 +6178,7 @@ export class ChatController {
       }
       await this.persistentStore.deleteWorkspace(wsId);
       await this.manifestStore.removeWorkspace(wsId);
+      await this.publicWorkspaceController.removeWorkspace(wsId);
     } catch (err) {
       console.error('[Workspace] Failed to delete persisted workspace data:', err);
       return false;
@@ -9122,7 +9270,7 @@ export class ChatController {
       persistedMessage.recipientPeerIds = recipients;
     }
 
-    await this.persistentStore.saveMessage(persistedMessage as PlaintextMessage);
+    await this.persistentStore.saveMessage(persistedMessage as unknown as PlaintextMessage);
 
     this.ui?.updateMessageStatus?.(msg.id, nextStatus, {
       acked: ackedBy.size,
@@ -9240,6 +9388,15 @@ export class ChatController {
           if (Array.isArray(deferred.attachments) && deferred.attachments.length > 0) {
             (encrypted as any).attachments = deferred.attachments;
           }
+          if (deferred._originalMessageId) {
+            (encrypted as any)._originalMessageId = deferred._originalMessageId;
+          }
+          if (deferred._gossipOriginalSender) {
+            (encrypted as any)._gossipOriginalSender = deferred._gossipOriginalSender;
+          }
+          if (typeof deferred._gossipHop === 'number') {
+            (encrypted as any)._gossipHop = deferred._gossipHop;
+          }
 
           // Include thread root snapshot for thread messages
           if (deferred.threadId) {
@@ -9252,7 +9409,11 @@ export class ChatController {
                 timestamp: threadRoot.timestamp,
                 attachments: (threadRoot as any).attachments,
               };
+            } else if (deferred.threadRootSnapshot) {
+              (encrypted as any).threadRootSnapshot = deferred.threadRootSnapshot;
             }
+          } else if (deferred.threadRootSnapshot) {
+            (encrypted as any).threadRootSnapshot = deferred.threadRootSnapshot;
           }
 
           envelope = encrypted;
@@ -9890,6 +10051,53 @@ export class ChatController {
 
   private getStableMessageRecipients(msg: PlaintextMessage): string[] {
     return this.getMessageRecipients(msg).filter((id) => id !== this.state.myPeerId);
+  }
+
+  private getInboundReceiptPeerId(peerId: string, data: any): string {
+    return typeof data?._receiptFromPeerId === 'string' && data._receiptFromPeerId.length > 0
+      ? data._receiptFromPeerId
+      : peerId;
+  }
+
+  private shouldForwardInboundReceipt(data: any): boolean {
+    return typeof data?._receiptTargetPeerId === 'string'
+      && data._receiptTargetPeerId.length > 0
+      && data._receiptTargetPeerId !== this.state.myPeerId;
+  }
+
+  private forwardInboundReceipt(messageId: string, channelId: string, logicalPeerId: string, type: 'ack' | 'read'): void {
+    const route = this._gossipReceiptRoutes.get(messageId);
+    if (!route?.upstreamPeerId) {
+      console.warn(`[ReceiptRelay] Missing gossip route for ${messageId}; dropping forwarded ${type}`);
+      return;
+    }
+
+    this.transport.send(route.upstreamPeerId, {
+      type,
+      messageId,
+      channelId,
+      _receiptFromPeerId: logicalPeerId,
+      _receiptTargetPeerId: route.originalSenderId,
+    });
+  }
+
+  private sendInboundReceipt(peerId: string, envelope: any, channelId: string, messageId: string, type: 'ack' | 'read'): void {
+    const originalSenderId = typeof envelope?._gossipOriginalSender === 'string' && envelope._gossipOriginalSender.length > 0
+      ? envelope._gossipOriginalSender
+      : undefined;
+
+    if (originalSenderId && originalSenderId !== peerId) {
+      this.transport.send(peerId, {
+        type,
+        messageId,
+        channelId,
+        _receiptFromPeerId: this.state.myPeerId,
+        _receiptTargetPeerId: originalSenderId,
+      });
+      return;
+    }
+
+    this.transport.send(peerId, { type, messageId, channelId });
   }
 
   private isValidInboundReceipt(peerId: string, channelId: string, messageId: string, type: 'ack' | 'read'): { valid: true; msg: PlaintextMessage; recipients: string[] } | { valid: false } {

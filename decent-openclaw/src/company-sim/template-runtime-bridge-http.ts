@@ -7,6 +7,7 @@ import {
 } from './template-registry.ts';
 import { installCompanyTemplate } from './template-installer.ts';
 import type { CompanyTemplateQuestionValue } from './template-types.ts';
+import { buildTemplateBenchmarkSuiteSummary } from './template-benchmark-summary.ts';
 
 export const COMPANY_TEMPLATE_BRIDGE_HTTP_PATH = '/api/channels/decentchat/company-template';
 
@@ -54,6 +55,7 @@ interface CompanyTemplateBridgeTemplateDefinition {
   channels: string[];
   roles: CompanyTemplateBridgeTemplateRole[];
   questions: CompanyTemplateBridgeTemplateQuestion[];
+  benchmarkSuite?: ReturnType<typeof buildTemplateBenchmarkSuiteSummary>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -121,6 +123,8 @@ function toTemplateDefinition(template: CompanySimTemplate): CompanyTemplateBrid
     };
   });
 
+  const benchmarkSuite = buildTemplateBenchmarkSuiteSummary(template);
+
   return {
     id: template.id,
     label: template.label,
@@ -129,6 +133,7 @@ function toTemplateDefinition(template: CompanySimTemplate): CompanyTemplateBrid
     channels,
     roles,
     questions,
+    ...(benchmarkSuite ? { benchmarkSuite } : {}),
   };
 }
 
@@ -347,6 +352,8 @@ export function createCompanyTemplateBridgeHttpHandler(params: CompanyTemplateBr
           companyId: install.summary.companyId,
           manifestPath: install.summary.manifestPath,
           companyDirPath: install.summary.companyDirPath,
+          ...(install.summary.communicationPolicy ? { communicationPolicy: install.summary.communicationPolicy } : {}),
+          ...(install.summary.benchmarkSuite ? { benchmarkSuite: install.summary.benchmarkSuite } : {}),
         },
       });
 

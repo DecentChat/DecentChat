@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { assertCompanyBootstrapAgentInstallation, ensureCompanyBootstrapRuntime, resolveCompanyManifestPath } from "./company-sim/bootstrap.js";
 import { startDecentChatPeer } from "./monitor.js";
-import { getActivePeer } from "./peer-registry.js";
+import { getActivePeer, listActivePeerAccountIds } from "./peer-registry.js";
 import { buildDecentChatRuntimeBootstrapKey, runDecentChatBootstrapOnce } from "./runtime.js";
 import type { DecentChatChannelConfig, OpenClawConfigShape, ResolvedDecentChatAccount } from "./types.js";
 
@@ -184,10 +184,153 @@ export function normalizeDecentChatMessagingTarget(raw: string): string | undefi
   return `decentchat:${value}`;
 }
 
+const DECENTCHAT_CHANNEL_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DECENTCHAT_PEER_ID_RE = /^[0-9a-f]{18}$/i;
+const DECENTCHAT_TEST_PEER_ID_RE = /^peer-[a-z0-9-]+$/i;
+
+type DecentChatTargetCandidate = {
+  kind: "user" | "group";
+  id: string;
+  name?: string;
+  handle?: string;
+  rank?: number;
+};
+
+type DecentChatResolvedTarget = {
+  to: string;
+  kind: "user" | "group" | "channel";
+  display?: string;
+  source: "normalized" | "directory";
+};
+
+function looksLikeBareDecentChatPeerId(value: string): boolean {
+  return DECENTCHAT_PEER_ID_RE.test(value) || DECENTCHAT_TEST_PEER_ID_RE.test(value);
+}
+
+function normalizeDecentChatLookupValue(value: string | undefined): string {
+  if (!value) return "";
+  return value.trim().toLowerCase()
+    .replace(/^decentchat:channel:/, "")
+    .replace(/^decentchat:/, "")
+    .replace(/^channel:/, "")
+    .replace(/^[@#]/, "")
+    .trim();
+}
+
+function scoreDecentChatTargetCandidate(candidate: DecentChatTargetCandidate, query: string): number {
+  const fields = [candidate.name, candidate.handle, candidate.id];
+  let best = -1;
+  for (const field of fields) {
+    const normalizedField = normalizeDecentChatLookupValue(field);
+    if (!normalizedField) continue;
+    if (normalizedField === query) return 300;
+    if (normalizedField.startsWith(query)) best = Math.max(best, 200);
+    else if (normalizedField.includes(query)) best = Math.max(best, 100);
+  }
+  return best;
+}
+
+function pickUniqueDecentChatCandidate(candidates: DecentChatTargetCandidate[], query: string): DecentChatTargetCandidate | null {
+  const scored = candidates
+    .map((candidate) => ({ candidate, score: scoreDecentChatTargetCandidate(candidate, query) }))
+    .filter((item) => item.score >= 0)
+    .sort((a, b) => b.score - a.score || (b.candidate.rank ?? 0) - (a.candidate.rank ?? 0) || (a.candidate.name ?? a.candidate.id).localeCompare(b.candidate.name ?? b.candidate.id));
+
+  if (scored.length === 0) return null;
+  const bestScore = scored[0]?.score ?? -1;
+  const best = scored.filter((item) => item.score == bestScore);
+  if (best.length !== 1) return null;
+  return best[0]?.candidate ?? null;
+}
+
+function buildDecentChatResolvedTarget(candidate: DecentChatTargetCandidate): DecentChatResolvedTarget {
+  return {
+    to: candidate.kind === "group"
+      ? (candidate.id.startsWith("decentchat:channel:") ? candidate.id : `decentchat:channel:${candidate.id}`)
+      : (candidate.id.startsWith("decentchat:") ? candidate.id : `decentchat:${candidate.id}`),
+    kind: candidate.kind,
+    display: candidate.name ?? candidate.handle ?? candidate.id,
+    source: "directory",
+  };
+}
+
+function resolveDecentChatTargetFromActivePeer(raw: string, accountId?: string | null, preferredKind?: "user" | "group" | "channel"): DecentChatResolvedTarget | null {
+  const query = normalizeDecentChatLookupValue(raw);
+  if (!query) return null;
+
+  const peer = getActivePeer(accountId?.trim() || DEFAULT_ACCOUNT_ID);
+  if (!peer) return null;
+
+  const peerMatches = peer.listDirectoryPeersLive({ query, limit: 50 }) as DecentChatTargetCandidate[];
+  const groupMatches = peer.listDirectoryGroupsLive({ query, limit: 50 }) as DecentChatTargetCandidate[];
+
+  const userCandidate = pickUniqueDecentChatCandidate(peerMatches, query);
+  const groupCandidate = pickUniqueDecentChatCandidate(groupMatches, query);
+
+  if (preferredKind === "user") return userCandidate ? buildDecentChatResolvedTarget(userCandidate) : null;
+  if (preferredKind === "group" || preferredKind === "channel") return groupCandidate ? buildDecentChatResolvedTarget(groupCandidate) : null;
+
+  if (userCandidate && !groupCandidate) return buildDecentChatResolvedTarget(userCandidate);
+  if (groupCandidate && !userCandidate) return buildDecentChatResolvedTarget(groupCandidate);
+  if (userCandidate && groupCandidate) return buildDecentChatResolvedTarget(userCandidate);
+  return null;
+}
+
+async function resolveDecentChatTarget(params: {
+  accountId?: string | null;
+  input: string;
+  normalized: string;
+  preferredKind?: "user" | "group" | "channel";
+}): Promise<DecentChatResolvedTarget | null> {
+  const rawValue = params.input.trim();
+  if (!rawValue) return null;
+
+  if (rawValue.startsWith("channel:")) {
+    const channelId = rawValue.slice("channel:".length).trim();
+    return channelId ? { to: `decentchat:channel:${channelId}`, kind: "group", display: channelId, source: "normalized" } : null;
+  }
+
+  if (rawValue.startsWith("decentchat:channel:")) {
+    const channelId = rawValue.slice("decentchat:channel:".length).trim();
+    return channelId ? { to: `decentchat:channel:${channelId}`, kind: "group", display: channelId, source: "normalized" } : null;
+  }
+
+  if (rawValue.startsWith("decentchat:")) {
+    const rest = rawValue.slice("decentchat:".length).trim();
+    if (!rest) return null;
+    if (rest.startsWith("channel:")) {
+      const channelId = rest.slice("channel:".length).trim();
+      return channelId ? { to: `decentchat:channel:${channelId}`, kind: "group", display: channelId, source: "normalized" } : null;
+    }
+    return { to: `decentchat:${rest}`, kind: "user", display: rest, source: "normalized" };
+  }
+
+  if (DECENTCHAT_CHANNEL_ID_RE.test(rawValue)) {
+    return { to: `decentchat:channel:${rawValue}`, kind: "group", display: rawValue, source: "normalized" };
+  }
+
+  if (looksLikeBareDecentChatPeerId(rawValue)) {
+    return { to: `decentchat:${rawValue}`, kind: "user", display: rawValue, source: "normalized" };
+  }
+
+  return resolveDecentChatTargetFromActivePeer(rawValue, params.accountId, params.preferredKind);
+}
+
 export function looksLikeDecentChatTargetId(raw: string, normalized?: string): boolean {
-  const value = (normalized ?? raw).trim();
-  if (!value) return false;
-  return value.startsWith("decentchat:channel:") || value.startsWith("decentchat:");
+  const rawValue = raw.trim();
+  const normalizedValue = (normalized ?? raw).trim();
+  if (!rawValue && !normalizedValue) return false;
+
+  if (rawValue.startsWith("channel:")) return true;
+  if (rawValue.startsWith("decentchat:channel:")) return true;
+  if (rawValue.startsWith("decentchat:")) return true;
+
+  if (DECENTCHAT_CHANNEL_ID_RE.test(rawValue)) return true;
+  if (looksLikeBareDecentChatPeerId(rawValue)) return true;
+
+  const accountIds = listActivePeerAccountIds();
+  if (accountIds.length === 0) return false;
+  return accountIds.some((accountId) => !!resolveDecentChatTargetFromActivePeer(rawValue, accountId));
 }
 
 export function resolveDecentChatAccount(cfg: any, accountId?: string | null): ResolvedDecentChatAccount {
@@ -405,7 +548,13 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
     normalizeTarget: normalizeDecentChatMessagingTarget,
     targetResolver: {
       looksLikeId: looksLikeDecentChatTargetId,
-      hint: "<peerId|channel:<id>|decentchat:channel:<id>>",
+      hint: "<peerId|channel:<id>|decentchat:channel:<id>|peer alias>",
+      resolveTarget: async ({ accountId, input, normalized, preferredKind }) => resolveDecentChatTarget({
+        accountId,
+        input,
+        normalized,
+        preferredKind: preferredKind as "user" | "group" | "channel" | undefined,
+      }),
     },
   },
 

@@ -16,4 +16,9 @@ describe('scripts/deploy.sh safety', () => {
   test('defaults to the known safe remote web root', () => {
     expect(script).toContain(': "${DEPLOY_REMOTE_PATH:=/decentchat.app/web/}"');
   });
+
+
+  test('guards optional SKIP_REVIEW under nounset mode', () => {
+    expect(script).toContain('${SKIP_REVIEW:-}');
+  });
 });

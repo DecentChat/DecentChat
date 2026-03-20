@@ -223,6 +223,60 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
     expect((await (peer as any).offlineQueue.listQueued('peer-ack')).length).toBe(0);
   });
 
+  test('incoming direct encrypted message without channelId is delivered as a DM and ACKed', async () => {
+    const incoming: any[] = [];
+    const peer = new NodeXenaPeer({
+      account: makeAccount({ alias: 'Mira PM' }),
+      onIncomingMessage: async (msg) => { incoming.push(msg); },
+      onReply: () => {},
+    });
+
+    const sent: Array<{ peerId: string; msg: any }> = [];
+    (peer as any).transport = {
+      send: mock((peerId: string, msg: any) => {
+        sent.push({ peerId, msg });
+        return true;
+      }),
+      getConnectedPeers: mock(() => ['peer-main'] as string[]),
+    };
+    (peer as any).messageProtocol = {
+      decryptMessage: mock(async () => 'hello from direct DM'),
+    };
+    (peer as any).syncProtocol = {};
+    (peer as any).cryptoManager = {
+      importPublicKey: mock(async () => ({ mocked: true })),
+    };
+    (peer as any).getPeerPublicKey = () => 'peer-main-public-key';
+
+    await (peer as any).handlePeerMessage('peer-main', {
+      id: 'env-direct-1',
+      ratchet: { header: { dhPublicKey: 'x', previousCount: 0, messageNumber: 1 }, ciphertext: 'cipher', iv: 'iv' },
+      signature: 'sig',
+      protocolVersion: 2,
+      isDirect: true,
+      senderId: 'peer-main',
+      senderName: 'Xena AI',
+      messageId: 'msg-direct-1',
+      timestamp: 123,
+    });
+
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0]).toMatchObject({
+      channelId: 'peer-main',
+      workspaceId: 'direct',
+      senderId: 'peer-main',
+      senderName: 'Xena AI',
+      messageId: 'msg-direct-1',
+      content: 'hello from direct DM',
+      chatType: 'direct',
+    });
+
+    expect(sent.some((entry) => entry.peerId === 'peer-main'
+      && entry.msg?.type === 'ack'
+      && entry.msg?.messageId === 'msg-direct-1'
+      && entry.msg?.channelId === 'peer-main')).toBe(true);
+  });
+
   test('handshake still resends pre-existing pending ACK messages', async () => {
     const peer = new NodeXenaPeer({
       account: makeAccount(),

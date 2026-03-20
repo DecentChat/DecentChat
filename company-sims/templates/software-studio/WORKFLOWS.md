@@ -5,9 +5,10 @@
 1. Manager defines scope and acceptance criteria.
 2. Manager assigns an owner with `[TASK] Owner=...;`.
 3. Backend role proposes implementation plan and ships change.
-4. QA role validates behavior and reports pass/fail with evidence.
-5. Use `[QUESTION]`, `[BLOCKED]`, `[HANDOFF]`, and `[DONE]` only when the task state changes.
-6. Manager reacts mainly to `[BLOCKED]`, `[HANDOFF]`, or `[DONE]`, not routine chatter.
+4. Backend hands off with `[HANDOFF] Target=QA Engineer; ...` when verification is needed.
+5. QA role validates behavior and reports pass/fail with evidence.
+6. Use `[QUESTION]`, `[BLOCKED]`, `[HANDOFF]`, and `[DONE]` only when the task state changes.
+7. Manager reacts mainly to `[BLOCKED]`, `[HANDOFF]`, or `[DONE]`, not routine chatter.
 
 ## Incident response
 

@@ -56,6 +56,12 @@ const TemplateDefaultsSchema = z.object({
   questionAnswers: z.record(TemplateQuestionValueSchema).optional().default({}),
 });
 
+const TemplatePolicyProfileSchema = z.object({
+  label: z.string().min(1),
+  description: z.string().min(1).optional(),
+  roleParticipation: z.record(TemplateParticipationSchema.partial()).optional().default({}),
+});
+
 export const CompanyTemplateMetadataSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
@@ -64,6 +70,7 @@ export const CompanyTemplateMetadataSchema = z.object({
   roles: z.array(TemplateRoleSchema).min(1),
   questions: z.array(TemplateQuestionSchema).optional().default([]),
   defaults: TemplateDefaultsSchema,
+  policyProfiles: z.record(TemplatePolicyProfileSchema).optional().default({}),
 }).superRefine((value, ctx) => {
   const roleIds = new Set<string>();
   for (const role of value.roles) {
@@ -96,4 +103,5 @@ export type CompanyTemplateRoleDefinition = z.infer<typeof TemplateRoleSchema>;
 export type CompanyTemplateQuestionOption = z.infer<typeof TemplateQuestionOptionSchema>;
 export type CompanyTemplateQuestionDefinition = z.infer<typeof TemplateQuestionSchema>;
 export type CompanyTemplateDefaults = z.infer<typeof TemplateDefaultsSchema>;
+export type CompanyTemplatePolicyProfile = z.infer<typeof TemplatePolicyProfileSchema>;
 export type CompanyTemplateMetadata = z.infer<typeof CompanyTemplateMetadataSchema>;

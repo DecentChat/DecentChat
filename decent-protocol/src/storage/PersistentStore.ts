@@ -365,6 +365,46 @@ export class PersistentStore {
       .sort((a, b) => (a.generatedAt || 0) - (b.generatedAt || 0));
   }
 
+  async deletePublicWorkspaceData(workspaceId: string): Promise<void> {
+    if (!workspaceId) return;
+
+    if (this.hasStore(PUBLIC_WORKSPACE_STORES.workspaceShells)) {
+      await this.delete(PUBLIC_WORKSPACE_STORES.workspaceShells, workspaceId);
+    }
+
+    if (this.hasStore(PUBLIC_WORKSPACE_STORES.memberDirectoryPages)) {
+      const pages = await this.getAllByIndex(PUBLIC_WORKSPACE_STORES.memberDirectoryPages, 'workspaceId', workspaceId);
+      for (const page of pages) {
+        if (page?.key) await this.delete(PUBLIC_WORKSPACE_STORES.memberDirectoryPages, page.key);
+      }
+    }
+
+    if (this.hasStore(PUBLIC_WORKSPACE_STORES.directoryShardRefs)) {
+      const refs = await this.getAllByIndex(PUBLIC_WORKSPACE_STORES.directoryShardRefs, 'workspaceId', workspaceId);
+      for (const ref of refs) {
+        if (ref?.key) await this.delete(PUBLIC_WORKSPACE_STORES.directoryShardRefs, ref.key);
+      }
+    }
+
+    if (this.hasStore(PUBLIC_WORKSPACE_STORES.channelPolicies)) {
+      const policies = await this.getAllByIndex(PUBLIC_WORKSPACE_STORES.channelPolicies, 'workspaceId', workspaceId);
+      for (const policy of policies) {
+        if (policy?.key) await this.delete(PUBLIC_WORKSPACE_STORES.channelPolicies, policy.key);
+      }
+    }
+
+    if (this.hasStore(PUBLIC_WORKSPACE_STORES.presenceAggregates)) {
+      await this.delete(PUBLIC_WORKSPACE_STORES.presenceAggregates, workspaceId);
+    }
+
+    if (this.hasStore(PUBLIC_WORKSPACE_STORES.historyPages)) {
+      const pages = await this.getAllByIndex(PUBLIC_WORKSPACE_STORES.historyPages, 'workspaceId', workspaceId);
+      for (const page of pages) {
+        if (page?.key) await this.delete(PUBLIC_WORKSPACE_STORES.historyPages, page.key);
+      }
+    }
+  }
+
   // === Messages ===
 
   /**

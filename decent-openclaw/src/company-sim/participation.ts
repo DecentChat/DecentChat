@@ -52,6 +52,16 @@ export function isAssignedChannel(employee: CompanyEmployeeConfig, channelNameOr
 
 const SUMMARY_TRIGGER_TAGS = new Set(['blocked', 'handoff', 'done']);
 
+function extractDelimitedFieldToken(text: string, expectedTag: string, fieldName: string): string | null {
+  if (extractCommunicationTag(text) !== expectedTag) return null;
+
+  const fieldMatch = text.match(new RegExp(`\\b${fieldName}\\s*[:=]\\s*([^;,.\\n\\r]+)`, 'i'));
+  if (!fieldMatch) return null;
+
+  const value = normalize(fieldMatch[1] ?? '');
+  return value || null;
+}
+
 export function extractCommunicationTag(text: string): string | null {
   const match = text.match(/^\s*\[([A-Za-z-]+)/);
   if (!match) return null;
@@ -65,13 +75,7 @@ export function hasSummaryTriggerTag(text: string): boolean {
 }
 
 export function extractTaskOwnerToken(text: string): string | null {
-  if (extractCommunicationTag(text) !== 'task') return null;
-
-  const ownerMatch = text.match(/\bowner\s*[:=]\s*([^;,.\n\r]+)/i);
-  if (!ownerMatch) return null;
-
-  const owner = normalize(ownerMatch[1] ?? '');
-  return owner || null;
+  return extractDelimitedFieldToken(text, 'task', 'owner');
 }
 
 export function isTaskOwnedByEmployee(text: string, employee: CompanyEmployeeConfig): boolean {
@@ -84,4 +88,20 @@ export function isTaskOwnedByEmployee(text: string, employee: CompanyEmployeeCon
 
 export function hasExplicitTaskOwner(text: string): boolean {
   return extractTaskOwnerToken(text) !== null;
+}
+
+export function extractHandoffTargetToken(text: string): string | null {
+  return extractDelimitedFieldToken(text, 'handoff', 'target');
+}
+
+export function isHandoffTargetedToEmployee(text: string, employee: CompanyEmployeeConfig): boolean {
+  const target = extractHandoffTargetToken(text);
+  if (!target) return false;
+
+  const known = buildEmployeeMentionTokens(employee);
+  return known.has(target);
+}
+
+export function hasExplicitHandoffTarget(text: string): boolean {
+  return extractHandoffTargetToken(text) !== null;
 }

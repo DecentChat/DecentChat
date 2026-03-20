@@ -62,6 +62,22 @@ describe('NodeXenaPeer company-template control plane', () => {
   test('handles authorized install requests and returns runtime provisioning payload', async () => {
     const installTemplate = mock(async () => ({
       provisioningMode: 'config-provisioned' as const,
+      communicationPolicy: 'disciplined',
+      benchmarkSuite: {
+        templateId: 'software-studio',
+        scenarioIds: ['owner-routing'],
+        policyScores: {
+          minimal: { score: 40 },
+          disciplined: { score: 88 },
+          strict: { score: 90 },
+        },
+        recommendedPolicy: 'disciplined',
+        recommendation: { policy: 'disciplined', reasonCode: 'default-tie-break', scoreDeltaVsMinimal: 48 },
+        rankedPolicies: [
+          { policy: 'disciplined', score: 88, deltaFromRecommended: 0 },
+          { policy: 'strict', score: 90, deltaFromRecommended: 2 },
+        ],
+      },
       createdAccountIds: ['backend'],
       provisionedAccountIds: ['backend'],
       onlineReadyAccountIds: ['backend', 'manager'],
@@ -124,6 +140,9 @@ describe('NodeXenaPeer company-template control plane', () => {
     expect(response?.peerId).toBe('owner-peer');
     expect(response?.msg?.sync?.ok).toBeTrue();
     expect(response?.msg?.sync?.result?.provisioningMode).toBe('config-provisioned');
+    expect(response?.msg?.sync?.result?.communicationPolicy).toBe('disciplined');
+    expect(response?.msg?.sync?.result?.benchmarkSuite?.policyScores?.disciplined?.score).toBe(88);
+    expect(response?.msg?.sync?.result?.benchmarkSuite?.recommendation?.reasonCode).toBe('default-tie-break');
   });
 
   test('rejects install requests from non-admin members', async () => {

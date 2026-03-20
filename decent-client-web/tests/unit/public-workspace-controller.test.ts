@@ -25,6 +25,11 @@ class FakePersistentStore {
     pages.push(page);
     this.pagesByWorkspace.set(page.workspaceId, pages);
   }
+
+  async deletePublicWorkspaceData(workspaceId: string): Promise<void> {
+    this.shells = this.shells.filter((shell) => shell.id !== workspaceId);
+    this.pagesByWorkspace.delete(workspaceId);
+  }
 }
 
 describe('PublicWorkspaceController', () => {
@@ -158,6 +163,105 @@ describe('PublicWorkspaceController', () => {
     for (const member of shardPage.members) {
       expect(planner.getShardPrefixForMember(member)).toBe(shardPrefix);
     }
+  });
+
+  test('removes persisted shell-first workspace data so deleted workspaces do not reappear after refresh', async () => {
+    const workspaceManager = new WorkspaceManager();
+    const store = new FakePersistentStore();
+    const controller = new PublicWorkspaceController(workspaceManager, store as any);
+
+    await controller.ingestWorkspaceShell({
+      id: 'ws-delete-me',
+      name: 'Delete Me',
+      createdBy: 'owner',
+      createdAt: 1,
+      version: 2,
+      memberCount: 2,
+      channelCount: 1,
+    });
+
+    await controller.ingestMemberPage({
+      workspaceId: 'ws-delete-me',
+      pageSize: 2,
+      members: [
+        { peerId: 'p1', alias: 'Alice', role: 'owner', joinedAt: 1 },
+        { peerId: 'p2', alias: 'Bob', role: 'member', joinedAt: 2 },
+      ],
+    });
+
+    expect(workspaceManager.getWorkspace('ws-delete-me')).toBeDefined();
+
+    await controller.removeWorkspace('ws-delete-me');
+    expect(workspaceManager.getWorkspace('ws-delete-me')).toBeUndefined();
+
+    const reloadedManager = new WorkspaceManager();
+    const reloaded = new PublicWorkspaceController(reloadedManager, store as any);
+    await reloaded.restoreFromStorage();
+
+    expect(reloadedManager.getWorkspace('ws-delete-me')).toBeUndefined();
+  });
+
+  test('identifies stale owned shell-only placeholders for startup cleanup', async () => {
+    const workspaceManager = new WorkspaceManager();
+    const store = new FakePersistentStore();
+    const controller = new PublicWorkspaceController(workspaceManager, store as any);
+
+    await controller.ingestWorkspaceShell({
+      id: 'ws-stale-owned',
+      name: 'Stale Owned',
+      createdBy: 'owner',
+      createdAt: 1,
+      version: 1,
+      memberCount: 1,
+      channelCount: 1,
+    });
+
+    await controller.ingestWorkspaceShell({
+      id: 'ws-foreign',
+      name: 'Foreign',
+      createdBy: 'someone-else',
+      createdAt: 1,
+      version: 1,
+      memberCount: 1,
+      channelCount: 1,
+    });
+
+    workspaceManager.importWorkspace({
+      id: 'ws-hydrated',
+      name: 'Hydrated',
+      inviteCode: 'ABC123',
+      createdBy: 'owner',
+      createdAt: 1,
+      version: 1,
+      members: [{ peerId: 'owner', alias: 'Owner', role: 'owner', joinedAt: 1 }],
+      channels: [],
+      permissions: {
+        whoCanCreateChannels: 'members',
+        whoCanInviteMembers: 'members',
+        allowMemberDMs: true,
+        allowReactions: true,
+        allowThreads: true,
+        allowEditMessage: 'author',
+        allowDeleteMessage: 'author',
+        allowPinMessage: 'admins',
+        allowVoiceMessage: true,
+        allowSendFiles: true,
+        allowManageWorkspace: 'owner',
+        revokedInviteIds: [],
+      },
+      bans: [],
+      shell: {
+        id: 'ws-hydrated',
+        name: 'Hydrated',
+        createdBy: 'owner',
+        createdAt: 1,
+        version: 1,
+        memberCount: 1,
+        channelCount: 0,
+      },
+    });
+
+    expect(controller.findStaleOwnedShellPlaceholders('owner', new Set(['ws-hydrated']))).toEqual(['ws-stale-owned']);
   });
 
   test('prefers hydrated workspace-member updates over stale paged directory records', async () => {

@@ -53,6 +53,7 @@ describe('company template installer', () => {
           companyName: 'Acme Platform',
           workspaceName: 'Acme HQ',
           backendAlias: 'Devon API',
+          communicationPolicy: 'strict',
         },
         targetWorkspaceId,
         targetInviteCode,
@@ -70,6 +71,8 @@ describe('company template installer', () => {
         'software-studio-qa',
       ]);
       expect(firstInstall.summary.createdChannels).toEqual(['engineering', 'general', 'leadership', 'qa']);
+      expect(firstInstall.summary.communicationPolicy).toBe('strict');
+      expect(firstInstall.summary.benchmarkSuite?.recommendedPolicy).toBe('disciplined');
       expect(existsSync(join(firstInstall.companyDirPath, 'teams', 'engineering.md'))).toBeTrue();
       expect(existsSync(join(firstInstall.companyDirPath, 'teams', 'qa.md'))).toBeTrue();
 
@@ -150,6 +153,12 @@ describe('company template installer', () => {
         expect(existsSync(join(scaffold.workspacePath, 'employee', 'PLAYBOOK.md'))).toBeTrue();
       }
 
+      const communicationMd = readFileSync(join(firstInstall.companyDirPath, 'COMMUNICATION.md'), 'utf8');
+      const workflowsMd = readFileSync(join(firstInstall.companyDirPath, 'WORKFLOWS.md'), 'utf8');
+      expect(communicationMd).toContain('Active communication policy: strict');
+      expect(communicationMd).toContain('Specialists stay quiet unless explicitly routed');
+      expect(workflowsMd).toContain('Policy note: strict');
+
       const backendMemory = readFileSync(join(firstInstall.companyDirPath, 'employees', 'backend', 'MEMORY.md'), 'utf8');
       expect(backendMemory).toContain('Devon API');
 
@@ -160,6 +169,7 @@ describe('company template installer', () => {
           companyName: 'Acme Platform',
           workspaceName: 'Acme HQ',
           backendAlias: 'Devon API',
+          communicationPolicy: 'strict',
         },
         targetWorkspaceId,
         targetInviteCode,

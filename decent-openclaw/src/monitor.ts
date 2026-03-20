@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveDecentChatAccount } from "./channel.js";
 import { getDecentChatRuntime } from "./runtime.js";
 import { resolveCompanyPromptContextForAccount } from "./company-sim/prompt-context.js";
+import { resolveThreadRoutingStateUpdate, type CompanyThreadRoutingState } from "./company-sim/thread-routing-state.js";
 import { decideCompanyParticipation } from "./company-sim/router.js";
 import { setActivePeer } from "./peer-registry.js";
 import type { ResolvedDecentChatAccount } from "./types.js";
@@ -189,6 +190,7 @@ interface ThreadAffinityEntry {
 }
 
 const threadAffinityMap = new Map<string, ThreadAffinityEntry>();
+const threadRoutingStateMap = new Map<string, CompanyThreadRoutingState & { updatedAt: number }>();
 
 function threadAffinityKey(channelId: string, senderId: string): string {
   return `${channelId}:${senderId}`;
@@ -208,6 +210,26 @@ function getThreadAffinity(channelId: string, senderId: string): string | null {
     return null;
   }
   return entry.threadId;
+}
+
+function threadRoutingStateKey(channelId: string, threadRef: string): string {
+  return `${channelId}:${threadRef}`;
+}
+
+function updateThreadRoutingState(channelId: string, threadRef: string, state: CompanyThreadRoutingState): void {
+  const key = threadRoutingStateKey(channelId, threadRef);
+  threadRoutingStateMap.set(key, { ...state, updatedAt: Date.now() });
+}
+
+function getThreadRoutingState(channelId: string, threadRef: string): CompanyThreadRoutingState | null {
+  const key = threadRoutingStateKey(channelId, threadRef);
+  const entry = threadRoutingStateMap.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.updatedAt > THREAD_AFFINITY_TTL_MS) {
+    threadRoutingStateMap.delete(key);
+    return null;
+  }
+  return { assignedEmployeeId: entry.assignedEmployeeId, source: entry.source };
 }
 
 function formatThreadHistoryContent(content: string, maxChars = 220): string {
@@ -899,12 +921,26 @@ async function processInboundMessage(
   const channelName = msg.chatType === "channel"
     ? (xenaPeer.resolveChannelNameById?.(msg.channelId) ?? msg.channelId)
     : undefined;
+  const routingThreadRef = (msg.threadId ?? msg.replyToId ?? '').trim();
+  const currentThreadRoutingState = routingThreadRef
+    ? getThreadRoutingState(msg.channelId, routingThreadRef)
+    : null;
+  if (companyContext && routingThreadRef) {
+    const threadRoutingUpdate = resolveThreadRoutingStateUpdate({
+      manifest: companyContext.manifest,
+      text: rawBody,
+    });
+    if (threadRoutingUpdate) {
+      updateThreadRoutingState(msg.channelId, routingThreadRef, threadRoutingUpdate);
+    }
+  }
   const participationDecision = decideCompanyParticipation({
     context: companyContext,
     chatType: msg.chatType === "direct" ? "direct" : "channel",
     channelNameOrId: channelName,
     text: rawBody,
     threadId: msg.threadId ?? msg.replyToId,
+    threadAssignedEmployeeId: currentThreadRoutingState?.assignedEmployeeId,
   });
   if (!participationDecision.shouldRespond) {
     ctx.log?.info?.(`[decentchat] company routing: silent account=${ctx.accountId} reason=${participationDecision.reason} channel=${channelName ?? msg.channelId}`);

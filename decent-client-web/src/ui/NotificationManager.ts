@@ -5,6 +5,8 @@
  * Tracks unread counts per channel.
  */
 
+import type { NotificationTarget } from './notificationNavigation';
+
 export class NotificationManager {
   private permission: NotificationPermission = 'default';
   /** Unread count per channel */
@@ -17,8 +19,8 @@ export class NotificationManager {
   private originalTitle = document.title;
   /** Title flash interval */
   private titleInterval: any = null;
-  /** Called when user clicks a desktop notification — switch to that channel */
-  onNotificationClick?: (channelId: string) => void;
+  /** Called when user clicks a desktop notification — switch to that channel/thread */
+  onNotificationClick?: (target: NotificationTarget) => void;
 
   constructor() {
     // Track window focus
@@ -59,7 +61,7 @@ export class NotificationManager {
   /**
    * Notify about a new message
    */
-  notify(channelId: string, channelName: string, senderName: string, content: string): void {
+  notify(channelId: string, channelName: string, senderName: string, content: string, target: Omit<NotificationTarget, 'channelId'> = {}): void {
     // Don't notify for the focused channel when window is active
     if (this.windowFocused && channelId === this.focusedChannelId) return;
 
@@ -79,7 +81,7 @@ export class NotificationManager {
       notification.onclick = () => {
         window.focus();
         notification.close();
-        this.onNotificationClick?.(channelId);
+        this.onNotificationClick?.({ channelId, ...target });
       };
 
       // Auto-close after 5s

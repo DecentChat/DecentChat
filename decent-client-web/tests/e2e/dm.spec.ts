@@ -111,6 +111,26 @@ test.describe('Direct Messages', () => {
     await page.waitForTimeout(300);
     await expect(page.locator('.channel-header h2')).toContainText('Charlie', { timeout: 8000 });
   });
+
+  test('workspace rail DM button shows unread badge while viewing a workspace', async ({ page }) => {
+    await addContactViaURI(page, 'Bob', 'bob-peer-id');
+    await startDM(page, 'Bob', 'bob-peer-id');
+
+    await page.locator('.ws-rail-icon[data-ws-id]').first().click();
+    await expect(page.locator('#ws-rail-dms')).not.toHaveClass(/active/);
+
+    await page.evaluate(async () => {
+      const ctrl = (window as any).__ctrl;
+      const conversations = await ctrl.getDirectConversations();
+      const conv = conversations.find((item: any) => item.contactPeerId === 'bob-peer-id');
+      if (!conv) throw new Error('Direct conversation not found');
+
+      ctrl.notifications.unreadCounts.set(conv.id, 1);
+      ctrl.ui.updateWorkspaceRail();
+    });
+
+    await expect(page.locator('#ws-rail-dms .activity-badge')).toHaveText('1');
+  });
 });
 
 test.describe('Workspace Direct Messages Section', () => {

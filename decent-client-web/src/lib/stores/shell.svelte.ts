@@ -85,6 +85,7 @@ export const shellData = $state({
     workspaces: [] as ShellWorkspaceData[],
     activeWorkspaceId: null as string | null,
     activityUnread: 0,
+    dmUnread: 0,
   },
 
   // Sidebar

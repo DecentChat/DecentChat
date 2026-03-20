@@ -65,6 +65,32 @@ export class PublicWorkspaceController {
     this.applyMemberPage(page, true);
   }
 
+  async removeWorkspace(workspaceId: string): Promise<void> {
+    this.runtime.delete(workspaceId);
+    this.workspaceManager.removeWorkspace(workspaceId);
+
+    const store = this.persistentStore as typeof this.persistentStore & {
+      deletePublicWorkspaceData?: (workspaceId: string) => Promise<void>;
+    };
+    await store.deletePublicWorkspaceData?.(workspaceId);
+  }
+
+  findStaleOwnedShellPlaceholders(ownerPeerId: string, hydratedWorkspaceIds: Iterable<string>): string[] {
+    if (!ownerPeerId) return [];
+
+    const hydrated = new Set(hydratedWorkspaceIds);
+    return this.workspaceManager.getAllWorkspaces()
+      .filter((workspace) => (
+        !hydrated.has(workspace.id)
+        && workspace.createdBy === ownerPeerId
+        && workspace.inviteCode === 'PAGED000'
+        && workspace.members.length === 0
+        && workspace.channels.length === 0
+        && Boolean(workspace.shell)
+      ))
+      .map((workspace) => workspace.id);
+  }
+
   getSnapshot(workspaceId: string): WorkspaceDirectorySnapshot {
     const runtime = this.getRuntime(workspaceId);
     const workspace = this.workspaceManager.getWorkspace(workspaceId);

@@ -149,6 +149,7 @@
           workspaces={shellData.rail.workspaces}
           activeWorkspaceId={shellData.rail.activeWorkspaceId}
           activityUnread={shellData.rail.activityUnread}
+          dmUnread={shellData.rail.dmUnread}
           onSwitchToDMs={cb.onSwitchToDMs}
           onSwitchWorkspace={cb.onSwitchWorkspace}
           onToggleActivity={cb.onToggleActivity}

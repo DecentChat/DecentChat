@@ -179,6 +179,37 @@ describe('company template compiler', () => {
     })).toThrow(/unknown role/i);
   });
 
+  test('applies selected communication policy profile from the template', () => {
+    const template = getCompanySimTemplate('software-studio', { templatesRoot: bundledTemplatesRoot });
+
+    const manifest = compileCompanyTemplateToManifest({
+      template,
+      answers: {
+        communicationPolicy: 'strict',
+      },
+    });
+
+    const manager = manifest.employees.find((employee) => employee.id === 'manager');
+    const backend = manifest.employees.find((employee) => employee.id === 'backend');
+    const qa = manifest.employees.find((employee) => employee.id === 'qa');
+
+    expect(manager?.participation).toEqual({
+      mode: 'summary-first',
+      respondWhenMentioned: true,
+      respondToChannelTopics: ['planning', 'priorities', 'blockers', 'status'],
+    });
+    expect(backend?.participation).toEqual({
+      mode: 'silent-unless-routed',
+      respondWhenMentioned: true,
+      replyInThreadsOnly: true,
+    });
+    expect(qa?.participation).toEqual({
+      mode: 'silent-unless-routed',
+      respondWhenMentioned: true,
+      replyInThreadsOnly: true,
+    });
+  });
+
   test('preserves template participation defaults unless explicitly overridden', () => {
     const template = getCompanySimTemplate('software-studio', { templatesRoot: bundledTemplatesRoot });
 

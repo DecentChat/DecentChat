@@ -14,6 +14,7 @@
     workspaces: WorkspaceInfo[];
     activeWorkspaceId: string | null;
     activityUnread: number;
+    dmUnread: number;
     onSwitchToDMs: () => void;
     onSwitchWorkspace: (wsId: string) => void;
     onToggleActivity: () => void;
@@ -24,6 +25,7 @@
     workspaces,
     activeWorkspaceId,
     activityUnread,
+    dmUnread,
     onSwitchToDMs,
     onSwitchWorkspace,
     onToggleActivity,
@@ -39,6 +41,11 @@
   onkeydown={(e) => e.key === 'Enter' && onSwitchToDMs()}
 >
   DM
+  {#if dmUnread > 0}
+    <span class="activity-badge ws-rail-badge">
+      {dmUnread > 99 ? '99+' : dmUnread}
+    </span>
+  {/if}
 </div>
 <div class="ws-rail-divider"></div>
 

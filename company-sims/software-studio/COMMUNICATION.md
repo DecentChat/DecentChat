@@ -18,7 +18,9 @@ Write short messages that change state. Avoid thinking out loud in public channe
 
 - Include a short task/thread label when possible
 - One task has one clear owner at a time
+- Once a thread gets an owner or handoff target, later plain thread replies stay with that assignee until another explicit reassignment
 - Specialists reply in the active task thread by default
+- If multiple specialists could answer a plain thread message, the system prefers one deterministic winner instead of letting everyone dogpile
 - Manager summarizes upward instead of forwarding raw chatter
 - In task threads, manager responds mainly to `[BLOCKED]`, `[HANDOFF]`, or `[DONE]`
 - Escalate with `[BLOCKED]` instead of repeating the same question
@@ -46,5 +48,5 @@ Example:
 - `[TASK pricing-api] Owner=Backend Engineer; Draft first endpoint today`
 - `[QUESTION pricing-api] Need final discount rules before implementation`
 - `[BLOCKED pricing-api] Waiting on product decision for annual billing edge case`
-- `[HANDOFF pricing-api] Endpoint merged locally, QA can verify upgrade + downgrade flows`
+- `[HANDOFF pricing-api] Target=QA Engineer; Endpoint merged locally, ready for verification`
 - `[DONE pricing-api] Verified happy path. Risk remains around prorations.`

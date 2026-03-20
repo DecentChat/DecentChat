@@ -28,7 +28,12 @@ describe('company template registry', () => {
       'managerAlias',
       'backendAlias',
       'qaAlias',
+      'communicationPolicy',
     ]);
+    expect(softwareStudio.policyProfiles.strict?.roleParticipation?.backend).toEqual({
+      mode: 'silent-unless-routed',
+      replyInThreadsOnly: true,
+    });
     expect(softwareStudio.defaults).toEqual({
       companyName: 'Software Studio',
       workspaceName: 'Studio HQ',
@@ -37,6 +42,7 @@ describe('company template registry', () => {
         managerAlias: 'Mira PM',
         backendAlias: 'Rian Backend',
         qaAlias: 'Iva QA',
+        communicationPolicy: 'disciplined',
       },
     });
 
