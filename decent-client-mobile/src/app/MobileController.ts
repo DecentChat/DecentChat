@@ -1990,22 +1990,49 @@ export class MobileController {
       return;
     }
 
-    const workspace = this.resolveWorkspaceForEnvelope(envelope);
-    if (!workspace) return;
+    const allWorkspaces = this.workspaceManager.getAllWorkspaces();
 
-    const channelId = this.resolveChannelIdForEnvelope(workspace, envelope);
-    if (!channelId) return;
+    let workspace: Workspace | undefined;
+    if (typeof envelope.workspaceId === 'string') {
+      workspace = allWorkspaces.find((candidate) => candidate.id === envelope.workspaceId);
+      if (!workspace && typeof envelope.channelId === 'string') {
+        workspace = allWorkspaces.find((candidate) => candidate.channels.some((channel) => channel.id === envelope.channelId));
+        if (workspace) {
+          console.warn(`[Security] Mobile workspaceId mismatch from ${peerId.slice(0, 8)}: ${envelope.workspaceId} -> using channel-mapped workspace ${workspace.id}`);
+        }
+      }
+      if (!workspace) {
+        console.warn(`[Security] Mobile dropping message from ${peerId.slice(0, 8)}: unknown workspaceId ${envelope.workspaceId}`);
+        return;
+      }
+    } else if (typeof envelope.channelId === 'string') {
+      workspace = allWorkspaces.find((candidate) => candidate.channels.some((channel) => channel.id === envelope.channelId));
+    }
+
+    if (!workspace) {
+      console.warn(`[Security] Mobile dropping message from ${peerId.slice(0, 8)}: workspace/channel not found`);
+      return;
+    }
 
     if (!workspace.members.some((member) => member.peerId === peerId)) {
-      this.workspaceManager.addMember(workspace.id, {
-        peerId,
-        alias: peerId.slice(0, 8),
-        publicKey: peerPublicKey,
-        joinedAt: Date.now(),
-        role: 'member',
-      });
-      await this.persistentStore.saveWorkspace(workspace);
-      this.syncWorkspaceStores();
+      console.warn(`[Security] Mobile dropping message from ${peerId.slice(0, 8)}: not a member of workspace ${workspace.id}`);
+      return;
+    }
+
+    let channelId: string | null = null;
+    if (typeof envelope.channelId === 'string' && workspace.channels.some((channel) => channel.id === envelope.channelId)) {
+      channelId = envelope.channelId;
+    } else if (typeof envelope.workspaceId === 'string') {
+      console.warn(`[Security] Mobile dropping message from ${peerId.slice(0, 8)}: unknown channel ${envelope.channelId || 'missing'} in workspace ${workspace.id}`);
+      return;
+    } else {
+      channelId = workspace.channels[0]?.id ?? null;
+    }
+
+    if (!channelId) return;
+    if (!this.workspaceManager.isMemberAllowedInChannel(workspace.id, channelId, peerId)) {
+      console.warn(`[Security] Mobile dropping message from ${peerId.slice(0, 8)}: not allowed in channel ${channelId}`);
+      return;
     }
 
     const message = await this.messageStore.createMessage(
