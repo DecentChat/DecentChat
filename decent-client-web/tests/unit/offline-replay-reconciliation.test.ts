@@ -226,6 +226,50 @@ describe('ChatController offline replay reconciliation', () => {
     expect(ctrl.persistentStore.saveMessage).not.toHaveBeenCalled();
   });
 
+
+  test('retryUnackedOutgoingForPeer does not replay unresolved legacy message to peer-specific fallback recipient', async () => {
+    const ctrl = makeBaseController();
+    const outgoing = {
+      id: 'msg-legacy',
+      channelId: 'unknown-channel',
+      senderId: 'me',
+      content: 'legacy unresolved recipients',
+      timestamp: 1700000003500,
+      type: 'text',
+      prevHash: 'legacy',
+      status: 'pending',
+      ackedBy: [],
+      ackedAt: {},
+      readBy: [],
+      readAt: {},
+    };
+
+    ctrl.messageStore = {
+      getAllChannelIds: mock(() => ['unknown-channel']),
+      getMessages: mock(() => [outgoing]),
+      getThreadRoot: mock(() => null),
+    };
+
+    ctrl.transport = {
+      send: mock(() => true),
+    };
+
+    ctrl.offlineQueue = {
+      listQueued: mock(async () => []),
+    };
+
+    ctrl.encryptMessageWithPreKeyBootstrap = mock(async () => ({ encrypted: { body: 'cipher' } }));
+    ctrl.queueCustodyEnvelope = mock(async () => {});
+    ctrl.custodyStore = {
+      listAllForRecipient: mock(async () => []),
+    };
+
+    await (ChatController.prototype as any).retryUnackedOutgoingForPeer.call(ctrl, 'peer-a');
+
+    expect(ctrl.transport.send).not.toHaveBeenCalled();
+    expect(ctrl.persistentStore.saveMessage).not.toHaveBeenCalled();
+  });
+
   test('reconcileReplayedOutgoingMessage preserves explicit multi-recipient state during single-peer replay', async () => {
     const ctrl = makeBaseController();
     const outgoing = {

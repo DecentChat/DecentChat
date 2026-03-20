@@ -9144,7 +9144,7 @@ export class ChatController {
         if (msg.senderId !== this.state.myPeerId) continue;
         if (queuedMessageIds.has(msg.id)) continue;
 
-        const recipients = this.getMessageRecipients(msg, peerId);
+        const recipients = this.getStableMessageRecipients(msg);
         if (!recipients.includes(peerId)) continue;
 
         const ackedBy = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
