@@ -570,10 +570,7 @@ export class NodeXenaPeer {
       });
     }
 
-    const workspace = workspaceId ? this.workspaceManager.getWorkspace(workspaceId) : undefined;
-    const recipients = workspace
-      ? workspace.members.map((m) => m.peerId).filter((p) => p !== this.myPeerId)
-      : this.transport.getConnectedPeers().filter((p) => p !== this.myPeerId);
+    const recipients = this.getChannelRecipientPeerIds(channelId, workspaceId);
 
     for (const peerId of recipients) {
       try {
@@ -2657,6 +2654,28 @@ export class NodeXenaPeer {
       .getAllWorkspaces()
       .find((workspace) => workspace.channels.some((ch) => ch.id === channelId));
     return ws?.channels.find((ch) => ch.id === channelId)?.name;
+  }
+
+  private getChannelRecipientPeerIds(channelId: string, workspaceId?: string): string[] {
+    const workspace = workspaceId ? this.workspaceManager.getWorkspace(workspaceId) : undefined;
+    if (!workspace) return this.transport?.getConnectedPeers().filter((p) => p !== this.myPeerId) ?? [];
+
+    const workspacePeers = workspace.members
+      .map((member) => member.peerId)
+      .filter((peerId) => Boolean(peerId) && peerId !== this.myPeerId);
+
+    const channels = Array.isArray((workspace as any).channels) ? workspace.channels : [];
+    const channel = channels.find((entry) => entry.id === channelId);
+    const accessPolicy = (channel as any)?.accessPolicy;
+    if (accessPolicy?.mode === 'explicit' && Array.isArray(accessPolicy.explicitMemberPeerIds)) {
+      return Array.from(new Set(
+        accessPolicy.explicitMemberPeerIds
+          .filter((peerId: unknown): peerId is string => typeof peerId === 'string' && peerId.length > 0)
+          .filter((peerId: string) => peerId !== this.myPeerId),
+      ));
+    }
+
+    return workspacePeers;
   }
 
   /** Compatibility alias used by monitor/company routing. */

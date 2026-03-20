@@ -116,6 +116,56 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
     expect((await (peer as any).offlineQueue.getQueued('peer-2')).length).toBe(0);
   });
 
+  test('channel send respects explicit channel members instead of all workspace members', async () => {
+    const peer = new NodeXenaPeer({
+      account: makeAccount({ alias: 'Mira PM' }),
+      onIncomingMessage: async () => {},
+      onReply: () => {},
+    });
+
+    const sent: Array<{ peerId: string; msg: any }> = [];
+    const send = mock((peerId: string, msg: any) => {
+      sent.push({ peerId, msg });
+      return true;
+    });
+    (peer as any).transport = {
+      send,
+      getConnectedPeers: mock(() => ['peer-backend', 'peer-qa', 'peer-alino']),
+    };
+
+    (peer as any).messageProtocol = {
+      encryptMessage: mock(async () => ({ id: 'env-explicit', type: 'text' })),
+    };
+
+    (peer as any).workspaceManager.getWorkspace = () => ({
+      id: 'workspace-1',
+      members: [
+        { peerId: (peer as any).myPeerId },
+        { peerId: 'peer-backend' },
+        { peerId: 'peer-qa' },
+        { peerId: 'peer-alino' },
+      ],
+      channels: [
+        {
+          id: 'leadership',
+          accessPolicy: {
+            mode: 'explicit',
+            explicitMemberPeerIds: [(peer as any).myPeerId, 'peer-backend'],
+          },
+        },
+      ],
+    });
+
+    await peer.sendMessage('leadership', 'workspace-1', 'private leadership note');
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(sent.map((entry) => entry.peerId)).toEqual(['peer-backend']);
+    expect((peer as any).store.get<any[]>((peer as any).pendingAckKey('peer-backend'), []).length).toBe(1);
+    expect((peer as any).store.get<any[]>((peer as any).pendingAckKey('peer-qa'), []).length).toBe(0);
+    expect((peer as any).store.get<any[]>((peer as any).pendingAckKey('peer-alino'), []).length).toBe(0);
+  });
+
+
   test('keeps pending message until ack and clears after ack', async () => {
     const peer = new NodeXenaPeer({
       account: makeAccount(),
