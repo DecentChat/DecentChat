@@ -2425,10 +2425,7 @@ export class NodeXenaPeer {
 
   async sendTyping(params: { channelId: string; workspaceId: string; typing: boolean }): Promise<void> {
     if (!this.transport || !params.channelId) return;
-    const workspace = params.workspaceId ? this.workspaceManager.getWorkspace(params.workspaceId) : undefined;
-    const recipients = workspace
-      ? workspace.members.map((m) => m.peerId).filter((p) => p !== this.myPeerId)
-      : this.transport.getConnectedPeers().filter((p) => p !== this.myPeerId);
+    const recipients = this.getChannelRecipientPeerIds(params.channelId, params.workspaceId);
     const envelope = {
       type: 'typing' as const,
       channelId: params.channelId,
@@ -2453,10 +2450,7 @@ export class NodeXenaPeer {
     model?: AssistantModelMeta;
   }): Promise<void> {
     if (!this.transport) return;
-    const workspace = params.workspaceId ? this.workspaceManager.getWorkspace(params.workspaceId) : undefined;
-    const recipients = workspace
-      ? workspace.members.map((m) => m.peerId).filter((p) => p !== this.myPeerId)
-      : this.transport.getConnectedPeers().filter((p) => p !== this.myPeerId);
+    const recipients = this.getChannelRecipientPeerIds(params.channelId, params.workspaceId);
     const envelope: any = {
       type: 'stream-start',
       messageId: params.messageId,
@@ -2506,10 +2500,7 @@ export class NodeXenaPeer {
     content: string;
   }): Promise<void> {
     if (!this.transport) return;
-    const workspace = params.workspaceId ? this.workspaceManager.getWorkspace(params.workspaceId) : undefined;
-    const recipients = workspace
-      ? workspace.members.map((m) => m.peerId).filter((p) => p !== this.myPeerId)
-      : this.transport.getConnectedPeers().filter((p) => p !== this.myPeerId);
+    const recipients = this.getChannelRecipientPeerIds(params.channelId, params.workspaceId);
     const envelope = { type: 'stream-delta', messageId: params.messageId, content: params.content };
     for (const peerId of recipients) {
       if (this.transport.getConnectedPeers().includes(peerId)) {
@@ -2533,10 +2524,7 @@ export class NodeXenaPeer {
     messageId: string;
   }): Promise<void> {
     if (!this.transport) return;
-    const workspace = params.workspaceId ? this.workspaceManager.getWorkspace(params.workspaceId) : undefined;
-    const recipients = workspace
-      ? workspace.members.map((m) => m.peerId).filter((p) => p !== this.myPeerId)
-      : this.transport.getConnectedPeers().filter((p) => p !== this.myPeerId);
+    const recipients = this.getChannelRecipientPeerIds(params.channelId, params.workspaceId);
     const envelope = { type: 'stream-done', messageId: params.messageId };
     for (const peerId of recipients) {
       if (this.transport.getConnectedPeers().includes(peerId)) {
