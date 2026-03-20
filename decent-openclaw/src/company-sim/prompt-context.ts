@@ -7,7 +7,7 @@ import {
 } from './context-loader.ts';
 import type { LoadedCompanyContext } from './context-loader.ts';
 
-function titleForDocument(id: LoadedCompanyContext['documents'][number]['id']): string {
+export function titleForCompanyContextDocument(id: LoadedCompanyContext['documents'][number]['id']): string {
   switch (id) {
     case 'company': return 'COMPANY';
     case 'org': return 'ORG';
@@ -33,7 +33,7 @@ export function buildCompanyPromptContext(context: LoadedCompanyContext): string
   ].filter(Boolean).join('\n');
 
   const sections = context.documents.map((doc) => {
-    return `## ${titleForDocument(doc.id)}\n${doc.content}`;
+    return `## ${titleForCompanyContextDocument(doc.id)}\n${doc.content}`;
   });
 
   return [header, ...sections].join('\n\n');

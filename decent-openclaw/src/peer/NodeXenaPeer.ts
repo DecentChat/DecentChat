@@ -41,6 +41,7 @@ import { BotHuddleManager, type BotHuddleConfig } from '../huddle/BotHuddleManag
 import { loadCompanyContextForAccount } from '../company-sim/context-loader.js';
 import { getCompanySimTemplate } from '../company-sim/template-registry.js';
 import { installCompanyTemplate } from '../company-sim/template-installer.js';
+import { getCompanySimControlState, readCompanySimControlDocument, writeCompanySimControlDocument, previewCompanySimRouting, getCompanySimEmployeeContext } from '../company-sim/control-plane.js';
 import type { CompanyTemplateQuestionValue } from '../company-sim/template-types.js';
 
 const COMPANY_TEMPLATE_CONTROL_CAPABILITY = 'company-template-control-v1';
@@ -893,6 +894,96 @@ export class NodeXenaPeer {
     };
   }
 
+  private async handleCompanySimControlRequest(fromPeerId: string, sync: any): Promise<void> {
+    const requestId = typeof sync?.requestId === 'string' ? sync.requestId.trim() : '';
+    const workspaceId = typeof sync?.workspaceId === 'string' ? sync.workspaceId.trim() : '';
+    const messageType = typeof sync?.type === 'string' ? sync.type : '';
+
+    if (!requestId || !workspaceId) return;
+
+    const responseType = messageType.replace(/-request$/, '-response');
+
+    const sendResponse = (ok: boolean, result?: any, error?: { code: string; message: string }) => {
+      if (!this.transport) return;
+      this.transport.send(fromPeerId, {
+        type: 'workspace-sync',
+        workspaceId,
+        sync: { type: responseType, requestId, ok, ...(result ? { result } : {}), ...(error ? { error } : {}) },
+      });
+    };
+
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) {
+      sendResponse(false, undefined, { code: 'workspace_not_found', message: `Workspace not found: ${workspaceId}` });
+      return;
+    }
+
+    if (this.workspaceManager.isBanned(workspaceId, fromPeerId) || !this.canRequesterInstallCompanyTemplate(workspace, fromPeerId)) {
+      sendResponse(false, undefined, { code: 'forbidden', message: 'Only workspace owners/admins can access company sim control plane' });
+      return;
+    }
+
+    const control = this.opts.companyTemplateControl;
+    if (!control?.loadConfig) {
+      sendResponse(false, undefined, { code: 'bridge_unavailable', message: 'Host control bridge is unavailable' });
+      return;
+    }
+
+    try {
+      const baseParams = {
+        workspaceId,
+        workspaceName: workspace.name,
+        loadConfig: control.loadConfig,
+      };
+
+      if (messageType === 'company-sim-state-request') {
+        const state = getCompanySimControlState(baseParams);
+        sendResponse(true, state);
+        return;
+      }
+
+      if (messageType === 'company-sim-doc-read-request') {
+        const relativePath = typeof sync?.relativePath === 'string' ? sync.relativePath.trim() : '';
+        if (!relativePath) { sendResponse(false, undefined, { code: 'bad_request', message: 'relativePath is required' }); return; }
+        const docResult = readCompanySimControlDocument({ ...baseParams, relativePath });
+        sendResponse(true, { content: docResult.content, doc: docResult.doc });
+        return;
+      }
+
+      if (messageType === 'company-sim-doc-write-request') {
+        const relativePath = typeof sync?.relativePath === 'string' ? sync.relativePath.trim() : '';
+        const content = typeof sync?.content === 'string' ? sync.content : '';
+        if (!relativePath) { sendResponse(false, undefined, { code: 'bad_request', message: 'relativePath is required' }); return; }
+        const docResult = writeCompanySimControlDocument({ ...baseParams, relativePath, content });
+        sendResponse(true, { content: docResult.content, doc: docResult.doc });
+        return;
+      }
+
+      if (messageType === 'company-sim-routing-preview-request') {
+        const chatType = sync?.chatType === 'direct' ? 'direct' : 'channel';
+        const text = typeof sync?.text === 'string' ? sync.text : '';
+        const channelNameOrId = typeof sync?.channelNameOrId === 'string' ? sync.channelNameOrId.trim() : undefined;
+        const threadId = typeof sync?.threadId === 'string' ? sync.threadId.trim() : undefined;
+        const preview = previewCompanySimRouting({ ...baseParams, chatType, channelNameOrId, text, threadId });
+        sendResponse(true, preview);
+        return;
+      }
+
+      if (messageType === 'company-sim-employee-context-request') {
+        const employeeId = typeof sync?.employeeId === 'string' ? sync.employeeId.trim() : '';
+        if (!employeeId) { sendResponse(false, undefined, { code: 'bad_request', message: 'employeeId is required' }); return; }
+        const result = getCompanySimEmployeeContext({ ...baseParams, employeeId });
+        sendResponse(true, result);
+        return;
+      }
+
+      sendResponse(false, undefined, { code: 'unknown_request', message: `Unknown control request: ${messageType}` });
+    } catch (error) {
+      const message = String((error as Error)?.message ?? error ?? 'Unknown error').trim();
+      sendResponse(false, undefined, { code: 'bad_request', message: message.slice(0, 240) });
+    }
+  }
+
   private async handleCompanyTemplateInstallRequest(fromPeerId: string, sync: any): Promise<void> {
     const requestId = typeof sync?.requestId === 'string' ? sync.requestId.trim() : '';
     const workspaceId = typeof sync?.workspaceId === 'string' ? sync.workspaceId.trim() : '';
@@ -1067,6 +1158,11 @@ export class NodeXenaPeer {
 
       if (merged.type === 'company-template-install-request') {
         await this.handleCompanyTemplateInstallRequest(fromPeerId, merged);
+        return;
+      }
+
+      if (merged.type === 'company-sim-state-request' || merged.type === 'company-sim-doc-read-request' || merged.type === 'company-sim-doc-write-request' || merged.type === 'company-sim-routing-preview-request' || merged.type === 'company-sim-employee-context-request') {
+        await this.handleCompanySimControlRequest(fromPeerId, merged);
         return;
       }
 

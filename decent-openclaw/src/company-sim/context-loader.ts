@@ -207,3 +207,79 @@ export function loadCompanyContextForAccount(
     versionToken: createCompanyContextVersionToken(trackedFiles),
   };
 }
+
+export interface LoadCompanyContextForEmployeeOptions {
+  manifestPath: string;
+  employeeId: string;
+  workspaceDir?: string;
+}
+
+export function loadCompanyContextForEmployee(
+  options: LoadCompanyContextForEmployeeOptions,
+): LoadedCompanyContext {
+  const manifest = parseCompanyManifestFile(options.manifestPath);
+  const employee = manifest.employees.find((entry) => entry.id === options.employeeId);
+  if (!employee) {
+    throw new Error(`Unknown employee ${options.employeeId} in manifest ${options.manifestPath}`);
+  }
+
+  const team = employee.teamId ? manifest.teams.find((entry) => entry.id === employee.teamId) : undefined;
+  const { companyDir, employeeDir } = resolveContextDirs({
+    manifestPath: options.manifestPath,
+    employeeId: employee.id,
+    roleFilesDir: employee.workspaceDir
+      ? join(employee.workspaceDir, 'employee')
+      : undefined,
+    workspaceDir: options.workspaceDir,
+  });
+
+  const documents: CompanyContextDocument[] = [];
+
+  const companyDoc = readRequiredFile(join(companyDir, 'COMPANY.md'));
+  const orgDoc = readRequiredFile(join(companyDir, 'ORG.md'));
+  const communicationDoc = readRequiredFile(join(companyDir, 'COMMUNICATION.md'));
+  const workflowsDoc = readRequiredFile(join(companyDir, 'WORKFLOWS.md'));
+
+  documents.push(
+    { id: 'company', path: join(companyDir, 'COMPANY.md'), content: companyDoc.content, snapshot: companyDoc.snapshot },
+    { id: 'org', path: join(companyDir, 'ORG.md'), content: orgDoc.content, snapshot: orgDoc.snapshot },
+    { id: 'communication', path: join(companyDir, 'COMMUNICATION.md'), content: communicationDoc.content, snapshot: communicationDoc.snapshot },
+    { id: 'workflows', path: join(companyDir, 'WORKFLOWS.md'), content: workflowsDoc.content, snapshot: workflowsDoc.snapshot },
+  );
+
+  if (team?.id) {
+    const teamPath = join(companyDir, 'teams', `${team.id}.md`);
+    const teamDoc = readOptionalFile(teamPath);
+    if (teamDoc) {
+      documents.push({ id: 'team', path: teamPath, content: teamDoc.content, snapshot: teamDoc.snapshot });
+    }
+  }
+
+  const employeeDocs: Array<[CompanyContextDocumentId, string]> = [
+    ['identity', join(employeeDir, 'IDENTITY.md')],
+    ['role', join(employeeDir, 'ROLE.md')],
+    ['rules', join(employeeDir, 'RULES.md')],
+    ['memory', join(employeeDir, 'MEMORY.md')],
+    ['playbook', join(employeeDir, 'PLAYBOOK.md')],
+  ];
+
+  for (const [id, filePath] of employeeDocs) {
+    const doc = readRequiredFile(filePath);
+    documents.push({ id, path: filePath, content: doc.content, snapshot: doc.snapshot });
+  }
+
+  const trackedFiles = documents
+    .map((doc) => doc.snapshot)
+    .filter((snapshot): snapshot is CompanyContextFileSnapshot => Boolean(snapshot));
+
+  return {
+    manifestPath: options.manifestPath,
+    companyDir,
+    manifest,
+    employee,
+    team,
+    documents,
+    trackedFiles,
+    versionToken: createCompanyContextVersionToken(trackedFiles),
+  };
+}

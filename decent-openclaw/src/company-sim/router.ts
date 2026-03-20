@@ -161,3 +161,44 @@ export function decideCompanyParticipation(params: RoutingParams): CompanyRoutin
   }
   return baseDecision;
 }
+
+export function describeCompanyRoutingDecision(
+  decision: CompanyRoutingDecision,
+  employee: { alias: string; title: string },
+): string {
+  const name = employee.alias || employee.title;
+  switch (decision.reason) {
+    case 'not-company-sim':
+      return `${name} is not in a company sim context.`;
+    case 'direct-message':
+      return `${name} responds because this is a direct message.`;
+    case 'mentioned':
+      return `${name} responds because they were mentioned.`;
+    case 'summary-thread':
+      return `${name} responds because a summary trigger tag was detected in an assigned thread.`;
+    case 'summary-topic':
+      return `${name} responds because the channel topic matches their configured interests.`;
+    case 'specialist-thread':
+      return `${name} responds as assigned specialist in this thread/channel.`;
+    case 'owned-channel':
+      return `${name} responds because they own this channel.`;
+    case 'task-owner':
+      return `${name} responds because they are the explicit task owner.`;
+    case 'silent-unless-routed':
+      return `${name} is silent unless explicitly routed to by mention, task assignment, or handoff.`;
+    case 'not-mentioned':
+      return `${name} is silent because they were not mentioned.`;
+    case 'not-owned-channel':
+      return `${name} is silent because this is not their assigned channel.`;
+    case 'threads-only':
+      return `${name} is silent because they only respond in threads, not top-level messages.`;
+    case 'awaiting-summary-signal':
+      return `${name} is silent, waiting for a summary trigger tag ([BLOCKED], [HANDOFF], [DONE]) before responding in this thread.`;
+    case 'not-task-owner':
+      return `${name} is silent because another employee is the explicit task owner.`;
+    case 'suppressed-by-peer':
+      return `${name} is silent because another employee won the peer routing decision.`;
+    default:
+      return `${name}: ${decision.reason}`;
+  }
+}
