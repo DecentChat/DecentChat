@@ -35,6 +35,20 @@ test.describe('company template picker', () => {
       await expect(review).toContainText('Acme Platform');
       await expect(review).toContainText('3 roles');
       await expect(review).toContainText('4 channels');
+
+      const roster = user.page.getByTestId('template-roster-preview');
+      await expect(roster).toBeVisible();
+
+      const managerCard = user.page.getByTestId('template-roster-card-manager');
+      await expect(managerCard).toContainText('Team Manager');
+      await managerCard.getByLabel(/alias for team manager/i).fill('Astra Lead');
+      await expect(user.page.getByTestId('template-roster-focus')).toContainText('Astra Lead');
+
+      const managerAvatar = managerCard.locator('.roster-avatar img');
+      const beforeSrc = await managerAvatar.getAttribute('src');
+      await managerCard.getByRole('button', { name: /reroll avatar/i }).click();
+      const afterSrc = await managerAvatar.getAttribute('src');
+      expect(afterSrc).not.toBe(beforeSrc);
     } finally {
       await closeUser(user);
     }

@@ -76,6 +76,35 @@ export interface CompanyTemplateQuestionDefinition {
   defaultValue?: string;
 }
 
+export type CompanyTemplateRoleAvatarStyle =
+  | 'helm'
+  | 'visor'
+  | 'circuit'
+  | 'glyph'
+  | 'sentinel'
+  | 'oracle'
+  | 'wisp'
+  | 'vanguard';
+
+export type CompanyTemplateRoleStatKey = 'planning' | 'execution' | 'quality' | 'adaptability';
+
+export type CompanyTemplateRoleStats = Record<CompanyTemplateRoleStatKey, number>;
+
+export interface CompanyTemplateRoleAvatarDefinition {
+  style?: CompanyTemplateRoleAvatarStyle;
+  seed?: string;
+  accent?: string;
+}
+
+export interface CompanyTemplateRoleProfileDefinition {
+  archetype?: string;
+  bioLine?: string;
+  traitPool?: string[];
+  statPreset?: Partial<CompanyTemplateRoleStats>;
+  avatar?: CompanyTemplateRoleAvatarDefinition;
+  channelAffinity?: string;
+}
+
 export interface CompanyTemplateRoleDefinition {
   id: string;
   title: string;
@@ -83,6 +112,7 @@ export interface CompanyTemplateRoleDefinition {
   defaultAlias: string;
   aliasQuestionId?: string;
   managerRoleId?: string;
+  profile?: CompanyTemplateRoleProfileDefinition;
 }
 
 export interface CompanyTemplateDefinition {
@@ -95,6 +125,13 @@ export interface CompanyTemplateDefinition {
   questions: CompanyTemplateQuestionDefinition[];
 }
 
+export interface CompanyTemplateGeneratedAvatar {
+  style: CompanyTemplateRoleAvatarStyle;
+  seed: string;
+  accent: string;
+  dataUrl: string;
+}
+
 export interface CompanyTemplateInstallPreviewMember {
   roleId: string;
   roleTitle: string;
@@ -102,6 +139,12 @@ export interface CompanyTemplateInstallPreviewMember {
   alias: string;
   peerId: string;
   managerRoleId?: string;
+  archetype?: string;
+  bioLine?: string;
+  traits?: string[];
+  stats?: CompanyTemplateRoleStats;
+  avatar?: CompanyTemplateGeneratedAvatar;
+  channelAffinity?: string;
 }
 
 export interface CompanyTemplateInstallPreview {

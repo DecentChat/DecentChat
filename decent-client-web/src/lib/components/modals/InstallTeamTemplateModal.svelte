@@ -4,7 +4,7 @@
     CompanyTemplateInstallRequest,
     CompanyTemplateInstallResult,
   } from '../../../ui/types';
-  import { buildCompanyTemplatePreview, listLocalCompanyTemplates } from '../../company-sim/templateCatalog';
+  import { buildCompanyTemplatePreview, buildTemplateDefaultAnswers, listLocalCompanyTemplates } from '../../company-sim/templateCatalog';
   import TemplateCard from '../company-sim/TemplateCard.svelte';
   import TemplateWizard from '../company-sim/TemplateWizard.svelte';
 
@@ -45,10 +45,23 @@
       : null,
   );
 
+  const totalRoleCount = $derived(templates.reduce((sum, template) => sum + template.roles.length, 0));
+  const totalChannelPresetCount = $derived(templates.reduce((sum, template) => sum + template.channels.length, 0));
+
   function sanitizeTemplate(template: CompanyTemplateDefinition): CompanyTemplateDefinition {
     return {
       ...template,
-      roles: template.roles.map((role) => ({ ...role })),
+      roles: template.roles.map((role) => ({
+        ...role,
+        profile: role.profile
+          ? {
+            ...role.profile,
+            traitPool: [...(role.profile.traitPool ?? [])],
+            statPreset: role.profile.statPreset ? { ...role.profile.statPreset } : undefined,
+            avatar: role.profile.avatar ? { ...role.profile.avatar } : undefined,
+          }
+          : undefined,
+      })),
       channels: [...template.channels],
       questions: template.questions
         .filter((question) => question.id !== 'workspaceName')
@@ -88,11 +101,7 @@
     installError = null;
     const template = templates.find((candidate) => candidate.id === templateId);
     if (!template) return;
-    const defaults: Record<string, string> = {};
-    for (const question of template.questions) {
-      defaults[question.id] = question.defaultValue ?? '';
-    }
-    answers = defaults;
+    answers = buildTemplateDefaultAnswers(template);
   }
 
   async function install(installAnswers: Record<string, string>): Promise<void> {
@@ -167,7 +176,28 @@
     {:else if loadError}
       <p class="wizard-error">Failed to load templates: {loadError}</p>
     {:else if !selectedTemplate}
-      <p class="modal-copy">Choose a team template and continue with setup.</p>
+      <section class="template-selection-shell">
+        <div>
+          <p class="selection-kicker">Company simulator</p>
+          <h3>Assemble your launch crew</h3>
+          <p class="modal-copy">Choose a team template, tune the roster, and deploy a game-like AI squad into the current workspace.</p>
+        </div>
+        <div class="selection-metrics" aria-label="Template metrics">
+          <article>
+            <span>Templates</span>
+            <strong>{templates.length}</strong>
+          </article>
+          <article>
+            <span>Roles ready</span>
+            <strong>{totalRoleCount}</strong>
+          </article>
+          <article>
+            <span>Channel presets</span>
+            <strong>{totalChannelPresetCount}</strong>
+          </article>
+        </div>
+      </section>
+
       <div class="template-card-grid">
         {#each templates as template (template.id)}
           <TemplateCard template={template} onChoose={pickTemplate} />
@@ -192,8 +222,8 @@
 
 <style>
   .install-team-template-modal {
-    width: min(960px, 94vw);
-    max-width: 960px;
+    width: min(980px, 94vw);
+    max-width: 980px;
   }
 
   .modal-header-row {
@@ -208,19 +238,89 @@
     margin: 0;
   }
 
+  .template-selection-shell {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding: 12px;
+    border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+    border-radius: var(--radius-md, var(--radius-lg));
+    background:
+      radial-gradient(120% 170% at 100% -12%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 42%),
+      linear-gradient(165deg, color-mix(in srgb, var(--bg-primary) 90%, #000 10%), var(--bg-primary));
+  }
+
+  .selection-kicker {
+    margin: 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+  }
+
+  .template-selection-shell h3 {
+    margin: 4px 0 0;
+  }
+
   .modal-copy {
-    margin: 0 0 12px;
+    margin: 6px 0 0;
     color: var(--text-muted);
     font-size: 13px;
+    line-height: 1.45;
+    max-width: 56ch;
+  }
+
+  .selection-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(88px, 1fr));
+    gap: 8px;
+    min-width: 286px;
+  }
+
+  .selection-metrics article {
+    border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+    border-radius: var(--radius-sm, 8px);
+    padding: 8px;
+    background: color-mix(in srgb, var(--bg-secondary) 74%, transparent);
+    display: grid;
+    gap: 4px;
+  }
+
+  .selection-metrics span {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .selection-metrics strong {
+    color: var(--text);
+    font-size: 17px;
   }
 
   .template-card-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 12px;
   }
 
   .wizard-error {
     color: var(--danger, #ff5d5d);
+  }
+
+  @media (max-width: 860px) {
+    .template-selection-shell {
+      grid-template-columns: 1fr;
+    }
+
+    .selection-metrics {
+      min-width: 0;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 620px) {
+    .selection-metrics {
+      grid-template-columns: 1fr;
+    }
   }
 </style>
