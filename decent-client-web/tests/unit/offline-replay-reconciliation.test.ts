@@ -225,4 +225,79 @@ describe('ChatController offline replay reconciliation', () => {
     expect(ctrl.transport.send).not.toHaveBeenCalled();
     expect(ctrl.persistentStore.saveMessage).not.toHaveBeenCalled();
   });
+
+  test('reconcileReplayedOutgoingMessage preserves explicit multi-recipient state during single-peer replay', async () => {
+    const ctrl = makeBaseController();
+    const outgoing = {
+      id: 'msg-5',
+      channelId: 'ch-1',
+      senderId: 'me',
+      content: 'group message',
+      timestamp: 1700000004000,
+      type: 'text',
+      prevHash: 'r',
+      status: 'pending',
+      recipientPeerIds: ['peer-a', 'peer-b', 'peer-c'],
+      ackedBy: ['peer-a'],
+      ackedAt: { 'peer-a': 1700000004500 },
+      readBy: [],
+      readAt: {},
+    };
+
+    ctrl.messageStore = {
+      getAllChannelIds: mock(() => ['ch-1']),
+      getMessages: mock(() => [outgoing]),
+      getThreadRoot: mock(() => null),
+    };
+
+    await (ChatController.prototype as any).reconcileReplayedOutgoingMessage.call(ctrl, 'peer-a', 'msg-5');
+
+    expect(ctrl.persistentStore.saveMessage).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'msg-5',
+      recipientPeerIds: ['peer-a', 'peer-b', 'peer-c'],
+      status: 'sent',
+      ackedBy: ['peer-a'],
+    }));
+    expect(ctrl.ui.updateMessageStatus).toHaveBeenCalledWith('msg-5', 'sent', { acked: 1, total: 3, read: 0 });
+  });
+
+  test('reconcileReplayedOutgoingMessage does not persist peer-specific fallback when recipients are unresolved', async () => {
+    const ctrl = makeBaseController();
+    const outgoing = {
+      id: 'msg-6',
+      channelId: 'unknown-channel',
+      senderId: 'me',
+      content: 'legacy message',
+      timestamp: 1700000005000,
+      type: 'text',
+      prevHash: 's',
+      status: 'pending',
+      ackedBy: [],
+      ackedAt: {},
+      readBy: [],
+      readAt: {},
+    };
+
+    ctrl.messageStore = {
+      getAllChannelIds: mock(() => ['unknown-channel']),
+      getMessages: mock(() => [outgoing]),
+      getThreadRoot: mock(() => null),
+    };
+    ctrl.directConversationStore = {
+      conversations: new Map<string, any>(),
+    };
+    ctrl.workspaceManager = {
+      getAllWorkspaces: mock(() => []),
+    };
+
+    await (ChatController.prototype as any).reconcileReplayedOutgoingMessage.call(ctrl, 'peer-a', 'msg-6');
+
+    expect(ctrl.persistentStore.saveMessage).toHaveBeenCalledTimes(1);
+    const persisted = ctrl.persistentStore.saveMessage.mock.calls[0][0];
+    expect(persisted.id).toBe('msg-6');
+    expect(persisted.status).toBe('sent');
+    expect(persisted.recipientPeerIds).toBeUndefined();
+    expect(ctrl.ui.updateMessageStatus).toHaveBeenCalledWith('msg-6', 'sent', { acked: 0, total: 0, read: 0 });
+  });
+
 });

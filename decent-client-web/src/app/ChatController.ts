@@ -9067,12 +9067,11 @@ export class ChatController {
     const msg = this.findMessageById(messageId);
     if (!msg || msg.senderId !== this.state.myPeerId) return;
 
-    const explicitRecipients = Array.isArray((msg as any).recipientPeerIds)
-      ? (msg as any).recipientPeerIds.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
-      : [];
-    const inferredRecipients = this.getMessageRecipients(msg, peerId);
-    const recipients = Array.from(new Set([...explicitRecipients, ...inferredRecipients, peerId]))
-      .filter((id) => id !== this.state.myPeerId);
+    // Important: never persist the peer-specific fallback used by receipt validation.
+    // During reconnect, workspace/direct metadata may not be fully hydrated yet; in that
+    // case collapsing a multi-recipient message down to [peerId] would make everyone
+    // except the first replayed peer look permanently pending.
+    const recipients = this.getStableMessageRecipients(msg);
 
     const ackedBy = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
     const readBy = new Set<string>(Array.isArray((msg as any).readBy) ? (msg as any).readBy : []);
@@ -9091,18 +9090,24 @@ export class ChatController {
     const currentStatus = (msg.status ?? 'pending') as 'pending' | 'sent' | 'delivered' | 'read';
     const nextStatus = rank[currentStatus] > rank[computedStatus] ? currentStatus : computedStatus;
 
-    (msg as any).recipientPeerIds = recipients;
+    if (recipients.length > 0) {
+      (msg as any).recipientPeerIds = recipients;
+    }
     (msg as any).status = nextStatus;
 
-    await this.persistentStore.saveMessage({
+    const persistedMessage: Record<string, unknown> = {
       ...msg,
       status: nextStatus,
-      recipientPeerIds: recipients,
       ackedBy: Array.from(ackedBy),
       ackedAt,
       readBy: Array.from(readBy),
       readAt,
-    });
+    };
+    if (recipients.length > 0) {
+      persistedMessage.recipientPeerIds = recipients;
+    }
+
+    await this.persistentStore.saveMessage(persistedMessage as PlaintextMessage);
 
     this.ui?.updateMessageStatus?.(msg.id, nextStatus, {
       acked: ackedBy.size,
@@ -9866,6 +9871,10 @@ export class ChatController {
 
     if (receiptPeerId) return [receiptPeerId];
     return [];
+  }
+
+  private getStableMessageRecipients(msg: PlaintextMessage): string[] {
+    return this.getMessageRecipients(msg).filter((id) => id !== this.state.myPeerId);
   }
 
   private isValidInboundReceipt(peerId: string, channelId: string, messageId: string, type: 'ack' | 'read'): { valid: true; msg: PlaintextMessage; recipients: string[] } | { valid: false } {
