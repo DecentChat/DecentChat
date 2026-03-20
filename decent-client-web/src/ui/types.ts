@@ -203,6 +203,136 @@ export interface CompanyTemplateRuntimeBridge {
   ) => Promise<CompanyTemplateRuntimeBridgeResult> | CompanyTemplateRuntimeBridgeResult;
 }
 
+export interface CompanySimOverview {
+  workspaceId: string;
+  workspaceName?: string;
+  companyId: string;
+  companyName: string;
+  manifestPath: string;
+  companyDirPath: string;
+  counts: {
+    employees: number;
+    teams: number;
+    channels: number;
+    docs: number;
+  };
+  sourceState: 'ready' | 'warning' | 'unknown';
+  generatedState: 'ready' | 'warning' | 'unknown';
+  liveState: 'ready' | 'warning' | 'unknown';
+  warnings: string[];
+}
+
+export interface CompanySimDocRecord {
+  id: string;
+  relativePath: string;
+  absolutePath?: string;
+  label: string;
+  kind: 'company' | 'team' | 'employee';
+  required: boolean;
+  exists: boolean;
+  usedByEmployeeIds: string[];
+  teamId?: string;
+  employeeId?: string;
+  documentId?: string;
+}
+
+export interface CompanySimTeamRecord {
+  id: string;
+  name: string;
+  managerEmployeeId?: string;
+  memberEmployeeIds: string[];
+  docPath: string;
+  docExists: boolean;
+}
+
+export interface CompanySimEmployeeParticipation {
+  mode?: 'summary-first' | 'specialist' | 'mention-only' | 'silent-unless-routed' | 'proactive-on-owned-channel';
+  respondWhenMentioned?: boolean;
+  replyInThreadsOnly?: boolean;
+  respondToChannelTopics?: string[];
+}
+
+export interface CompanySimEmployeeRecord {
+  id: string;
+  accountId: string;
+  alias: string;
+  title: string;
+  teamId?: string;
+  managerEmployeeId?: string;
+  channels: string[];
+  participation: CompanySimEmployeeParticipation;
+  silentChannelIds: string[];
+  effectiveDocPaths: string[];
+}
+
+export interface CompanySimChannelRecord {
+  name: string;
+  memberEmployeeIds: string[];
+  mutedEmployeeIds: string[];
+}
+
+export interface CompanySimProvisioningState {
+  bootstrapEnabled: boolean;
+  bootstrapMode: 'runtime' | 'off' | null;
+  manifestPath: string;
+  targetWorkspaceId?: string;
+  targetInviteCode?: string;
+  configuredAccountIds: string[];
+  missingAccountIds: string[];
+  onlineReadyAccountIds: string[];
+  manualActionRequiredAccountIds: string[];
+}
+
+export interface CompanySimState {
+  overview: CompanySimOverview;
+  teams: CompanySimTeamRecord[];
+  employees: CompanySimEmployeeRecord[];
+  channels: CompanySimChannelRecord[];
+  docs: CompanySimDocRecord[];
+  provisioning: CompanySimProvisioningState;
+}
+
+export interface CompanySimDocumentPayload {
+  doc: CompanySimDocRecord;
+  content: string;
+}
+
+export interface CompanySimEmployeeContextSection {
+  id: string;
+  title: string;
+  relativePath: string;
+  content: string;
+}
+
+export interface CompanySimEmployeeContext {
+  employeeId: string;
+  alias: string;
+  sections: CompanySimEmployeeContextSection[];
+  prompt: string;
+}
+
+export interface CompanySimRoutingPreviewEntry {
+  employeeId: string;
+  alias: string;
+  title: string;
+  teamId?: string;
+  shouldRespond: boolean;
+  reason: string;
+  preferredReply: 'channel' | 'thread';
+  explanation: string;
+}
+
+export interface CompanySimRoutingPreview {
+  workspaceId: string;
+  companyId: string;
+  chatType: 'direct' | 'channel';
+  channelNameOrId?: string;
+  text: string;
+  threadId?: string;
+  responders: CompanySimRoutingPreviewEntry[];
+  suppressed: CompanySimRoutingPreviewEntry[];
+}
+
 export interface UICallbacks {
   sendMessage: (content: string, threadId?: string) => Promise<void>;
   sendAttachment: (file: File, text?: string, threadId?: string) => Promise<void>;

@@ -85,6 +85,7 @@ import {
   normalizeRuntimeBridgeInstallResult,
   resolveCompanyTemplateRuntimeBridge,
 } from './lib/company-sim/runtimeBridge';
+import { setCompanySimControlPlaneTransport } from './lib/company-sim/controlPlane';
 import type { CompanyTemplateProvisioningMode } from './ui/types';
 import type { AppSettings } from './storage/types';
 import { SeedPhraseManager as _SeedPhraseManager, IdentityManager as _IdentityManager } from 'decent-protocol';
@@ -328,6 +329,15 @@ async function init(): Promise<void> {
 
   // Create controller (owns all protocol instances)
   const ctrl = new ChatController(state);
+
+  setCompanySimControlPlaneTransport({
+    requestState: ({ workspaceId }) => ctrl.requestCompanySimStateViaControlPlane({ workspaceId }),
+    readDocument: ({ workspaceId, relativePath }) => ctrl.readCompanySimDocumentViaControlPlane({ workspaceId, relativePath }),
+    writeDocument: ({ workspaceId, relativePath, content }) => ctrl.writeCompanySimDocumentViaControlPlane({ workspaceId, relativePath, content }),
+    requestEmployeeContext: ({ workspaceId, employeeId }) => ctrl.requestCompanySimEmployeeContextViaControlPlane({ workspaceId, employeeId }),
+    requestRoutingPreview: ({ workspaceId, chatType, channelNameOrId, text, threadId }) =>
+      ctrl.requestCompanySimRoutingPreviewViaControlPlane({ workspaceId, chatType, channelNameOrId, text, threadId }),
+  });
 
   // Create command parser
   const commandParser = new CommandParser();

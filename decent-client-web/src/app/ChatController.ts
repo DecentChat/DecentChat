@@ -249,6 +249,15 @@ type PendingCompanyTemplateInstallRequest = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+
+type PendingCompanySimControlRequest = {
+  targetPeerId: string;
+  responseType: string;
+  resolve: (result: unknown) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 // ---------------------------------------------------------------------------
 // ChatController
 // ---------------------------------------------------------------------------
@@ -295,6 +304,7 @@ export class ChatController {
     }
   >();
   private readonly pendingCompanyTemplateInstallRequests = new Map<string, PendingCompanyTemplateInstallRequest>();
+  private readonly pendingCompanySimControlRequests = new Map<string, PendingCompanySimControlRequest>();
   private readonly pendingPreKeyBundleFetches = new Map<string, PendingPreKeyBundleFetch>();
   private readonly publishedPreKeyVersionByWorkspace = new Map<string, string>();
   private lastMessageSyncRequestAt = new Map<string, number>();
@@ -1139,6 +1149,12 @@ export class ChatController {
         clearTimeout(pending.timer);
         pending.reject(new Error('Host control peer disconnected during AI team install'));
         this.pendingCompanyTemplateInstallRequests.delete(requestId);
+      }
+      for (const [requestId, pending] of this.pendingCompanySimControlRequests) {
+        if (pending.targetPeerId !== peerId) continue;
+        clearTimeout(pending.timer);
+        pending.reject(new Error('Host control peer disconnected during company sim request'));
+        this.pendingCompanySimControlRequests.delete(requestId);
       }
       this.ui?.updateSidebar();
     };
@@ -2625,7 +2641,210 @@ export class ChatController {
       return 'Host control bridge rejected AI team install request';
     })();
 
+
     pending.reject(new Error(errorMessage));
+  }
+
+  private extractCompanySimControlErrorMessage(sync: any): string {
+    if (typeof sync?.error === 'string') {
+      const trimmed = sync.error.trim();
+      if (trimmed) return trimmed;
+    }
+    if (sync?.error && typeof sync.error === 'object') {
+      const rawMessage = (sync.error as Record<string, unknown>).message;
+      if (typeof rawMessage === 'string' && rawMessage.trim()) {
+        return rawMessage.trim();
+      }
+    }
+    return 'Host control bridge rejected company sim request';
+  }
+
+  private handleCompanySimControlResponse(peerId: string, sync: any): void {
+    const requestId = typeof sync?.requestId === 'string' ? sync.requestId.trim() : '';
+    if (!requestId) return;
+
+    const pending = this.pendingCompanySimControlRequests.get(requestId);
+    if (!pending) return;
+    if (pending.targetPeerId !== peerId) return;
+    if (pending.responseType !== sync?.type) return;
+
+    clearTimeout(pending.timer);
+    this.pendingCompanySimControlRequests.delete(requestId);
+
+    if (sync?.ok === true) {
+      pending.resolve(sync?.result ?? null);
+      return;
+    }
+
+    pending.reject(new Error(this.extractCompanySimControlErrorMessage(sync)));
+  }
+
+  private requestCompanySimControlFromPeer(params: {
+    targetPeerId: string;
+    workspaceId: string;
+    requestType: string;
+    responseType: string;
+    label: string;
+    payload?: Record<string, unknown>;
+  }): Promise<unknown> {
+    const randomUuid = (globalThis.crypto as any)?.randomUUID?.bind(globalThis.crypto);
+    const requestId = typeof randomUuid === 'function'
+      ? randomUuid()
+      : `company-sim:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const pending = this.pendingCompanySimControlRequests.get(requestId);
+        if (!pending) return;
+        this.pendingCompanySimControlRequests.delete(requestId);
+        pending.reject(new Error('Timed out waiting for host control bridge response'));
+      }, COMPANY_TEMPLATE_INSTALL_TIMEOUT_MS);
+
+      this.pendingCompanySimControlRequests.set(requestId, {
+        targetPeerId: params.targetPeerId,
+        responseType: params.responseType,
+        resolve,
+        reject,
+        timer,
+      });
+
+      this.sendControlWithRetry(params.targetPeerId, {
+        type: 'workspace-sync',
+        workspaceId: params.workspaceId,
+        sync: {
+          type: params.requestType,
+          requestId,
+          workspaceId: params.workspaceId,
+          ...(params.payload ?? {}),
+        },
+      }, { label: params.label });
+    });
+  }
+
+  private async requestCompanySimControlViaControlPlane(params: {
+    workspaceId: string;
+    requestType: string;
+    responseType: string;
+    label: string;
+    payload?: Record<string, unknown>;
+    noPeerMessage: string;
+  }): Promise<unknown> {
+    let targetPeers = this.selectWorkspaceSyncTargetPeers(
+      params.workspaceId,
+      COMPANY_TEMPLATE_CONTROL_CAPABILITY,
+    );
+
+    if (!targetPeers.length) {
+      await this.warmCompanyTemplateControlPeerConnections(params.workspaceId);
+      targetPeers = this.selectWorkspaceSyncTargetPeers(
+        params.workspaceId,
+        COMPANY_TEMPLATE_CONTROL_CAPABILITY,
+      );
+    }
+
+    if (!targetPeers.length) {
+      throw new Error(params.noPeerMessage);
+    }
+
+    const failures: string[] = [];
+    for (const targetPeerId of targetPeers) {
+      try {
+        return await this.requestCompanySimControlFromPeer({
+          targetPeerId,
+          workspaceId: params.workspaceId,
+          requestType: params.requestType,
+          responseType: params.responseType,
+          label: params.label,
+          payload: params.payload,
+        });
+      } catch (error) {
+        failures.push(String((error as Error)?.message ?? error ?? 'Unknown host control failure'));
+      }
+    }
+
+    const detail = failures.find((entry) => entry.trim()) ?? 'Host control bridge failed company sim request';
+    throw new Error(detail);
+  }
+
+  async requestCompanySimStateViaControlPlane(params: { workspaceId: string }): Promise<unknown> {
+    const workspaceId = String(params.workspaceId ?? '').trim();
+    if (!workspaceId) throw new Error('workspaceId is required for company sim state request');
+    return await this.requestCompanySimControlViaControlPlane({
+      workspaceId,
+      requestType: 'company-sim-state-request',
+      responseType: 'company-sim-state-response',
+      label: 'company-sim-state',
+      noPeerMessage: 'No online host control peer is available to inspect company sim right now',
+    });
+  }
+
+  async readCompanySimDocumentViaControlPlane(params: { workspaceId: string; relativePath: string }): Promise<unknown> {
+    const workspaceId = String(params.workspaceId ?? '').trim();
+    const relativePath = String(params.relativePath ?? '').trim();
+    if (!workspaceId) throw new Error('workspaceId is required for company sim doc read');
+    if (!relativePath) throw new Error('relativePath is required for company sim doc read');
+    return await this.requestCompanySimControlViaControlPlane({
+      workspaceId,
+      requestType: 'company-sim-doc-read-request',
+      responseType: 'company-sim-doc-read-response',
+      label: 'company-sim-doc-read',
+      payload: { relativePath },
+      noPeerMessage: 'No online host control peer is available to read company sim docs right now',
+    });
+  }
+
+  async writeCompanySimDocumentViaControlPlane(params: { workspaceId: string; relativePath: string; content: string }): Promise<unknown> {
+    const workspaceId = String(params.workspaceId ?? '').trim();
+    const relativePath = String(params.relativePath ?? '').trim();
+    if (!workspaceId) throw new Error('workspaceId is required for company sim doc write');
+    if (!relativePath) throw new Error('relativePath is required for company sim doc write');
+    return await this.requestCompanySimControlViaControlPlane({
+      workspaceId,
+      requestType: 'company-sim-doc-write-request',
+      responseType: 'company-sim-doc-write-response',
+      label: 'company-sim-doc-write',
+      payload: { relativePath, content: String(params.content ?? '') },
+      noPeerMessage: 'No online host control peer is available to write company sim docs right now',
+    });
+  }
+
+  async requestCompanySimEmployeeContextViaControlPlane(params: { workspaceId: string; employeeId: string }): Promise<unknown> {
+    const workspaceId = String(params.workspaceId ?? '').trim();
+    const employeeId = String(params.employeeId ?? '').trim();
+    if (!workspaceId) throw new Error('workspaceId is required for company sim employee context request');
+    if (!employeeId) throw new Error('employeeId is required for company sim employee context request');
+    return await this.requestCompanySimControlViaControlPlane({
+      workspaceId,
+      requestType: 'company-sim-employee-context-request',
+      responseType: 'company-sim-employee-context-response',
+      label: 'company-sim-employee-context',
+      payload: { employeeId },
+      noPeerMessage: 'No online host control peer is available to inspect employee context right now',
+    });
+  }
+
+  async requestCompanySimRoutingPreviewViaControlPlane(params: {
+    workspaceId: string;
+    chatType: 'direct' | 'channel';
+    channelNameOrId?: string;
+    text: string;
+    threadId?: string;
+  }): Promise<unknown> {
+    const workspaceId = String(params.workspaceId ?? '').trim();
+    if (!workspaceId) throw new Error('workspaceId is required for company sim routing preview');
+    return await this.requestCompanySimControlViaControlPlane({
+      workspaceId,
+      requestType: 'company-sim-routing-preview-request',
+      responseType: 'company-sim-routing-preview-response',
+      label: 'company-sim-routing-preview',
+      payload: {
+        chatType: params.chatType === 'direct' ? 'direct' : 'channel',
+        ...(params.channelNameOrId ? { channelNameOrId: String(params.channelNameOrId) } : {}),
+        text: String(params.text ?? ''),
+        ...(params.threadId ? { threadId: String(params.threadId) } : {}),
+      },
+      noPeerMessage: 'No online host control peer is available to simulate company routing right now',
+    });
   }
 
   private requestCompanyTemplateInstallFromPeer(
@@ -2991,6 +3210,17 @@ export class ChatController {
   private async handleSyncMessage(peerId: string, msg: any): Promise<void> {
     if (msg.sync?.type === 'company-template-install-response') {
       this.handleCompanyTemplateInstallResponse(peerId, msg.sync);
+      return;
+    }
+
+    if (
+      msg.sync?.type === 'company-sim-state-response'
+      || msg.sync?.type === 'company-sim-doc-read-response'
+      || msg.sync?.type === 'company-sim-doc-write-response'
+      || msg.sync?.type === 'company-sim-employee-context-response'
+      || msg.sync?.type === 'company-sim-routing-preview-response'
+    ) {
+      this.handleCompanySimControlResponse(peerId, msg.sync);
       return;
     }
 
