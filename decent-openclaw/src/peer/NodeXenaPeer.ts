@@ -46,6 +46,29 @@ import type { CompanyTemplateQuestionValue } from '../company-sim/template-types
 
 const COMPANY_TEMPLATE_CONTROL_CAPABILITY = 'company-template-control-v1';
 
+let nodeXenaPeerStartupLock: Promise<void> = Promise.resolve();
+
+export function resetNodeXenaPeerStartupLockForTests(): void {
+  nodeXenaPeerStartupLock = Promise.resolve();
+}
+
+export async function runNodeXenaPeerStartupLocked<T>(task: () => Promise<T>): Promise<T> {
+  const waitForPrevious = nodeXenaPeerStartupLock;
+  let releaseCurrent: (() => void) | null = null;
+
+  nodeXenaPeerStartupLock = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+
+  await waitForPrevious;
+
+  try {
+    return await task();
+  } finally {
+    releaseCurrent?.();
+  }
+}
+
 export interface NodeXenaPeerOptions {
   account: ResolvedDecentChatAccount;
   onIncomingMessage: (params: {
@@ -253,6 +276,11 @@ type DirectoryEntry = {
 export class NodeXenaPeer {
   private static readonly CUSTODIAN_REPLICATION_TARGET = 2;
   private static readonly PRE_KEY_FETCH_TIMEOUT_MS = 2_500;
+  private static readonly DECRYPT_RECOVERY_HANDSHAKE_COOLDOWN_MS = 5_000;
+  private static readonly CONNECT_HANDSHAKE_COOLDOWN_MS = 5_000;
+  private static readonly INBOUND_HANDSHAKE_COOLDOWN_MS = 5_000;
+  private static readonly PEER_MAINTENANCE_RETRY_BASE_MS = 30_000;
+  private static readonly PEER_MAINTENANCE_RETRY_MAX_MS = 10 * 60_000;
 
   private readonly store: FileStore;
   private readonly workspaceManager: WorkspaceManager;
@@ -274,6 +302,13 @@ export class NodeXenaPeer {
   private readonly pendingMediaRequests = new Map<string, PendingMediaRequest>();
   private readonly pendingPreKeyBundleFetches = new Map<string, PendingPreKeyBundleFetch>();
   private readonly publishedPreKeyVersionByWorkspace = new Map<string, string>();
+  private readonly decryptRecoveryAtByPeer = new Map<string, number>();
+  private readonly connectHandshakeAtByPeer = new Map<string, number>();
+  private readonly inboundHandshakeAtByPeer = new Map<string, number>();
+  private readonly peerMaintenanceRetryAtByPeer = new Map<string, number>();
+  private readonly peerMaintenanceAttemptsByPeer = new Map<string, number>();
+  private companySimProfileLoaded = false;
+  private companySimProfile: WorkspaceMember["companySim"] | undefined;
   private companyTemplateInstallLock: Promise<void> = Promise.resolve();
   private readonly mediaChunkTimeout = 30000;
   private manifestPersistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -372,143 +407,181 @@ export class NodeXenaPeer {
       throw new Error(`Invalid seed phrase in channels.decentchat.seedPhrase: ${validation.error}`);
     }
 
-    const { ecdhKeyPair, ecdsaKeyPair } = await seedMgr.deriveKeys(seedPhrase);
-    this.myPeerId = await seedMgr.derivePeerId(seedPhrase);
+    await runNodeXenaPeerStartupLocked(async () => {
+      const { ecdhKeyPair, ecdsaKeyPair } = await seedMgr.deriveKeys(seedPhrase);
+      this.myPeerId = await seedMgr.derivePeerId(seedPhrase);
 
-    this.cryptoManager.setKeyPair(ecdhKeyPair);
-    this.myPublicKey = await this.cryptoManager.exportPublicKey(ecdhKeyPair.publicKey);
+      this.cryptoManager.setKeyPair(ecdhKeyPair);
+      this.myPublicKey = await this.cryptoManager.exportPublicKey(ecdhKeyPair.publicKey);
 
-    this.messageProtocol = new NodeMessageProtocol(this.cryptoManager, this.myPeerId);
-    this.messageProtocol.setPersistence({
-      save: async (peerId, state) => this.store.set(`ratchet-${peerId}`, state),
-      load: async (peerId) => this.store.get(`ratchet-${peerId}`, null),
-      delete: async (peerId) => this.store.delete(`ratchet-${peerId}`),
-      savePreKeyBundle: async (peerId, bundle) => this.store.set(`prekey-bundle-${peerId}`, bundle),
-      loadPreKeyBundle: async (peerId) => this.store.get(`prekey-bundle-${peerId}`, null),
-      deletePreKeyBundle: async (peerId) => this.store.delete(`prekey-bundle-${peerId}`),
-      saveLocalPreKeyState: async (ownerPeerId, state) => this.store.set(`prekey-state-${ownerPeerId}`, state),
-      loadLocalPreKeyState: async (ownerPeerId) => this.store.get(`prekey-state-${ownerPeerId}`, null),
-      deleteLocalPreKeyState: async (ownerPeerId) => this.store.delete(`prekey-state-${ownerPeerId}`),
-    });
-    await this.messageProtocol.init(ecdsaKeyPair);
+      this.messageProtocol = new NodeMessageProtocol(this.cryptoManager, this.myPeerId);
+      this.messageProtocol.setPersistence({
+        save: async (peerId, state) => this.store.set(`ratchet-${peerId}`, state),
+        load: async (peerId) => this.store.get(`ratchet-${peerId}`, null),
+        delete: async (peerId) => this.store.delete(`ratchet-${peerId}`),
+        savePreKeyBundle: async (peerId, bundle) => this.store.set(`prekey-bundle-${peerId}`, bundle),
+        loadPreKeyBundle: async (peerId) => this.store.get(`prekey-bundle-${peerId}`, null),
+        deletePreKeyBundle: async (peerId) => this.store.delete(`prekey-bundle-${peerId}`),
+        saveLocalPreKeyState: async (ownerPeerId, state) => this.store.set(`prekey-state-${ownerPeerId}`, state),
+        loadLocalPreKeyState: async (ownerPeerId) => this.store.get(`prekey-state-${ownerPeerId}`, null),
+        deleteLocalPreKeyState: async (ownerPeerId) => this.store.delete(`prekey-state-${ownerPeerId}`),
+      });
+      await this.messageProtocol.init(ecdsaKeyPair);
 
-    this.restoreWorkspaces();
-    this.restoreMessages();
-    this.restoreManifestState();
-    this.restoreCustodianInbox();
+      this.restoreWorkspaces();
+      this.restoreMessages();
+      this.restoreManifestState();
+      this.restoreCustodianInbox();
 
-    const configServer = this.opts.account.signalingServer ?? 'https://decentchat.app/peerjs';
-    const allServers: string[] = [configServer];
+      const configServer = this.opts.account.signalingServer ?? 'https://decentchat.app/peerjs';
+      const allServers: string[] = [configServer];
 
-    // Normalize a signaling URL for deduplication: strip default ports so
-    // https://0.peerjs.com/ and https://0.peerjs.com:443/ are treated as identical.
-    const normalizeUrl = (url: string): string => {
-      try {
-        const u = new URL(url);
-        const defaultPort = u.protocol === 'https:' || u.protocol === 'wss:' ? '443' : '80';
-        if (u.port === defaultPort) u.port = '';
-        return u.toString();
-      } catch { return url; }
-    };
-    const normalizedServers = new Set(allServers.map(normalizeUrl));
+      // Normalize a signaling URL for deduplication: strip default ports so
+      // https://0.peerjs.com/ and https://0.peerjs.com:443/ are treated as identical.
+      const normalizeUrl = (url: string): string => {
+        try {
+          const u = new URL(url);
+          const defaultPort = u.protocol === 'https:' || u.protocol === 'wss:' ? '443' : '80';
+          if (u.port === defaultPort) u.port = '';
+          return u.toString();
+        } catch { return url; }
+      };
+      const normalizedServers = new Set(allServers.map(normalizeUrl));
 
-    // Collect signaling servers from all invites so we can find peers
-    // regardless of which PeerJS server they registered on.
-    for (const inviteUri of this.opts.account.invites ?? []) {
-      try {
-        const invite = InviteURI.decode(inviteUri);
-        const scheme = invite.secure ? 'https' : 'http';
-        const inviteServer = `${scheme}://${invite.host}:${invite.port}${invite.path}`;
-        if (!normalizedServers.has(normalizeUrl(inviteServer))) {
-          normalizedServers.add(normalizeUrl(inviteServer));
-          allServers.push(inviteServer);
+      // Collect signaling servers from all invites so we can find peers
+      // regardless of which PeerJS server they registered on.
+      for (const inviteUri of this.opts.account.invites ?? []) {
+        try {
+          const invite = InviteURI.decode(inviteUri);
+          const scheme = invite.secure ? 'https' : 'http';
+          const inviteServer = `${scheme}://${invite.host}:${invite.port}${invite.path}`;
+          if (!normalizedServers.has(normalizeUrl(inviteServer))) {
+            normalizedServers.add(normalizeUrl(inviteServer));
+            allServers.push(inviteServer);
+          }
+        } catch {
+          // malformed invite — skip
         }
-      } catch {
-        // malformed invite — skip
+      }
+
+      this.transport = new PeerTransport({
+        signalingServers: allServers,
+        // useTurn defaults to true → uses STUN + open-relay TURN for NAT traversal
+      });
+      this.opts.log?.info(`[xena-peer] signaling servers: ${allServers.join(', ')}`);
+
+      this.syncProtocol = new SyncProtocol(
+        this.workspaceManager,
+        this.messageStore,
+        (peerId, data) => this.transport?.send(peerId, data) ?? false,
+        (event) => {
+          void this.handleSyncEvent(event);
+        },
+        this.myPeerId,
+      );
+
+      this.transport.onConnect = (peerId) => {
+        void this.handlePeerConnect(peerId);
+      };
+
+      this.transport.onDisconnect = (peerId) => {
+        this.opts.log?.info(`[xena-peer] peer disconnected: ${peerId}`);
+        this.messageProtocol?.clearSharedSecret(peerId);
+      };
+
+      this.transport.onMessage = (fromPeerId, rawData) => {
+        void this.handlePeerMessage(fromPeerId, rawData);
+      };
+
+      this.transport.onError = (err) => {
+        this.notePeerMaintenanceFailure(this.extractPeerIdFromTransportError(err), Date.now());
+        this.opts.log?.error?.(`[xena-peer] transport error: ${err.message}`);
+      };
+
+      this.myPeerId = await this.transport.init(this.myPeerId);
+      this.opts.log?.info(`[xena-peer] online as ${this.myPeerId}, signaling: ${allServers.join(', ')}`);
+      this.startPeerMaintenance();
+
+      // Initialize huddle manager after transport is ready (if enabled)
+      const huddleConfig = this.opts.account.huddle;
+      if (huddleConfig?.enabled !== false) {
+        this.botHuddle = new BotHuddleManager(this.myPeerId, {
+          sendSignal: (peerId, data) => this.transport?.send(peerId, data) ?? false,
+          broadcastSignal: (data) => {
+            if (!this.transport) return;
+            for (const peerId of this.transport.getConnectedPeers()) {
+              if (peerId !== this.myPeerId) {
+                this.transport.send(peerId, data);
+              }
+            }
+          },
+          getDisplayName: (peerId) => this.resolveSenderName('', peerId),
+          onTranscription: async (text, peerId, channelId) => {
+            const senderName = this.resolveSenderName('', peerId);
+            return this.opts.onHuddleTranscription?.(text, peerId, channelId, senderName);
+          },
+          log: this.opts.log,
+        }, {
+          autoJoin: huddleConfig?.autoJoin,
+          sttEngine: huddleConfig?.sttEngine,
+          whisperModel: huddleConfig?.whisperModel,
+          sttLanguage: huddleConfig?.sttLanguage,
+          sttApiKey: huddleConfig?.sttApiKey,
+          ttsVoice: huddleConfig?.ttsVoice,
+          vadSilenceMs: huddleConfig?.vadSilenceMs,
+          vadThreshold: huddleConfig?.vadThreshold,
+        });
+      }
+
+      for (const inviteUri of this.opts.account.invites ?? []) {
+        const invite = (() => {
+          try {
+            return InviteURI.decode(inviteUri);
+          } catch {
+            return null;
+          }
+        })();
+        if (!invite || !this.shouldAttemptInviteJoin(invite)) {
+          continue;
+        }
+        // Try immediately; if the peer is offline, retry with backoff
+        void this.joinWorkspaceWithRetry(inviteUri, invite);
+      }
+    });
+  }
+
+  private shouldAttemptInviteJoin(invite: { peerId?: string; workspaceId?: string }): boolean {
+    if (!invite.peerId) {
+      return false;
+    }
+
+    if (invite.workspaceId) {
+      const workspace = this.workspaceManager.getWorkspace(invite.workspaceId);
+      if (workspace?.members.some((member) => member.peerId === this.myPeerId)) {
+        return !workspace.members.some((member) => member.peerId === invite.peerId);
       }
     }
 
-    this.transport = new PeerTransport({
-      signalingServers: allServers,
-      // useTurn defaults to true → uses STUN + open-relay TURN for NAT traversal
-    });
-    this.opts.log?.info(`[xena-peer] signaling servers: ${allServers.join(', ')}`);
-
-    this.syncProtocol = new SyncProtocol(
-      this.workspaceManager,
-      this.messageStore,
-      (peerId, data) => this.transport?.send(peerId, data) ?? false,
-      (event) => {
-        void this.handleSyncEvent(event);
-      },
-      this.myPeerId,
-    );
-
-    this.transport.onConnect = (peerId) => {
-      this.opts.log?.info(`[xena-peer] peer connected: ${peerId}`);
-      // Clear ALL ratchet state (not just shared secret) so processHandshake always reinitializes
-      void this.messageProtocol?.clearRatchetState(peerId);
-      this.messageProtocol?.clearSharedSecret(peerId);
-      this.store.delete(`ratchet-${peerId}`);
-      void this.sendHandshake(peerId);
-    };
-
-    this.transport.onDisconnect = (peerId) => {
-      this.opts.log?.info(`[xena-peer] peer disconnected: ${peerId}`);
-      this.messageProtocol?.clearSharedSecret(peerId);
-    };
-
-    this.transport.onMessage = (fromPeerId, rawData) => {
-      void this.handlePeerMessage(fromPeerId, rawData);
-    };
-
-    this.transport.onError = (err) => {
-      this.opts.log?.error?.(`[xena-peer] transport error: ${err.message}`);
-    };
-
-    this.myPeerId = await this.transport.init(this.myPeerId);
-    this.opts.log?.info(`[xena-peer] online as ${this.myPeerId}, signaling: ${allServers.join(', ')}`);
-    this.startPeerMaintenance();
-
-    // Initialize huddle manager after transport is ready (if enabled)
-    const huddleConfig = this.opts.account.huddle;
-    if (huddleConfig?.enabled !== false) {
-      this.botHuddle = new BotHuddleManager(this.myPeerId, {
-        sendSignal: (peerId, data) => this.transport?.send(peerId, data) ?? false,
-        broadcastSignal: (data) => {
-          if (!this.transport) return;
-          for (const peerId of this.transport.getConnectedPeers()) {
-            if (peerId !== this.myPeerId) {
-              this.transport.send(peerId, data);
-            }
-          }
-        },
-        getDisplayName: (peerId) => this.resolveSenderName('', peerId),
-        onTranscription: async (text, peerId, channelId) => {
-          const senderName = this.resolveSenderName('', peerId);
-          return this.opts.onHuddleTranscription?.(text, peerId, channelId, senderName);
-        },
-        log: this.opts.log,
-      }, {
-        autoJoin: huddleConfig?.autoJoin,
-        sttEngine: huddleConfig?.sttEngine,
-        whisperModel: huddleConfig?.whisperModel,
-        sttLanguage: huddleConfig?.sttLanguage,
-        sttApiKey: huddleConfig?.sttApiKey,
-        ttsVoice: huddleConfig?.ttsVoice,
-        vadSilenceMs: huddleConfig?.vadSilenceMs,
-        vadThreshold: huddleConfig?.vadThreshold,
-      });
+    for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+      const memberPeerIds = new Set(workspace.members.map((member) => member.peerId));
+      if (memberPeerIds.has(this.myPeerId) && memberPeerIds.has(invite.peerId)) {
+        return false;
+      }
     }
 
-    for (const inviteUri of this.opts.account.invites ?? []) {
-      // Try immediately; if the peer is offline, retry with backoff
-      void this.joinWorkspaceWithRetry(inviteUri);
-    }
+    return true;
   }
 
-  private async joinWorkspaceWithRetry(inviteUri: string, maxAttempts = 5): Promise<void> {
+  private async joinWorkspaceWithRetry(
+    inviteUri: string,
+    decodedInvite: ReturnType<typeof InviteURI.decode> | null = null,
+    maxAttempts = 5,
+  ): Promise<void> {
     const delays = [5000, 15000, 30000, 60000, 120000];
+    const invite = decodedInvite ?? (() => { try { return InviteURI.decode(inviteUri); } catch { return null; } })();
+    if (!invite || !this.shouldAttemptInviteJoin(invite)) {
+      return;
+    }
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       if (this.destroyed) return;
       try {
@@ -518,8 +591,8 @@ export class NodeXenaPeer {
         // joinWorkspace() catches internally and logs; we just check if we're connected
       }
       // If already connected to this peer (inbound connection arrived first), stop retrying
-      const invite = (() => { try { return InviteURI.decode(inviteUri); } catch { return null; } })();
       if (invite?.peerId && this.transport?.getConnectedPeers().includes(invite.peerId)) return;
+      if (!this.shouldAttemptInviteJoin(invite)) return;
 
       if (attempt < maxAttempts - 1) {
         const delay = delays[Math.min(attempt, delays.length - 1)];
@@ -622,9 +695,17 @@ export class NodeXenaPeer {
               ciphertext: encrypted,
               metadata: {
                 messageId: msg.id,
-                senderId: this.myPeerId,
-                senderName: this.opts.account.alias,
-                ...(replyToId ? { replyToId } : {}),
+                ...this.buildCustodyResendMetadata({
+                  content: content.trim(),
+                  channelId,
+                  workspaceId,
+                  senderId: this.myPeerId,
+                  senderName: this.opts.account.alias,
+                  threadId,
+                  replyToId,
+                  isDirect: false,
+                  metadata: modelMeta,
+                }),
               },
             });
             await this.replicateToCustodians(peerId, { workspaceId, channelId, opId: msg.id, domain: 'channel-message' });
@@ -643,9 +724,17 @@ export class NodeXenaPeer {
           ciphertext: encrypted,
           metadata: {
             messageId: msg.id,
-            senderId: this.myPeerId,
-            senderName: this.opts.account.alias,
-            ...(replyToId ? { replyToId } : {}),
+            ...this.buildCustodyResendMetadata({
+              content: content.trim(),
+              channelId,
+              workspaceId,
+              senderId: this.myPeerId,
+              senderName: this.opts.account.alias,
+              threadId,
+              replyToId,
+              isDirect: false,
+              metadata: modelMeta,
+            }),
           },
         });
         await this.replicateToCustodians(peerId, { workspaceId, channelId, opId: msg.id, domain: 'channel-message' });
@@ -771,20 +860,54 @@ export class NodeXenaPeer {
   private startPeerMaintenance(): void {
     if (this._maintenanceInterval) return;
     this._maintenanceInterval = setInterval(() => {
-      if (this.destroyed || !this.transport) return;
-      const connectedPeers = new Set(this.transport.getConnectedPeers());
-      const seen = new Set<string>();
-      for (const workspace of this.workspaceManager.getAllWorkspaces()) {
-        for (const member of workspace.members) {
-          const peerId = member.peerId;
-          if (peerId === this.myPeerId) continue;
-          if (connectedPeers.has(peerId)) continue;
-          if (seen.has(peerId)) continue;
-          seen.add(peerId);
-          this.transport.connect(peerId).catch(() => {});
+      void this.runPeerMaintenancePass();
+    }, 30_000);
+  }
+
+  private extractPeerIdFromTransportError(error: Error): string | null {
+    const match = /Could not connect to peer ([a-z0-9]+)/i.exec(error.message);
+    return match?.[1] ?? null;
+  }
+
+  private notePeerMaintenanceFailure(peerId: string | null, now = Date.now()): void {
+    if (!peerId || peerId === this.myPeerId) return;
+    const attempt = (this.peerMaintenanceAttemptsByPeer.get(peerId) ?? 0) + 1;
+    this.peerMaintenanceAttemptsByPeer.set(peerId, attempt);
+    const delay = Math.min(
+      NodeXenaPeer.PEER_MAINTENANCE_RETRY_BASE_MS * (2 ** Math.max(0, attempt - 1)),
+      NodeXenaPeer.PEER_MAINTENANCE_RETRY_MAX_MS,
+    );
+    this.peerMaintenanceRetryAtByPeer.set(peerId, now + delay);
+  }
+
+  private clearPeerMaintenanceFailure(peerId: string): void {
+    this.peerMaintenanceAttemptsByPeer.delete(peerId);
+    this.peerMaintenanceRetryAtByPeer.delete(peerId);
+  }
+
+  private async runPeerMaintenancePass(now = Date.now()): Promise<void> {
+    if (this.destroyed || !this.transport) return;
+    const connectedPeers = new Set(this.transport.getConnectedPeers());
+    const seen = new Set<string>();
+    for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+      for (const member of workspace.members) {
+        const peerId = member.peerId;
+        if (peerId === this.myPeerId) continue;
+        if (seen.has(peerId)) continue;
+        seen.add(peerId);
+        if (connectedPeers.has(peerId)) {
+          this.clearPeerMaintenanceFailure(peerId);
+          continue;
+        }
+        const retryAt = this.peerMaintenanceRetryAtByPeer.get(peerId) ?? 0;
+        if (retryAt > now) continue;
+        try {
+          await this.transport.connect(peerId);
+        } catch {
+          this.notePeerMaintenanceFailure(peerId, now);
         }
       }
-    }, 30_000);
+    }
   }
 
   private async withCompanyTemplateInstallLock<T>(task: () => Promise<T>): Promise<T> {
@@ -1102,6 +1225,10 @@ export class NodeXenaPeer {
     }
 
     if (msg?.type === 'handshake') {
+      if (this.shouldIgnoreInboundHandshakeBurst(fromPeerId)) {
+        return;
+      }
+      this.decryptRecoveryAtByPeer.delete(fromPeerId);
       await this.messageProtocol.processHandshake(fromPeerId, msg);
       if (msg.preKeySupport) {
         const preKeyWorkspaceId = this.resolveSharedWorkspaceIds(fromPeerId)[0];
@@ -1125,14 +1252,7 @@ export class NodeXenaPeer {
           publicKey: typeof msg.publicKey === 'string' ? msg.publicKey : undefined,
         });
       }
-      // Resend previously pending ACK-tracked messages first, then flush newly queued
-      // offline payloads to avoid immediate duplicate sends in the same handshake cycle.
-      await this.resendPendingAcks(fromPeerId);
-      await this.flushOfflineQueue(fromPeerId);
-      await this.flushPendingReadReceipts(fromPeerId);
-      this.requestSyncForPeer(fromPeerId);
-      this.sendManifestSummary(fromPeerId);
-      this.requestCustodyRecovery(fromPeerId);
+      await this.resumePeerSession(fromPeerId);
       return;
     }
 
@@ -1253,20 +1373,21 @@ export class NodeXenaPeer {
     try {
       content = await this.messageProtocol.decryptMessage(fromPeerId, msg, peerPublicKey);
     } catch (err) {
+      if (this.shouldIgnoreDecryptReplay(fromPeerId, msg, err)) {
+        this.opts.log?.info?.(`[xena-peer] ignoring replayed pre-key session from ${fromPeerId}`);
+        return;
+      }
       this.opts.log?.warn?.(`[xena-peer] decrypt threw for ${fromPeerId}, resetting ratchet: ${String(err)}`);
-      void this.messageProtocol?.clearRatchetState(fromPeerId);
-      this.messageProtocol?.clearSharedSecret(fromPeerId);
-      this.store.delete(`ratchet-${fromPeerId}`);
+      await this.triggerDecryptRecoveryHandshake(fromPeerId);
       return;
     }
     if (!content) {
       // decryptMessage returned null (internal error) — ratchet desynced, reset it
       this.opts.log?.warn?.(`[xena-peer] decrypt returned null for ${fromPeerId}, resetting ratchet`);
-      void this.messageProtocol?.clearRatchetState(fromPeerId);
-      this.messageProtocol?.clearSharedSecret(fromPeerId);
-      this.store.delete(`ratchet-${fromPeerId}`);
+      await this.triggerDecryptRecoveryHandshake(fromPeerId);
       return;
     }
+    this.decryptRecoveryAtByPeer.delete(fromPeerId);
 
     const isDirect = msg.isDirect === true;
     const channelId = (msg.channelId as string | undefined) ?? (isDirect ? fromPeerId : undefined);
@@ -1909,6 +2030,152 @@ export class NodeXenaPeer {
     return false;
   }
 
+  private buildCustodyResendMetadata(payload: {
+    content: string;
+    channelId?: string;
+    workspaceId?: string;
+    senderId?: string;
+    senderName?: string;
+    threadId?: string;
+    replyToId?: string;
+    isDirect?: boolean;
+    metadata?: MessageMetadata;
+  }): Record<string, unknown> {
+    return {
+      ...(payload.isDirect ? { isDirect: true } : {}),
+      ...(payload.replyToId ? { replyToId: payload.replyToId } : {}),
+      senderId: payload.senderId ?? this.myPeerId,
+      senderName: payload.senderName ?? this.opts.account.alias,
+      resend: {
+        content: payload.content,
+        ...(payload.channelId ? { channelId: payload.channelId } : {}),
+        ...(payload.workspaceId ? { workspaceId: payload.workspaceId } : {}),
+        ...(payload.threadId ? { threadId: payload.threadId } : {}),
+        ...(payload.replyToId ? { replyToId: payload.replyToId } : {}),
+        ...(payload.isDirect ? { isDirect: true } : {}),
+        ...(payload.metadata ? { metadata: payload.metadata } : {}),
+      },
+    };
+  }
+
+  private getCustodyResendPayload(envelope: CustodyEnvelope): {
+    content: string;
+    channelId?: string;
+    workspaceId?: string;
+    senderId?: string;
+    senderName?: string;
+    threadId?: string;
+    replyToId?: string;
+    isDirect?: boolean;
+    metadata?: MessageMetadata;
+  } | null {
+    const metadata = isRecord(envelope.metadata) ? envelope.metadata : null;
+    const resend = metadata && isRecord(metadata.resend) ? metadata.resend : null;
+    const content = typeof resend?.content === 'string' ? resend.content.trim() : '';
+    if (!content) return null;
+
+    return {
+      content,
+      channelId: typeof resend?.channelId === 'string' ? resend.channelId : undefined,
+      workspaceId: typeof resend?.workspaceId === 'string' ? resend.workspaceId : undefined,
+      senderId: typeof metadata?.senderId === 'string' ? metadata.senderId : undefined,
+      senderName: typeof metadata?.senderName === 'string' ? metadata.senderName : undefined,
+      threadId: typeof resend?.threadId === 'string' ? resend.threadId : undefined,
+      replyToId: typeof resend?.replyToId === 'string' ? resend.replyToId : undefined,
+      isDirect: resend?.isDirect === true,
+      metadata: resend?.metadata as MessageMetadata | undefined,
+    };
+  }
+
+  private shouldReencryptCustodyEnvelope(envelope: CustodyEnvelope): boolean {
+    if (!isRecord(envelope.ciphertext)) return false;
+    return envelope.ciphertext.protocolVersion === 3 && isRecord(envelope.ciphertext.sessionInit);
+  }
+
+  private hasProtocolSession(peerId: string): boolean {
+    const hasSharedSecret =
+      typeof this.messageProtocol?.hasSharedSecret === 'function'
+        ? this.messageProtocol.hasSharedSecret.bind(this.messageProtocol)
+        : undefined;
+    return hasSharedSecret?.(peerId) ?? false;
+  }
+
+  private isIncomingPreKeySessionEnvelope(value: unknown): value is { protocolVersion: 3; sessionInit: Record<string, unknown> } {
+    return isRecord(value) && value.protocolVersion === 3 && isRecord(value.sessionInit);
+  }
+
+  private shouldIgnoreDecryptReplay(peerId: string, msg: unknown, error: unknown): boolean {
+    if (!this.isIncomingPreKeySessionEnvelope(msg)) {
+      return false;
+    }
+
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    if (message.includes('Ratchet already established')) {
+      return true;
+    }
+
+    if (message.includes('Pre-key ') && message.includes(' unavailable') && this.hasProtocolSession(peerId)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private async triggerDecryptRecoveryHandshake(peerId: string): Promise<void> {
+    const now = Date.now();
+    const lastRecoveryAt = this.decryptRecoveryAtByPeer.get(peerId) ?? 0;
+    if (now - lastRecoveryAt < NodeXenaPeer.DECRYPT_RECOVERY_HANDSHAKE_COOLDOWN_MS) {
+      return;
+    }
+
+    this.decryptRecoveryAtByPeer.set(peerId, now);
+    await this.messageProtocol?.clearRatchetState?.(peerId);
+    this.messageProtocol?.clearSharedSecret?.(peerId);
+    this.store.delete(`ratchet-${peerId}`);
+    await this.sendHandshake(peerId);
+  }
+
+  private async resumePeerSession(peerId: string): Promise<void> {
+    // Resend previously pending ACK-tracked messages first, then flush newly queued
+    // offline payloads to avoid immediate duplicate sends in the same handshake cycle.
+    await this.resendPendingAcks(peerId);
+    await this.flushOfflineQueue(peerId);
+    await this.flushPendingReadReceipts(peerId);
+    this.requestSyncForPeer(peerId);
+    this.sendManifestSummary(peerId);
+    this.requestCustodyRecovery(peerId);
+  }
+
+  private async handlePeerConnect(peerId: string): Promise<void> {
+    this.opts.log?.info(`[xena-peer] peer connected: ${peerId}`);
+    this.clearPeerMaintenanceFailure(peerId);
+
+    const now = Date.now();
+    const lastHandshakeAt = this.connectHandshakeAtByPeer.get(peerId) ?? 0;
+    if (now - lastHandshakeAt < NodeXenaPeer.CONNECT_HANDSHAKE_COOLDOWN_MS) {
+      return;
+    }
+
+    this.connectHandshakeAtByPeer.set(peerId, now);
+    if (this.hasProtocolSession(peerId)) {
+      await this.resumePeerSession(peerId);
+      return;
+    }
+    await this.sendHandshake(peerId);
+  }
+
+  private shouldIgnoreInboundHandshakeBurst(peerId: string): boolean {
+    const now = Date.now();
+    const lastHandshakeAt = this.inboundHandshakeAtByPeer.get(peerId) ?? 0;
+    const hasSession = this.hasProtocolSession(peerId);
+    if (hasSession && now - lastHandshakeAt < NodeXenaPeer.INBOUND_HANDSHAKE_COOLDOWN_MS) {
+      return true;
+    }
+
+    this.inboundHandshakeAtByPeer.set(peerId, now);
+    return false;
+  }
+
   private async sendHandshake(peerId: string): Promise<void> {
     if (!this.transport || !this.messageProtocol) return;
     try {
@@ -2508,9 +2775,15 @@ export class NodeXenaPeer {
             ciphertext: encrypted,
             metadata: {
               messageId: outboundMessageId,
-              isDirect: true,
-              senderId: this.myPeerId,
-              senderName: this.opts.account.alias,
+              ...this.buildCustodyResendMetadata({
+                content: content.trim(),
+                senderId: this.myPeerId,
+                senderName: this.opts.account.alias,
+                threadId,
+                replyToId,
+                isDirect: true,
+                metadata: modelMeta,
+              }),
             },
           });
         }
@@ -2527,9 +2800,15 @@ export class NodeXenaPeer {
         ciphertext: encrypted,
         metadata: {
           messageId: outboundMessageId,
-          isDirect: true,
-          senderId: this.myPeerId,
-          senderName: this.opts.account.alias,
+          ...this.buildCustodyResendMetadata({
+            content: content.trim(),
+            senderId: this.myPeerId,
+            senderName: this.opts.account.alias,
+            threadId,
+            replyToId,
+            isDirect: true,
+            metadata: modelMeta,
+          }),
         },
       });
     } catch (err) {
@@ -2928,19 +3207,27 @@ export class NodeXenaPeer {
   }
 
   private getMyCompanySimProfile(): WorkspaceMember["companySim"] | undefined {
-    if (!this.opts.account.companySim?.enabled) return undefined;
+    if (this.companySimProfileLoaded) {
+      return this.companySimProfile;
+    }
+    if (!this.opts.account.companySim?.enabled) {
+      this.companySimProfileLoaded = true;
+      this.companySimProfile = undefined;
+      return undefined;
+    }
     try {
       const context = loadCompanyContextForAccount(this.opts.account);
-      if (!context) return undefined;
-      return {
+      this.companySimProfile = context ? {
         automationKind: 'openclaw-agent',
         roleTitle: context.employee.title,
         teamId: context.employee.teamId,
-      };
+      } : undefined;
     } catch (err) {
       this.opts.log?.warn?.(`[xena-peer] failed to load company profile for ${this.opts.account.accountId}: ${String(err)}`);
-      return { automationKind: 'openclaw-agent' };
+      this.companySimProfile = { automationKind: 'openclaw-agent' };
     }
+    this.companySimProfileLoaded = true;
+    return this.companySimProfile;
   }
 
   private pendingReadReceiptKey(peerId: string): string {
@@ -3653,6 +3940,23 @@ export class NodeXenaPeer {
     for (const item of pending) {
       if (!item || typeof item !== 'object') continue;
       try {
+        if (typeof item.content === 'string') {
+          const envelope = await this.encryptMessageWithPreKeyBootstrap(peerId, item.content, item.metadata, item.workspaceId);
+          (envelope as any).senderId = item.senderId ?? this.myPeerId;
+          (envelope as any).senderName = item.senderName ?? this.opts.account.alias;
+          (envelope as any).messageId = item.messageId;
+          if (item.isDirect) {
+            (envelope as any).isDirect = true;
+          } else {
+            (envelope as any).channelId = item.channelId;
+            (envelope as any).workspaceId = item.workspaceId;
+          }
+          if (item.threadId) (envelope as any).threadId = item.threadId;
+          if (item.replyToId) (envelope as any).replyToId = item.replyToId;
+          this.transport.send(peerId, envelope);
+          continue;
+        }
+
         if (item.ciphertext && typeof item.ciphertext === 'object') {
           const outbound = { ...item.ciphertext } as any;
           outbound._offlineReplay = 1;
@@ -3662,21 +3966,6 @@ export class NodeXenaPeer {
           this.transport.send(peerId, outbound);
           continue;
         }
-
-        if (typeof item.content !== 'string') continue;
-        const envelope = await this.encryptMessageWithPreKeyBootstrap(peerId, item.content, item.metadata, item.workspaceId);
-        (envelope as any).senderId = item.senderId ?? this.myPeerId;
-        (envelope as any).senderName = item.senderName ?? this.opts.account.alias;
-        (envelope as any).messageId = item.messageId;
-        if (item.isDirect) {
-          (envelope as any).isDirect = true;
-        } else {
-          (envelope as any).channelId = item.channelId;
-          (envelope as any).workspaceId = item.workspaceId;
-        }
-        if (item.threadId) (envelope as any).threadId = item.threadId;
-        if (item.replyToId) (envelope as any).replyToId = item.replyToId;
-        this.transport.send(peerId, envelope);
       } catch (err) {
         this.opts.log?.warn?.(`[xena-peer] resend pending failed for ${peerId}: ${String(err)}`);
       }
@@ -3732,12 +4021,17 @@ export class NodeXenaPeer {
             domain: 'channel-message',
             ciphertext: encrypted,
             createdAt: now,
-            metadata: {
-              ...(payload.isDirect ? { isDirect: true } : {}),
-              ...(payload.replyToId ? { replyToId: payload.replyToId } : {}),
+            metadata: this.buildCustodyResendMetadata({
+              content: payload.content,
+              channelId: payload.channelId,
+              workspaceId: payload.workspaceId,
               senderId: payload.senderId ?? this.myPeerId,
               senderName: payload.senderName ?? this.opts.account.alias,
-            },
+              threadId: payload.threadId,
+              replyToId: payload.replyToId,
+              isDirect: payload.isDirect === true,
+              metadata: payload.metadata,
+            }),
           });
           return;
         } catch (err) {
@@ -3787,6 +4081,52 @@ export class NodeXenaPeer {
 
       try {
         if (this.isCustodyEnvelope(item)) {
+          const resendPayload = item.domain === 'channel-message' && this.shouldReencryptCustodyEnvelope(item)
+            ? this.getCustodyResendPayload(item)
+            : null;
+
+          if (resendPayload) {
+            const envelope = await this.encryptMessageWithPreKeyBootstrap(
+              peerId,
+              resendPayload.content,
+              resendPayload.metadata,
+              resendPayload.workspaceId,
+            );
+            (envelope as any).senderId = resendPayload.senderId ?? this.myPeerId;
+            (envelope as any).senderName = resendPayload.senderName ?? this.opts.account.alias;
+            (envelope as any).messageId = item.opId;
+            if (resendPayload.isDirect) {
+              (envelope as any).isDirect = true;
+            } else {
+              (envelope as any).channelId = resendPayload.channelId ?? item.channelId;
+              (envelope as any).workspaceId = resendPayload.workspaceId ?? item.workspaceId;
+            }
+            if (resendPayload.threadId) (envelope as any).threadId = resendPayload.threadId;
+            if (resendPayload.replyToId) (envelope as any).replyToId = resendPayload.replyToId;
+
+            const accepted = this.transport.send(peerId, envelope);
+            if (!accepted) throw new Error('transport rejected queued send');
+
+            await this.queuePendingAck(peerId, {
+              messageId: item.opId,
+              channelId: resendPayload.channelId ?? item.channelId,
+              workspaceId: resendPayload.workspaceId ?? item.workspaceId,
+              threadId: resendPayload.threadId ?? item.threadId,
+              content: resendPayload.content,
+              isDirect: resendPayload.isDirect === true,
+              replyToId: resendPayload.replyToId,
+              senderId: resendPayload.senderId ?? this.myPeerId,
+              senderName: resendPayload.senderName ?? this.opts.account.alias,
+              ...(resendPayload.metadata ? { metadata: resendPayload.metadata } : {}),
+            });
+
+            if (typeof queuedItem?.id === 'number') {
+              await this.offlineQueue.remove(peerId, queuedItem.id);
+            }
+            sentCount += 1;
+            continue;
+          }
+
           const outbound = typeof item.ciphertext === 'object' && item.ciphertext
             ? { ...(item.ciphertext as Record<string, unknown>) }
             : item.ciphertext;

@@ -101,6 +101,14 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
             }));
           }
 
+          const identityPeersByKey = new Map<string, string[]>();
+          for (const member of ws.members as any[]) {
+            const key = member.identityId || member.peerId;
+            const peers = identityPeersByKey.get(key);
+            if (peers) peers.push(member.peerId);
+            else identityPeersByKey.set(key, [member.peerId]);
+          }
+
           const seen = new Set<string>();
           return ws.members.filter((m: any) => {
             const key = m.identityId || m.peerId;
@@ -108,9 +116,7 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
             seen.add(key);
             return true;
           }).map((m: any) => {
-            const identityPeers = m.identityId
-              ? ws.members.filter((other: any) => other.identityId === m.identityId).map((other: any) => other.peerId)
-              : [m.peerId];
+            const identityPeers = identityPeersByKey.get(m.identityId || m.peerId) || [m.peerId];
             const isMe = identityPeers.includes(state.myPeerId);
             const isOnline = isMe || identityPeers.some((pid: string) => peerStatusClass(pid) === 'online');
             return {

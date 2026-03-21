@@ -998,17 +998,6 @@ async function init(): Promise<void> {
     // Register this peer in all known workspaces for signaling-server discovery
     ctrl.registerAllWorkspaces();
 
-    // Pre-mark all known workspace members as "connecting" so the sidebar's
-    // amber pulsing dot is visible from the very first render (not a grey→green jump).
-    // The dots will transition to green when WebRTC handshakes complete.
-    for (const ws of ctrl.workspaceManager.getAllWorkspaces()) {
-      for (const member of ws.members) {
-        if (member.peerId !== state.myPeerId) {
-          state.connectingPeers.add(member.peerId);
-        }
-      }
-    }
-
     // Check for /join/CODE invite URL
     const joinMatch = path.match(/^\/join\/([A-Za-z0-9]+)/);
     let pendingInvite: { code: string; peerId: string; name: string; inviteData?: import('decent-protocol').InviteData } | null = null;

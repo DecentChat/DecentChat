@@ -223,6 +223,87 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
     expect((await (peer as any).offlineQueue.listQueued('peer-ack')).length).toBe(0);
   });
 
+
+  test('incoming handshake preserves existing session state while re-processing', async () => {
+    const peer = new NodeXenaPeer({
+      account: makeAccount(),
+      onIncomingMessage: async () => {},
+      onReply: () => {},
+    });
+
+    const send = mock(() => true);
+    (peer as any).transport = {
+      send,
+      getConnectedPeers: mock(() => ['peer-1'] as string[]),
+    };
+
+    const clearRatchetState = mock(async () => {});
+    const clearSharedSecret = mock(() => {});
+    const processHandshake = mock(async () => {});
+    const createPreKeyBundle = mock(async () => ({ version: 1, peerId: 'acct-1', signedPreKey: { keyId: 1 }, oneTimePreKeys: [] }));
+    (peer as any).messageProtocol = {
+      clearRatchetState,
+      clearSharedSecret,
+      processHandshake,
+      createPreKeyBundle,
+    };
+    (peer as any).syncProtocol = { requestSync: mock(() => {}) };
+
+    await (peer as any).handlePeerMessage('peer-1', {
+      type: 'handshake',
+      publicKey: 'peer-public-key',
+      peerId: 'peer-1',
+      protocolVersion: 2,
+      ratchetDHPublicKey: 'ratchet-public-key',
+      preKeySupport: false,
+    });
+
+    expect(clearRatchetState).toHaveBeenCalledTimes(0);
+    expect(clearSharedSecret).toHaveBeenCalledTimes(0);
+    expect(processHandshake).toHaveBeenCalledWith('peer-1', expect.any(Object));
+  });
+
+  test('decrypt failure triggers ratchet reset and recovery handshake', async () => {
+    const peer = new NodeXenaPeer({
+      account: makeAccount(),
+      onIncomingMessage: async () => {},
+      onReply: () => {},
+    });
+
+    const clearRatchetState = mock(async () => {});
+    const clearSharedSecret = mock(() => {});
+    (peer as any).transport = { send: mock(() => true), getConnectedPeers: mock(() => ['peer-main'] as string[]) };
+    (peer as any).syncProtocol = {};
+    (peer as any).messageProtocol = {
+      decryptMessage: mock(async () => {
+        throw new Error('No ratchet state with peer peer-main');
+      }),
+      clearRatchetState,
+      clearSharedSecret,
+    };
+    (peer as any).cryptoManager = {
+      importPublicKey: mock(async () => ({ mocked: true })),
+    };
+    (peer as any).getPeerPublicKey = () => 'peer-public-key';
+    const sendHandshake = mock(async () => {});
+    (peer as any).sendHandshake = sendHandshake;
+
+    await (peer as any).handlePeerMessage('peer-main', {
+      id: 'env-recovery-1',
+      ratchet: { header: { dhPublicKey: 'x', previousCount: 0, messageNumber: 1 }, ciphertext: 'cipher', iv: 'iv' },
+      signature: 'sig',
+      protocolVersion: 2,
+      senderId: 'peer-main',
+      senderName: 'Peer Main',
+      messageId: 'msg-recovery-1',
+      timestamp: 123,
+    });
+
+    expect(clearRatchetState).toHaveBeenCalledWith('peer-main');
+    expect(clearSharedSecret).toHaveBeenCalledWith('peer-main');
+    expect(sendHandshake).toHaveBeenCalledWith('peer-main');
+  });
+
   test('incoming direct encrypted message without channelId is delivered as a DM and ACKed', async () => {
     const incoming: any[] = [];
     const peer = new NodeXenaPeer({

@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import {
   decentChatPlugin,
   listDecentChatAccountIds,
+  listDecentChatStartupAccountIds,
   resolveDecentChatAccount,
   resolveDefaultDecentChatAccountId,
+  resolveDecentChatStartupDelayMs,
 } from '../../src/channel.ts';
 import { getActivePeer, setActivePeer } from '../../src/peer-registry.ts';
 
@@ -38,7 +40,32 @@ describe('decent-openclaw multi-account company-sim', () => {
 
     expect(listDecentChatAccountIds(cfg)).toEqual(['default']);
     expect(resolveDefaultDecentChatAccountId(cfg)).toBe('default');
-    expect(resolveDecentChatAccount(cfg).alias).toBe('Xena AI');
+    const account = resolveDecentChatAccount(cfg);
+    expect(account.alias).toBe('Xena AI');
+    expect(account.dataDir).toBeUndefined();
+    expect(listDecentChatStartupAccountIds(cfg)).toEqual(['default']);
+    expect(resolveDecentChatStartupDelayMs(cfg, 'default')).toBe(0);
+  });
+
+  test('stages multi-account startup with default first and deterministic delays', () => {
+    const cfg = {
+      channels: {
+        decentchat: {
+          accounts: {
+            manager: { seedPhrase: 'seed-manager' },
+            backend: { seedPhrase: 'seed-backend' },
+            qa: { seedPhrase: 'seed-qa' },
+            default: { seedPhrase: 'seed-default' },
+          },
+        },
+      },
+    } as any;
+
+    expect(listDecentChatStartupAccountIds(cfg)).toEqual(['default', 'backend', 'manager', 'qa']);
+    expect(resolveDecentChatStartupDelayMs(cfg, 'default')).toBe(0);
+    expect(resolveDecentChatStartupDelayMs(cfg, 'backend')).toBe(6_000);
+    expect(resolveDecentChatStartupDelayMs(cfg, 'manager')).toBe(12_000);
+    expect(resolveDecentChatStartupDelayMs(cfg, 'qa')).toBe(18_000);
   });
 
   test('merges base config with account overrides and attaches company-sim metadata', () => {
@@ -82,6 +109,69 @@ describe('decent-openclaw multi-account company-sim', () => {
       employeeId: 'backend-dev',
       roleFilesDir: '/company-sims/software-studio/employees/backend-dev',
     });
+  });
+
+  test('assigns isolated default data directories per account when dataDir is omitted', () => {
+    const cfg = {
+      channels: {
+        decentchat: {
+          accounts: {
+            'team-manager': { seedPhrase: 'seed-1' },
+            'backend-dev': { seedPhrase: 'seed-2' },
+          },
+        },
+      },
+    } as any;
+
+    const manager = resolveDecentChatAccount(cfg, 'team-manager');
+    const backend = resolveDecentChatAccount(cfg, 'backend-dev');
+
+    expect(manager.dataDir).toContain('/.openclaw/data/decentchat/');
+    expect(backend.dataDir).toContain('/.openclaw/data/decentchat/');
+    expect(manager.dataDir).not.toBe(backend.dataDir);
+    expect(manager.dataDir?.endsWith('/team-manager')).toBe(true);
+    expect(backend.dataDir?.endsWith('/backend-dev')).toBe(true);
+  });
+
+  test('does not inherit root-only invites or bootstrap config into sub-accounts', () => {
+    const cfg = {
+      channels: {
+        decentchat: {
+          seedPhrase: 'seed-default',
+          signalingServer: 'https://0.peerjs.com/',
+          invites: ['decent://0.peerjs.com/CODE123?peer=root-peer'],
+          companySimBootstrap: {
+            enabled: true,
+            mode: 'runtime',
+            manifestPath: '/company-sims/software-studio/company.yaml',
+            targetWorkspaceId: 'ws-root',
+            targetInviteCode: 'CODE123',
+          },
+          accounts: {
+            manager: {
+              seedPhrase: 'seed-manager',
+              alias: 'Mira PM',
+            },
+          },
+        },
+      },
+    } as any;
+
+    const defaultAccount = resolveDecentChatAccount(cfg, 'default');
+    const manager = resolveDecentChatAccount(cfg, 'manager');
+
+    expect(defaultAccount.invites).toEqual(['decent://0.peerjs.com/CODE123?peer=root-peer']);
+    expect(defaultAccount.companySimBootstrap).toEqual({
+      enabled: true,
+      mode: 'runtime',
+      manifestPath: '/company-sims/software-studio/company.yaml',
+      targetWorkspaceId: 'ws-root',
+      targetInviteCode: 'CODE123',
+    });
+
+    expect(manager.signalingServer).toBe('https://0.peerjs.com/');
+    expect(manager.invites).toEqual([]);
+    expect(manager.companySimBootstrap).toBeUndefined();
   });
 
   test('resolves company-sim silent channel ids from account overrides', () => {

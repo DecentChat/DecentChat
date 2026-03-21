@@ -109,6 +109,9 @@ export function createUIService(
   }
 
   let contactsCacheRefreshSeq = 0;
+  let sidebarSyncQueued = false;
+  let sidebarNeedsContactsRefresh = false;
+  let contactsRefreshInFlight = false;
 
   async function refreshContactsCache(): Promise<void> {
     const requestSeq = ++contactsCacheRefreshSeq;
@@ -311,11 +314,35 @@ export function createUIService(
     syncShellThread();
   }
 
+  function scheduleSidebarSync(): void {
+    if (sidebarSyncQueued) return;
+    sidebarSyncQueued = true;
+
+    const run = () => {
+      sidebarSyncQueued = false;
+      syncShellSidebar();
+
+      if (!sidebarNeedsContactsRefresh || contactsRefreshInFlight) return;
+
+      sidebarNeedsContactsRefresh = false;
+      contactsRefreshInFlight = true;
+      refreshContactsCache()
+        .then(() => syncShellSidebar())
+        .catch(() => {})
+        .finally(() => {
+          contactsRefreshInFlight = false;
+          if (sidebarNeedsContactsRefresh) scheduleSidebarSync();
+        });
+    };
+
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else setTimeout(run, 16);
+  }
+
   function updateSidebar(options: { refreshContacts?: boolean } = {}): void {
     const { refreshContacts = true } = options;
-    syncShellSidebar();
-    if (!refreshContacts) return;
-    refreshContactsCache().then(() => syncShellSidebar()).catch(() => {});
+    if (refreshContacts) sidebarNeedsContactsRefresh = true;
+    scheduleSidebarSync();
   }
 
   function updateChannelHeader(): void {
@@ -338,26 +365,68 @@ export function createUIService(
   ): void {
     const patch = (msg: any) => {
       if (!msg || msg.id !== messageId) return msg;
+
+      const nextRecipientPeerIds = typeof detail?.total === 'number'
+        ? Array.from({ length: detail.total }, (_, i) => msg?.recipientPeerIds?.[i] ?? `pending-${i}`)
+        : msg.recipientPeerIds;
+      const nextAckedBy = typeof detail?.acked === 'number'
+        ? Array.from({ length: detail.acked }, (_, i) => msg?.ackedBy?.[i] ?? `acked-${i}`)
+        : msg.ackedBy;
+      const nextReadBy = typeof detail?.read === 'number'
+        ? Array.from({ length: detail.read }, (_, i) => msg?.readBy?.[i] ?? `read-${i}`)
+        : msg.readBy;
+
+      const sameRecipientCount = nextRecipientPeerIds === msg.recipientPeerIds
+        || (Array.isArray(nextRecipientPeerIds)
+          && Array.isArray(msg.recipientPeerIds)
+          && nextRecipientPeerIds.length === msg.recipientPeerIds.length);
+      const sameAckedCount = nextAckedBy === msg.ackedBy
+        || (Array.isArray(nextAckedBy)
+          && Array.isArray(msg.ackedBy)
+          && nextAckedBy.length === msg.ackedBy.length);
+      const sameReadCount = nextReadBy === msg.readBy
+        || (Array.isArray(nextReadBy)
+          && Array.isArray(msg.readBy)
+          && nextReadBy.length === msg.readBy.length);
+
+      if (msg.status === status && sameRecipientCount && sameAckedCount && sameReadCount) {
+        return msg;
+      }
+
       return {
         ...msg,
         status,
-        recipientPeerIds: typeof detail?.total === 'number'
-          ? Array.from({ length: detail.total }, (_, i) => msg?.recipientPeerIds?.[i] ?? `pending-${i}`)
-          : msg.recipientPeerIds,
-        ackedBy: typeof detail?.acked === 'number'
-          ? Array.from({ length: detail.acked }, (_, i) => msg?.ackedBy?.[i] ?? `acked-${i}`)
-          : msg.ackedBy,
-        readBy: typeof detail?.read === 'number'
-          ? Array.from({ length: detail.read }, (_, i) => msg?.readBy?.[i] ?? `read-${i}`)
-          : msg.readBy,
+        recipientPeerIds: nextRecipientPeerIds,
+        ackedBy: nextAckedBy,
+        readBy: nextReadBy,
       };
     };
 
-    shellData.messages.messages = shellData.messages.messages.map((msg: any) => patch(msg));
+    let messagesChanged = false;
+    shellData.messages.messages = shellData.messages.messages.map((msg: any) => {
+      const next = patch(msg);
+      if (next !== msg) messagesChanged = true;
+      return next;
+    });
+
+    let threadParentChanged = false;
     if (shellData.thread.parentMessage?.id === messageId) {
-      shellData.thread.parentMessage = patch(shellData.thread.parentMessage as any);
+      const parent = shellData.thread.parentMessage as any;
+      const nextParent = patch(parent);
+      threadParentChanged = nextParent !== parent;
+      if (threadParentChanged) {
+        shellData.thread.parentMessage = nextParent;
+      }
     }
-    shellData.thread.replies = shellData.thread.replies.map((msg: any) => patch(msg));
+
+    let threadRepliesChanged = false;
+    shellData.thread.replies = shellData.thread.replies.map((msg: any) => {
+      const next = patch(msg);
+      if (next !== msg) threadRepliesChanged = true;
+      return next;
+    });
+
+    if (!(messagesChanged || threadParentChanged || threadRepliesChanged)) return;
 
     renderMessages();
     if (state.threadOpen && state.activeThreadId) {

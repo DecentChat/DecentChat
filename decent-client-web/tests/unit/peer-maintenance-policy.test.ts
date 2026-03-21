@@ -610,6 +610,58 @@ describe('ChatController peer maintenance policy helpers', () => {
     expect(connect).toHaveBeenCalled();
   });
 
+
+  test('runPeerMaintenance does not reconnect every peer just to satisfy safe minimum recovery', () => {
+    const now = Date.now();
+    const connect = mock(async () => {});
+    const members = [
+      { peerId: 'me-peer', role: 'owner', joinedAt: now - 30_000 },
+      { peerId: 'owner-peer', role: 'owner', joinedAt: now - 20_000 },
+      { peerId: 'admin-peer', role: 'admin', joinedAt: now - 19_000 },
+      { peerId: 'member-a', role: 'member', joinedAt: now - 18_000 },
+      { peerId: 'member-b', role: 'member', joinedAt: now - 17_000 },
+      { peerId: 'member-c', role: 'member', joinedAt: now - 16_000 },
+      { peerId: 'member-d', role: 'member', joinedAt: now - 15_000 },
+      { peerId: 'member-e', role: 'member', joinedAt: now - 14_000 },
+      { peerId: 'member-f', role: 'member', joinedAt: now - 13_000 },
+      { peerId: 'member-g', role: 'member', joinedAt: now - 12_000 },
+      { peerId: 'member-h', role: 'member', joinedAt: now - 11_000 },
+      { peerId: 'member-i', role: 'member', joinedAt: now - 10_000 },
+      { peerId: 'member-j', role: 'member', joinedAt: now - 9_000 },
+    ];
+    const ctrl = createPolicyController({
+      isPartialMeshEnabled: () => true,
+      transport: {
+        getConnectedPeers: () => [],
+        isConnectingToPeer: () => false,
+        connect,
+      },
+      state: {
+        myPeerId: 'me-peer',
+        activeWorkspaceId: 'ws-1',
+        connectingPeers: new Set<string>(),
+        readyPeers: new Set<string>(),
+        connectedPeers: new Set<string>(),
+      },
+      workspaceManager: {
+        getWorkspace: (id: string) => ({ id, members }),
+        getAllWorkspaces: () => [{ id: 'ws-1', members }],
+      },
+    });
+
+    for (const member of members) {
+      if (member.peerId === 'me-peer') continue;
+      ctrl.peerLastSeenAt.set(member.peerId, now - 1000);
+    }
+
+    const desired = ctrl.selectDesiredPeers('ws-1', now, { isMobile: false }).desiredPeerIds;
+    const attempted = ctrl._runPeerMaintenance();
+    const attemptedPeerIds = connect.mock.calls.map(([peerId]: [string]) => peerId).sort();
+
+    expect(attempted).toBe(desired.length);
+    expect(attemptedPeerIds).toEqual([...desired].sort());
+  });
+
   test('runPeerMaintenance prunes excess non-desired peers conservatively and keeps shared-workspace links', () => {
     const now = Date.now();
     const disconnect = mock(() => {});

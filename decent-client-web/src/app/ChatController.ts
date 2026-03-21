@@ -334,6 +334,9 @@ export class ChatController {
   private readonly pendingPreKeyBundleFetches = new Map<string, PendingPreKeyBundleFetch>();
   private readonly publishedPreKeyVersionByWorkspace = new Map<string, string>();
   private lastMessageSyncRequestAt = new Map<string, number>();
+  private readonly messageSyncInFlight = new Map<string, Promise<void>>();
+  private readonly messageSyncRerunRequested = new Set<string>();
+  private readonly retryUnackedInFlight = new Map<string, Promise<void>>();
   private directoryRequestFailoverTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   /** DEP-002: Peer Exchange for signaling server discovery */
@@ -372,6 +375,8 @@ export class ChatController {
   private static readonly COLD_PEER_RETRY_MS = 5 * 60 * 1000;
   /** Join validation timeout: provisional join workspace must be confirmed by owner workspace-state. */
   private static readonly JOIN_VALIDATION_TIMEOUT_MS = 5000;
+  private static readonly PERIODIC_MESSAGE_SYNC_INTERVAL_MS = 120 * 1000;
+  private static readonly RETRY_UNACKED_SCAN_YIELD_EVERY = 300;
   private static readonly PARTIAL_MESH_ENABLED = true;
   private static readonly PARTIAL_MESH_DESKTOP_TARGET = 8;
   private static readonly PARTIAL_MESH_MOBILE_TARGET = 5;
@@ -3984,6 +3989,13 @@ export class ChatController {
     this.ui?.renderApp();
     console.log(`[Sync] Workspace state synced from ${peerId.slice(0, 8)}`);
 
+    // Channel remaps and membership updates can land after an initial reconnect sync
+    // request has already started. Ask for one follow-up sync; requestMessageSync
+    // coalesces in-flight calls and runs one rerun if needed.
+    this.requestMessageSync(peerId).catch((error) => {
+      console.warn('[Sync] Post-workspace-state message sync failed:', error);
+    });
+
     // If we are the owner, send back our full workspace state so the joiner
     // gets all channels/members (their provisional workspace only has #general).
     if (this.workspaceManager.isOwner(localWs.id, this.state.myPeerId)) {
@@ -4230,22 +4242,32 @@ export class ChatController {
     return Math.max(0, Math.min(candidateCount, target, hardCap));
   }
 
+  private getSharedWorkspacePeerCounts(): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+      const seen = new Set<string>();
+      for (const member of workspace.members) {
+        const peerId = member.peerId;
+        if (!peerId || peerId === this.state.myPeerId || seen.has(peerId)) continue;
+        seen.add(peerId);
+        counts.set(peerId, (counts.get(peerId) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }
+
   private getWorkspacePeerCandidates(workspaceId = this.state.activeWorkspaceId ?? '', now = Date.now()): WorkspacePeerCandidate[] {
     if (!workspaceId) return [];
     const ws = this.workspaceManager.getWorkspace(workspaceId);
     if (!ws) return [];
 
     const snapshot = this.getPeerConnectionSnapshot();
-    const allWorkspaces = this.workspaceManager.getAllWorkspaces();
+    const sharedWorkspaceCounts = this.getSharedWorkspacePeerCounts();
 
     return ws.members
       .filter((member) => member.peerId && member.peerId !== this.state.myPeerId)
       .map((member) => {
         const peerId = member.peerId;
-        const sharedWorkspaceCount = allWorkspaces.filter((candidateWs) =>
-          candidateWs.members.some((candidateMember) => candidateMember.peerId === peerId),
-        ).length;
-
         const capabilitySummary = this.getPeerCapabilitySummary(peerId);
         return {
           peerId,
@@ -4256,7 +4278,7 @@ export class ChatController {
           ready: snapshot.ready.has(peerId),
           likelyOnline: this.isLikelyOnlinePeer(peerId, member.joinedAt, now),
           recentlySeenAt: this.peerLastSeenAt.get(peerId) ?? 0,
-          sharedWorkspaceCount,
+          sharedWorkspaceCount: sharedWorkspaceCounts.get(peerId) ?? 1,
           connectedAt: this.peerConnectedAt.get(peerId),
           lastSyncAt: this.peerLastSuccessfulSyncAt.get(peerId),
           disconnectCount: this.peerDisconnectCount.get(peerId) ?? 0,
@@ -5166,7 +5188,7 @@ export class ChatController {
         // dropped during relay outages. Periodic sync closes those gaps.
         if (this.state.readyPeers.has(peerId)) {
           const last = this.lastMessageSyncRequestAt.get(peerId) ?? 0;
-          if (now - last >= 10_000) {
+          if (now - last >= ChatController.PERIODIC_MESSAGE_SYNC_INTERVAL_MS) {
             this.lastMessageSyncRequestAt.set(peerId, now);
             this.requestMessageSync(peerId).catch(err => {
               console.warn('[Maintenance] Periodic message sync failed:', err);
@@ -5177,7 +5199,7 @@ export class ChatController {
       }
 
       const inDesiredSet = desiredSelection ? desiredPeerIds.has(peerId) : true;
-      if (!inDesiredSet && !needsMinimumSafeRecovery) continue;
+      if (!inDesiredSet) continue;
 
       if (candidate.likelyOnline) likelyTargets.push(peerId);
       else coldTargets.push(peerId);
@@ -5202,7 +5224,7 @@ export class ChatController {
         workspaceId: ws.id,
         peerId,
         event: 'connect-attempt',
-        reason: desiredPeerIds.has(peerId) ? 'desired-peer' : 'safe-minimum-recovery',
+        reason: desiredSelection ? 'desired-peer' : 'legacy-connect-all',
         sharedWorkspaceCount: connectCandidate?.sharedWorkspaceCount,
         score: connectCandidate ? this.scoreWorkspacePeer(connectCandidate, now) : undefined,
         connected: connectCandidate?.connected,
@@ -9316,42 +9338,67 @@ export class ChatController {
   }
 
   private async requestMessageSync(peerId: string): Promise<void> {
-    const workspaceId = this.resolveTopologyWorkspaceId(peerId);
-    try {
-      // Use Negentropy (set reconciliation) when peer supports it — efficient
-      // for reconnects where both sides have mostly the same data.
-      // If Negentropy fails/times out, gracefully fall back to timestamp sync
-      // instead of failing the entire sync for freshly joined/restored peers.
-      if (this.peerSupportsCapability(peerId, NEGENTROPY_SYNC_CAPABILITY)) {
-        console.log(`[Sync] Using Negentropy sync with ${peerId.slice(0, 8)}`);
-        try {
-          await this.requestNegentropyMessageSync(peerId);
-        } catch (error) {
-          console.warn(`[Sync] Negentropy failed for ${peerId.slice(0, 8)}, falling back to timestamp sync:`, error);
+    if (!peerId) return;
+    const inFlight = this.messageSyncInFlight.get(peerId);
+    if (inFlight) {
+      this.messageSyncRerunRequested.add(peerId);
+      return inFlight;
+    }
+
+    const runOnce = async (): Promise<void> => {
+      const workspaceId = this.resolveTopologyWorkspaceId(peerId);
+      this.lastMessageSyncRequestAt.set(peerId, Date.now());
+
+      try {
+        // Use Negentropy (set reconciliation) when peer supports it — efficient
+        // for reconnects where both sides have mostly the same data.
+        // If Negentropy fails/times out, gracefully fall back to timestamp sync
+        // instead of failing the entire sync for freshly joined/restored peers.
+        if (this.peerSupportsCapability(peerId, NEGENTROPY_SYNC_CAPABILITY)) {
+          console.log(`[Sync] Using Negentropy sync with ${peerId.slice(0, 8)}`);
+          try {
+            await this.requestNegentropyMessageSync(peerId);
+          } catch (error) {
+            console.warn(`[Sync] Negentropy failed for ${peerId.slice(0, 8)}, falling back to timestamp sync:`, error);
+            await this.requestTimestampMessageSync(peerId);
+          }
+        } else {
+          console.log(`[Sync] Peer ${peerId.slice(0, 8)} lacks Negentropy, falling back to timestamp sync`);
           await this.requestTimestampMessageSync(peerId);
         }
-      } else {
-        console.log(`[Sync] Peer ${peerId.slice(0, 8)} lacks Negentropy, falling back to timestamp sync`);
-        await this.requestTimestampMessageSync(peerId);
+        this.peerLastSuccessfulSyncAt.set(peerId, Date.now());
+        this.recordTopologyPeerEvent({
+          level: 'info',
+          workspaceId,
+          peerId,
+          event: 'sync-succeeded',
+          lastSyncAt: this.peerLastSuccessfulSyncAt.get(peerId),
+        });
+      } catch (error) {
+        this.recordTopologyPeerEvent({
+          level: 'warn',
+          workspaceId,
+          peerId,
+          event: 'sync-failed',
+          reason: (error as Error)?.message ?? String(error),
+        });
+        throw error;
       }
-      this.peerLastSuccessfulSyncAt.set(peerId, Date.now());
-      this.recordTopologyPeerEvent({
-        level: 'info',
-        workspaceId,
-        peerId,
-        event: 'sync-succeeded',
-        lastSyncAt: this.peerLastSuccessfulSyncAt.get(peerId),
-      });
-    } catch (error) {
-      this.recordTopologyPeerEvent({
-        level: 'warn',
-        workspaceId,
-        peerId,
-        event: 'sync-failed',
-        reason: (error as Error)?.message ?? String(error),
-      });
-      throw error;
-    }
+    };
+
+    const task = (async () => {
+      this.messageSyncRerunRequested.delete(peerId);
+      do {
+        await runOnce();
+      } while (this.messageSyncRerunRequested.delete(peerId));
+    })().finally(() => {
+      if (this.messageSyncInFlight.get(peerId) === task) {
+        this.messageSyncInFlight.delete(peerId);
+      }
+    });
+
+    this.messageSyncInFlight.set(peerId, task);
+    return task;
   }
 
   private peerSupportsCapability(peerId: string, capability: string): boolean {
@@ -9787,27 +9834,18 @@ export class ChatController {
       }
 
       // Record activity for synced thread replies + mentions (batch)
-      let syncActivityChanged = false;
+      const activityLenBeforeSync = this.activityItems.length;
+      const activityUnreadBeforeSync = this.getActivityUnreadCount();
       for (const msg of toSync) {
         if (msg.senderId === this.state.myPeerId) continue;
 
-        const lenBefore = this.activityItems.length;
-        const unreadBefore = this.getActivityUnreadCount();
-
-        const wsId = this.resolveWorkspaceIdByChannelId(msg.channelId);
-        if (wsId) {
-          this.maybeRecordMentionActivity(msg as any, msg.channelId, wsId);
-        }
+        this.maybeRecordMentionActivity(msg as any, msg.channelId, wsId);
         if (msg.threadId) {
           this.maybeRecordThreadActivity(msg as any, msg.channelId);
         }
-
-        const lenAfter = this.activityItems.length;
-        const unreadAfter = this.getActivityUnreadCount();
-        if (lenAfter !== lenBefore || unreadAfter !== unreadBefore) {
-          syncActivityChanged = true;
-        }
       }
+      const syncActivityChanged = this.activityItems.length !== activityLenBeforeSync
+        || this.getActivityUnreadCount() !== activityUnreadBeforeSync;
       if (syncActivityChanged) {
         this.ui?.updateChannelHeader();
         this.ui?.updateWorkspaceRail?.();
@@ -9961,73 +9999,97 @@ export class ChatController {
   private async retryUnackedOutgoingForPeer(peerId: string): Promise<void> {
     if (!this.state.readyPeers.has(peerId)) return;
 
-    const queued = typeof (this.offlineQueue as any).listQueued === 'function'
-      ? await this.offlineQueue.listQueued(peerId)
-      : await this.offlineQueue.getQueued(peerId);
-    const queuedMessageIds = new Set<string>();
-    for (const item of queued as any[]) {
-      const opId = this.extractQueuedOpId(item);
-      if (opId) queuedMessageIds.add(opId);
-    }
+    const inFlight = this.retryUnackedInFlight.get(peerId);
+    if (inFlight) return inFlight;
 
-    if (this.custodyStore && typeof this.custodyStore.listAllForRecipient === 'function') {
-      const pendingEnvelopes = await this.custodyStore.listAllForRecipient(peerId);
-      for (const envelope of pendingEnvelopes) {
-        if (typeof envelope?.opId === 'string' && envelope.opId.length > 0) {
-          queuedMessageIds.add(envelope.opId);
+    const task = (async () => {
+      const queued = typeof (this.offlineQueue as any).listQueued === 'function'
+        ? await this.offlineQueue.listQueued(peerId)
+        : await this.offlineQueue.getQueued(peerId);
+      const queuedMessageIds = new Set<string>();
+      for (const item of queued as any[]) {
+        const opId = this.extractQueuedOpId(item);
+        if (opId) queuedMessageIds.add(opId);
+      }
+
+      if (this.custodyStore && typeof this.custodyStore.listAllForRecipient === 'function') {
+        const pendingEnvelopes = await this.custodyStore.listAllForRecipient(peerId);
+        for (const envelope of pendingEnvelopes) {
+          if (typeof envelope?.opId === 'string' && envelope.opId.length > 0) {
+            queuedMessageIds.add(envelope.opId);
+          }
         }
       }
-    }
 
-    const candidates: PlaintextMessage[] = [];
-    for (const channelId of this.messageStore.getAllChannelIds()) {
-      const channelMessages = this.messageStore.getMessages(channelId) as PlaintextMessage[];
-      for (const msg of channelMessages) {
-        if (msg.senderId !== this.state.myPeerId) continue;
-        if (queuedMessageIds.has(msg.id)) continue;
+      const candidates: PlaintextMessage[] = [];
+      let scanned = 0;
+      for (const channelId of this.messageStore.getAllChannelIds()) {
+        const channelMessages = this.messageStore.getMessages(channelId) as PlaintextMessage[];
+        for (const msg of channelMessages) {
+          scanned += 1;
+          if (scanned % ChatController.RETRY_UNACKED_SCAN_YIELD_EVERY === 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          }
 
-        const recipients = this.getStableMessageRecipients(msg);
-        if (!recipients.includes(peerId)) continue;
+          if (msg.senderId !== this.state.myPeerId) continue;
+          if (queuedMessageIds.has(msg.id)) continue;
 
-        const ackedBy = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
-        const readBy = new Set<string>(Array.isArray((msg as any).readBy) ? (msg as any).readBy : []);
-        if (ackedBy.has(peerId) || readBy.has(peerId)) continue;
-        if (msg.status === 'delivered' || msg.status === 'read') continue;
+          const recipients = this.getStableMessageRecipients(msg);
+          if (!recipients.includes(peerId)) continue;
 
-        candidates.push(msg);
+          const ackedBy = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
+          const readBy = new Set<string>(Array.isArray((msg as any).readBy) ? (msg as any).readBy : []);
+          if (ackedBy.has(peerId) || readBy.has(peerId)) continue;
+          if (msg.status === 'delivered' || msg.status === 'read') continue;
+
+          candidates.push(msg);
+        }
       }
-    }
 
-    candidates.sort((a, b) => a.timestamp - b.timestamp);
+      candidates.sort((a, b) => a.timestamp - b.timestamp);
 
-    for (const msg of candidates) {
-      if (!this.state.readyPeers.has(peerId)) break;
+      let replayed = 0;
+      for (const msg of candidates) {
+        if (!this.state.readyPeers.has(peerId)) break;
 
-      try {
-        const { envelope, queueWorkspaceId, metadata } = await this.buildReplayEnvelopeForOutgoingMessage(peerId, msg);
-        (envelope as any)._offlineReplay = 1;
-        const sent = this.transport.send(peerId, envelope);
-        if (!sent) {
-          await this.queueCustodyEnvelope(peerId, {
-            envelopeId: typeof (envelope as any).id === 'string' ? (envelope as any).id : undefined,
-            opId: msg.id,
-            recipientPeerIds: [peerId],
-            workspaceId: queueWorkspaceId,
-            channelId: msg.channelId,
-            ...(msg.threadId ? { threadId: msg.threadId } : {}),
-            domain: 'channel-message',
-            ciphertext: envelope,
-            metadata,
-          }, envelope);
-          this.scheduleOfflineQueueFlush(peerId);
-          continue;
+        replayed += 1;
+        if (replayed % 25 === 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
         }
 
-        await this.reconcileReplayedOutgoingMessage(peerId, msg.id);
-      } catch (error) {
-        console.warn('[OfflineQueue] resend/reconcile failed for', msg.id, (error as Error)?.message || error);
+        try {
+          const { envelope, queueWorkspaceId, metadata } = await this.buildReplayEnvelopeForOutgoingMessage(peerId, msg);
+          (envelope as any)._offlineReplay = 1;
+          const sent = this.transport.send(peerId, envelope);
+          if (!sent) {
+            await this.queueCustodyEnvelope(peerId, {
+              envelopeId: typeof (envelope as any).id === 'string' ? (envelope as any).id : undefined,
+              opId: msg.id,
+              recipientPeerIds: [peerId],
+              workspaceId: queueWorkspaceId,
+              channelId: msg.channelId,
+              ...(msg.threadId ? { threadId: msg.threadId } : {}),
+              domain: 'channel-message',
+              ciphertext: envelope,
+              metadata,
+            }, envelope);
+            this.scheduleOfflineQueueFlush(peerId);
+            continue;
+          }
+
+          await this.reconcileReplayedOutgoingMessage(peerId, msg.id);
+        } catch (error) {
+          console.warn('[OfflineQueue] resend/reconcile failed for', msg.id, (error as Error)?.message || error);
+        }
       }
-    }
+    })().finally(() => {
+      if (this.retryUnackedInFlight.get(peerId) === task) {
+        this.retryUnackedInFlight.delete(peerId);
+      }
+    });
+
+    this.retryUnackedInFlight.set(peerId, task);
+    return task;
   }
 
   private async flushOfflineQueue(peerId: string): Promise<void> {
@@ -10480,6 +10542,8 @@ export class ChatController {
   } {
     const snapshot = this.publicWorkspaceController.getSnapshot(workspaceId);
     const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    const workspaceMembers = workspace?.members ?? [];
+    const localMemberByPeerId = new Map(workspaceMembers.map((member) => [member.peerId, member] as const));
     const largeWorkspaceEnabled = this.workspaceHasLargeWorkspaceCapability(workspace);
     const hasDirectoryCapablePeer = this.selectWorkspaceSyncTargetPeers(workspaceId, MEMBER_DIRECTORY_CAPABILITY).length > 0;
     const canPageDirectory = largeWorkspaceEnabled && hasDirectoryCapablePeer;
@@ -10505,7 +10569,7 @@ export class ChatController {
     for (const member of snapshot.members) {
       const identityKey = member.identityId || member.peerId;
       const aggregate = identityState.get(identityKey) || { hasMe: false, hasOnline: false };
-      const localMember = this.workspaceManager.getMember(workspaceId, member.peerId);
+      const localMember = localMemberByPeerId.get(member.peerId);
 
       // Aggregate online/me status across all known device peer IDs for this identity.
       const identityPeerIds = new Set<string>([member.peerId]);
@@ -10540,7 +10604,7 @@ export class ChatController {
     }
 
     let members = snapshot.members.map((member) => {
-      const localMember = this.workspaceManager.getMember(workspaceId, member.peerId);
+      const localMember = localMemberByPeerId.get(member.peerId);
       const identityKey = member.identityId || member.peerId;
       const aggregate = identityState.get(identityKey);
       const localLooksLikeMe = (
@@ -10583,7 +10647,7 @@ export class ChatController {
     // if this workspace snapshot doesn't include the current device peer yet,
     // still show a local "you" row so presence doesn't look offline/stuck.
     if (!members.some((member) => member.isYou)) {
-      const localSelfMember = this.workspaceManager.getMember(workspaceId, this.state.myPeerId);
+      const localSelfMember = localMemberByPeerId.get(this.state.myPeerId);
       members.push({
         peerId: this.state.myPeerId,
         alias: this.getMyAliasForWorkspace(workspaceId),

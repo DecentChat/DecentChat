@@ -153,11 +153,13 @@ export class NodeMessageProtocol {
   /** Local signed pre-key + one-time pre-keys (includes private key material) */
   private localSignedPreKey: LocalSignedPreKeyRuntimeRecord | null = null;
   private localOneTimePreKeys = new Map<number, LocalPreKeyRuntimeRecord>();
+  private localPreKeyBundleCache: PreKeyBundle | null = null;
   private nextOneTimePreKeyId = 1;
 
   /** Persistence backend (optional) */
   private persistence: RatchetPersistence | null = null;
   private preKeyReady: Promise<void> | null = null;
+  private localPreKeyMutation: Promise<void> = Promise.resolve();
 
   /** Get a peer's ECDSA signing public key (for auth verification) */
   getSigningPublicKey(peerId: string): CryptoKey | undefined {
@@ -186,6 +188,15 @@ export class NodeMessageProtocol {
     // If init already generated local pre-keys before persistence was wired,
     // persist them now so restarts can consume one-time keys correctly.
     void this.persistLocalPreKeyState();
+  }
+
+  private async runWithLocalPreKeyMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const pending = this.localPreKeyMutation.catch(() => undefined).then(operation);
+    this.localPreKeyMutation = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pending;
   }
 
   async createHandshake(): Promise<HandshakeData> {
@@ -293,11 +304,19 @@ export class NodeMessageProtocol {
 
   async createPreKeyBundle(): Promise<PreKeyBundle> {
     await this.ensureLocalPreKeyMaterial();
-    const changed = await this.applyLocalPreKeyLifecyclePolicy();
-    if (changed) {
-      await this.persistLocalPreKeyState();
-    }
-    return this.snapshotLocalPreKeyBundle();
+    return this.runWithLocalPreKeyMutation(async () => {
+      const changed = await this.applyLocalPreKeyLifecyclePolicy();
+      if (changed) {
+        await this.persistLocalPreKeyState();
+      }
+      if (!changed && this.localPreKeyBundleCache) {
+        return structuredClone(this.localPreKeyBundleCache);
+      }
+
+      const bundle = await this.snapshotLocalPreKeyBundle();
+      this.localPreKeyBundleCache = bundle;
+      return structuredClone(bundle);
+    });
   }
 
   async storePeerPreKeyBundle(peerId: string, bundle: PreKeyBundle): Promise<boolean> {
@@ -609,54 +628,56 @@ export class NodeMessageProtocol {
     }
 
     await this.ensureLocalPreKeyMaterial();
+    return this.runWithLocalPreKeyMutation(async () => {
+      const init = envelope.sessionInit;
+      if (!init || init.type !== 'pre-key-session-init') {
+        throw new Error('Invalid pre-key session-init payload');
+      }
 
-    const init = envelope.sessionInit;
-    if (!init || init.type !== 'pre-key-session-init') {
-      throw new Error('Invalid pre-key session-init payload');
-    }
+      const localPreKey = this.resolveLocalPreKey(init.selectedPreKeyType, init.selectedPreKeyId);
+      if (!localPreKey) {
+        throw new Error(`Pre-key ${init.selectedPreKeyType}:${init.selectedPreKeyId} unavailable`);
+      }
 
-    const localPreKey = this.resolveLocalPreKey(init.selectedPreKeyType, init.selectedPreKeyId);
-    if (!localPreKey) {
-      throw new Error(`Pre-key ${init.selectedPreKeyType}:${init.selectedPreKeyId} unavailable`);
-    }
+      const senderEphemeral = await this.importEcdhPublicKey(init.senderEphemeralPublicKey);
+      const initialSecret = await crypto.subtle.deriveBits(
+        { name: 'ECDH', public: senderEphemeral },
+        localPreKey.privateKey,
+        256,
+      );
 
-    const senderEphemeral = await this.importEcdhPublicKey(init.senderEphemeralPublicKey);
-    const initialSecret = await crypto.subtle.deriveBits(
-      { name: 'ECDH', public: senderEphemeral },
-      localPreKey.privateKey,
-      256,
-    );
+      const state = await DoubleRatchet.initBob(initialSecret, {
+        publicKey: localPreKey.publicKey,
+        privateKey: localPreKey.privateKey,
+      });
 
-    const state = await DoubleRatchet.initBob(initialSecret, {
-      publicKey: localPreKey.publicKey,
-      privateKey: localPreKey.privateKey,
+      const content = await DoubleRatchet.decrypt(state, envelope.ratchet);
+
+      // Verify signature before mutating durable state.
+      const signingKey = this.signingPublicKeys.get(peerId) ?? peerPublicKey;
+      const isValid = await this.cipher.verify(content, envelope.signature, signingKey);
+      if (!isValid) return null;
+
+      this.ratchetStates.set(peerId, state);
+      await this.persistState(peerId);
+
+      let localStateChanged = false;
+      if (init.selectedPreKeyType === 'one-time') {
+        this.localOneTimePreKeys.delete(init.selectedPreKeyId);
+        this.invalidateLocalPreKeyBundleCache();
+        localStateChanged = true;
+      }
+
+      if (await this.applyLocalPreKeyLifecyclePolicy()) {
+        localStateChanged = true;
+      }
+
+      if (localStateChanged) {
+        await this.persistLocalPreKeyState();
+      }
+
+      return content;
     });
-
-    const content = await DoubleRatchet.decrypt(state, envelope.ratchet);
-
-    // Verify signature before mutating durable state.
-    const signingKey = this.signingPublicKeys.get(peerId) ?? peerPublicKey;
-    const isValid = await this.cipher.verify(content, envelope.signature, signingKey);
-    if (!isValid) return null;
-
-    this.ratchetStates.set(peerId, state);
-    await this.persistState(peerId);
-
-    let localStateChanged = false;
-    if (init.selectedPreKeyType === 'one-time') {
-      this.localOneTimePreKeys.delete(init.selectedPreKeyId);
-      localStateChanged = true;
-    }
-
-    if (await this.applyLocalPreKeyLifecyclePolicy()) {
-      localStateChanged = true;
-    }
-
-    if (localStateChanged) {
-      await this.persistLocalPreKeyState();
-    }
-
-    return content;
   }
 
   private resolveLocalPreKey(type: PreKeyType, keyId: number): LocalPreKeyRuntimeRecord | null {
@@ -727,11 +748,13 @@ export class NodeMessageProtocol {
       ...Array.from(this.localOneTimePreKeys.keys(), (id) => id + 1),
       1,
     );
+    this.invalidateLocalPreKeyBundleCache();
   }
 
   private async generateFreshLocalPreKeys(): Promise<void> {
     if (!this._signingKeyPair) throw new Error('MessageProtocol not initialized with signing keys');
 
+    this.invalidateLocalPreKeyBundleCache();
     const now = Date.now();
     const signedPair = await crypto.subtle.generateKey(
       { name: 'ECDH', namedCurve: 'P-256' },
@@ -757,6 +780,7 @@ export class NodeMessageProtocol {
   private async rotateLocalSignedPreKey(now = Date.now()): Promise<void> {
     if (!this._signingKeyPair) throw new Error('MessageProtocol not initialized with signing keys');
 
+    this.invalidateLocalPreKeyBundleCache();
     const signedPair = await crypto.subtle.generateKey(
       { name: 'ECDH', namedCurve: 'P-256' },
       true,
@@ -803,6 +827,19 @@ export class NodeMessageProtocol {
       for (const keyId of oneTimePlan.staleKeyIds) {
         this.localOneTimePreKeys.delete(keyId);
       }
+      this.invalidateLocalPreKeyBundleCache();
+      changed = true;
+    }
+
+    if (this.localOneTimePreKeys.size > PRE_KEY_POLICY.targetOneTimePreKeys) {
+      const keyIdsToRemove = Array.from(this.localOneTimePreKeys.values())
+        .sort((a, b) => b.keyId - a.keyId)
+        .slice(PRE_KEY_POLICY.targetOneTimePreKeys)
+        .map((record) => record.keyId);
+      for (const keyId of keyIdsToRemove) {
+        this.localOneTimePreKeys.delete(keyId);
+      }
+      this.invalidateLocalPreKeyBundleCache();
       changed = true;
     }
 
@@ -815,6 +852,9 @@ export class NodeMessageProtocol {
   }
 
   private async generateMoreOneTimePreKeys(count: number): Promise<void> {
+    if (count > 0) {
+      this.invalidateLocalPreKeyBundleCache();
+    }
     for (let i = 0; i < count; i++) {
       const keyId = this.nextOneTimePreKeyId++;
       const pair = await crypto.subtle.generateKey(
@@ -908,6 +948,10 @@ export class NodeMessageProtocol {
     } catch (e) {
       console.warn(`[PreKey] Failed to persist ${context} for ${peerId.slice(0, 8)}:`, e);
     }
+  }
+
+  private invalidateLocalPreKeyBundleCache(): void {
+    this.localPreKeyBundleCache = null;
   }
 
   private normalizePeerPreKeyBundle(bundle: PreKeyBundle, now = Date.now()): PreKeyBundle | null {

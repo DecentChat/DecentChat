@@ -143,6 +143,43 @@ describe('NodeMessageProtocol pre-key bootstrap', () => {
 });
 
 describe('NodeMessageProtocol pre-key lifecycle policy', () => {
+  test('reuses unchanged local pre-key bundle snapshots and invalidates after one-time key consumption', async () => {
+    const originalDateNow = Date.now;
+    let now = 1_000_000;
+    Date.now = () => now++;
+
+    try {
+      const aliceCrypto = new CryptoManager();
+      const aliceSigning = await aliceCrypto.generateSigningKeyPair();
+
+      const bobCrypto = new CryptoManager();
+      const bobSigning = await bobCrypto.generateSigningKeyPair();
+
+      const alice = new NodeMessageProtocol(aliceCrypto, 'alice-peer');
+      const bob = new NodeMessageProtocol(bobCrypto, 'bob-peer');
+
+      await alice.init(aliceSigning);
+      await bob.init(bobSigning);
+
+      const first = await bob.createPreKeyBundle();
+      const second = await bob.createPreKeyBundle();
+
+      expect(second.generatedAt).toBe(first.generatedAt);
+      expect(second).toEqual(first);
+
+      await alice.storePeerPreKeyBundle('bob-peer', first);
+      const envelope = await alice.encryptMessage('bob-peer', 'invalidate after consumption') as any;
+      await bob.decryptMessage('alice-peer', envelope, aliceSigning.publicKey);
+
+      const third = await bob.createPreKeyBundle();
+      expect(third.generatedAt).toBeGreaterThan(second.generatedAt);
+      expect(third.oneTimePreKeys).toHaveLength(second.oneTimePreKeys.length - 1);
+      expect(third.oneTimePreKeys[0]?.keyId).not.toBe(second.oneTimePreKeys[0]?.keyId);
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
   test('rotates near-expiry signed pre-key, prunes stale local one-time keys, and replenishes pool', async () => {
     const cryptoManager = new CryptoManager();
     const signing = await cryptoManager.generateSigningKeyPair();
@@ -190,6 +227,98 @@ describe('NodeMessageProtocol pre-key lifecycle policy', () => {
     expect(bundle.oneTimePreKeys.every((entry) => entry.createdAt > now - (24 * 60 * 60 * 1000))).toBe(true);
     expect(postPolicyState).not.toBeNull();
     expect(postPolicyState!.oneTimePreKeys).toHaveLength(20);
+  });
+
+  test('prunes excess fresh local one-time pre-keys down to the publish target', async () => {
+    const cryptoManager = new CryptoManager();
+    const signing = await cryptoManager.generateSigningKeyPair();
+
+    let seededState: PersistedLocalPreKeyState | null = null;
+    const seedProtocol = new NodeMessageProtocol(cryptoManager, 'alice-peer');
+    seedProtocol.setPersistence({
+      ...createBasePersistence(),
+      saveLocalPreKeyState: async (_ownerPeerId: string, state: PersistedLocalPreKeyState) => {
+        seededState = structuredClone(state);
+      },
+      loadLocalPreKeyState: async () => null,
+    });
+
+    await seedProtocol.init(signing);
+    await seedProtocol.createPreKeyBundle();
+
+    expect(seededState).not.toBeNull();
+
+    const now = Date.now();
+    const persisted = structuredClone(seededState!);
+    const extraKeys = persisted.oneTimePreKeys.slice(0, 5).map((entry, index) => ({
+      ...entry,
+      keyId: persisted.nextOneTimePreKeyId + index,
+      createdAt: now + index + 1,
+    }));
+    persisted.oneTimePreKeys.push(...extraKeys);
+    persisted.nextOneTimePreKeyId += extraKeys.length;
+
+    let postPolicyState: PersistedLocalPreKeyState | null = null;
+    const protocol = new NodeMessageProtocol(cryptoManager, 'alice-peer');
+    protocol.setPersistence({
+      ...createBasePersistence(),
+      loadLocalPreKeyState: async () => persisted,
+      saveLocalPreKeyState: async (_ownerPeerId: string, state: PersistedLocalPreKeyState) => {
+        postPolicyState = structuredClone(state);
+      },
+    });
+
+    await protocol.init(signing);
+    const bundle = await protocol.createPreKeyBundle();
+
+    expect(bundle.oneTimePreKeys).toHaveLength(20);
+    expect(postPolicyState).not.toBeNull();
+    expect(postPolicyState!.oneTimePreKeys).toHaveLength(20);
+  });
+
+  test('serializes concurrent local pre-key bundle refreshes', async () => {
+    const cryptoManager = new CryptoManager();
+    const signing = await cryptoManager.generateSigningKeyPair();
+
+    const protocol = new NodeMessageProtocol(cryptoManager, 'alice-peer');
+    await protocol.init(signing);
+
+    const runtime = protocol as any;
+    const seedRecord = Array.from(runtime.localOneTimePreKeys.values())[0];
+    expect(seedRecord).toBeDefined();
+
+    runtime.localOneTimePreKeys = new Map([[seedRecord.keyId, seedRecord]]);
+    runtime.nextOneTimePreKeyId = seedRecord.keyId + 1;
+    runtime.localPreKeyBundleCache = null;
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    runtime.generateMoreOneTimePreKeys = async function (count: number) {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      for (let index = 0; index < count; index += 1) {
+        const keyId = this.nextOneTimePreKeyId++;
+        this.localOneTimePreKeys.set(keyId, {
+          keyId,
+          publicKey: seedRecord.publicKey,
+          privateKey: seedRecord.privateKey,
+          createdAt: Date.now(),
+        });
+      }
+      inFlight -= 1;
+    };
+
+    const bundles = await Promise.all([
+      protocol.createPreKeyBundle(),
+      protocol.createPreKeyBundle(),
+      protocol.createPreKeyBundle(),
+      protocol.createPreKeyBundle(),
+    ]);
+
+    expect(maxInFlight).toBe(1);
+    expect(runtime.localOneTimePreKeys.size).toBe(20);
+    expect(bundles.every((bundle) => bundle.oneTimePreKeys.length === 20)).toBe(true);
   });
 
   test('prunes stale and duplicate peer one-time pre-keys on store', async () => {

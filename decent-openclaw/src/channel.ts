@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ChannelPlugin } from "openclaw/plugin-sdk";
 import { z } from "zod";
 
@@ -9,6 +11,25 @@ import { buildDecentChatRuntimeBootstrapKey, runDecentChatBootstrapOnce } from "
 import type { DecentChatChannelConfig, OpenClawConfigShape, ResolvedDecentChatAccount } from "./types.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
+const DECENTCHAT_STARTUP_STAGGER_MS = 6_000;
+
+function sanitizeDecentChatAccountPathSegment(accountId: string): string {
+  const sanitized = accountId.trim().replace(/[^a-zA-Z0-9._-]+/g, "-");
+  return sanitized || DEFAULT_ACCOUNT_ID;
+}
+
+function resolveDecentChatDataDir(cfg: any, accountId: string, configuredDataDir: unknown): string | undefined {
+  if (typeof configuredDataDir === "string" && configuredDataDir.trim()) {
+    return configuredDataDir.trim();
+  }
+
+  const accountIds = listDecentChatAccountIds(cfg);
+  if (accountIds.length === 1 && accountIds[0] === DEFAULT_ACCOUNT_ID && accountId === DEFAULT_ACCOUNT_ID) {
+    return undefined;
+  }
+
+  return join(homedir(), ".openclaw", "data", "decentchat", sanitizeDecentChatAccountPathSegment(accountId));
+}
 
 function formatPairingApproveHint(channelId: string): string {
   return `Approve via: \`openclaw pairing list ${channelId}\` / \`openclaw pairing approve ${channelId} <code>\``;
@@ -90,6 +111,55 @@ export function resolveDefaultDecentChatAccountId(cfg: any): string {
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
+export function listDecentChatStartupAccountIds(cfg: any): string[] {
+  const ids = listDecentChatAccountIds(cfg);
+  if (!ids.includes(DEFAULT_ACCOUNT_ID)) {
+    return ids;
+  }
+
+  return [
+    DEFAULT_ACCOUNT_ID,
+    ...ids.filter((accountId) => accountId !== DEFAULT_ACCOUNT_ID),
+  ];
+}
+
+export function resolveDecentChatStartupDelayMs(cfg: any, accountId?: string | null): number {
+  const resolvedAccountId = accountId?.trim() || resolveDefaultDecentChatAccountId(cfg);
+  const startupOrder = listDecentChatStartupAccountIds(cfg);
+  const startupIndex = startupOrder.indexOf(resolvedAccountId);
+  if (startupIndex <= 0) {
+    return 0;
+  }
+
+  return startupIndex * DECENTCHAT_STARTUP_STAGGER_MS;
+}
+
+async function waitForDecentChatStartupSlot(delayMs: number, abortSignal?: AbortSignal): Promise<void> {
+  if (delayMs <= 0) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+
+    const onAbort = () => {
+      clearTimeout(timer);
+      abortSignal?.removeEventListener("abort", onAbort);
+      reject(new Error("DecentChat startup aborted"));
+    };
+
+    if (abortSignal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 function normalizeStringList(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b));
@@ -144,16 +214,36 @@ function resolveRawDecentChatAccountConfig(cfg: any, accountId?: string | null):
     defaultAccount: _defaultAccount,
     ...base
   } = channelCfg;
+  const inheritRootStartupConfig = !accounts || resolvedAccountId === DEFAULT_ACCOUNT_ID;
 
   return {
     ...base,
     ...(accountCfg ?? {}),
+    invites: inheritRootStartupConfig ? (accountCfg?.invites ?? base.invites) : accountCfg?.invites,
     channels: mergeObject(base.channels, accountCfg?.channels),
     replyToModeByChatType: mergeObject(base.replyToModeByChatType, accountCfg?.replyToModeByChatType),
     thread: mergeObject(base.thread, accountCfg?.thread),
     huddle: mergeObject(base.huddle, accountCfg?.huddle),
     companySim: mergeObject(base.companySim, accountCfg?.companySim),
-    companySimBootstrap: mergeObject(base.companySimBootstrap, accountCfg?.companySimBootstrap),
+    companySimBootstrap: mergeObject(
+      inheritRootStartupConfig ? base.companySimBootstrap : undefined,
+      accountCfg?.companySimBootstrap,
+    ),
+    companySimBootstrapEnabled: inheritRootStartupConfig
+      ? (accountCfg?.companySimBootstrapEnabled ?? base.companySimBootstrapEnabled)
+      : accountCfg?.companySimBootstrapEnabled,
+    companySimBootstrapMode: inheritRootStartupConfig
+      ? (accountCfg?.companySimBootstrapMode ?? base.companySimBootstrapMode)
+      : accountCfg?.companySimBootstrapMode,
+    companySimBootstrapManifestPath: inheritRootStartupConfig
+      ? (accountCfg?.companySimBootstrapManifestPath ?? base.companySimBootstrapManifestPath)
+      : accountCfg?.companySimBootstrapManifestPath,
+    companySimBootstrapTargetWorkspaceId: inheritRootStartupConfig
+      ? (accountCfg?.companySimBootstrapTargetWorkspaceId ?? base.companySimBootstrapTargetWorkspaceId)
+      : accountCfg?.companySimBootstrapTargetWorkspaceId,
+    companySimBootstrapTargetInviteCode: inheritRootStartupConfig
+      ? (accountCfg?.companySimBootstrapTargetInviteCode ?? base.companySimBootstrapTargetInviteCode)
+      : accountCfg?.companySimBootstrapTargetInviteCode,
   };
 }
 
@@ -357,7 +447,7 @@ export function resolveDecentChatAccount(cfg: any, accountId?: string | null): R
     signalingServer: ch.signalingServer ?? "https://decentchat.app/peerjs",
     invites: ch.invites ?? [],
     alias: ch.alias ?? "Xena AI",
-    dataDir: ch.dataDir,
+    dataDir: resolveDecentChatDataDir(cfg, resolvedAccountId, ch.dataDir),
     streamEnabled: ch.streamEnabled !== false,
     replyToMode: ch.replyToMode ?? "all",
     replyToModeByChatType: {
@@ -662,6 +752,12 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
           account: ctx.account,
           log: ctx.log,
         });
+
+        const startupDelayMs = resolveDecentChatStartupDelayMs(ctx.cfg, ctx.accountId);
+        if (startupDelayMs > 0) {
+          ctx.log?.info?.(`[${ctx.accountId}] startup stagger ${startupDelayMs}ms`);
+          await waitForDecentChatStartupSlot(startupDelayMs, ctx.abortSignal);
+        }
 
         await startDecentChatPeer({
           account: ctx.account,

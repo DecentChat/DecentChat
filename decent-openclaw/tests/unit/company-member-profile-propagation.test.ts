@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { NodeXenaPeer } from '../../src/peer/NodeXenaPeer.ts';
@@ -72,6 +72,28 @@ describe('company member profile propagation', () => {
         roleTitle: 'Backend Engineer',
         teamId: 'engineering',
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('peer reuses a loaded company profile instead of re-reading files on every access', () => {
+    const root = join(tmpdir(), `company-peer-cache-${Date.now()}`);
+    mkdirSync(root, { recursive: true });
+    try {
+      const warns: string[] = [];
+      const peer = Object.create(NodeXenaPeer.prototype) as any;
+      peer.opts = {
+        account: makeAccount(root),
+        log: { warn(message: string) { warns.push(message); } },
+      };
+
+      const first = NodeXenaPeer.prototype['getMyCompanySimProfile'].call(peer);
+      unlinkSync(join(root, 'COMMUNICATION.md'));
+      const second = NodeXenaPeer.prototype['getMyCompanySimProfile'].call(peer);
+
+      expect(second).toEqual(first);
+      expect(warns).toHaveLength(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
