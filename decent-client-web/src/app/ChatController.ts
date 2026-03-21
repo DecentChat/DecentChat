@@ -4870,7 +4870,7 @@ export class ChatController {
           envelopeId: typeof (relayEnv as any).id === 'string' ? (relayEnv as any).id : undefined,
           opId: originalMsgId,
           recipientPeerIds: [targetPeerId],
-          workspaceId,
+          workspaceId: workspaceId!,
           channelId,
           ...(envelope.threadId ? { threadId: envelope.threadId } : {}),
           domain: 'channel-message',
