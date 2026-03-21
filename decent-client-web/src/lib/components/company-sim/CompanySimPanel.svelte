@@ -77,12 +77,16 @@
 
 <style>
   .company-sim-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 100%;
+    box-sizing: border-box;
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 0;
     height: 100%;
-    padding: 18px;
-    gap: 16px;
+    max-height: 100%;
+    overflow: hidden;
+    padding: clamp(12px, 2.2vh, 18px);
+    gap: clamp(12px, 2vh, 16px);
     background:
       radial-gradient(120% 160% at 100% -10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 42%),
       linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 92%, #000 8%), var(--bg-primary));
@@ -93,6 +97,7 @@
     justify-content: space-between;
     gap: 16px;
     align-items: flex-start;
+    flex-wrap: wrap;
   }
 
   .company-sim-kicker {
@@ -116,6 +121,7 @@
   .company-sim-actions {
     display: flex;
     gap: 10px;
+    flex-wrap: wrap;
   }
 
   .company-sim-layout {
@@ -130,7 +136,8 @@
   }
 
   .company-sim-content {
-    padding: 18px;
+    min-height: 0;
+    padding: clamp(12px, 2.2vh, 18px);
     overflow: auto;
   }
 
@@ -154,6 +161,16 @@
   @media (max-width: 900px) {
     .company-sim-layout {
       grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-height: 760px) {
+    .company-sim-header h2 {
+      font-size: 28px;
+    }
+
+    .company-sim-empty-state {
+      padding: 18px;
     }
   }
 </style>
