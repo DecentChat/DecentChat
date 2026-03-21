@@ -90,6 +90,7 @@ describe('activity navigation', () => {
       peerStatusTitle: mock(() => ''),
       showToast: mock(() => {}),
       toggleMobileSidebar: mock(() => {}),
+      closeMobileSidebar: mock(() => {}),
       closeLightbox: mock(() => {}),
       syncShellHuddle: mock(() => {}),
     });
@@ -118,5 +119,72 @@ describe('activity navigation', () => {
     expect(calls.indexOf('switchWorkspace:ws-target')).toBeLessThan(calls.indexOf('switchChannel:ch-target'));
     expect(calls.indexOf('switchChannel:ch-target')).toBeLessThan(calls.indexOf('openThread:thread-1'));
     expect(state.activeWorkspaceId).toBe('ws-target');
+  });
+
+  test('switching to DMs closes mobile sidebar to avoid stale fullscreen overlay', async () => {
+    const { registerShellCallbacks } = await import('../../src/ui/registerShellCallbacks');
+    const { getShellCallbacks } = await import('../../src/lib/stores/shell.svelte');
+
+    const closeMobileSidebar = mock(() => {});
+
+    const state: any = {
+      myPeerId: 'me',
+      myAlias: 'Me',
+      workspaceAliases: {},
+      connectedPeers: new Set<string>(),
+      connectingPeers: new Set<string>(),
+      readyPeers: new Set<string>(),
+      activeWorkspaceId: 'ws-current',
+      activeChannelId: 'ch-current',
+      activeThreadId: null,
+      threadOpen: false,
+      sidebarOpen: true,
+      activeDirectConversationId: null,
+    };
+
+    registerShellCallbacks({
+      state,
+      workspaceManager: {
+        getWorkspace: mock(() => null),
+      } as any,
+      messageStore: {} as any,
+      callbacks: {} as any,
+      modalActions: {} as any,
+      toggleActivityPanel: mock(() => {}),
+      persistViewState: mock(() => {}),
+      refreshContactsCache: mock(async () => {}),
+      syncShellSidebar: mock(() => {}),
+      syncShellRail: mock(() => {}),
+      syncShellHeader: mock(() => {}),
+      syncShellMessages: mock(() => {}),
+      refreshActivityPanel: mock(() => {}),
+      switchWorkspace: mock(() => {}),
+      switchChannel: mock(() => {}),
+      switchToDirectConversation: mock(() => {}),
+      startMemberDM: mock(() => {}),
+      openThread: mock(() => {}),
+      closeThread: mock(() => {}),
+      rememberReaction: mock(() => {}),
+      showMessageInfo: mock(() => {}),
+      openLightbox: mock(() => {}),
+      scrollToMessageAndHighlight: mock(() => {}),
+      getPeerAlias: mock(() => ''),
+      peerStatusClass: mock(() => ''),
+      peerStatusTitle: mock(() => ''),
+      showToast: mock(() => {}),
+      toggleMobileSidebar: mock(() => {}),
+      closeMobileSidebar,
+      closeLightbox: mock(() => {}),
+      syncShellHuddle: mock(() => {}),
+    });
+
+    const shellCallbacks = getShellCallbacks();
+    expect(shellCallbacks).toBeTruthy();
+
+    shellCallbacks!.onSwitchToDMs();
+
+    expect(closeMobileSidebar).toHaveBeenCalledTimes(1);
+    expect(state.activeWorkspaceId).toBeNull();
+    expect(state.activeChannelId).toBeNull();
   });
 });

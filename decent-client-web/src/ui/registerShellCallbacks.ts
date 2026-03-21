@@ -37,6 +37,7 @@ interface RegisterShellCallbacksContext {
   peerStatusTitle: (peerId: string) => string;
   showToast: (message: string, type?: 'info' | 'error' | 'success') => void;
   toggleMobileSidebar: () => void;
+  closeMobileSidebar: () => void;
   closeLightbox: () => void;
   syncShellHuddle: () => void;
 }
@@ -71,6 +72,7 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     peerStatusTitle,
     showToast,
     toggleMobileSidebar,
+    closeMobileSidebar,
     closeLightbox,
     syncShellHuddle,
   } = ctx;
@@ -168,6 +170,7 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
       syncShellRail();
       syncShellHeader();
       syncShellMessages();
+      closeMobileSidebar();
     },
     onSwitchWorkspace: async (wsId) => {
       switchWorkspace(wsId);

@@ -488,6 +488,7 @@ export function createUIService(
     peerStatusTitle,
     showToast,
     toggleMobileSidebar,
+    closeMobileSidebar,
     closeLightbox,
     syncShellHuddle,
   });
