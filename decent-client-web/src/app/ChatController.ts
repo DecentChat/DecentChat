@@ -376,6 +376,8 @@ export class ChatController {
   private static readonly LIKELY_PEER_RETRY_BASE_MS = 30_000;
   private static readonly LIKELY_PEER_RETRY_MAX_MS = 10 * 60 * 1000;
   private static readonly CONNECT_FAILURE_MIN_UPDATE_MS = 4_000;
+  private static readonly WORKSPACE_STATE_CONNECT_SWEEP_MIN_MS = 4_000;
+  private static readonly JOIN_CONNECT_CANDIDATE_CAP = 8;
   /** Cold peers are retried sparsely to avoid noisy constant reconnect churn. */
   private static readonly COLD_PEER_RETRY_MS = 5 * 60 * 1000;
   /** Join validation timeout: provisional join workspace must be confirmed by owner/member workspace-state. */
@@ -453,6 +455,7 @@ export class ChatController {
   private readonly peerConnectFailureCount = new Map<string, number>();
   private readonly peerConnectRetryAfterAt = new Map<string, number>();
   private readonly peerLastConnectFailureAt = new Map<string, number>();
+  private readonly workspaceStateConnectSweepAt = new Map<string, number>();
   private topologyTelemetry?: TopologyTelemetry;
   private topologyAnomalyDetector?: TopologyAnomalyDetector;
   private topologyDesiredSetByWorkspace?: Map<string, string[]>;
@@ -4011,26 +4014,17 @@ export class ChatController {
       }
     }
 
-    // Bug 1 fix: connect to workspace members we haven't connected to yet.
-    // When Mary joins via Bob, Bob's workspace-state tells Mary about Alice,
-    // but without an explicit connect() Mary never opens a WebRTC connection to Alice.
-    // Guard connectingPeers to avoid duplicate in-flight connect() calls when
-    // multiple peers send workspace-state in quick succession.
-    for (const member of localWs.members) {
-      if (
-        member.peerId !== this.state.myPeerId &&
-        !this.state.connectedPeers.has(member.peerId) &&
-        !this.state.connectingPeers.has(member.peerId)
-      ) {
-        this.state.connectingPeers.add(member.peerId);
-        this.ui?.updateSidebar();
-        this.transport.connect(member.peerId).catch(() => {});
-        setTimeout(() => {
-          if (!this.state.connectedPeers.has(member.peerId)) {
-            this.state.connectingPeers.delete(member.peerId);
-            this.ui?.updateSidebar();
-          }
-        }, 4000);
+    // Reconcile connectivity after workspace-state merge.
+    // IMPORTANT: don't fan out connect() to every member here — in larger workspaces
+    // that creates a reconnect storm and UI churn. Use the maintenance selector
+    // (desired peers + per-peer cooldown) and rate-limit sweeps.
+    const shouldSweepNow = this.state.activeWorkspaceId === localWs.id || this.pendingJoinValidationTimers.has(localWs.id);
+    if (shouldSweepNow) {
+      const now = Date.now();
+      const lastSweepAt = this.workspaceStateConnectSweepAt.get(localWs.id) ?? 0;
+      if (now - lastSweepAt >= ChatController.WORKSPACE_STATE_CONNECT_SWEEP_MIN_MS) {
+        this.workspaceStateConnectSweepAt.set(localWs.id, now);
+        this.runPeerMaintenanceNow('workspace-state-sync');
       }
     }
 
@@ -6218,13 +6212,16 @@ export class ChatController {
       }
     }
 
-    console.log(`[Join] Attempting parallel connect to ${candidates.size} candidate peer(s):`,
-      Array.from(candidates).map(p => p.slice(0, 8)));
+    const orderedCandidates = Array.from(candidates);
+    const cappedCandidates = orderedCandidates.slice(0, ChatController.JOIN_CONNECT_CANDIDATE_CAP);
 
-    // Connect to ALL candidates in parallel — first one that responds and
+    console.log(`[Join] Attempting parallel connect to ${cappedCandidates.length}/${orderedCandidates.length} candidate peer(s):`,
+      cappedCandidates.map(p => p.slice(0, 8)));
+
+    // Connect to a bounded candidate set in parallel — first one that responds and
     // completes handshake wins. Workspace-state sync from any member is valid.
     const results = await Promise.allSettled(
-      Array.from(candidates).map(p => this.connectPeerWithRetry(p, 'join-workspace'))
+      cappedCandidates.map(p => this.connectPeerWithRetry(p, 'join-workspace'))
     );
 
     const connected = results.filter(r => r.status === 'fulfilled').length;
