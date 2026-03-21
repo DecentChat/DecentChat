@@ -137,7 +137,7 @@ function getDefaultSignalingServer(): string {
 // ---------------------------------------------------------------------------
 
 export interface UIUpdater {
-  updateSidebar: () => void;
+  updateSidebar: (options?: { refreshContacts?: boolean }) => void;
   updateChannelHeader: () => void;
   appendMessageToDOM: (msg: PlaintextMessage, animate?: boolean) => void;
   showToast: (message: string, type?: 'info' | 'error' | 'success') => void;
@@ -608,7 +608,7 @@ export class ChatController {
 
     if (changed) {
       console.log(`[Identity] Migrated stored workspace membership ${previous.slice(0, 8)} → ${current.slice(0, 8)}`);
-      this.ui?.updateSidebar();
+      this.ui?.updateSidebar({ refreshContacts: false });
       this.ui?.renderMessages();
     }
   }
@@ -1174,7 +1174,7 @@ export class ChatController {
 
   setupTransportHandlers(): void {
     this.transport.onSignalingStateChange = () => {
-      this.ui?.updateSidebar();
+      this.ui?.updateSidebar({ refreshContacts: false });
     };
 
     this.transport.onConnect = async (peerId: string) => {
@@ -1194,7 +1194,7 @@ export class ChatController {
         ready: this.state.readyPeers.has(peerId),
         connectedAt: this.peerConnectedAt.get(peerId),
       });
-      this.ui?.updateSidebar();
+      this.ui?.updateSidebar({ refreshContacts: false });
 
       try {
         const handshake = await this.messageProtocol!.createHandshake();
@@ -1250,7 +1250,7 @@ export class ChatController {
         pending.reject(new Error('Host control peer disconnected during company sim request'));
         this.pendingCompanySimControlRequests.delete(requestId);
       }
-      this.ui?.updateSidebar();
+      this.ui?.updateSidebar({ refreshContacts: false });
     };
 
     this.transport.onMessage = async (peerId: string, rawData: unknown) => {
@@ -1637,7 +1637,7 @@ export class ChatController {
           await this.keyStore.storePeerPublicKey(peerId, data.publicKey);
 
           this.state.connectedPeers.add(peerId);
-          this.ui?.updateSidebar();
+          this.ui?.updateSidebar({ refreshContacts: false });
           const ratchetActive = this.messageProtocol!.hasRatchetState(peerId);
           // Connection toast removed — too noisy for end users
           console.debug(`[P2P] ${ratchetActive ? "Forward-secret" : "Encrypted"} connection with ${peerId.slice(0, 8)}`);
@@ -1915,7 +1915,7 @@ export class ChatController {
               this.persistentStore.saveContact(newContact).catch(() => {});
             }
           }).catch(() => {});
-          this.ui?.updateSidebar();
+          this.ui?.updateSidebar({ refreshContacts: false });
           this.ui?.renderMessages();
           return;
         }
@@ -2116,7 +2116,7 @@ export class ChatController {
             this.notifications.notify(channelId, senderName, senderName, content, {
               threadId: msg.threadId || undefined,
             });
-            this.ui?.updateSidebar();
+            this.ui?.updateSidebar({ refreshContacts: false });
           }
           return;
         }
@@ -2222,7 +2222,7 @@ export class ChatController {
                 this.notifications.notify(channelId, senderName, senderName, content, {
                   threadId: msg.threadId || undefined,
                 });
-                this.ui?.updateSidebar();
+                this.ui?.updateSidebar({ refreshContacts: false });
               }
               return;
             }
@@ -2429,7 +2429,7 @@ export class ChatController {
           );
 
           // Always update sidebar so unread badge appears on non-active channels
-          this.ui?.updateSidebar();
+          this.ui?.updateSidebar({ refreshContacts: false });
         }
       } catch (error) {
         console.error('Message processing failed:', error);
@@ -2479,12 +2479,12 @@ export class ChatController {
         console.log(`[Network] Reconnected. Re-probing ${peers.length} peers...`);
         this.runPeerMaintenanceNow('browser-online');
         void this.reinitializeTransportIfStuck('browser-online');
-        this.ui?.updateSidebar();
+        this.ui?.updateSidebar({ refreshContacts: false });
       });
 
       window.addEventListener('offline', () => {
         console.log('[Network] Offline. Waiting for connectivity…');
-        this.ui?.updateSidebar();
+        this.ui?.updateSidebar({ refreshContacts: false });
       });
     }
   }
@@ -2513,7 +2513,7 @@ export class ChatController {
     console.log(`[Sync] Channel created by peer: #${channel.name} in workspace ${workspaceId.slice(0, 8)}`);
 
     // Refresh sidebar so the new channel appears immediately
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
   }
 
   private async handleChannelRemoved(workspaceId: string, channelId: string): Promise<void> {
@@ -2548,7 +2548,7 @@ export class ChatController {
       this.ui?.updateComposePlaceholder?.();
     }
 
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
   }
 
   private sendWorkspaceState(peerId: string, workspaceId?: string, options?: { forceInclude?: boolean }): void {
@@ -3224,7 +3224,7 @@ export class ChatController {
 
     if (this.state.activeWorkspaceId === shell.id) {
       this.ui?.updateWorkspaceRail?.();
-      this.ui?.updateSidebar();
+      this.ui?.updateSidebar({ refreshContacts: false });
     }
 
     void this.prefetchWorkspaceMemberDirectory(shell.id, peerId);
@@ -3263,7 +3263,7 @@ export class ChatController {
     this.publicWorkspaceController.endPageRequest(page.workspaceId, page.cursor);
 
     if (this.state.activeWorkspaceId === page.workspaceId) {
-      this.ui?.updateSidebar();
+      this.ui?.updateSidebar({ refreshContacts: false });
     }
   }
 
@@ -3457,7 +3457,7 @@ export class ChatController {
         this.workspaceManager.removeWorkspace(msg.workspaceId);
         this.ui?.showToast('Workspace was deleted by owner', 'error');
         this.ui?.updateWorkspaceRail?.();
-        this.ui?.updateSidebar();
+        this.ui?.updateSidebar({ refreshContacts: false });
         this.ui?.updateChannelHeader();
         this.ui?.renderMessages();
         this.ui?.updateComposePlaceholder?.();
@@ -3606,7 +3606,7 @@ export class ChatController {
             this.workspaceManager.removeWorkspace(ws.id);
             this.ui?.showToast('You left the workspace', 'info');
             this.ui?.updateWorkspaceRail?.();
-            this.ui?.updateSidebar();
+            this.ui?.updateSidebar({ refreshContacts: false });
             this.ui?.updateChannelHeader();
             this.ui?.renderMessages();
             this.ui?.updateComposePlaceholder?.();
@@ -3671,7 +3671,7 @@ export class ChatController {
           return;
         } else {
           this.persistWorkspace(ws.id).catch(() => {});
-          this.ui?.updateSidebar();
+          this.ui?.updateSidebar({ refreshContacts: false });
           this.ui?.updateChannelHeader();
           this.ui?.renderMessages();
         }
@@ -4810,7 +4810,7 @@ export class ChatController {
       ? 0
       : this.runPeerMaintenanceNow('user-retry-post');
 
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
     return {
       attempted: firstAttempt + secondAttempt,
       reinitialized,
@@ -5329,7 +5329,7 @@ export class ChatController {
         connectedAt: connectCandidate?.connectedAt,
         lastSyncAt: connectCandidate?.lastSyncAt,
       });
-      this.ui?.updateSidebar();
+      this.ui?.updateSidebar({ refreshContacts: false });
       // Stop the pulsating indicator quickly — if the peer doesn't answer in
       // 4s, show them as offline rather than spinning forever. PeerTransport
       // keeps retrying silently in the background; onConnect will light them
@@ -5338,7 +5338,7 @@ export class ChatController {
         if (!this.state.connectedPeers.has(peerId)) {
           this.state.connectingPeers.delete(peerId);
           this.notePeerConnectFailure(peerId, { likelyOnline: options?.likelyOnline ?? true });
-          this.ui?.updateSidebar();
+          this.ui?.updateSidebar({ refreshContacts: false });
         }
       }, 4000);
       this.transport.connect(peerId).catch(() => {
@@ -5686,7 +5686,7 @@ export class ChatController {
       }
 
       // Refresh sidebar and messages so own name updates immediately
-      this.ui?.updateSidebar();
+      this.ui?.updateSidebar({ refreshContacts: false });
       this.ui?.renderMessages();
     }
 
@@ -6469,7 +6469,7 @@ export class ChatController {
       });
     }
 
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
     this.ui?.updateChannelHeader();
     this.ui?.renderMessages();
     this.ui?.updateComposePlaceholder?.();
@@ -6525,7 +6525,7 @@ export class ChatController {
 
     this.ui?.showToast(`Could not join ${workspaceName}. Access denied or join timed out.`, 'error');
     this.ui?.updateWorkspaceRail?.();
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
     this.ui?.updateChannelHeader();
     this.ui?.renderMessages();
     this.ui?.updateComposePlaceholder?.();
@@ -6568,7 +6568,7 @@ export class ChatController {
     }
 
     this.ui?.updateWorkspaceRail?.();
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
     this.ui?.updateChannelHeader();
     this.ui?.renderMessages();
     this.ui?.updateComposePlaceholder?.();
@@ -6637,7 +6637,7 @@ export class ChatController {
     const ok = await this.cleanupWorkspaceLocalState(wsId, ws);
     if (ok) {
       this.ui?.updateWorkspaceRail?.();
-      this.ui?.updateSidebar();
+      this.ui?.updateSidebar({ refreshContacts: false });
       this.ui?.updateChannelHeader();
       this.ui?.renderMessages();
       this.ui?.updateComposePlaceholder?.();
@@ -6684,7 +6684,7 @@ export class ChatController {
 
     this.ui?.showToast('You left the workspace', 'info');
     this.ui?.updateWorkspaceRail?.();
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
     this.ui?.updateChannelHeader();
     this.ui?.renderMessages();
     this.ui?.updateComposePlaceholder?.();
@@ -6745,7 +6745,7 @@ export class ChatController {
       }
     }
 
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
     this.ui?.updateChannelHeader();
     this.ui?.renderMessages();
 
@@ -6805,7 +6805,7 @@ export class ChatController {
     }
 
     this.ui?.updateWorkspaceRail?.();
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
     this.ui?.updateChannelHeader();
     this.ui?.renderMessages();
     this.ui?.updateComposePlaceholder?.();
@@ -6839,7 +6839,7 @@ export class ChatController {
       });
     }
 
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
     this.ui?.updateChannelHeader();
     return { success: true };
   }
@@ -6873,7 +6873,7 @@ export class ChatController {
       });
     }
 
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
     this.ui?.updateChannelHeader();
     return { success: true };
   }
@@ -6969,7 +6969,7 @@ export class ChatController {
       this.sendWorkspaceState(connectedPeerId);
     }
 
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
     this.ui?.updateChannelHeader();
     return { success: true };
   }
@@ -7062,13 +7062,13 @@ export class ChatController {
         alias: contact.displayName,
       });
     }
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
   }
 
   async removeContact(peerId: string): Promise<void> {
     await this.contactStore.remove(peerId);
     await this.persistentStore.deleteContact(peerId);
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
   }
 
   async getContacts(): Promise<Contact[]> {
@@ -7102,7 +7102,7 @@ export class ChatController {
       originWorkspaceId: sourceWorkspaceId,
     });
     await this.persistentStore.saveDirectConversation(conv);
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
     return conv;
   }
 
@@ -7168,7 +7168,7 @@ export class ChatController {
     } else {
       await this.persistentStore.saveDirectConversation(conv);
     }
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
 
     if (conversationId === this.state.activeChannelId) {
       if (threadId && this.state.threadOpen) {
@@ -7511,7 +7511,7 @@ export class ChatController {
     this.presence.handlePresenceAggregate(msg.aggregate);
 
     if (this.state.activeWorkspaceId === msg.workspaceId) {
-      this.ui?.updateSidebar();
+      this.ui?.updateSidebar({ refreshContacts: false });
       this.ui?.updateChannelHeader();
     }
   }
@@ -7534,7 +7534,7 @@ export class ChatController {
     });
 
     if (this.state.activeWorkspaceId === msg.workspaceId) {
-      this.ui?.updateSidebar();
+      this.ui?.updateSidebar({ refreshContacts: false });
       this.ui?.updateChannelHeader();
     }
 
@@ -7887,7 +7887,7 @@ export class ChatController {
       if (wsForCall) {
         this.state.activeWorkspaceId = wsForCall.id;
         this.state.activeChannelId = channelId;
-        this.ui?.updateSidebar();
+        this.ui?.updateSidebar({ refreshContacts: false });
         this.ui?.renderMessages();
       }
 
@@ -10512,7 +10512,7 @@ export class ChatController {
     });
 
     this.persistWorkspace(ws.id).catch(() => {});
-    this.ui?.updateSidebar();
+    this.ui?.updateSidebar({ refreshContacts: false });
   }
 
   /** Resolve a peer's display name given a channel context (looks through workspace members) */

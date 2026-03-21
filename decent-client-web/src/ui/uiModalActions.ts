@@ -30,7 +30,7 @@ interface ModalActionContext {
   qrFlow: QRFlowLike;
   showToast: (message: string, type?: 'info' | 'error' | 'success') => void;
   refreshContactsCache: () => Promise<void>;
-  updateSidebar: () => void;
+  updateSidebar: (options?: { refreshContacts?: boolean }) => void;
   syncShellHeader: () => void;
   switchChannel: (channelId: string) => void;
   switchToDirectConversation: (conversationId: string) => void;
