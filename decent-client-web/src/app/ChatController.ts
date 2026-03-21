@@ -300,6 +300,7 @@ export class ChatController {
   private readonly deferredGossipIntentOfferState = new Map<string, number>();
   private readonly deferredGossipIntentInboundState = new Map<string, number>();
   private readonly pendingCustodyOffers = new Map<string, string[]>();
+  private readonly scheduledOfflineQueueFlushes = new Map<string, ReturnType<typeof setTimeout>>();
   readonly messageCRDTs: Map<string, MessageCRDT> = new Map();
   readonly mediaStore: MediaStore;
   private readonly blobStorage: IndexedDBBlobStorage;
@@ -5814,6 +5815,7 @@ export class ChatController {
               },
             }, envelope);
             await this.replicateToCustodians(peerId, { workspaceId: this.state.activeWorkspaceId, channelId: this.state.activeChannelId, opId: msg.id, domain: 'channel-message' });
+            this.scheduleOfflineQueueFlush(peerId);
           }
         } else {
           await this.queueCustodyEnvelope(peerId, {
@@ -7094,6 +7096,7 @@ export class ChatController {
               isDirect: true,
             },
           }, envelope);
+          this.scheduleOfflineQueueFlush(peerId);
         }
       } else {
         await this.queueCustodyEnvelope(peerId, {
@@ -7970,6 +7973,7 @@ export class ChatController {
                 hasAttachment: true,
               },
             }, envelope);
+            this.scheduleOfflineQueueFlush(peerId);
           }
         } else {
           await this.queueCustodyEnvelope(peerId, {
@@ -8668,6 +8672,22 @@ export class ChatController {
     if (fallbackPayload !== undefined) {
       await this.offlineQueue.enqueue(peerId, fallbackPayload);
     }
+  }
+
+  private scheduleOfflineQueueFlush(peerId: string, delayMs = 250): void {
+    if (!peerId) return;
+    const existing = this.scheduledOfflineQueueFlushes.get(peerId);
+    if (existing) return;
+
+    const timer = setTimeout(() => {
+      this.scheduledOfflineQueueFlushes.delete(peerId);
+      if (!this.state.readyPeers.has(peerId)) return;
+      this.flushOfflineQueue(peerId).catch((err) => {
+        console.warn('[OfflineQueue] scheduled flush failed:', (err as Error)?.message || err);
+      });
+    }, delayMs);
+
+    this.scheduledOfflineQueueFlushes.set(peerId, timer);
   }
 
   private sendManifestSummary(peerId: string, onlyWorkspaceId?: string): void {
@@ -9917,6 +9937,7 @@ export class ChatController {
             ciphertext: envelope,
             metadata,
           }, envelope);
+          this.scheduleOfflineQueueFlush(peerId);
           continue;
         }
 

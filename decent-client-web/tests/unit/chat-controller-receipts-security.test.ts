@@ -114,6 +114,79 @@ describe('ChatController outbound receipt field initialization', () => {
     expect(ctrl.ui.updateMessageStatus).toHaveBeenCalledWith('dm-1', 'sent', { acked: 0, total: 1, read: 0 });
   });
 
+
+  test('sendDirectMessage schedules queued flush when live send is rejected for a ready peer', async () => {
+    const ctrl = Object.create(ChatController.prototype) as any;
+    ctrl.state = { myPeerId: 'me', readyPeers: new Set<string>(['alice']), activeChannelId: 'conv-1', threadOpen: false };
+    const msg = { id: 'dm-2', channelId: 'conv-1', senderId: 'me', timestamp: Date.now(), status: 'pending' } as any;
+
+    ctrl.directConversationStore = {
+      get: mock(async () => ({ id: 'conv-1', contactPeerId: 'alice', lastMessageAt: 0 })),
+      updateLastMessage: mock(async () => {}),
+    };
+    ctrl.messageStore = {
+      createMessage: mock(async () => msg),
+      addMessage: mock(async () => ({ success: true })),
+    };
+    ctrl.getOrCreateCRDT = mock(() => ({ createMessage: mock(() => ({ vectorClock: {} })) }));
+    ctrl.persistMessage = mock(async () => {});
+    ctrl.persistentStore = { saveDirectConversation: mock(async () => {}), saveMessage: mock(async () => {}) };
+    ctrl.ui = { updateSidebar: mock(() => {}), appendMessageToDOM: mock(() => {}), updateMessageStatus: mock(() => {}), renderThreadMessages: mock(() => {}), updateThreadIndicator: mock(() => {}) };
+    ctrl.messageProtocol = { encryptMessage: mock(async () => ({})) };
+    ctrl.transport = { send: mock(() => false) };
+    ctrl.getDisplayNameForPeer = mock(() => 'Me');
+    ctrl.queueCustodyEnvelope = mock(async () => {});
+    ctrl.scheduleOfflineQueueFlush = mock(() => {});
+
+    await ChatController.prototype.sendDirectMessage.call(ctrl, 'conv-1', 'hello');
+
+    expect(ctrl.queueCustodyEnvelope).toHaveBeenCalledTimes(1);
+    expect(ctrl.scheduleOfflineQueueFlush).toHaveBeenCalledWith('alice');
+  });
+
+  test('sendMessage schedules queued flush when live send is rejected for a ready workspace peer', async () => {
+    const ctrl = Object.create(ChatController.prototype) as any;
+    ctrl.state = {
+      myPeerId: 'me',
+      readyPeers: new Set<string>(['alice']),
+      activeChannelId: 'ch-1',
+      activeWorkspaceId: 'ws-1',
+      threadOpen: false,
+    };
+    const msg = { id: 'm-queue-1', channelId: 'ch-1', senderId: 'me', timestamp: Date.now(), status: 'pending' } as any;
+
+    ctrl.messageStore = {
+      createMessage: mock(async () => msg),
+      addMessage: mock(async () => ({ success: true })),
+      getThreadRoot: mock(() => null),
+    };
+    ctrl.getOrCreateCRDT = mock(() => ({ createMessage: mock(() => ({ vectorClock: {} })) }));
+    ctrl.persistMessage = mock(async () => {});
+    ctrl.recordManifestDomain = mock(() => {});
+    ctrl.getChannelMessageCount = mock(() => 1);
+    ctrl.persistentStore = { saveMessage: mock(async () => {}) };
+    ctrl.ui = { showToast: mock(() => {}), appendMessageToDOM: mock(() => {}), renderThreadMessages: mock(() => {}), updateThreadIndicator: mock(() => {}), updateMessageStatus: mock(() => {}) };
+    ctrl.getChannelDeliveryPeerIds = mock(() => ['alice']);
+    ctrl.encryptMessageWithPreKeyBootstrap = mock(async () => ({}));
+    ctrl.transport = { send: mock(() => false) };
+    ctrl.getDisplayNameForPeer = mock(() => 'Me');
+    ctrl.offlineQueue = { enqueue: mock(async () => {}) };
+    ctrl.queueCustodyEnvelope = mock(async () => {});
+    ctrl.replicateToCustodians = mock(async () => {});
+    ctrl.scheduleOfflineQueueFlush = mock(() => {});
+
+    await ChatController.prototype.sendMessage.call(ctrl, 'hello workspace');
+
+    expect(ctrl.queueCustodyEnvelope).toHaveBeenCalledTimes(1);
+    expect(ctrl.replicateToCustodians).toHaveBeenCalledWith('alice', expect.objectContaining({
+      workspaceId: 'ws-1',
+      channelId: 'ch-1',
+      opId: 'm-queue-1',
+      domain: 'channel-message',
+    }));
+    expect(ctrl.scheduleOfflineQueueFlush).toHaveBeenCalledWith('alice');
+  });
+
   test('sendAttachment initializes receipt fields and advances to sent', async () => {
     const ctrl = Object.create(ChatController.prototype) as any;
     ctrl.state = { myPeerId: 'me', activeChannelId: 'ch-1', activeWorkspaceId: 'ws-1', readyPeers: new Set<string>(['alice']), threadOpen: false };
