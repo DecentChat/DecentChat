@@ -337,7 +337,6 @@ export class ChatController {
   private readonly publishedPreKeyVersionByWorkspace = new Map<string, string>();
   private lastMessageSyncRequestAt = new Map<string, number>();
   private readonly messageSyncInFlight = new Map<string, Promise<void>>();
-  private readonly messageSyncRerunRequested = new Set<string>();
   private readonly retryUnackedInFlight = new Map<string, Promise<void>>();
   private directoryRequestFailoverTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -380,6 +379,7 @@ export class ChatController {
   private static readonly JOIN_CONNECT_CANDIDATE_CAP = 8;
   private static readonly POST_CONNECT_RETRY_UNACKED_MIN_MS = 12_000;
   private static readonly POST_CONNECT_MESSAGE_SYNC_MIN_MS = 5_000;
+  private static readonly MESSAGE_SYNC_MIN_INTERVAL_MS = 20_000;
   private static readonly WORKSPACE_SHELL_PREFETCH_MIN_MS = 10_000;
   /** Cold peers are retried sparsely to avoid noisy constant reconnect churn. */
   private static readonly COLD_PEER_RETRY_MS = 5 * 60 * 1000;
@@ -9446,8 +9446,13 @@ export class ChatController {
     if (!peerId) return;
     const inFlight = this.messageSyncInFlight.get(peerId);
     if (inFlight) {
-      this.messageSyncRerunRequested.add(peerId);
       return inFlight;
+    }
+
+    const now = Date.now();
+    const last = this.lastMessageSyncRequestAt.get(peerId) ?? 0;
+    if (now - last < ChatController.MESSAGE_SYNC_MIN_INTERVAL_MS) {
+      return;
     }
 
     const runOnce = async (): Promise<void> => {
@@ -9491,12 +9496,7 @@ export class ChatController {
       }
     };
 
-    const task = (async () => {
-      this.messageSyncRerunRequested.delete(peerId);
-      do {
-        await runOnce();
-      } while (this.messageSyncRerunRequested.delete(peerId));
-    })().finally(() => {
+    const task = runOnce().finally(() => {
       if (this.messageSyncInFlight.get(peerId) === task) {
         this.messageSyncInFlight.delete(peerId);
       }
