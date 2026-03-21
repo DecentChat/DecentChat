@@ -127,7 +127,7 @@ export class LifecycleReconnectGuard {
     const expectedPeers = this.deps.getExpectedPeers();
     const connectedPeers = this.deps.getConnectedPeers();
 
-    if (connectedPeers > 0) {
+    if (expectedPeers > 0 && connectedPeers >= expectedPeers) {
       this.reinitAttempt = 0;
       this.nextAllowedReinitAt = 0;
       return;

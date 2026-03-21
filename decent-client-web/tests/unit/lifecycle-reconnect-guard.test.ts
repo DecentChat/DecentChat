@@ -83,6 +83,38 @@ describe('LifecycleReconnectGuard', () => {
     expect(reinitializeTransportIfStuck).not.toHaveBeenCalled();
   });
 
+
+  test('partial connectivity still triggers maintenance when expected peers are missing', async () => {
+    const windowTarget = new EventTarget();
+    const documentTarget = new MockDocumentTarget();
+    const runPeerMaintenanceNow = mock(() => 1);
+    const reinitializeTransportIfStuck = mock(async () => false);
+
+    const guard = new LifecycleReconnectGuard(
+      {
+        windowTarget,
+        documentTarget,
+        getExpectedPeers: () => 2,
+        getConnectedPeers: () => 1,
+        runPeerMaintenanceNow,
+        reinitializeTransportIfStuck,
+      },
+      {
+        debounceMs: 1,
+        initGraceMs: 5000,
+        initForceRecheckMs: 9000,
+      },
+    );
+
+    guard.start();
+    guard.scheduleCheck('partial');
+    await wait(10);
+    guard.stop();
+
+    expect(runPeerMaintenanceNow).toHaveBeenCalledTimes(1);
+    expect(reinitializeTransportIfStuck).not.toHaveBeenCalled();
+  });
+
   test('reinit attempts honor backoff and do not storm', async () => {
     const windowTarget = new EventTarget();
     const documentTarget = new MockDocumentTarget();
