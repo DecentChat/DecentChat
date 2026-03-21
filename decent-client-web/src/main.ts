@@ -8,6 +8,10 @@
 
 import './ui/styles/main.css';
 import './ui/styles/tooltips.css';
+import {
+  TITLE_TOOLTIP_ATTRIBUTE_FILTER,
+  shouldHydrateTitleTooltipAttribute,
+} from './ui/titleTooltipObserver';
 
 // ─── Single-Tab Lock ─────────────────────────────────────────────────────────
 // Prevent multiple tabs from running simultaneously (shared IndexedDB,
@@ -118,8 +122,8 @@ function initTitleTooltipObserver(): void {
   const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       if (mutation.type === 'attributes' && mutation.target instanceof HTMLElement) {
-        if (mutation.attributeName === 'title' || mutation.attributeName === 'data-tooltip') {
-          hydrateTitleTooltips(mutation.target.parentElement || document);
+        if (shouldHydrateTitleTooltipAttribute(mutation.attributeName)) {
+          hydrateTitleTooltips(mutation.target);
         }
         continue;
       }
@@ -129,7 +133,7 @@ function initTitleTooltipObserver(): void {
           if (!(node instanceof HTMLElement)) return;
 
           if (node.hasAttribute('title')) {
-            hydrateTitleTooltips(node.parentElement || document);
+            hydrateTitleTooltips(node);
           } else if (node.querySelector('[title]')) {
             hydrateTitleTooltips(node);
           }
@@ -142,7 +146,7 @@ function initTitleTooltipObserver(): void {
     subtree: true,
     childList: true,
     attributes: true,
-    attributeFilter: ['title', 'data-tooltip'],
+    attributeFilter: [...TITLE_TOOLTIP_ATTRIBUTE_FILTER],
   });
 }
 
