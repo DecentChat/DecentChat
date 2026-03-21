@@ -373,10 +373,13 @@ export class ChatController {
   private static readonly LIKELY_PEER_WINDOW_MS = 6 * 60 * 60 * 1000;
   /** During startup, treat all peers as likely to avoid missing first reconnection. */
   private static readonly INITIAL_LIKELY_BOOTSTRAP_MS = 2 * 60 * 1000;
+  private static readonly LIKELY_PEER_RETRY_BASE_MS = 30_000;
+  private static readonly LIKELY_PEER_RETRY_MAX_MS = 10 * 60 * 1000;
+  private static readonly CONNECT_FAILURE_MIN_UPDATE_MS = 4_000;
   /** Cold peers are retried sparsely to avoid noisy constant reconnect churn. */
   private static readonly COLD_PEER_RETRY_MS = 5 * 60 * 1000;
-  /** Join validation timeout: provisional join workspace must be confirmed by owner workspace-state. */
-  private static readonly JOIN_VALIDATION_TIMEOUT_MS = 5000;
+  /** Join validation timeout: provisional join workspace must be confirmed by owner/member workspace-state. */
+  private static readonly JOIN_VALIDATION_TIMEOUT_MS = 30_000;
   private static readonly PERIODIC_MESSAGE_SYNC_INTERVAL_MS = 120 * 1000;
   private static readonly RETRY_UNACKED_SCAN_YIELD_EVERY = 300;
   private static readonly PARTIAL_MESH_ENABLED = true;
@@ -447,6 +450,9 @@ export class ChatController {
   private readonly peerConnectedAt = new Map<string, number>();
   private readonly peerDisconnectCount = new Map<string, number>();
   private readonly peerExplorerLastUsedAt = new Map<string, number>();
+  private readonly peerConnectFailureCount = new Map<string, number>();
+  private readonly peerConnectRetryAfterAt = new Map<string, number>();
+  private readonly peerLastConnectFailureAt = new Map<string, number>();
   private topologyTelemetry?: TopologyTelemetry;
   private topologyAnomalyDetector?: TopologyAnomalyDetector;
   private topologyDesiredSetByWorkspace?: Map<string, string[]>;
@@ -689,6 +695,48 @@ export class ChatController {
   private markPeerSeen(peerId: string): void {
     const seenMap = this.peerLastSeenAt ?? ((this as any).peerLastSeenAt = new Map<string, number>());
     seenMap.set(peerId, Date.now());
+  }
+
+  private markPeerConnectSuccess(peerId: string): void {
+    const failureCounts = this.peerConnectFailureCount ?? ((this as any).peerConnectFailureCount = new Map<string, number>());
+    const retryAfter = this.peerConnectRetryAfterAt ?? ((this as any).peerConnectRetryAfterAt = new Map<string, number>());
+    const lastFailure = this.peerLastConnectFailureAt ?? ((this as any).peerLastConnectFailureAt = new Map<string, number>());
+    failureCounts.delete(peerId);
+    retryAfter.delete(peerId);
+    lastFailure.delete(peerId);
+  }
+
+  private notePeerConnectFailure(peerId: string, options?: { likelyOnline?: boolean; now?: number }): void {
+    if (!peerId || peerId === this.state.myPeerId) return;
+
+    const now = options?.now ?? Date.now();
+    const lastFailureMap = this.peerLastConnectFailureAt ?? ((this as any).peerLastConnectFailureAt = new Map<string, number>());
+    const previousFailureAt = lastFailureMap.get(peerId) ?? 0;
+    if (now - previousFailureAt < ChatController.CONNECT_FAILURE_MIN_UPDATE_MS) return;
+
+    const failureCounts = this.peerConnectFailureCount ?? ((this as any).peerConnectFailureCount = new Map<string, number>());
+    const retryAfter = this.peerConnectRetryAfterAt ?? ((this as any).peerConnectRetryAfterAt = new Map<string, number>());
+    const likelyOnline = options?.likelyOnline ?? true;
+    const previousCount = failureCounts.get(peerId) ?? 0;
+    const count = Math.min(previousCount + 1, 10);
+    failureCounts.set(peerId, count);
+    lastFailureMap.set(peerId, now);
+
+    let delayMs = ChatController.COLD_PEER_RETRY_MS;
+    if (likelyOnline) {
+      delayMs = Math.min(
+        ChatController.LIKELY_PEER_RETRY_MAX_MS,
+        Math.round(ChatController.LIKELY_PEER_RETRY_BASE_MS * Math.pow(2, Math.max(0, count - 1))),
+      );
+    }
+
+    const existingRetryAfter = retryAfter.get(peerId) ?? 0;
+    retryAfter.set(peerId, Math.max(existingRetryAfter, now + delayMs));
+  }
+
+  private getPeerRetryAfterAt(peerId: string): number {
+    const retryAfter = this.peerConnectRetryAfterAt ?? ((this as any).peerConnectRetryAfterAt = new Map<string, number>());
+    return retryAfter.get(peerId) ?? 0;
   }
 
   private getTopologyTelemetry(): TopologyTelemetry {
@@ -1125,6 +1173,7 @@ export class ChatController {
       this.state.connectingPeers.delete(peerId);
       this.peerConnectedAt.set(peerId, Date.now());
       this.markPeerSeen(peerId);
+      this.markPeerConnectSuccess(peerId);
       const workspaceId = this.resolveTopologyWorkspaceId(peerId);
       this.recordTopologyPeerEvent({
         level: 'info',
@@ -2369,10 +2418,22 @@ export class ChatController {
         void this.reinitializeTransportIfStuck('signaling-error');
         return;
       }
-      // Peer is simply offline — expected, no need to disturb the user.
+      // Peer is simply offline — expected, no toast; still damp retries to prevent churn storms.
       if (error.message?.includes('Could not connect to peer') ||
           error.message?.includes('Failed to connect to') ||
-          error.message?.includes('peer-unavailable')) return;
+          error.message?.includes('peer-unavailable')) {
+        const msg = error.message || '';
+        const match = msg.match(/peer\s+([A-Za-z0-9-]+)/i) || msg.match(/to\s+([A-Za-z0-9-]+)/i);
+        const failedPeerId = match?.[1];
+        if (failedPeerId) {
+          const activeWsId = this.state.activeWorkspaceId ?? '';
+          const ws = activeWsId ? this.workspaceManager.getWorkspace(activeWsId) : null;
+          const member = ws?.members.find((m: any) => m.peerId === failedPeerId);
+          const likelyOnline = this.isLikelyOnlinePeer(failedPeerId, member?.joinedAt, Date.now());
+          this.notePeerConnectFailure(failedPeerId, { likelyOnline });
+        }
+        return;
+      }
       // PeerJS can throw this transiently during reconnect races.
       if (error.message?.includes('Connection is not open') ||
           error.message?.includes('listen for the `open` event before sending')) return;
@@ -3935,13 +3996,19 @@ export class ChatController {
       }
     }
 
-    // Join validation: first authoritative owner workspace-state confirms provisional join.
-    if (
-      this.pendingJoinValidationTimers.has(localWs.id) &&
-      this.workspaceManager.isOwner(localWs.id, peerId) &&
-      localWs.members.some((m: any) => m.peerId === this.state.myPeerId)
-    ) {
-      this.markJoinValidated(localWs.id);
+    // Join validation: first authoritative workspace-state confirms provisional join.
+    // Owner state is preferred, but in partially available meshes the inviter can be
+    // offline while another already-member peer provides a valid state snapshot.
+    if (this.pendingJoinValidationTimers.has(localWs.id)) {
+      const iAmMember = localWs.members.some((m: any) => m.peerId === this.state.myPeerId);
+      const senderIsKnownMember = localWs.members.some((m: any) => m.peerId === peerId);
+      const hasOwnerInState = localWs.members.some((m: any) => m.role === 'owner');
+      const hasChannels = Array.isArray(localWs.channels) && localWs.channels.length > 0;
+      const ownerValidated = this.workspaceManager.isOwner(localWs.id, peerId);
+      const memberSnapshotValidated = senderIsKnownMember && hasOwnerInState && hasChannels;
+      if (iAmMember && (ownerValidated || memberSnapshotValidated)) {
+        this.markJoinValidated(localWs.id);
+      }
     }
 
     // Bug 1 fix: connect to workspace members we haven't connected to yet.
@@ -5205,11 +5272,14 @@ export class ChatController {
       const inDesiredSet = desiredSelection ? desiredPeerIds.has(peerId) : true;
       if (!inDesiredSet) continue;
 
+      const retryAfterAt = this.getPeerRetryAfterAt(peerId);
+      if (retryAfterAt > now) continue;
+
       if (candidate.likelyOnline) likelyTargets.push(peerId);
       else coldTargets.push(peerId);
     }
 
-    const connectPeer = (peerId: string): void => {
+    const connectPeer = (peerId: string, options?: { likelyOnline?: boolean }): void => {
       // Use the transport's own in-flight state (connectingTo + pending reconnect
       // timers) instead of app-level connectingPeers, which can go stale when
       // connect() returns immediately (dedup early-return, no catch fired).
@@ -5247,22 +5317,30 @@ export class ChatController {
       setTimeout(() => {
         if (!this.state.connectedPeers.has(peerId)) {
           this.state.connectingPeers.delete(peerId);
+          this.notePeerConnectFailure(peerId, { likelyOnline: options?.likelyOnline ?? true });
           this.ui?.updateSidebar();
         }
       }, 4000);
-      this.transport.connect(peerId).catch(() => { /* retries handled by PeerTransport */ });
+      this.transport.connect(peerId).catch(() => {
+        this.notePeerConnectFailure(peerId, { likelyOnline: options?.likelyOnline ?? true });
+        /* retries handled by PeerTransport */
+      });
     };
 
-    // Aggressive reconnect for likely-online peers.
+    // Aggressive reconnect for likely-online peers with adaptive cooldown after repeated failures.
     for (const peerId of likelyTargets) {
-      connectPeer(peerId);
+      const retryAfterAt = this.getPeerRetryAfterAt(peerId);
+      if (retryAfterAt > now) continue;
+      connectPeer(peerId, { likelyOnline: true });
     }
 
     // Sparse reconnect for cold peers (background probing, low noise).
     for (const peerId of coldTargets) {
       const lastAttempt = this.peerLastConnectAttemptAt.get(peerId) ?? 0;
-      if (now - lastAttempt < ChatController.COLD_PEER_RETRY_MS) continue;
-      connectPeer(peerId);
+      const retryAfterAt = this.getPeerRetryAfterAt(peerId);
+      const nextAllowedAt = Math.max(lastAttempt + ChatController.COLD_PEER_RETRY_MS, retryAfterAt);
+      if (now < nextAllowedAt) continue;
+      connectPeer(peerId, { likelyOnline: false });
     }
 
     if (desiredSelection) {

@@ -31,6 +31,9 @@ function createPolicyController(overrides: Record<string, unknown> = {}): any {
   ctrl.peerConnectedAt = new Map<string, number>();
   ctrl.peerDisconnectCount = new Map<string, number>();
   ctrl.peerExplorerLastUsedAt = new Map<string, number>();
+  ctrl.peerConnectFailureCount = new Map<string, number>();
+  ctrl.peerConnectRetryAfterAt = new Map<string, number>();
+  ctrl.peerLastConnectFailureAt = new Map<string, number>();
   ctrl.lastMessageSyncRequestAt = new Map<string, number>();
   ctrl.startedAt = Date.now() - (10 * 60 * 1000);
   ctrl.requestMessageSync = mock(async () => {});
@@ -506,6 +509,49 @@ describe('ChatController peer maintenance policy helpers', () => {
     const selection = ctrl.selectDesiredPeers('ws-1', now, { isMobile: false });
     expect(selection.budget).toBe(8);
     expect(selection.desiredPeerIds).toContain('overlap-peer');
+  });
+
+  test('runPeerMaintenance respects per-peer retry-after cooldown to avoid reconnect churn', () => {
+    const now = Date.now();
+    const connect = mock(async () => {});
+    const ctrl = createPolicyController({
+      isPartialMeshEnabled: () => false,
+      transport: {
+        getConnectedPeers: () => [],
+        isConnectingToPeer: () => false,
+        connect,
+      },
+      state: {
+        myPeerId: 'me-peer',
+        activeWorkspaceId: 'ws-1',
+        connectingPeers: new Set<string>(),
+        readyPeers: new Set<string>(),
+        connectedPeers: new Set<string>(),
+      },
+      workspaceManager: {
+        getWorkspace: (id: string) => ({
+          id,
+          members: [
+            { peerId: 'me-peer', role: 'owner', joinedAt: now - 20_000 },
+            { peerId: 'admin-peer', role: 'admin', joinedAt: now - 9_000 },
+          ],
+        }),
+        getAllWorkspaces: () => [{
+          id: 'ws-1',
+          members: [
+            { peerId: 'me-peer', role: 'owner', joinedAt: now - 20_000 },
+            { peerId: 'admin-peer', role: 'admin', joinedAt: now - 9_000 },
+          ],
+        }],
+      },
+    });
+
+    ctrl.peerLastSeenAt.set('admin-peer', now - 1000);
+    ctrl.peerConnectRetryAfterAt.set('admin-peer', Date.now() + 60_000);
+
+    const attempted = ctrl._runPeerMaintenance();
+    expect(attempted).toBe(0);
+    expect(connect).not.toHaveBeenCalled();
   });
 
   test('runPeerMaintenance keeps legacy connect-to-all behavior when partial mesh is disabled', () => {
