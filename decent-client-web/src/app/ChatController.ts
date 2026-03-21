@@ -113,6 +113,7 @@ const COMPANY_TEMPLATE_INSTALL_TIMEOUT_MS = 20_000;
 const COMPANY_SIM_CONTROL_TIMEOUT_MS = 8_000;
 const DEFERRED_GOSSIP_INTENT_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFERRED_GOSSIP_INTENT_OFFER_COOLDOWN_MS = 60 * 1000;
+const PENDING_DELIVERY_WATCHDOG_MS = 4_000;
 const NEGENTROPY_QUERY_TIMEOUT_MS = 8000;
 const PRESENCE_PAGE_REQUEST_TIMEOUT_MS = 5000;
 const PRESENCE_AUTO_ADVANCE_PAGE_TARGET = 150;
@@ -301,6 +302,7 @@ export class ChatController {
   private readonly deferredGossipIntentInboundState = new Map<string, number>();
   private readonly pendingCustodyOffers = new Map<string, string[]>();
   private readonly scheduledOfflineQueueFlushes = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly pendingDeliveryWatchTimers = new Map<string, ReturnType<typeof setTimeout>>();
   readonly messageCRDTs: Map<string, MessageCRDT> = new Map();
   readonly mediaStore: MediaStore;
   private readonly blobStorage: IndexedDBBlobStorage;
@@ -1214,6 +1216,7 @@ export class ChatController {
           const messageId = data.messageId as string;
           if (channelId && messageId) {
             const logicalPeerId = this.getInboundReceiptPeerId(peerId, data);
+            this.clearPendingDeliveryWatch(logicalPeerId, messageId);
             await this.clearDeferredGossipIntentsForReceipt(messageId, logicalPeerId);
             if (this.shouldForwardInboundReceipt(data)) {
               this.forwardInboundReceipt(messageId, channelId, logicalPeerId, data.type);
@@ -1273,6 +1276,7 @@ export class ChatController {
           const messageId = data.messageId as string;
           if (channelId && messageId) {
             const logicalPeerId = this.getInboundReceiptPeerId(peerId, data);
+            this.clearPendingDeliveryWatch(logicalPeerId, messageId);
             await this.clearDeferredGossipIntentsForReceipt(messageId, logicalPeerId);
             if (this.shouldForwardInboundReceipt(data)) {
               this.forwardInboundReceipt(messageId, channelId, logicalPeerId, data.type);
@@ -5796,6 +5800,9 @@ export class ChatController {
 
         if (this.state.readyPeers.has(peerId)) {
           const sent = this.transport.send(peerId, envelope);
+          if (sent !== false) {
+            this.schedulePendingDeliveryWatch(peerId, this.state.activeChannelId!, msg.id, this.state.activeWorkspaceId ?? undefined);
+          }
           // Reconnect race: readyPeers can be briefly stale after disconnect.
           // If transport rejects the send, persist to outbox instead of dropping.
           if (sent === false) {
@@ -7956,6 +7963,9 @@ export class ChatController {
 
         if (this.state.readyPeers.has(peerId)) {
           const sent = this.transport.send(peerId, envelope);
+          if (sent !== false) {
+            this.schedulePendingDeliveryWatch(peerId, this.state.activeChannelId!, msg.id, this.state.activeWorkspaceId ?? undefined);
+          }
           if (sent === false) {
             await this.queueCustodyEnvelope(peerId, {
               envelopeId: typeof (envelope as any).id === 'string' ? (envelope as any).id : undefined,
@@ -8688,6 +8698,78 @@ export class ChatController {
     }, delayMs);
 
     this.scheduledOfflineQueueFlushes.set(peerId, timer);
+  }
+
+  private pendingDeliveryWatchKey(peerId: string, messageId: string): string {
+    return `${peerId}:${messageId}`;
+  }
+
+  private clearPendingDeliveryWatch(peerId: string, messageId: string): void {
+    const timers = this.pendingDeliveryWatchTimers;
+    if (!timers) return;
+    const key = this.pendingDeliveryWatchKey(peerId, messageId);
+    const timer = timers.get(key);
+    if (!timer) return;
+    clearTimeout(timer);
+    timers.delete(key);
+  }
+
+  private clearPendingDeliveryWatchesForPeer(peerId: string): void {
+    const timers = this.pendingDeliveryWatchTimers;
+    if (!timers) return;
+    const prefix = `${peerId}:`;
+    for (const [key, timer] of timers) {
+      if (!key.startsWith(prefix)) continue;
+      clearTimeout(timer);
+      timers.delete(key);
+    }
+  }
+
+  private isMessagePendingForPeer(channelId: string, messageId: string, peerId: string): boolean {
+    const msg = this.messageStore.getMessages(channelId).find((candidate: any) => candidate.id === messageId) as any;
+    if (!msg) return false;
+    if (msg.senderId !== this.state.myPeerId) return false;
+    const ackedBy = new Set<string>(Array.isArray(msg.ackedBy) ? msg.ackedBy : []);
+    const readBy = new Set<string>(Array.isArray(msg.readBy) ? msg.readBy : []);
+    return !ackedBy.has(peerId) && !readBy.has(peerId);
+  }
+
+  private schedulePendingDeliveryWatch(
+    peerId: string,
+    channelId: string,
+    messageId: string,
+    workspaceId?: string,
+    delayMs = PENDING_DELIVERY_WATCHDOG_MS,
+  ): void {
+    if (!peerId || !channelId || !messageId) return;
+    const timers = this.pendingDeliveryWatchTimers ?? ((this as any).pendingDeliveryWatchTimers = new Map<string, ReturnType<typeof setTimeout>>());
+    const key = this.pendingDeliveryWatchKey(peerId, messageId);
+    if (timers.has(key)) return;
+
+    const timer = setTimeout(() => {
+      timers.delete(key);
+      if (!this.state.readyPeers.has(peerId)) return;
+      if (!this.isMessagePendingForPeer(channelId, messageId, peerId)) return;
+
+      this.scheduleOfflineQueueFlush(peerId, 250);
+      this.retryUnackedOutgoingForPeer(peerId).catch((err) => {
+        console.warn('[DeliveryWatch] retryUnackedOutgoingForPeer failed:', (err as Error)?.message || err);
+      });
+      if (workspaceId) {
+        this.requestCustodyRecovery(peerId);
+        this.requestMessageSync(peerId).catch((err) => {
+          console.warn('[DeliveryWatch] requestMessageSync failed:', (err as Error)?.message || err);
+        });
+      }
+      try {
+        this.transport.disconnect(peerId);
+        this.transport.connect(peerId).catch(() => {});
+      } catch {
+        // best-effort targeted reconnect only
+      }
+    }, delayMs);
+
+    timers.set(key, timer);
   }
 
   private sendManifestSummary(peerId: string, onlyWorkspaceId?: string): void {
@@ -10054,6 +10136,13 @@ export class ChatController {
         delivered += 1;
 
         const msgId = custodyEnvelope?.opId ?? (envelope as any)?.messageId ?? (item?.data ?? item)?.messageId;
+        const watchChannelId = custodyEnvelope?.channelId ?? (envelope as any)?.channelId ?? (item?.data ?? item)?.channelId;
+        const watchWorkspaceId = custodyEnvelope?.workspaceId && custodyEnvelope.workspaceId !== 'direct'
+          ? custodyEnvelope.workspaceId
+          : ((item?.data ?? item)?.workspaceId || undefined);
+        if (watchChannelId && msgId) {
+          this.schedulePendingDeliveryWatch(peerId, watchChannelId, msgId, watchWorkspaceId);
+        }
         await this.reconcileReplayedOutgoingMessage(peerId, msgId);
       } catch (err) {
         failed += 1;

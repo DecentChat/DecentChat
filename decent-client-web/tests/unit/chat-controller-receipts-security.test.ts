@@ -21,6 +21,7 @@ function makeReceiptController(message: any, workspaces: any[] = []): any {
 
   ctrl.transport = { send: mock(() => true) };
   ctrl.deferredGossipIntents = new Map();
+  ctrl.pendingDeliveryWatchTimers = new Map();
   ctrl.offlineQueue = { applyReceipt: mock(async () => true) };
   ctrl.messageGuard = { check: mock(() => ({ allowed: true })) };
   ctrl.messageStore = { getMessages: mock(() => [message]) };
@@ -78,6 +79,64 @@ describe('ChatController inbound receipt security + consistency', () => {
   });
 });
 
+
+  test('pending delivery watchdog retries unreplied ready peer without waiting for refresh', async () => {
+    const msg = {
+      id: 'm-watch-1',
+      channelId: 'ch-1',
+      senderId: 'me',
+      status: 'sent',
+      recipientPeerIds: ['alice'],
+      ackedBy: [],
+      readBy: [],
+    };
+    const ctrl = makeReceiptController(msg);
+    ctrl.state.readyPeers = new Set<string>(['alice']);
+    ctrl.retryUnackedOutgoingForPeer = mock(async () => {});
+    ctrl.scheduleOfflineQueueFlush = mock(() => {});
+    ctrl.requestCustodyRecovery = mock(() => {});
+    ctrl.requestMessageSync = mock(async () => {});
+    ctrl.transport = { disconnect: mock(() => {}), connect: mock(async () => {}) };
+    ctrl.pendingDeliveryWatchTimers = new Map();
+
+    ChatController.prototype.schedulePendingDeliveryWatch.call(ctrl, 'alice', 'ch-1', 'm-watch-1', 'ws-1', 5);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+
+    expect(ctrl.retryUnackedOutgoingForPeer).toHaveBeenCalledWith('alice');
+    expect(ctrl.scheduleOfflineQueueFlush).toHaveBeenCalledWith('alice', 250);
+    expect(ctrl.requestCustodyRecovery).toHaveBeenCalledWith('alice');
+    expect(ctrl.requestMessageSync).toHaveBeenCalledWith('alice');
+    expect(ctrl.transport.disconnect).toHaveBeenCalledWith('alice');
+    expect(ctrl.transport.connect).toHaveBeenCalledWith('alice');
+  });
+
+  test('pending delivery watchdog stays quiet once peer already acked', async () => {
+    const msg = {
+      id: 'm-watch-2',
+      channelId: 'ch-1',
+      senderId: 'me',
+      status: 'delivered',
+      recipientPeerIds: ['alice'],
+      ackedBy: ['alice'],
+      readBy: [],
+    };
+    const ctrl = makeReceiptController(msg);
+    ctrl.state.readyPeers = new Set<string>(['alice']);
+    ctrl.retryUnackedOutgoingForPeer = mock(async () => {});
+    ctrl.scheduleOfflineQueueFlush = mock(() => {});
+    ctrl.requestCustodyRecovery = mock(() => {});
+    ctrl.requestMessageSync = mock(async () => {});
+    ctrl.transport = { disconnect: mock(() => {}), connect: mock(async () => {}) };
+    ctrl.pendingDeliveryWatchTimers = new Map();
+
+    ChatController.prototype.schedulePendingDeliveryWatch.call(ctrl, 'alice', 'ch-1', 'm-watch-2', 'ws-1', 5);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+
+    expect(ctrl.retryUnackedOutgoingForPeer).not.toHaveBeenCalled();
+    expect(ctrl.transport.disconnect).not.toHaveBeenCalled();
+  });
+
+
 describe('ChatController outbound receipt field initialization', () => {
   test('sendDirectMessage initializes receipt fields and advances to sent', async () => {
     const ctrl = Object.create(ChatController.prototype) as any;
@@ -98,6 +157,7 @@ describe('ChatController outbound receipt field initialization', () => {
     ctrl.ui = { updateSidebar: mock(() => {}), appendMessageToDOM: mock(() => {}), updateMessageStatus: mock(() => {}), renderThreadMessages: mock(() => {}), updateThreadIndicator: mock(() => {}) };
     ctrl.messageProtocol = { encryptMessage: mock(async () => ({})) };
     ctrl.transport = { send: mock(() => {}) };
+    ctrl.pendingDeliveryWatchTimers = new Map();
     ctrl.offlineQueue = { enqueue: mock(async () => {}) };
 
     await ChatController.prototype.sendDirectMessage.call(ctrl, 'conv-1', 'hello');
