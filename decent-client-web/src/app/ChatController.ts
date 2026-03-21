@@ -110,6 +110,8 @@ const ARCHIVE_HISTORY_CAPABILITY = 'archive-history-v1';
 const PRESENCE_AGGREGATOR_CAPABILITY = 'presence-aggregator-v1';
 const COMPANY_TEMPLATE_CONTROL_CAPABILITY = 'company-template-control-v1';
 const COMPANY_TEMPLATE_INSTALL_TIMEOUT_MS = 20_000;
+const DEFERRED_GOSSIP_INTENT_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFERRED_GOSSIP_INTENT_OFFER_COOLDOWN_MS = 60 * 1000;
 const NEGENTROPY_QUERY_TIMEOUT_MS = 8000;
 const PRESENCE_PAGE_REQUEST_TIMEOUT_MS = 5000;
 const PRESENCE_AUTO_ADVANCE_PAGE_TARGET = 150;
@@ -249,13 +251,30 @@ type PendingCompanyTemplateInstallRequest = {
   timer: ReturnType<typeof setTimeout>;
 };
 
-
 type PendingCompanySimControlRequest = {
   targetPeerId: string;
   responseType: string;
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+};
+
+type DeferredGossipIntent = {
+  intentId: string;
+  targetPeerId: string;
+  upstreamPeerId: string;
+  originalMessageId: string;
+  originalSenderId: string;
+  plaintext: string;
+  workspaceId?: string;
+  channelId: string;
+  threadId?: string;
+  vectorClock?: unknown;
+  metadata?: Record<string, unknown>;
+  attachments?: unknown[];
+  threadRootSnapshot?: Record<string, unknown>;
+  hop: number;
+  createdAt: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -276,6 +295,9 @@ export class ChatController {
   readonly custodyStore: CustodyStore;
   readonly manifestStore: ManifestStore;
   private readonly custodianInbox = new Map<string, CustodyEnvelope>();
+  private readonly deferredGossipIntents = new Map<string, DeferredGossipIntent>();
+  private readonly deferredGossipIntentOfferState = new Map<string, number>();
+  private readonly deferredGossipIntentInboundState = new Map<string, number>();
   private readonly pendingCustodyOffers = new Map<string, string[]>();
   readonly messageCRDTs: Map<string, MessageCRDT> = new Map();
   readonly mediaStore: MediaStore;
@@ -599,6 +621,7 @@ export class ChatController {
       'custody.fetch_index',
       'custody.fetch_envelopes',
       'custody.ack',
+      'gossip.intent.store',
       'pre-key-bundle.publish',
       'pre-key-bundle.request',
       'pre-key-bundle.response',
@@ -1189,6 +1212,7 @@ export class ChatController {
           const messageId = data.messageId as string;
           if (channelId && messageId) {
             const logicalPeerId = this.getInboundReceiptPeerId(peerId, data);
+            await this.clearDeferredGossipIntentsForReceipt(messageId, logicalPeerId);
             if (this.shouldForwardInboundReceipt(data)) {
               this.forwardInboundReceipt(messageId, channelId, logicalPeerId, data.type);
               return;
@@ -1247,6 +1271,7 @@ export class ChatController {
           const messageId = data.messageId as string;
           if (channelId && messageId) {
             const logicalPeerId = this.getInboundReceiptPeerId(peerId, data);
+            await this.clearDeferredGossipIntentsForReceipt(messageId, logicalPeerId);
             if (this.shouldForwardInboundReceipt(data)) {
               this.forwardInboundReceipt(messageId, channelId, logicalPeerId, data.type);
               return;
@@ -1548,6 +1573,8 @@ export class ChatController {
           // immediately re-send items that were just removed from the queue.
           await this.retryUnackedOutgoingForPeer(peerId);
           await this.flushOfflineQueue(peerId);
+          await this.offerDeferredGossipIntentsToPeer(peerId);
+          await this.processDeferredGossipIntentsForPeer(peerId);
           this.requestMessageSync(peerId).catch(err => console.warn('[Sync] Message sync request failed:', err));
           this.sendManifestSummary(peerId);
           this.requestCustodyRecovery(peerId);
@@ -1851,6 +1878,10 @@ export class ChatController {
 
         if (typeof data?.type === 'string' && data.type.startsWith('custody.')) {
           await this.handleCustodyControl(peerId, data);
+          return;
+        }
+        if (data?.type === 'gossip.intent.store') {
+          await this.handleDeferredGossipIntentControl(peerId, data);
           return;
         }
 
@@ -4870,7 +4901,7 @@ export class ChatController {
           envelopeId: typeof (relayEnv as any).id === 'string' ? (relayEnv as any).id : undefined,
           opId: originalMsgId,
           recipientPeerIds: [targetPeerId],
-          workspaceId: workspaceId!,
+          workspaceId: workspaceId ?? ws.id,
           channelId,
           ...(envelope.threadId ? { threadId: envelope.threadId } : {}),
           domain: 'channel-message',
@@ -4890,7 +4921,21 @@ export class ChatController {
           });
         }
       } catch {
-        await this.queueDeferredGossipRelay(targetPeerId, originalMsgId, originalSenderId, plaintext, channelId, workspaceId, hop, envelope);
+        const intent = this.buildDeferredGossipIntent(
+          targetPeerId,
+          originalMsgId,
+          originalSenderId,
+          plaintext,
+          channelId,
+          workspaceId,
+          hop,
+          envelope,
+        );
+        await this.storeDeferredGossipIntent(intent);
+        await this.replicateDeferredGossipIntentToCustodians(intent);
+        if (this.state.readyPeers.has(targetPeerId)) {
+          await this.processDeferredGossipIntentsForPeer(targetPeerId);
+        }
       }
     }
   }
@@ -4907,6 +4952,7 @@ export class ChatController {
       for (const [id, route] of this._gossipReceiptRoutes) {
         if (route.timestamp < cutoff) this._gossipReceiptRoutes.delete(id);
       }
+      void this.pruneExpiredDeferredGossipIntents();
     }, FIVE_MIN);
   }
 
@@ -5338,6 +5384,9 @@ export class ChatController {
   async restoreFromStorage(): Promise<void> {
     await this.loadCustodianInbox().catch((error) => {
       console.warn('[Custody] Failed to load custodian inbox', error);
+    });
+    await this.loadDeferredGossipIntents().catch((error) => {
+      console.warn('[GossipIntent] Failed to load deferred gossip intents', error);
     });
 
     const savedAlias = await this.persistentStore.getSetting('myAlias');
@@ -8253,6 +8302,303 @@ export class ChatController {
 
   private async persistCustodianInbox(): Promise<void> {
     await this.persistentStore.saveSetting('custodyInbox', JSON.stringify([...this.custodianInbox.values()]));
+  }
+
+  private isDeferredGossipIntent(value: any): value is DeferredGossipIntent {
+    return value
+      && typeof value.intentId === 'string'
+      && typeof value.targetPeerId === 'string'
+      && typeof value.upstreamPeerId === 'string'
+      && typeof value.originalMessageId === 'string'
+      && typeof value.originalSenderId === 'string'
+      && typeof value.plaintext === 'string'
+      && typeof value.channelId === 'string'
+      && typeof value.hop === 'number'
+      && typeof value.createdAt === 'number';
+  }
+
+  private async loadDeferredGossipIntents(nowMs = Date.now()): Promise<void> {
+    const raw = await this.persistentStore.getSetting('deferredGossipIntents');
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      this.deferredGossipIntents.clear();
+      for (const item of parsed) {
+        if (this.isDeferredGossipIntent(item)) {
+          this.deferredGossipIntents.set(item.intentId, item);
+        }
+      }
+      await this.pruneExpiredDeferredGossipIntents(nowMs);
+    } catch {
+      // ignore malformed cache
+    }
+  }
+
+  private async persistDeferredGossipIntents(): Promise<void> {
+    await this.persistentStore.saveSetting('deferredGossipIntents', JSON.stringify([...this.deferredGossipIntents.values()]));
+  }
+
+  private async pruneExpiredDeferredGossipIntents(nowMs = Date.now()): Promise<void> {
+    const intents = this.deferredGossipIntents;
+    if (!intents) return;
+
+    const cutoff = nowMs - DEFERRED_GOSSIP_INTENT_TTL_MS;
+    let changed = false;
+    for (const [intentId, intent] of intents) {
+      if (intent.createdAt < cutoff) {
+        intents.delete(intentId);
+        this.clearDeferredGossipIntentOfferState(intentId);
+        this.clearDeferredGossipIntentInboundState(intentId);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      await this.persistDeferredGossipIntents();
+    }
+  }
+
+  private getDeferredGossipIntentOfferKey(intentId: string, peerId: string): string {
+    return `${intentId}::${peerId}`;
+  }
+
+  private clearDeferredGossipIntentOfferState(intentId: string): void {
+    const offerState = this.deferredGossipIntentOfferState;
+    if (!offerState) return;
+    const prefix = `${intentId}::`;
+    for (const key of offerState.keys()) {
+      if (key.startsWith(prefix)) offerState.delete(key);
+    }
+  }
+
+  private clearDeferredGossipIntentInboundState(intentId: string): void {
+    const inboundState = this.deferredGossipIntentInboundState;
+    if (!inboundState) return;
+    const suffix = `::${intentId}`;
+    for (const key of inboundState.keys()) {
+      if (key.endsWith(suffix)) inboundState.delete(key);
+    }
+  }
+
+  private getDeferredGossipIntentInboundKey(peerId: string, intentId: string): string {
+    return `${peerId}::${intentId}`;
+  }
+
+  private areDeferredGossipIntentsEquivalent(a: DeferredGossipIntent, b: DeferredGossipIntent): boolean {
+    return a.intentId === b.intentId
+      && a.targetPeerId === b.targetPeerId
+      && a.upstreamPeerId === b.upstreamPeerId
+      && a.originalMessageId === b.originalMessageId
+      && a.originalSenderId === b.originalSenderId
+      && a.plaintext === b.plaintext
+      && a.workspaceId === b.workspaceId
+      && a.channelId === b.channelId
+      && a.threadId === b.threadId
+      && a.hop === b.hop
+      && a.createdAt === b.createdAt
+      && JSON.stringify(a.vectorClock ?? null) === JSON.stringify(b.vectorClock ?? null)
+      && JSON.stringify(a.metadata ?? null) === JSON.stringify(b.metadata ?? null)
+      && JSON.stringify(a.attachments ?? null) === JSON.stringify(b.attachments ?? null)
+      && JSON.stringify(a.threadRootSnapshot ?? null) === JSON.stringify(b.threadRootSnapshot ?? null);
+  }
+
+  private sendDeferredGossipIntentOffer(peerId: string, intent: DeferredGossipIntent, nowMs = Date.now()): boolean {
+    const offerState = this.deferredGossipIntentOfferState ?? ((this as any).deferredGossipIntentOfferState = new Map<string, number>());
+    const key = this.getDeferredGossipIntentOfferKey(intent.intentId, peerId);
+    const lastOfferedAt = offerState.get(key) ?? 0;
+    if (nowMs - lastOfferedAt < DEFERRED_GOSSIP_INTENT_OFFER_COOLDOWN_MS) {
+      return false;
+    }
+
+    const sent = this.sendControlWithRetry(peerId, {
+      type: 'gossip.intent.store',
+      workspaceId: intent.workspaceId,
+      recipientPeerId: intent.targetPeerId,
+      intent: {
+        ...intent,
+        upstreamPeerId: this.state.myPeerId,
+      },
+    }, { label: 'gossip.intent.store' });
+
+    if (sent) {
+      offerState.set(key, nowMs);
+    }
+    return sent;
+  }
+
+  private buildDeferredGossipIntent(
+    targetPeerId: string,
+    originalMsgId: string,
+    originalSenderId: string,
+    plaintext: string,
+    channelId: string,
+    workspaceId: string | null,
+    hop: number,
+    envelope: any,
+  ): DeferredGossipIntent {
+    return {
+      intentId: `gossip-intent:${originalMsgId}:${targetPeerId}`,
+      targetPeerId,
+      upstreamPeerId: this.state.myPeerId,
+      originalMessageId: originalMsgId,
+      originalSenderId,
+      plaintext,
+      ...(workspaceId ? { workspaceId } : {}),
+      channelId,
+      ...(envelope.threadId ? { threadId: envelope.threadId } : {}),
+      ...(envelope.vectorClock ? { vectorClock: envelope.vectorClock } : {}),
+      ...(envelope.metadata ? { metadata: envelope.metadata } : {}),
+      ...(Array.isArray(envelope.attachments) && envelope.attachments.length > 0 ? { attachments: envelope.attachments } : {}),
+      ...(envelope.threadRootSnapshot ? { threadRootSnapshot: envelope.threadRootSnapshot } : {}),
+      hop,
+      createdAt: Date.now(),
+    };
+  }
+
+  private async storeDeferredGossipIntent(intent: DeferredGossipIntent): Promise<void> {
+    this.deferredGossipIntents.set(intent.intentId, intent);
+    await this.persistDeferredGossipIntents();
+  }
+
+  private async deleteDeferredGossipIntent(intentId: string): Promise<void> {
+    if (!this.deferredGossipIntents.delete(intentId)) return;
+    this.clearDeferredGossipIntentOfferState(intentId);
+    this.clearDeferredGossipIntentInboundState(intentId);
+    await this.persistDeferredGossipIntents();
+  }
+
+  private async clearDeferredGossipIntentsForReceipt(messageId: string, recipientPeerId: string): Promise<void> {
+    const intents = this.deferredGossipIntents;
+    if (!intents) return;
+
+    const matches = [...intents.values()]
+      .filter((intent) => intent.originalMessageId === messageId && intent.targetPeerId === recipientPeerId)
+      .map((intent) => intent.intentId);
+    if (matches.length === 0) return;
+
+    let changed = false;
+    for (const intentId of matches) {
+      if (intents.delete(intentId)) {
+        this.clearDeferredGossipIntentOfferState(intentId);
+        this.clearDeferredGossipIntentInboundState(intentId);
+        changed = true;
+      }
+    }
+    if (changed) {
+      await this.persistDeferredGossipIntents();
+    }
+  }
+
+  private async replicateDeferredGossipIntentToCustodians(intent: DeferredGossipIntent, nowMs = Date.now()): Promise<void> {
+    if (!intent.workspaceId) return;
+    const custodians = this.selectCustodianPeers(intent.workspaceId, intent.targetPeerId);
+    for (const custodianPeerId of custodians) {
+      this.sendDeferredGossipIntentOffer(custodianPeerId, intent, nowMs);
+    }
+  }
+
+  private async offerDeferredGossipIntentsToPeer(peerId: string, nowMs = Date.now()): Promise<void> {
+    for (const intent of this.deferredGossipIntents.values()) {
+      if (!intent.workspaceId) continue;
+      const custodians = this.selectCustodianPeers(intent.workspaceId, intent.targetPeerId);
+      if (!custodians.includes(peerId)) continue;
+      this.sendDeferredGossipIntentOffer(peerId, intent, nowMs);
+    }
+  }
+
+  private async handleDeferredGossipIntentControl(peerId: string, data: any, nowMs = Date.now()): Promise<void> {
+    const workspaceId = typeof data?.workspaceId === 'string' ? data.workspaceId : undefined;
+    if (workspaceId && !this.isWorkspaceMember(peerId, workspaceId)) return;
+
+    const intent = data?.intent;
+    if (!this.isDeferredGossipIntent(intent)) return;
+    if (workspaceId && intent.workspaceId && intent.workspaceId !== workspaceId) return;
+    if (workspaceId && !this.isWorkspaceMember(this.state.myPeerId, workspaceId)) return;
+    if (workspaceId && !this.isWorkspaceMember(intent.targetPeerId, workspaceId)) return;
+    if (workspaceId && !this.isWorkspaceMember(intent.originalSenderId, workspaceId)) return;
+
+    const normalizedIntent: DeferredGossipIntent = {
+      ...intent,
+      upstreamPeerId: peerId,
+    };
+    const inboundState = this.deferredGossipIntentInboundState ?? ((this as any).deferredGossipIntentInboundState = new Map<string, number>());
+    const inboundKey = this.getDeferredGossipIntentInboundKey(peerId, normalizedIntent.intentId);
+    const lastSeenAt = inboundState.get(inboundKey) ?? 0;
+    const existingIntent = this.deferredGossipIntents.get(normalizedIntent.intentId);
+    const identicalExisting = !!existingIntent && this.areDeferredGossipIntentsEquivalent(existingIntent, normalizedIntent);
+    if (identicalExisting && nowMs - lastSeenAt < DEFERRED_GOSSIP_INTENT_OFFER_COOLDOWN_MS) {
+      return;
+    }
+    inboundState.set(inboundKey, nowMs);
+
+    if (!identicalExisting) {
+      await this.storeDeferredGossipIntent(normalizedIntent);
+    }
+    if (this.state.readyPeers.has(intent.targetPeerId)) {
+      await this.processDeferredGossipIntentsForPeer(intent.targetPeerId);
+    }
+  }
+
+  private async processDeferredGossipIntentsForPeer(peerId: string): Promise<void> {
+    const intents = [...this.deferredGossipIntents.values()]
+      .filter((intent) => intent.targetPeerId === peerId)
+      .sort((a, b) => a.createdAt - b.createdAt);
+
+    for (const intent of intents) {
+      try {
+        const relayEnv = this.finalizeGossipRelayEnvelope(
+          await this.encryptMessageWithPreKeyBootstrap(peerId, intent.plaintext, intent.workspaceId),
+          intent.originalMessageId,
+          intent.originalSenderId,
+          intent.channelId,
+          intent.workspaceId ?? null,
+          intent.hop,
+          intent,
+        );
+
+        const existingRoute = this._gossipReceiptRoutes.get(intent.originalMessageId);
+        this._gossipReceiptRoutes.set(intent.originalMessageId, {
+          upstreamPeerId: existingRoute?.upstreamPeerId ?? intent.upstreamPeerId ?? intent.originalSenderId,
+          originalSenderId: intent.originalSenderId,
+          timestamp: Date.now(),
+        });
+
+        if (this.state.readyPeers.has(peerId)) {
+          const sent = this.transport.send(peerId, relayEnv);
+          if (sent !== false) {
+            await this.deleteDeferredGossipIntent(intent.intentId);
+            continue;
+          }
+        }
+
+        await this.queueCustodyEnvelope(peerId, {
+          envelopeId: typeof (relayEnv as any).id === 'string' ? (relayEnv as any).id : undefined,
+          opId: intent.originalMessageId,
+          recipientPeerIds: [peerId],
+          workspaceId: intent.workspaceId || 'direct',
+          channelId: intent.channelId,
+          ...(intent.threadId ? { threadId: intent.threadId } : {}),
+          domain: 'channel-message',
+          ciphertext: relayEnv,
+          metadata: {
+            messageId: intent.originalMessageId,
+            senderId: intent.originalSenderId,
+          },
+        }, relayEnv);
+        if (intent.workspaceId) {
+          await this.replicateToCustodians(peerId, {
+            workspaceId: intent.workspaceId,
+            channelId: intent.channelId,
+            opId: intent.originalMessageId,
+            domain: 'channel-message',
+          });
+        }
+        await this.deleteDeferredGossipIntent(intent.intentId);
+      } catch {
+        // Keep the intent for a later reconnect / pre-key hydration opportunity.
+      }
+    }
   }
 
   private schedulePersistManifestState(): void {

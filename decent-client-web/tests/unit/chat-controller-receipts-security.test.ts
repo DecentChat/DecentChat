@@ -20,12 +20,13 @@ function makeReceiptController(message: any, workspaces: any[] = []): any {
   };
 
   ctrl.transport = { send: mock(() => true) };
+  ctrl.deferredGossipIntents = new Map();
   ctrl.offlineQueue = { applyReceipt: mock(async () => true) };
   ctrl.messageGuard = { check: mock(() => ({ allowed: true })) };
   ctrl.messageStore = { getMessages: mock(() => [message]) };
   ctrl.workspaceManager = { getAllWorkspaces: mock(() => workspaces) };
   ctrl.directConversationStore = { conversations: new Map<string, any>() };
-  ctrl.persistentStore = { getPeer: mock(async () => null), saveMessage: mock(async () => {}) };
+  ctrl.persistentStore = { getPeer: mock(async () => null), saveMessage: mock(async () => {}), saveSetting: mock(async () => {}) };
   ctrl.ui = { updateMessageStatus: mock(() => {}) };
 
   ChatController.prototype.setupTransportHandlers.call(ctrl);
@@ -205,8 +206,89 @@ describe('ChatController gossip receipt routing', () => {
     expect(msg.ackedBy).toEqual([]);
   });
 
-  test('original sender attributes forwarded ACK to logical recipient, not relay peer', async () => {
+
+  test('relay forwarding ACK also clears matching deferred gossip intent for that recipient', async () => {
     const msg = {
+      id: 'm1',
+      channelId: 'ch-1',
+      senderId: 'alice',
+      status: 'sent',
+      recipientPeerIds: ['carol'],
+      ackedBy: [],
+      readBy: [],
+    };
+    const ctrl = makeReceiptController(msg);
+    ctrl.state.myPeerId = 'bob';
+    ctrl._gossipReceiptRoutes = new Map([
+      ['m1', { upstreamPeerId: 'alice', originalSenderId: 'alice', timestamp: Date.now() }],
+    ]);
+    ctrl.deferredGossipIntents = new Map([
+      ['gossip-intent:m1:carol', {
+        intentId: 'gossip-intent:m1:carol',
+        targetPeerId: 'carol',
+        upstreamPeerId: 'bob',
+        originalMessageId: 'm1',
+        originalSenderId: 'alice',
+        plaintext: 'hello',
+        workspaceId: 'ws-1',
+        channelId: 'ch-1',
+        hop: 1,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    await ctrl.transport.onMessage('carol', {
+      type: 'ack',
+      channelId: 'ch-1',
+      messageId: 'm1',
+      _receiptFromPeerId: 'carol',
+      _receiptTargetPeerId: 'alice',
+    });
+
+    expect(ctrl.deferredGossipIntents.size).toBe(0);
+    expect(ctrl.persistentStore.saveSetting).toHaveBeenCalledWith('deferredGossipIntents', '[]');
+  });
+
+  test('original sender clears matching deferred gossip intent on direct read receipt', async () => {
+    const msg = {
+      id: 'm1',
+      channelId: 'ch-1',
+      senderId: 'alice',
+      status: 'sent',
+      recipientPeerIds: ['carol'],
+      ackedBy: [],
+      ackedAt: {},
+      readBy: [],
+      readAt: {},
+    };
+    const ctrl = makeReceiptController(msg);
+    ctrl.state.myPeerId = 'alice';
+    ctrl.deferredGossipIntents = new Map([
+      ['gossip-intent:m1:carol', {
+        intentId: 'gossip-intent:m1:carol',
+        targetPeerId: 'carol',
+        upstreamPeerId: 'bob',
+        originalMessageId: 'm1',
+        originalSenderId: 'alice',
+        plaintext: 'hello',
+        workspaceId: 'ws-1',
+        channelId: 'ch-1',
+        hop: 1,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    await ctrl.transport.onMessage('carol', {
+      type: 'read',
+      channelId: 'ch-1',
+      messageId: 'm1',
+    });
+
+    expect(ctrl.deferredGossipIntents.size).toBe(0);
+    expect(msg.readBy).toEqual(['carol']);
+  });
+
+  test('original sender attributes forwarded ACK to logical recipient, not relay peer', async () => {    const msg = {
       id: 'm1',
       channelId: 'ch-1',
       senderId: 'alice',
