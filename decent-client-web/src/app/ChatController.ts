@@ -110,6 +110,7 @@ const ARCHIVE_HISTORY_CAPABILITY = 'archive-history-v1';
 const PRESENCE_AGGREGATOR_CAPABILITY = 'presence-aggregator-v1';
 const COMPANY_TEMPLATE_CONTROL_CAPABILITY = 'company-template-control-v1';
 const COMPANY_TEMPLATE_INSTALL_TIMEOUT_MS = 20_000;
+const COMPANY_SIM_CONTROL_TIMEOUT_MS = 8_000;
 const DEFERRED_GOSSIP_INTENT_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFERRED_GOSSIP_INTENT_OFFER_COOLDOWN_MS = 60 * 1000;
 const NEGENTROPY_QUERY_TIMEOUT_MS = 8000;
@@ -2728,8 +2729,8 @@ export class ChatController {
         const pending = this.pendingCompanySimControlRequests.get(requestId);
         if (!pending) return;
         this.pendingCompanySimControlRequests.delete(requestId);
-        pending.reject(new Error('Timed out waiting for host control bridge response'));
-      }, COMPANY_TEMPLATE_INSTALL_TIMEOUT_MS);
+        pending.reject(new Error('Company Sim host did not answer in time. Make sure the OpenClaw host peer is online, then try Refresh.'));
+      }, COMPANY_SIM_CONTROL_TIMEOUT_MS);
 
       this.pendingCompanySimControlRequests.set(requestId, {
         targetPeerId: params.targetPeerId,

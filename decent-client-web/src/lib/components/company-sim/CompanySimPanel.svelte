@@ -49,13 +49,17 @@
 
     <div class="company-sim-content">
       {#if companySimStore.loading && !companySimStore.state}
-        <div class="company-sim-empty-state">
+        <div class="company-sim-empty-state" data-testid="company-sim-loading">
           <h3>Loading company sim…</h3>
+          <p>Waiting for the host control peer to return live company data.</p>
         </div>
       {:else if companySimStore.error && !companySimStore.state}
         <div class="company-sim-empty-state" data-testid="company-sim-error">
           <h3>Could not load Company Sim</h3>
           <p>{companySimStore.error}</p>
+          <div class="company-sim-empty-actions">
+            <button type="button" class="btn-secondary" onclick={refresh}>Try again</button>
+          </div>
         </div>
       {:else if companySimStore.state}
         {#if companySimStore.activeSection === 'overview'}
@@ -156,6 +160,12 @@
   .company-sim-empty-state p {
     margin-top: 8px;
     color: var(--text-secondary);
+  }
+
+  .company-sim-empty-actions {
+    margin-top: 14px;
+    display: flex;
+    gap: 10px;
   }
 
   @media (max-width: 900px) {

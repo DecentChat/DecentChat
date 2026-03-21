@@ -52,6 +52,13 @@ export function setCompanySimSection(section: CompanySimSection): void {
   companySimStore.activeSection = section;
 }
 
+function normalizeCompanySimLoadError(error: unknown): string {
+  const message = String((error as Error)?.message ?? error ?? 'Failed to load Company Sim');
+  if (/did not answer in time/i.test(message) || /Timed out waiting for host control bridge response/i.test(message)) {
+    return 'Company Sim host did not answer in time. Check that the OpenClaw host peer is online, then press Refresh.';
+  }
+  return message;
+}
 
 export async function loadCompanySimState(workspaceId: string): Promise<void> {
   const nextWorkspaceId = String(workspaceId ?? '').trim();
@@ -67,7 +74,7 @@ export async function loadCompanySimState(workspaceId: string): Promise<void> {
     companySimStore.state = state;
     companySimStore.lastLoadedAt = Date.now();
   } catch (error) {
-    companySimStore.error = (error as Error).message;
+    companySimStore.error = normalizeCompanySimLoadError(error);
     throw error;
   } finally {
     companySimStore.loading = false;
