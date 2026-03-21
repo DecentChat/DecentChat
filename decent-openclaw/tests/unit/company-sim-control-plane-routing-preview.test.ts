@@ -185,11 +185,11 @@ describe('company sim control plane routing preview', () => {
       expect(routine.suppressed.find((entry) => entry.employeeId === 'team-manager')?.explanation)
         .toMatch(/waiting for a summary trigger/i);
 
-      expect(blocked.responders.map((entry) => entry.employeeId)).toEqual(['backend-dev', 'team-manager', 'tester']);
+      expect(blocked.responders.map((entry) => entry.employeeId)).toEqual(['backend-dev', 'team-manager']);
       expect(blocked.responders.find((entry) => entry.employeeId === 'team-manager')?.reason)
         .toBe('summary-thread');
-      expect(blocked.suppressed.length)
-        .toBe(0);
+      expect(blocked.suppressed.find((entry) => entry.employeeId === 'tester')?.reason)
+        .toBe('suppressed-by-peer');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -253,7 +253,9 @@ describe('company sim control plane routing preview', () => {
       const response = sent.find((entry) => entry.msg?.sync?.type === 'company-sim-routing-preview-response');
       expect(response?.msg?.sync?.ok).toBeTrue();
       expect(response?.msg?.sync?.result?.responders?.map((entry: any) => entry.employeeId))
-        .toEqual(['backend-dev', 'team-manager', 'tester']);
+        .toEqual(['backend-dev', 'team-manager']);
+      expect(response?.msg?.sync?.result?.suppressed?.find((entry: any) => entry.employeeId === 'tester')?.reason)
+        .toBe('suppressed-by-peer');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
