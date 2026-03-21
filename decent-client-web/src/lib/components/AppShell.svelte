@@ -266,27 +266,29 @@
             <div class="messages-list-wrapper">
             <div class="messages-list" id="messages-list">
               {#if cb}
-                <MessageList
-                  messages={shellData.messages.messages}
-                  channelName={shellData.messages.channelName}
-                  activeChannelId={shellData.messages.activeChannelId}
-                  myPeerId={shellData.messages.myPeerId}
-                  myDisplayName={shellData.messages.myDisplayName}
-                  activeThreadRootId={shellData.thread.open ? shellData.thread.threadId : null}
-                  frequentReactions={shellData.messages.frequentReactions}
-                  scrollTargetMessageId={shellData.messages.scrollTargetMessageId}
-                  scrollTargetNonce={shellData.messages.scrollTargetNonce}
-                  getThread={cb.getThread}
-                  getPeerAlias={cb.getPeerAlias}
-                  isBot={cb.isBot}
-                  getCompanySimProfile={cb.getCompanySimProfile}
-                  onOpenThread={cb.onOpenThread}
-                  onToggleReaction={cb.onToggleReaction}
-                  onRememberReaction={cb.onRememberReaction}
-                  onShowMessageInfo={cb.onShowMessageInfo}
-                  onImageClick={cb.onImageClick}
-                  resolveAttachmentImageUrl={cb.resolveAttachmentImageUrl}
-                />
+                {#key shellData.messages.activeChannelId}
+                  <MessageList
+                    messages={shellData.messages.messages}
+                    channelName={shellData.messages.channelName}
+                    activeChannelId={shellData.messages.activeChannelId}
+                    myPeerId={shellData.messages.myPeerId}
+                    myDisplayName={shellData.messages.myDisplayName}
+                    activeThreadRootId={shellData.thread.open ? shellData.thread.threadId : null}
+                    frequentReactions={shellData.messages.frequentReactions}
+                    scrollTargetMessageId={shellData.messages.scrollTargetMessageId}
+                    scrollTargetNonce={shellData.messages.scrollTargetNonce}
+                    getThread={cb.getThread}
+                    getPeerAlias={cb.getPeerAlias}
+                    isBot={cb.isBot}
+                    getCompanySimProfile={cb.getCompanySimProfile}
+                    onOpenThread={cb.onOpenThread}
+                    onToggleReaction={cb.onToggleReaction}
+                    onRememberReaction={cb.onRememberReaction}
+                    onShowMessageInfo={cb.onShowMessageInfo}
+                    onImageClick={cb.onImageClick}
+                    resolveAttachmentImageUrl={cb.resolveAttachmentImageUrl}
+                  />
+                {/key}
               {/if}
             </div>
             </div><!-- /.messages-list-wrapper -->

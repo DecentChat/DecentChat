@@ -181,7 +181,7 @@ export function createUIService(
     void callbacks.onChannelViewed?.(channelId);
     closeThread();
     persistViewState();
-    updateSidebar();
+    updateSidebar({ refreshContacts: false });
     syncShellHeader();
     renderMessages();
     syncShellCompose();
@@ -208,7 +208,7 @@ export function createUIService(
     void callbacks.onChannelViewed?.(conversationId);
     closeThread();
     persistViewState();
-    updateSidebar();
+    updateSidebar({ refreshContacts: false });
     syncShellHeader();
     renderMessages();
     syncShellCompose();
@@ -227,8 +227,7 @@ export function createUIService(
     closeThread();
     persistViewState();
     void callbacks.onWorkspaceActivated?.(workspaceId);
-    void refreshContactsCache();
-    updateSidebar();
+    updateSidebar({ refreshContacts: false });
     syncShellRail();
     syncShellHeader();
     renderMessages();
@@ -307,8 +306,10 @@ export function createUIService(
     syncShellThread();
   }
 
-  function updateSidebar(): void {
+  function updateSidebar(options: { refreshContacts?: boolean } = {}): void {
+    const { refreshContacts = true } = options;
     syncShellSidebar();
+    if (!refreshContacts) return;
     refreshContactsCache().then(() => syncShellSidebar()).catch(() => {});
   }
 

@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { clearStorage, waitForApp, createWorkspace, sendMessage } from './helpers';
+import { clearStorage, waitForApp, createWorkspace } from './helpers';
 
 async function enterDMView(page: Page): Promise<void> {
   await page.click('#ws-rail-dms');
@@ -72,5 +72,40 @@ test.describe('Direct message switching under load', () => {
     }
 
     expect(Date.now() - startedAt).toBeLessThan(8000);
+  });
+
+  test('switching between DMs does not re-fetch contacts from storage', async ({ page }) => {
+    await page.evaluate(() => {
+      const ctrl = (window as any).__ctrl;
+      if (!ctrl) throw new Error('Controller not available');
+
+      const originalGetContacts = ctrl.getContacts.bind(ctrl);
+      const originalGetDirectConversations = ctrl.getDirectConversations.bind(ctrl);
+      (window as any).__dmSwitchCounts = { contacts: 0, conversations: 0 };
+
+      ctrl.getContacts = async (...args: any[]) => {
+        (window as any).__dmSwitchCounts.contacts += 1;
+        return originalGetContacts(...args);
+      };
+
+      ctrl.getDirectConversations = async (...args: any[]) => {
+        (window as any).__dmSwitchCounts.conversations += 1;
+        return originalGetDirectConversations(...args);
+      };
+    });
+
+    const items = page.locator('[data-testid="direct-conversation-item"]');
+    await expect(items).toHaveCount(2);
+
+    for (let i = 0; i < 10; i += 1) {
+      const target = i % 2 === 0 ? 'Bob' : 'Charlie';
+      await items.filter({ hasText: target }).first().click();
+      await expect(page.locator('.channel-header h2')).toContainText(target, { timeout: 1500 });
+    }
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__dmSwitchCounts)).toEqual({
+      contacts: 0,
+      conversations: 0,
+    });
   });
 });

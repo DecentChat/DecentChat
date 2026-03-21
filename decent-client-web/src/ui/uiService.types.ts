@@ -8,7 +8,7 @@ export interface UIService {
   renderMessages(): void;
   renderThreadMessages(): void;
   appendMessageToDOM(msg: PlaintextMessage, container?: HTMLElement, animate?: boolean): void;
-  updateSidebar(): void;
+  updateSidebar(options?: { refreshContacts?: boolean }): void;
   updateChannelHeader(): void;
   updateWorkspaceRail(): void;
   updateMessageStatus(messageId: string, status: 'pending' | 'sent' | 'delivered' | 'read', detail?: { acked?: number; total?: number; read?: number }): void;
