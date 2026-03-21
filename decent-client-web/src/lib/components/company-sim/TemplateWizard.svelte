@@ -9,6 +9,7 @@
     CompanyTemplateRoleStats,
   } from '../../../ui/types';
   import { buildCompanyTemplatePreview, deriveRerolledAvatarSeed } from '../../company-sim/templateCatalog';
+  import { buildPolicyRecommendationViewModel, policyLabel } from '../../company-sim/policyPresentation';
 
   interface Props {
     template: CompanyTemplateDefinition;
@@ -81,6 +82,8 @@
   }
 
   const preview = $derived(buildCompanyTemplatePreview(template, answers, { workspaceName }));
+  const selectedCommunicationPolicy = $derived(readValue('communicationPolicy', template.questions.find((question) => question.id === 'communicationPolicy')?.defaultValue ?? ''));
+  const benchmarkVm = $derived(buildPolicyRecommendationViewModel(template.benchmarkSuite, selectedCommunicationPolicy));
   const selectedMember = $derived(preview.members.find((member) => member.roleId === selectedRoleId) ?? preview.members[0] ?? null);
 
   $effect(() => {
@@ -196,8 +199,22 @@
         <div class="result-mode-row">
           <span class="result-mode-pill">{provisioningLabel(installResult.provisioningMode)}</span>
           <span class="result-template-pill">{installResult.templateLabel}</span>
+          {#if installResult.communicationPolicy}
+            <span class="result-template-pill">Selected policy: {policyLabel(installResult.communicationPolicy)}</span>
+          {/if}
         </div>
       </header>
+
+      {#if installResult.benchmarkSuite}
+        {@const installBenchmarkVm = buildPolicyRecommendationViewModel(installResult.benchmarkSuite, installResult.communicationPolicy)}
+        {#if installBenchmarkVm}
+          <section class="install-policy-panel">
+            <p class="install-manual-heading">Communication policy</p>
+            <strong>{installBenchmarkVm.summary}</strong>
+            <p>{installBenchmarkVm.explainer}</p>
+          </section>
+        {/if}
+      {/if}
 
       <section class="result-metrics" aria-label="Install metrics">
         <article>
@@ -287,19 +304,49 @@
         {#each template.questions as question (question.id)}
           <label class="wizard-field">
             <span>{question.label}</span>
-            <input
-              type="text"
-              value={readValue(question.id, question.defaultValue ?? '')}
-              placeholder={question.placeholder ?? ''}
-              oninput={(event) => updateAnswer(question.id, (event.currentTarget as HTMLInputElement).value)}
-              required={question.required === true}
-              aria-label={question.label}
-            />
+            {#if question.type === 'select' && question.options && question.options.length > 0}
+              <select
+                value={readValue(question.id, question.defaultValue ?? '')}
+                onchange={(event) => updateAnswer(question.id, (event.currentTarget as HTMLSelectElement).value)}
+                required={question.required === true}
+                aria-label={question.label}
+              >
+                {#each question.options as option (option.value)}
+                  <option value={option.value}>{option.label}</option>
+                {/each}
+              </select>
+            {:else}
+              <input
+                type="text"
+                value={readValue(question.id, question.defaultValue ?? '')}
+                placeholder={question.placeholder ?? ''}
+                oninput={(event) => updateAnswer(question.id, (event.currentTarget as HTMLInputElement).value)}
+                required={question.required === true}
+                aria-label={question.label}
+              />
+            {/if}
             {#if question.description}
               <small>{question.description}</small>
             {/if}
           </label>
         {/each}
+
+        {#if benchmarkVm}
+          <section class="policy-benchmark-panel" data-testid="template-policy-benchmark">
+            <p class="policy-panel-kicker">Communication benchmark</p>
+            <strong>{benchmarkVm.summary}</strong>
+            <p>{benchmarkVm.explainer}</p>
+            <div class="policy-ranking">
+              {#each benchmarkVm.rankedPolicies as entry (entry.policy)}
+                <div class="policy-row" data-recommended={entry.isRecommended ? 'true' : 'false'} data-selected={entry.isSelected ? 'true' : 'false'}>
+                  <span>{entry.label}</span>
+                  <span>{entry.score} pts</span>
+                  <span>{entry.deltaFromMinimal >= 0 ? `+${entry.deltaFromMinimal}` : `${entry.deltaFromMinimal}`} vs Minimal</span>
+                </div>
+              {/each}
+            </div>
+          </section>
+        {/if}
 
         {#if installError}
           <p class="wizard-error">{installError}</p>
@@ -336,6 +383,9 @@
           <p><strong>Company:</strong> {preview.companyName}</p>
           <p><strong>Workspace:</strong> {preview.workspaceName}</p>
           <p><strong>Scope:</strong> {preview.members.length} roles · {preview.channelNames.length} channels</p>
+          {#if benchmarkVm}
+            <p><strong>Recommended policy:</strong> {benchmarkVm.recommendedLabel}</p>
+          {/if}
         </header>
 
         <section class="roster-focus-panel" data-testid="template-roster-focus" aria-live="polite">
@@ -1030,5 +1080,46 @@
     .result-metrics {
       grid-template-columns: 1fr;
     }
+  }
+  .policy-benchmark-panel,
+  .install-policy-panel {
+    display: grid;
+    gap: 8px;
+    padding: 12px;
+    border-radius: var(--radius-md, 12px);
+    border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+    background: color-mix(in srgb, var(--bg-primary) 82%, transparent);
+  }
+
+  .policy-panel-kicker {
+    margin: 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+
+  .policy-ranking {
+    display: grid;
+    gap: 6px;
+  }
+
+  .policy-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 10px;
+    align-items: center;
+    font-size: 12px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  }
+
+  .policy-row[data-recommended='true'] {
+    outline: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+
+  .policy-row[data-selected='true'] {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
   }
 </style>

@@ -432,6 +432,8 @@ async function init(): Promise<void> {
       onlineReadyAccountIds,
       manualActionRequiredAccountIds,
       manualActionItems: status.manualActionItems,
+      communicationPolicy: runtimeInstall.communicationPolicy,
+      benchmarkSuite: runtimeInstall.benchmarkSuite,
     };
   };
 

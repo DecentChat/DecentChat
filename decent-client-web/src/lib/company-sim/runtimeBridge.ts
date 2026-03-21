@@ -22,6 +22,55 @@ function readStringArray(value: unknown): string[] {
   );
 }
 
+function normalizeBenchmarkSuite(value: unknown): CompanyTemplateRuntimeBridgeResult['benchmarkSuite'] | undefined {
+  if (!isRecord(value)) return undefined;
+  const templateId = typeof value.templateId === 'string' ? value.templateId.trim() : '';
+  if (!templateId) return undefined;
+
+  const scenarioIds = readStringArray(value.scenarioIds);
+  const rawPolicyScores = isRecord(value.policyScores) ? value.policyScores : {};
+  const policyScores = Object.fromEntries(
+    Object.entries(rawPolicyScores).flatMap(([policy, entry]) => {
+      if (!isRecord(entry)) return [];
+      return [[policy, {
+        score: typeof entry.score === 'number' ? entry.score : Number(entry.score ?? 0) || 0,
+        ...(typeof entry.unexpectedResponders === 'number' ? { unexpectedResponders: entry.unexpectedResponders } : {}),
+        ...(typeof entry.missingExpectedResponders === 'number' ? { missingExpectedResponders: entry.missingExpectedResponders } : {}),
+        ...(typeof entry.silentViolations === 'number' ? { silentViolations: entry.silentViolations } : {}),
+      }]];
+    }),
+  );
+  const rankedPolicies = Array.isArray(value.rankedPolicies)
+    ? value.rankedPolicies
+      .filter((entry) => isRecord(entry) && typeof entry.policy === 'string')
+      .map((entry) => ({
+        policy: String(entry.policy),
+        score: typeof entry.score === 'number' ? entry.score : Number(entry.score ?? 0) || 0,
+        deltaFromRecommended: typeof entry.deltaFromRecommended === 'number' ? entry.deltaFromRecommended : Number(entry.deltaFromRecommended ?? 0) || 0,
+        deltaFromMinimal: typeof entry.deltaFromMinimal === 'number' ? entry.deltaFromMinimal : Number(entry.deltaFromMinimal ?? 0) || 0,
+      }))
+    : [];
+  const recommendation = isRecord(value.recommendation) && typeof value.recommendation.policy === 'string'
+    ? {
+        policy: String(value.recommendation.policy),
+        reasonCode: String(value.recommendation.reasonCode ?? 'best-score') as any,
+        scoreDeltaVsMinimal: typeof value.recommendation.scoreDeltaVsMinimal === 'number'
+          ? value.recommendation.scoreDeltaVsMinimal
+          : Number(value.recommendation.scoreDeltaVsMinimal ?? 0) || 0,
+      }
+    : undefined;
+  const recommendedPolicy = typeof value.recommendedPolicy === 'string' ? value.recommendedPolicy.trim() : undefined;
+
+  return {
+    templateId,
+    scenarioIds,
+    policyScores,
+    ...(recommendedPolicy ? { recommendedPolicy } : {}),
+    ...(recommendation ? { recommendation } : {}),
+    rankedPolicies,
+  };
+}
+
 export interface NormalizedRuntimeBridgeInstallResult {
   provisioningMode: 'runtime-provisioned' | 'config-provisioned';
   createdAccountIds: string[];
@@ -29,6 +78,8 @@ export interface NormalizedRuntimeBridgeInstallResult {
   onlineReadyAccountIds: string[];
   manualActionRequiredAccountIds: string[];
   manualActionItems: string[];
+  communicationPolicy?: string;
+  benchmarkSuite?: CompanyTemplateRuntimeBridgeResult['benchmarkSuite'];
 }
 
 export function normalizeRuntimeBridgeInstallResult(
@@ -46,6 +97,8 @@ export function normalizeRuntimeBridgeInstallResult(
     onlineReadyAccountIds: readStringArray(payload.onlineReadyAccountIds),
     manualActionRequiredAccountIds: readStringArray(payload.manualActionRequiredAccountIds),
     manualActionItems: readStringArray(payload.manualActionItems),
+    ...(typeof payload.communicationPolicy === 'string' && payload.communicationPolicy.trim() ? { communicationPolicy: payload.communicationPolicy.trim() } : {}),
+    ...(normalizeBenchmarkSuite(payload.benchmarkSuite) ? { benchmarkSuite: normalizeBenchmarkSuite(payload.benchmarkSuite) } : {}),
   };
 }
 

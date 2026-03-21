@@ -65,7 +65,7 @@
       channels: [...template.channels],
       questions: template.questions
         .filter((question) => question.id !== 'workspaceName')
-        .map((question) => ({ ...question })),
+        .map((question) => ({ ...question, options: question.options ? question.options.map((option) => ({ ...option })) : undefined })),
     };
   }
 
@@ -145,6 +145,8 @@
             'Run the decent-openclaw company template installer to provision real accounts/agents.',
             'Apply/restart OpenClaw runtime so provisioned accounts can bootstrap and appear online.',
           ],
+          communicationPolicy: installAnswers.communicationPolicy || selectedTemplate.questions.find((question) => question.id === 'communicationPolicy')?.defaultValue,
+          benchmarkSuite: selectedTemplate.benchmarkSuite,
         };
       }
 

@@ -224,6 +224,11 @@ export function createUIService(
     state.activeWorkspaceId = workspaceId;
     state.activeDirectConversationId = null;
     state.activeChannelId = ws.channels[0]?.id || null;
+    callbacks.setFocusedChannel?.(state.activeChannelId);
+    if (state.activeChannelId) {
+      callbacks.markChannelRead?.(state.activeChannelId);
+      void callbacks.onChannelViewed?.(state.activeChannelId);
+    }
     closeThread();
     persistViewState();
     void callbacks.onWorkspaceActivated?.(workspaceId);

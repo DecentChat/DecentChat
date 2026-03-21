@@ -67,6 +67,11 @@ export interface WorkspaceMemberDirectoryView {
   };
 }
 
+export interface CompanyTemplateQuestionOptionDefinition {
+  value: string;
+  label: string;
+}
+
 export interface CompanyTemplateQuestionDefinition {
   id: string;
   label: string;
@@ -74,6 +79,8 @@ export interface CompanyTemplateQuestionDefinition {
   placeholder?: string;
   required?: boolean;
   defaultValue?: string;
+  type?: 'text' | 'select';
+  options?: CompanyTemplateQuestionOptionDefinition[];
 }
 
 export type CompanyTemplateRoleAvatarStyle =
@@ -115,6 +122,35 @@ export interface CompanyTemplateRoleDefinition {
   profile?: CompanyTemplateRoleProfileDefinition;
 }
 
+export interface CompanyTemplateBenchmarkPolicyScore {
+  score: number;
+  unexpectedResponders?: number;
+  missingExpectedResponders?: number;
+  silentViolations?: number;
+}
+
+export interface CompanyTemplateBenchmarkRecommendation {
+  policy: string;
+  reasonCode: 'best-score' | 'default-tie-break' | 'priority-tie-break' | 'lexical-tie-break';
+  scoreDeltaVsMinimal: number;
+}
+
+export interface CompanyTemplateBenchmarkRankedPolicy {
+  policy: string;
+  score: number;
+  deltaFromRecommended: number;
+  deltaFromMinimal: number;
+}
+
+export interface CompanyTemplateBenchmarkSuiteSummary {
+  templateId: string;
+  scenarioIds: string[];
+  policyScores: Record<string, CompanyTemplateBenchmarkPolicyScore>;
+  recommendedPolicy?: string;
+  recommendation?: CompanyTemplateBenchmarkRecommendation;
+  rankedPolicies: CompanyTemplateBenchmarkRankedPolicy[];
+}
+
 export interface CompanyTemplateDefinition {
   id: string;
   label: string;
@@ -123,6 +159,7 @@ export interface CompanyTemplateDefinition {
   channels: string[];
   roles: CompanyTemplateRoleDefinition[];
   questions: CompanyTemplateQuestionDefinition[];
+  benchmarkSuite?: CompanyTemplateBenchmarkSuiteSummary;
 }
 
 export interface CompanyTemplateGeneratedAvatar {
@@ -185,6 +222,8 @@ export interface CompanyTemplateInstallResult {
   onlineReadyAccountIds: string[];
   manualActionRequiredAccountIds: string[];
   manualActionItems: string[];
+  communicationPolicy?: string;
+  benchmarkSuite?: CompanyTemplateBenchmarkSuiteSummary;
 }
 
 export interface CompanyTemplateRuntimeBridgeResult {
@@ -194,6 +233,8 @@ export interface CompanyTemplateRuntimeBridgeResult {
   onlineReadyAccountIds?: string[];
   manualActionRequiredAccountIds?: string[];
   manualActionItems?: string[];
+  communicationPolicy?: string;
+  benchmarkSuite?: CompanyTemplateBenchmarkSuiteSummary;
 }
 
 export interface CompanyTemplateRuntimeBridge {

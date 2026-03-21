@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { CompanyTemplateDefinition, CompanyTemplateRoleAvatarStyle } from '../../../ui/types';
   import { buildCompanyTemplatePreview, buildTemplateDefaultAnswers } from '../../company-sim/templateCatalog';
+  import { buildPolicyRecommendationViewModel } from '../../company-sim/policyPresentation';
 
   interface Props {
     template: CompanyTemplateDefinition;
@@ -10,7 +11,9 @@
 
   let { template, selected = false, onChoose }: Props = $props();
 
-  const preview = $derived(buildCompanyTemplatePreview(template, buildTemplateDefaultAnswers(template)));
+  const defaultAnswers = $derived(buildTemplateDefaultAnswers(template));
+  const preview = $derived(buildCompanyTemplatePreview(template, defaultAnswers));
+  const benchmarkVm = $derived(buildPolicyRecommendationViewModel(template.benchmarkSuite, defaultAnswers.communicationPolicy));
 
   function initialsFor(name: string): string {
     const words = name.trim().split(/\s+/).filter(Boolean);
@@ -37,6 +40,9 @@
     <div class="template-card-badges">
       <span class="template-badge">{template.roles.length} roles</span>
       <span class="template-badge">{template.channels.length} channels</span>
+      {#if benchmarkVm}
+        <span class="template-badge template-badge-accent">Recommended: {benchmarkVm.recommendedLabel}</span>
+      {/if}
     </div>
   </header>
 
@@ -80,6 +86,13 @@
     <span>{template.questions.length} setup questions</span>
     <span>{preview.channelNames.join(' · ')}</span>
   </div>
+
+  {#if benchmarkVm}
+    <div class="template-policy-preview">
+      <strong>{benchmarkVm.summary}</strong>
+      <span>{benchmarkVm.explainer}</span>
+    </div>
+  {/if}
 
   <button class="btn-primary" type="button" onclick={() => onChoose?.(template.id)}>
     Choose template
@@ -177,6 +190,27 @@
     border-radius: 999px;
     padding: 2px 8px;
     background: color-mix(in srgb, var(--bg-primary) 75%, transparent);
+  }
+
+  .template-badge-accent {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    color: var(--text);
+  }
+
+  .template-policy-preview {
+    display: grid;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 10px;
+    border-radius: var(--radius-md, 12px);
+    background: color-mix(in srgb, var(--bg-primary) 78%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  }
+
+  .template-policy-preview strong {
+    color: var(--text);
+    font-size: 12px;
   }
 
   .template-team-preview {

@@ -151,7 +151,40 @@ export const SOFTWARE_STUDIO_TEMPLATE: CompanyTemplateDefinition = {
       placeholder: 'Iva QA',
       defaultValue: 'Iva QA',
     },
+    {
+      id: 'communicationPolicy',
+      label: 'Communication policy',
+      description: 'How disciplined the team communication should be by default.',
+      type: 'select',
+      required: true,
+      defaultValue: 'disciplined',
+      options: [
+        { value: 'minimal', label: 'Minimal' },
+        { value: 'disciplined', label: 'Disciplined' },
+        { value: 'strict', label: 'Strict' },
+      ],
+    },
   ],
+  benchmarkSuite: {
+    templateId: 'software-studio',
+    scenarioIds: ['owner-routing', 'handoff-targeting', 'manager-summary-discipline', 'top-level-noise-control'],
+    policyScores: {
+      minimal: { score: 34, unexpectedResponders: 3, missingExpectedResponders: 0, silentViolations: 2 },
+      disciplined: { score: 88, unexpectedResponders: 0, missingExpectedResponders: 0, silentViolations: 0 },
+      strict: { score: 88, unexpectedResponders: 0, missingExpectedResponders: 0, silentViolations: 0 },
+    },
+    recommendedPolicy: 'disciplined',
+    recommendation: {
+      policy: 'disciplined',
+      reasonCode: 'default-tie-break',
+      scoreDeltaVsMinimal: 54,
+    },
+    rankedPolicies: [
+      { policy: 'disciplined', score: 88, deltaFromRecommended: 0, deltaFromMinimal: 54 },
+      { policy: 'strict', score: 88, deltaFromRecommended: 0, deltaFromMinimal: 54 },
+      { policy: 'minimal', score: 34, deltaFromRecommended: -54, deltaFromMinimal: 0 },
+    ],
+  },
 };
 
 const COMPANY_TEMPLATE_CATALOG: CompanyTemplateDefinition[] = [SOFTWARE_STUDIO_TEMPLATE];
