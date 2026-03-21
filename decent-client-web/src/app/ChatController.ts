@@ -501,7 +501,7 @@ export class ChatController {
     this.contactStore = new MemoryContactStore();
     this.directConversationStore = new MemoryDirectConversationStore();
     this.notifications = new NotificationManager();
-    this.topologyTelemetry = new TopologyTelemetry();
+    this.topologyTelemetry = new TopologyTelemetry({ emitConsole: false });
     this.topologyAnomalyDetector = new TopologyAnomalyDetector();
     this.topologyDesiredSetByWorkspace = new Map<string, string[]>();
     this.custodyStore.setReceiptPersistence(
@@ -749,7 +749,7 @@ export class ChatController {
   }
 
   private getTopologyTelemetry(): TopologyTelemetry {
-    if (!this.topologyTelemetry) this.topologyTelemetry = new TopologyTelemetry();
+    if (!this.topologyTelemetry) this.topologyTelemetry = new TopologyTelemetry({ emitConsole: false });
     return this.topologyTelemetry;
   }
 
