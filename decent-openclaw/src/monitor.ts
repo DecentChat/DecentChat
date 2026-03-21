@@ -232,6 +232,11 @@ function getThreadRoutingState(channelId: string, threadRef: string): CompanyThr
   return { assignedEmployeeId: entry.assignedEmployeeId, source: entry.source };
 }
 
+export function resetThreadRoutingStateForTests(): void {
+  threadAffinityMap.clear();
+  threadRoutingStateMap.clear();
+}
+
 function formatThreadHistoryContent(content: string, maxChars = 220): string {
   const normalized = content.replace(/\s+/g, " ").trim();
   if (!normalized) return "[empty]";
@@ -956,28 +961,16 @@ async function processInboundMessage(
   const explicitThreadId = (msg.threadId ?? "").trim();
   const fallbackThreadId = (msg.replyToId ?? "").trim();
 
-  // Auto-thread eligible: channel message without explicit thread context
-  // when replyToMode=all. In this mode each top-level message gets its own
-  // parallel session. replyToId is informational (shows which message is
-  // being replied to) and must NOT be used for session routing — multiple
-  // unrelated channel messages may reply to the same bot message without
-  // being part of the same conversation.
-  const autoThreadEligible = !explicitThreadId && !fallbackThreadId && msg.chatType !== "direct" && threadingFlags.replyToMode === "all";
+  // Only use replyToId as thread fallback when explicit threadId is absent.
+  let candidateThreadId = explicitThreadId || fallbackThreadId;
 
-  // Only use replyToId as thread fallback when NOT in auto-thread mode.
-  // In auto-thread mode, each message gets its own session regardless of replyToId.
-  let candidateThreadId = explicitThreadId || (autoThreadEligible ? "" : fallbackThreadId);
-
-  // Thread affinity: when a message arrives without threadId in a group channel,
-  // check if this sender was recently active in a thread. If so, route to that
-  // thread instead of creating a new auto-thread. This prevents session
-  // fragmentation when the client loses thread panel state (page reload, etc.).
-  //
-  // SKIP affinity for auto-thread-eligible messages: the whole point of
-  // replyToMode=all is that each new top-level message gets its own session.
-  // Affinity would defeat this by routing new messages to old sessions.
+  // Thread affinity: when a message arrives without explicit thread metadata in a
+  // group channel, check if this sender was recently active in a thread. If so,
+  // route to that thread instead of creating a brand-new auto-thread. This keeps
+  // the session stable when the client loses thread panel state (page reload, UI
+  // reset, etc.) and matches user intent more often than spawning a fresh thread.
   let affinityApplied = false;
-  if (!candidateThreadId && !autoThreadEligible && msg.chatType !== "direct" && threadingFlags.replyToMode === "all") {
+  if (!candidateThreadId && msg.chatType !== "direct" && threadingFlags.replyToMode === "all") {
     const affinityThreadId = getThreadAffinity(msg.channelId, msg.senderId);
     if (affinityThreadId) {
       candidateThreadId = affinityThreadId;
@@ -985,6 +978,11 @@ async function processInboundMessage(
       ctx.log?.info?.(`[decentchat] thread-affinity: sender=${msg.senderId.slice(0, 8)} → thread=${affinityThreadId.slice(0, 8)} (channel=${msg.channelId.slice(0, 8)})`);
     }
   }
+
+  // Auto-thread eligible: channel message without explicit thread context or
+  // affinity match when replyToMode=all. In this mode each top-level message gets
+  // its own parallel session.
+  const autoThreadEligible = !candidateThreadId && msg.chatType !== "direct" && threadingFlags.replyToMode === "all";
 
   // When auto-thread eligible, use the message's own ID as the thread so
   // it gets a unique parallel session and the reply appears as a thread reply.

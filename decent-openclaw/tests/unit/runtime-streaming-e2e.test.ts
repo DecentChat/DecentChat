@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { relayInboundMessageToPeer } from "../../src/monitor.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { relayInboundMessageToPeer, resetThreadRoutingStateForTests } from "../../src/monitor.ts";
 
 type RuntimeScript = {
   partials?: string[];
@@ -57,6 +57,9 @@ function makeIncoming(overrides: Partial<any> = {}): any {
 }
 
 describe("runtime streaming relay integration", () => {
+  beforeEach(() => {
+    resetThreadRoutingStateForTests();
+  });
   test("thread reply without threadId uses replyToId and bootstraps parent session on first thread turn", async () => {
     const recorded: Array<{ sessionKey: string; ctx: any }> = [];
 
@@ -117,6 +120,84 @@ describe("runtime streaming relay integration", () => {
     expect(recorded[0]?.sessionKey).toContain(":thread:root-777");
     expect(recorded[0]?.ctx?.MessageThreadId).toBe("root-777");
     expect(recorded[0]?.ctx?.ParentSessionKey).toBe("session:group:ws:chan");
+  });
+
+
+  test("follow-up channel message without thread metadata reuses recent thread affinity", async () => {
+    const recorded: Array<{ sessionKey: string; ctx: any }> = [];
+
+    const core = {
+      config: { loadConfig: () => ({ channels: { decentchat: { replyToMode: "all", thread: { historyScope: "thread", inheritParent: false } } } }) },
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({ sessionKey: "session:group:ws:chan", agentId: "agent-1", accountId: "acct-1" }),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/decent-openclaw-stream-test-store",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: async (args: any) => recorded.push(args),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope: (params: { body: string }) => params.body,
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher: async ({ dispatcherOptions }: any) => {
+            await dispatcherOptions.deliver({ text: "ok" });
+          },
+        },
+      },
+    } as any;
+
+    const xenaPeer = {
+      startStream: async () => {},
+      startDirectStream: async () => {},
+      sendStreamDelta: async () => {},
+      sendDirectStreamDelta: async () => {},
+      sendStreamDone: async () => {},
+      sendDirectStreamDone: async () => {},
+      sendDirectToPeer: async () => {},
+      sendToChannel: async () => {},
+      sendReadReceipt: async () => {},
+      requestFullImage: async () => null,
+    } as any;
+
+    await relayInboundMessageToPeer({
+      incoming: {
+        channelId: "chan-affinity",
+        workspaceId: "ws-1",
+        content: "hello in thread",
+        senderId: "peer-affinity",
+        senderName: "Peer",
+        messageId: "msg-affinity-root",
+        chatType: "channel",
+        timestamp: Date.now(),
+        threadId: "root-affinity",
+      },
+      ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
+      core,
+      xenaPeer,
+    });
+
+    await relayInboundMessageToPeer({
+      incoming: {
+        channelId: "chan-affinity",
+        workspaceId: "ws-1",
+        content: "follow up without thread metadata",
+        senderId: "peer-affinity",
+        senderName: "Peer",
+        messageId: "msg-affinity-followup",
+        chatType: "channel",
+        timestamp: Date.now(),
+      },
+      ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
+      core,
+      xenaPeer,
+    });
+
+    expect(recorded).toHaveLength(2);
+    expect(recorded[0]?.sessionKey).toContain(":thread:root-affinity");
+    expect(recorded[1]?.sessionKey).toContain(":thread:root-affinity");
+    expect(recorded[1]?.ctx?.MessageThreadId).toBe("root-affinity");
   });
 
   test("auto-threaded top-level channel message starts a clean thread session", async () => {
