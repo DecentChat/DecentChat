@@ -378,6 +378,9 @@ export class ChatController {
   private static readonly CONNECT_FAILURE_MIN_UPDATE_MS = 4_000;
   private static readonly WORKSPACE_STATE_CONNECT_SWEEP_MIN_MS = 4_000;
   private static readonly JOIN_CONNECT_CANDIDATE_CAP = 8;
+  private static readonly POST_CONNECT_RETRY_UNACKED_MIN_MS = 12_000;
+  private static readonly POST_CONNECT_MESSAGE_SYNC_MIN_MS = 5_000;
+  private static readonly WORKSPACE_SHELL_PREFETCH_MIN_MS = 10_000;
   /** Cold peers are retried sparsely to avoid noisy constant reconnect churn. */
   private static readonly COLD_PEER_RETRY_MS = 5 * 60 * 1000;
   /** Join validation timeout: provisional join workspace must be confirmed by owner/member workspace-state. */
@@ -456,6 +459,9 @@ export class ChatController {
   private readonly peerConnectRetryAfterAt = new Map<string, number>();
   private readonly peerLastConnectFailureAt = new Map<string, number>();
   private readonly workspaceStateConnectSweepAt = new Map<string, number>();
+  private readonly workspaceShellPrefetchAt = new Map<string, number>();
+  private lastPostConnectRetryUnackedAt = 0;
+  private lastPostConnectMessageSyncAt = 0;
   private topologyTelemetry?: TopologyTelemetry;
   private topologyAnomalyDetector?: TopologyAnomalyDetector;
   private topologyDesiredSetByWorkspace?: Map<string, string[]>;
@@ -1636,15 +1642,29 @@ export class ChatController {
           // Connection toast removed — too noisy for end users
           console.debug(`[P2P] ${ratchetActive ? "Forward-secret" : "Encrypted"} connection with ${peerId.slice(0, 8)}`);
 
-          // Retry missed historical sends before flushing the queued outbox so we don't
-          // immediately re-send items that were just removed from the queue.
-          await this.retryUnackedOutgoingForPeer(peerId);
+          const now = Date.now();
+          const shouldRunRetryUnacked = now - this.lastPostConnectRetryUnackedAt >= ChatController.POST_CONNECT_RETRY_UNACKED_MIN_MS;
+          if (shouldRunRetryUnacked) {
+            this.lastPostConnectRetryUnackedAt = now;
+            // Retry missed historical sends before flushing the queued outbox so we don't
+            // immediately re-send items that were just removed from the queue.
+            await this.retryUnackedOutgoingForPeer(peerId);
+          }
+
           await this.flushOfflineQueue(peerId);
           await this.offerDeferredGossipIntentsToPeer(peerId);
           await this.processDeferredGossipIntentsForPeer(peerId);
-          this.requestMessageSync(peerId).catch(err => console.warn('[Sync] Message sync request failed:', err));
+
+          const shouldRunMessageSync = now - this.lastPostConnectMessageSyncAt >= ChatController.POST_CONNECT_MESSAGE_SYNC_MIN_MS;
+          if (shouldRunMessageSync) {
+            this.lastPostConnectMessageSyncAt = now;
+            this.requestMessageSync(peerId).catch(err => console.warn('[Sync] Message sync request failed:', err));
+          }
+
           this.sendManifestSummary(peerId);
-          this.requestCustodyRecovery(peerId);
+          if (shouldRunRetryUnacked) {
+            this.requestCustodyRecovery(peerId);
+          }
 
           // Send workspace state to new peer.
           // Use forceInclude so the peer receives state even if not yet in
@@ -1654,9 +1674,15 @@ export class ChatController {
           this.sendWorkspaceState(peerId, this.state.activeWorkspaceId ?? undefined, { forceInclude: true });
 
           // Shell-first + paged directory sync path for scalable public workspaces.
+          // Rate-limit these requests so simultaneous handshakes don't trigger a flood.
           if (this.state.activeWorkspaceId) {
-            this.requestWorkspaceShell(peerId, this.state.activeWorkspaceId);
-            void this.prefetchWorkspaceMemberDirectory(this.state.activeWorkspaceId, peerId);
+            const wsId = this.state.activeWorkspaceId;
+            const lastShellPrefetchAt = this.workspaceShellPrefetchAt.get(wsId) ?? 0;
+            if (now - lastShellPrefetchAt >= ChatController.WORKSPACE_SHELL_PREFETCH_MIN_MS) {
+              this.workspaceShellPrefetchAt.set(wsId, now);
+              this.requestWorkspaceShell(peerId, wsId);
+              void this.prefetchWorkspaceMemberDirectory(wsId, peerId);
+            }
           }
 
           // Announce our display name for this workspace
