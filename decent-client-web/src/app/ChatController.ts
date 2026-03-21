@@ -114,6 +114,7 @@ const COMPANY_SIM_CONTROL_TIMEOUT_MS = 8_000;
 const DEFERRED_GOSSIP_INTENT_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFERRED_GOSSIP_INTENT_OFFER_COOLDOWN_MS = 60 * 1000;
 const PENDING_DELIVERY_WATCHDOG_MS = 4_000;
+const PENDING_DELIVERY_RECOVERY_COOLDOWN_MS = 20_000;
 const NEGENTROPY_QUERY_TIMEOUT_MS = 8000;
 const PRESENCE_PAGE_REQUEST_TIMEOUT_MS = 5000;
 const PRESENCE_AUTO_ADVANCE_PAGE_TARGET = 150;
@@ -303,6 +304,7 @@ export class ChatController {
   private readonly pendingCustodyOffers = new Map<string, string[]>();
   private readonly scheduledOfflineQueueFlushes = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pendingDeliveryWatchTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly pendingDeliveryRecoveryCooldowns = new Map<string, number>();
   readonly messageCRDTs: Map<string, MessageCRDT> = new Map();
   readonly mediaStore: MediaStore;
   private readonly blobStorage: IndexedDBBlobStorage;
@@ -1154,6 +1156,8 @@ export class ChatController {
       this.state.connectingPeers.delete(peerId);
       this.state.readyPeers.delete(peerId);
       this.peerConnectedAt.delete(peerId);
+      this.clearPendingDeliveryWatchesForPeer(peerId);
+      this.pendingDeliveryRecoveryCooldowns.delete(peerId);
       this.peerDisconnectCount.set(peerId, (this.peerDisconnectCount.get(peerId) ?? 0) + 1);
       this.recordTopologyPeerEvent({
         level: 'info',
@@ -8773,6 +8777,12 @@ export class ChatController {
       if (!this.state.readyPeers.has(peerId)) return;
       if (!this.isMessagePendingForPeer(channelId, messageId, peerId)) return;
 
+      const now = Date.now();
+      const cooldowns = this.pendingDeliveryRecoveryCooldowns ?? ((this as any).pendingDeliveryRecoveryCooldowns = new Map<string, number>());
+      const lastRecoveryAt = cooldowns.get(peerId) ?? 0;
+      if (now - lastRecoveryAt < PENDING_DELIVERY_RECOVERY_COOLDOWN_MS) return;
+      cooldowns.set(peerId, now);
+
       this.scheduleOfflineQueueFlush(peerId, 250);
       this.retryUnackedOutgoingForPeer(peerId).catch((err) => {
         console.warn('[DeliveryWatch] retryUnackedOutgoingForPeer failed:', (err as Error)?.message || err);
@@ -8782,12 +8792,6 @@ export class ChatController {
         this.requestMessageSync(peerId).catch((err) => {
           console.warn('[DeliveryWatch] requestMessageSync failed:', (err as Error)?.message || err);
         });
-      }
-      try {
-        this.transport.disconnect(peerId);
-        this.transport.connect(peerId).catch(() => {});
-      } catch {
-        // best-effort targeted reconnect only
       }
     }, delayMs);
 

@@ -22,6 +22,7 @@ function makeReceiptController(message: any, workspaces: any[] = []): any {
   ctrl.transport = { send: mock(() => true) };
   ctrl.deferredGossipIntents = new Map();
   ctrl.pendingDeliveryWatchTimers = new Map();
+  ctrl.pendingDeliveryRecoveryCooldowns = new Map();
   ctrl.offlineQueue = { applyReceipt: mock(async () => true) };
   ctrl.messageGuard = { check: mock(() => ({ allowed: true })) };
   ctrl.messageStore = { getMessages: mock(() => [message]) };
@@ -80,7 +81,7 @@ describe('ChatController inbound receipt security + consistency', () => {
 });
 
 
-  test('pending delivery watchdog retries unreplied ready peer without waiting for refresh', async () => {
+  test('pending delivery watchdog retries unreplied ready peer without forced reconnect churn', async () => {
     const msg = {
       id: 'm-watch-1',
       channelId: 'ch-1',
@@ -98,6 +99,7 @@ describe('ChatController inbound receipt security + consistency', () => {
     ctrl.requestMessageSync = mock(async () => {});
     ctrl.transport = { disconnect: mock(() => {}), connect: mock(async () => {}) };
     ctrl.pendingDeliveryWatchTimers = new Map();
+    ctrl.pendingDeliveryRecoveryCooldowns = new Map();
 
     ChatController.prototype.schedulePendingDeliveryWatch.call(ctrl, 'alice', 'ch-1', 'm-watch-1', 'ws-1', 5);
     await new Promise((resolve) => setTimeout(resolve, 15));
@@ -106,8 +108,8 @@ describe('ChatController inbound receipt security + consistency', () => {
     expect(ctrl.scheduleOfflineQueueFlush).toHaveBeenCalledWith('alice', 250);
     expect(ctrl.requestCustodyRecovery).toHaveBeenCalledWith('alice');
     expect(ctrl.requestMessageSync).toHaveBeenCalledWith('alice');
-    expect(ctrl.transport.disconnect).toHaveBeenCalledWith('alice');
-    expect(ctrl.transport.connect).toHaveBeenCalledWith('alice');
+    expect(ctrl.transport.disconnect).not.toHaveBeenCalled();
+    expect(ctrl.transport.connect).not.toHaveBeenCalled();
   });
 
   test('pending delivery watchdog stays quiet once peer already acked', async () => {
@@ -128,12 +130,50 @@ describe('ChatController inbound receipt security + consistency', () => {
     ctrl.requestMessageSync = mock(async () => {});
     ctrl.transport = { disconnect: mock(() => {}), connect: mock(async () => {}) };
     ctrl.pendingDeliveryWatchTimers = new Map();
+    ctrl.pendingDeliveryRecoveryCooldowns = new Map();
 
     ChatController.prototype.schedulePendingDeliveryWatch.call(ctrl, 'alice', 'ch-1', 'm-watch-2', 'ws-1', 5);
     await new Promise((resolve) => setTimeout(resolve, 15));
 
     expect(ctrl.retryUnackedOutgoingForPeer).not.toHaveBeenCalled();
     expect(ctrl.transport.disconnect).not.toHaveBeenCalled();
+  });
+
+
+  test('pending delivery watchdog coalesces multiple pending messages for the same peer', async () => {
+    const msgA = {
+      id: 'm-watch-3a',
+      channelId: 'ch-1',
+      senderId: 'me',
+      status: 'sent',
+      recipientPeerIds: ['alice'],
+      ackedBy: [],
+      readBy: [],
+    };
+    const msgB = { ...msgA, id: 'm-watch-3b' };
+    const ctrl = makeReceiptController(msgA);
+    ctrl.messageStore = {
+      getMessages: mock(() => [msgA, msgB]),
+    };
+    ctrl.state.readyPeers = new Set<string>(['alice']);
+    ctrl.retryUnackedOutgoingForPeer = mock(async () => {});
+    ctrl.scheduleOfflineQueueFlush = mock(() => {});
+    ctrl.requestCustodyRecovery = mock(() => {});
+    ctrl.requestMessageSync = mock(async () => {});
+    ctrl.transport = { disconnect: mock(() => {}), connect: mock(async () => {}) };
+    ctrl.pendingDeliveryWatchTimers = new Map();
+    ctrl.pendingDeliveryRecoveryCooldowns = new Map();
+
+    ChatController.prototype.schedulePendingDeliveryWatch.call(ctrl, 'alice', 'ch-1', 'm-watch-3a', 'ws-1', 5);
+    ChatController.prototype.schedulePendingDeliveryWatch.call(ctrl, 'alice', 'ch-1', 'm-watch-3b', 'ws-1', 5);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+
+    expect(ctrl.retryUnackedOutgoingForPeer).toHaveBeenCalledTimes(1);
+    expect(ctrl.scheduleOfflineQueueFlush).toHaveBeenCalledTimes(1);
+    expect(ctrl.requestCustodyRecovery).toHaveBeenCalledTimes(1);
+    expect(ctrl.requestMessageSync).toHaveBeenCalledTimes(1);
+    expect(ctrl.transport.disconnect).not.toHaveBeenCalled();
+    expect(ctrl.transport.connect).not.toHaveBeenCalled();
   });
 
 
