@@ -1,0 +1,23 @@
+[log] [DecentChat] HD device key derivation: device=0, peerId=f36dc98c…, identityId=255ef8bd…
+[log] [DecentChat] At-rest encryption enabled
+[log] [DecentChat] Connected to 1/1 signaling servers as f36dc98c93a554b50c
+[log] [DecentChat] Svelte 5 bridge + AppShell initialized
+[warning] [PERF] restore:parallelIDB=1ms
+[warning] [PERF] restore:settingsApply=1ms
+[log] [DecentChat] restoreFromStorage: found 0 full workspaces
+[warning] [PERF] restore:wsLoop=0ms
+[warning] [PERF] restoreFromStorage: 0.9ms
+[warning] [PERF] main: restore=1ms migrate=0ms contacts=0ms
+[log] [DecentChat] Disconnected from signaling: wss://0.peerjs.com/
+[log] [DecentChat] Scheduling signaling reconnect #1 in 3000ms: wss://0.peerjs.com/
+[log] [DecentChat] Signaling closed: wss://0.peerjs.com/
+[log] [DecentChat] HD device key derivation: device=0, peerId=11e6e4c7…, identityId=f343ea2d…
+[log] [DecentChat] At-rest encryption enabled
+[log] [DecentChat] Connected to 1/1 signaling servers as 11e6e4c79da7ef322b
+[log] [DecentChat] Svelte 5 bridge + AppShell initialized
+[warning] [PERF] restore:parallelIDB=0ms
+[warning] [PERF] restore:settingsApply=0ms
+[log] [DecentChat] restoreFromStorage: found 0 full workspaces
+[warning] [PERF] restore:wsLoop=0ms
+[warning] [PERF] restoreFromStorage: 0.6ms
+[warning] [PERF] main: restore=1ms migrate=0ms contacts=0ms

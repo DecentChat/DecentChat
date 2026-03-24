@@ -21,20 +21,31 @@ export class NotificationManager {
   private titleInterval: any = null;
   /** Called when user clicks a desktop notification — switch to that channel/thread */
   onNotificationClick?: (target: NotificationTarget) => void;
+  /** Stored handler refs for cleanup */
+  private _onFocus: () => void;
+  private _onBlur: () => void;
 
   constructor() {
     // Track window focus
-    window.addEventListener('focus', () => {
+    this._onFocus = () => {
       this.windowFocused = true;
       this.clearTitleFlash();
       if (this.focusedChannelId) {
         this.markRead(this.focusedChannelId);
       }
-    });
-
-    window.addEventListener('blur', () => {
+    };
+    this._onBlur = () => {
       this.windowFocused = false;
-    });
+    };
+    window.addEventListener('focus', this._onFocus);
+    window.addEventListener('blur', this._onBlur);
+  }
+
+  destroy(): void {
+    window.removeEventListener('focus', this._onFocus);
+    window.removeEventListener('blur', this._onBlur);
+    this.clearTitleFlash();
+    this.unreadCounts.clear();
   }
 
   /**

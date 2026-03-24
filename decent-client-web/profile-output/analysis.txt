@@ -1,0 +1,218 @@
+
+================================================================================
+CPU PROFILE ANALYSIS
+================================================================================
+Total profile time: 69361.4ms
+Total samples: 446318
+Unique functions sampled: 151
+
+────────────────────────────────────────────────────────────────────────────────
+TOP 30 FUNCTIONS BY SELF-TIME
+────────────────────────────────────────────────────────────────────────────────
+Rank  Self-Time     %       Hits    Function
+────────────────────────────────────────────────────────────────────────────────
+1     68391.2ms     98.6%   440701  (idle)@:-1
+2     804.0ms       1.2%    4569    (program)@:-1
+3     42.9ms        0.1%    277     Fn@https://decentchat.app/assets/index-Dq0wq-ZF.js:2
+4     17.7ms        0.0%    88      (garbage collector)@:-1
+5     15.9ms        0.0%    102     visitNode@:266
+6     11.8ms        0.0%    70      requestAnimationFrame@:-1
+7     10.9ms        0.0%    65      e@https://decentchat.app/assets/index-Dq0wq-ZF.js:138
+8     6.5ms         0.0%    42      mul@https://decentchat.app/assets/index-Dq0wq-ZF.js:2
+9     5.0ms         0.0%    32      add@https://decentchat.app/assets/index-Dq0wq-ZF.js:2
+10    2.4ms         0.0%    15      RTCPeerConnection@:-1
+11    2.4ms         0.0%    15      visitChild@:318
+12    2.3ms         0.0%    15      appendChild@:-1
+13    2.1ms         0.0%    14      importKey@:-1
+14    2.1ms         0.0%    13      j@https://decentchat.app/assets/index-Dq0wq-ZF.js:2
+15    1.7ms         0.0%    11      (anonymous)@:-1
+16    1.7ms         0.0%    10      precomputeWindow@https://decentchat.app/assets/index-Dq0wq-ZF.js:2
+17    1.7ms         0.0%    11      sub@https://decentchat.app/assets/index-Dq0wq-ZF.js:2
+18    1.4ms         0.0%    9       generateKey@:-1
+19    1.3ms         0.0%    9       before@:-1
+20    1.1ms         0.0%    7       (anonymous)@https://decentchat.app/assets/index-Dq0wq-ZF.js:-1
+21    1.0ms         0.0%    6       yI@https://decentchat.app/assets/index-Dq0wq-ZF.js:172
+22    0.9ms         0.0%    6       (anonymous)@:0
+23    0.9ms         0.0%    6       (anonymous)@https://decentchat.app/assets/index-Dq0wq-ZF.js:44
+24    0.9ms         0.0%    6       captureSnapshot@:256
+25    0.9ms         0.0%    6       query@:5286
+26    0.9ms         0.0%    6       Df@https://decentchat.app/assets/index-Dq0wq-ZF.js:43
+27    0.8ms         0.0%    5       (anonymous)@https://decentchat.app/assets/index-Dq0wq-ZF.js:172
+28    0.8ms         0.0%    5       checkAndReturn@:292
+29    0.8ms         0.0%    5       (anonymous)@:1
+30    0.8ms         0.0%    5       exportKey@:-1
+
+────────────────────────────────────────────────────────────────────────────────
+SELF-TIME BY SOURCE FILE (top 20)
+────────────────────────────────────────────────────────────────────────────────
+     69271.5ms   99.9%  (native)
+        87.6ms    0.1%  https://decentchat.app/assets/index-Dq0wq-ZF.js
+         1.5ms    0.0%  https://decentchat.app/assets/AppShell-Bw1wfUin.js
+         0.6ms    0.0%  https://decentchat.app/assets/MessageProtocol-DdqUQuYo.js
+         0.2ms    0.0%  https://decentchat.app/assets/bridge.svelte-DXTfasd0.js
+         0.2ms    0.0%  extensions::SafeBuiltins
+
+────────────────────────────────────────────────────────────────────────────────
+LONGEST CONTIGUOUS EXECUTION RUNS (>50ms)
+────────────────────────────────────────────────────────────────────────────────
+      83.0ms    534 samples  (idle)@:-1
+      68.5ms    440 samples  (idle)@:-1
+      68.4ms    440 samples  (idle)@:-1
+      68.4ms    439 samples  (idle)@:-1
+      68.3ms    440 samples  (idle)@:-1
+      68.3ms    441 samples  (idle)@:-1
+      68.3ms    439 samples  (idle)@:-1
+      67.7ms    435 samples  (idle)@:-1
+      67.4ms    435 samples  (idle)@:-1
+      66.6ms    426 samples  (idle)@:-1
+      66.6ms    429 samples  (idle)@:-1
+      66.2ms    426 samples  (idle)@:-1
+      65.2ms    420 samples  (idle)@:-1
+      64.8ms    418 samples  (idle)@:-1
+      64.8ms    418 samples  (idle)@:-1
+      64.6ms    416 samples  (idle)@:-1
+      57.7ms    372 samples  (idle)@:-1
+      56.8ms    366 samples  (idle)@:-1
+      51.9ms    334 samples  (idle)@:-1
+      51.8ms    332 samples  (idle)@:-1
+
+────────────────────────────────────────────────────────────────────────────────
+HEAVIEST CALL STACKS (top 10 by accumulated self-time)
+────────────────────────────────────────────────────────────────────────────────
+
+  Stack #1: 22.4ms (0.0%)
+    → deriveKeyPairAtPath (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+      → importP256PrivateKey (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+        → c (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+          → multiply (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+            → U (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+              → cached (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                → getPrecomputes (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                  → precomputeWindow (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                    → add (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                      → mul (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                        → Fn (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+
+  Stack #2: 11.8ms (0.0%)
+    → e (https://decentchat.app/assets/index-Dq0wq-ZF.js:138)
+      → requestAnimationFrame (:-1)
+
+  Stack #3: 10.9ms (0.0%)
+    → e (https://decentchat.app/assets/index-Dq0wq-ZF.js:138)
+
+  Stack #4: 8.5ms (0.0%)
+    → deriveKeyPairAtPath (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+      → importP256PrivateKey (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+        → c (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+          → multiply (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+            → U (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+              → cached (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                → getPrecomputes (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                  → precomputeWindow (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                    → add (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                      → add (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                        → Fn (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+
+  Stack #5: 4.8ms (0.0%)
+    → deriveKeyPairAtPath (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+      → importP256PrivateKey (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+        → c (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+          → multiply (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+            → U (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+              → cached (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                → getPrecomputes (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                  → (anonymous) (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                    → Jl (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                      → (anonymous) (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                        → toAffine (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                          → (anonymous) (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                            → (anonymous) (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                              → mul (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                                → Fn (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+
+  Stack #6: 4.2ms (0.0%)
+    → deriveKeyPairAtPath (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+      → importP256PrivateKey (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+        → c (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+          → multiply (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+            → U (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+              → cached (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                → getPrecomputes (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                  → (anonymous) (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                    → Jl (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                      → Bu (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                        → (anonymous) (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                          → mul (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                            → Fn (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+
+  Stack #7: 4.1ms (0.0%)
+    → deriveKeyPairAtPath (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+      → importP256PrivateKey (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+        → c (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+          → multiply (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+            → U (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+              → cached (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                → getPrecomputes (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                  → precomputeWindow (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                    → add (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                      → mul (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+
+  Stack #8: 4.1ms (0.0%)
+    → deriveKeyPairAtPath (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+      → importP256PrivateKey (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+        → c (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+          → multiply (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+            → U (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+              → cached (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                → getPrecomputes (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                  → precomputeWindow (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                    → add (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+                      → add (https://decentchat.app/assets/index-Dq0wq-ZF.js:2)
+
+  Stack #9: 3.4ms (0.0%)
+    → (anonymous) (:-1)
+      → captureSnapshot (:256)
+        → visitNode (:266)
+          → visitChild (:318)
+            → visitNode (:266)
+              → visitChild (:318)
+                → visitNode (:266)
+                  → visitChild (:318)
+                    → visitNode (:266)
+                      → visitChild (:318)
+                        → visitNode (:266)
+                          → visitChild (:318)
+                            → visitNode (:266)
+                              → visitChild (:318)
+                                → visitNode (:266)
+                                  → visitChild (:318)
+                                    → visitNode (:266)
+                                      → visitChild (:318)
+                                        → visitNode (:266)
+
+  Stack #10: 3.0ms (0.0%)
+    → (anonymous) (:-1)
+      → captureSnapshot (:256)
+        → visitNode (:266)
+          → visitChild (:318)
+            → visitNode (:266)
+              → visitChild (:318)
+                → visitNode (:266)
+                  → visitChild (:318)
+                    → visitNode (:266)
+                      → visitChild (:318)
+                        → visitNode (:266)
+                          → visitChild (:318)
+                            → visitNode (:266)
+                              → visitChild (:318)
+                                → visitNode (:266)
+                                  → visitChild (:318)
+                                    → visitNode (:266)
+
+────────────────────────────────────────────────────────────────────────────────
+TIME BREAKDOWN: App vs Native vs Idle
+────────────────────────────────────────────────────────────────────────────────
+  App code:                89.9ms  0.1%
+  Native/built-in:        862.6ms  1.2%
+  Idle:                 68391.2ms  98.6%
+  GC:                      17.7ms  0.0%

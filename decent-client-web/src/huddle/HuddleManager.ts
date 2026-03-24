@@ -49,6 +49,7 @@ export class HuddleManager {
   private audioElements = new Map<string, HTMLAudioElement>();
   private participants = new Map<string, HuddleParticipant>();
   private reconnectCleanupTimers = new Map<string, number>();
+  private _diagCaptures = new Map<string, { ctx: AudioContext; processor: ScriptProcessorNode; interval: ReturnType<typeof setInterval>; chunks: Float32Array[] }>();
   private audioContexts = new Map<string, AudioContext>();
   private analysers = new Map<string, AnalyserNode>();
   private analyserData = new Map<string, Uint8Array>();
@@ -157,6 +158,7 @@ export class HuddleManager {
     this.localStream = null;
     this.stopSpeechMonitoring();
     this.stopStatsCollection();
+    this._cleanupAllDiagCaptures();
 
     for (const [peerId, pc] of this.connections) {
       pc.close();
@@ -408,8 +410,14 @@ export class HuddleManager {
         });
 
       // ── Audio diagnostic: capture incoming audio for analysis ──
+      // Gated behind explicit opt-in to prevent memory leaks in production.
+      // Enable by setting window.__huddleDiagEnabled = true before joining a huddle.
       const diagCapture = () => {
+        if (!(window as any).__huddleDiagEnabled) return;
         try {
+          // Clean up any previous diagnostic capture for this peer
+          this._cleanupDiagCapture(peerId);
+
           const diagCtx = new AudioContext({ sampleRate: 48000 });
           const diagSrc = diagCtx.createMediaStreamSource(remoteStream);
           const diagAnalyser = diagCtx.createAnalyser();
@@ -418,10 +426,14 @@ export class HuddleManager {
           const freqData = new Float32Array(diagAnalyser.frequencyBinCount);
           const tdData = new Uint8Array(diagAnalyser.frequencyBinCount);
 
-          // Capture PCM for WAV export
+          // Capture PCM for WAV export (bounded to ~60s to prevent unbounded growth)
+          const MAX_CAPTURE_CHUNKS = Math.ceil(60 * 48000 / 4096); // ~60 seconds
           const capturedChunks: Float32Array[] = [];
           const processor = diagCtx.createScriptProcessor(4096, 1, 1);
           processor.onaudioprocess = (e) => {
+            if (capturedChunks.length >= MAX_CAPTURE_CHUNKS) {
+              capturedChunks.shift(); // ring buffer: drop oldest
+            }
             const input = e.inputBuffer.getChannelData(0);
             capturedChunks.push(new Float32Array(input));
           };
@@ -453,9 +465,11 @@ export class HuddleManager {
             diagCount++;
           }, 500);
 
+          // Track resources for cleanup
+          this._diagCaptures.set(peerId, { ctx: diagCtx, processor, interval: diagInterval, chunks: capturedChunks });
+
           // Save WAV export function to window for manual triggering
           (window as any).__huddleDiagExport = () => {
-            clearInterval(diagInterval);
             const totalSamples = capturedChunks.reduce((s, c) => s + c.length, 0);
             const merged = new Float32Array(totalSamples);
             let offset = 0;
@@ -564,8 +578,25 @@ export class HuddleManager {
     }
   }
 
+  private _cleanupDiagCapture(peerId: string): void {
+    const entry = this._diagCaptures.get(peerId);
+    if (!entry) return;
+    try { clearInterval(entry.interval); } catch (_) {}
+    try { entry.processor.disconnect(); } catch (_) {}
+    try { void entry.ctx.close(); } catch (_) {}
+    entry.chunks.length = 0;
+    this._diagCaptures.delete(peerId);
+  }
+
+  private _cleanupAllDiagCaptures(): void {
+    for (const peerId of this._diagCaptures.keys()) {
+      this._cleanupDiagCapture(peerId);
+    }
+  }
+
   private cleanupPeer(peerId: string): void {
     this.clearReconnectCleanup(peerId);
+    this._cleanupDiagCapture(peerId);
     const pc = this.connections.get(peerId);
     if (pc) {
       pc.close();

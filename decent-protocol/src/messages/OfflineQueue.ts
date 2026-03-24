@@ -50,6 +50,7 @@ export interface OfflineQueueConfig {
 type SaveFn = (targetPeerId: string, data: any, meta?: Partial<QueuedMessage>) => Promise<void>;
 type LoadFn = (targetPeerId: string) => Promise<QueuedMessage[]>;
 type RemoveFn = (id: number) => Promise<void>;
+type RemoveBatchFn = (ids: number[]) => Promise<void>;
 type RemoveAllFn = (targetPeerId: string) => Promise<QueuedMessage[]>;
 type UpdateFn = (id: number, patch: Partial<QueuedMessage>) => Promise<void>;
 
@@ -61,6 +62,7 @@ export class OfflineQueue {
   private saveFn?: SaveFn;
   private loadFn?: LoadFn;
   private removeFn?: RemoveFn;
+  private removeBatchFn?: RemoveBatchFn;
   private removeAllFn?: RemoveAllFn;
   private updateFn?: UpdateFn;
 
@@ -73,12 +75,13 @@ export class OfflineQueue {
   }
 
   /** Wire up persistence (optional — call before using). */
-  setPersistence(save: SaveFn, load: LoadFn, remove: RemoveFn, removeAll: RemoveAllFn, update?: UpdateFn): void {
+  setPersistence(save: SaveFn, load: LoadFn, remove: RemoveFn, removeAll: RemoveAllFn, update?: UpdateFn, removeBatch?: RemoveBatchFn): void {
     this.saveFn = save;
     this.loadFn = load;
     this.removeFn = remove;
     this.removeAllFn = removeAll;
     this.updateFn = update;
+    this.removeBatchFn = removeBatch;
   }
 
   /**
@@ -279,6 +282,28 @@ export class OfflineQueue {
     if (queue) {
       const idx = queue.findIndex((m) => m.id === messageId);
       if (idx >= 0) queue.splice(idx, 1);
+    }
+  }
+
+  /** Batch-remove messages from the queue. Single IDB transaction instead of N. */
+  async removeBatch(targetPeerId: string, messageIds: number[]): Promise<void> {
+    if (messageIds.length === 0) return;
+    if (messageIds.length === 1) { await this.remove(targetPeerId, messageIds[0]); return; }
+
+    if (this.removeBatchFn) {
+      await this.removeBatchFn(messageIds);
+    } else if (this.removeFn) {
+      // Fallback: individual removes if no batch fn wired
+      for (const id of messageIds) await this.removeFn(id);
+    }
+
+    const queue = this.inMemoryQueue.get(targetPeerId);
+    if (queue) {
+      const idSet = new Set(messageIds);
+      const filtered = queue.filter((m) => typeof m.id !== 'number' || !idSet.has(m.id));
+      if (filtered.length !== queue.length) {
+        this.inMemoryQueue.set(targetPeerId, filtered);
+      }
     }
   }
 

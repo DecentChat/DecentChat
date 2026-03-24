@@ -486,6 +486,8 @@ export interface UICallbacks {
     };
   };
   retryReconnect?: () => Promise<{ attempted: number; reinitialized: boolean }>;
+  loadOlderMessages?: (channelId: string) => Promise<number>;
+  hasOlderMessages?: (channelId: string) => boolean;
   listCompanyTemplates?: () => Promise<CompanyTemplateDefinition[]> | CompanyTemplateDefinition[];
   installCompanyTemplate?: (request: CompanyTemplateInstallRequest) => Promise<CompanyTemplateInstallResult>;
 }

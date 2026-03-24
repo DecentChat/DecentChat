@@ -1,0 +1,10 @@
+[warning] [PERF] restore:parallelIDB=1ms
+[warning] [PERF] restore:settingsApply=1ms
+[warning] [PERF] restore:wsLoop=0ms
+[warning] [PERF] restoreFromStorage: 0.9ms
+[warning] [PERF] main: restore=1ms migrate=0ms contacts=0ms
+[warning] [PERF] restore:parallelIDB=0ms
+[warning] [PERF] restore:settingsApply=0ms
+[warning] [PERF] restore:wsLoop=0ms
+[warning] [PERF] restoreFromStorage: 0.6ms
+[warning] [PERF] main: restore=1ms migrate=0ms contacts=0ms

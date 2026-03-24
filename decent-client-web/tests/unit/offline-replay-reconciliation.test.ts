@@ -27,6 +27,12 @@ function makeBaseController(): any {
 
   ctrl.getDisplayNameForPeer = mock(() => 'Me');
 
+  // Instance fields normally initialized by the constructor — required by
+  // flushOfflineQueue (in-flight guard + cooldown) and retryUnackedOutgoingForPeer.
+  ctrl.offlineQueueFlushInFlight = new Map<string, Promise<void>>();
+  ctrl.lastOfflineQueueFlushAt = new Map<string, number>();
+  ctrl.retryUnackedInFlight = new Map<string, Promise<void>>();
+
   return ctrl;
 }
 
@@ -72,6 +78,7 @@ describe('ChatController offline replay reconciliation', () => {
         },
       }]),
       remove: mock(async () => {}),
+      removeBatch: mock(async () => {}),
       markAttempt: mock(async () => {}),
     };
 

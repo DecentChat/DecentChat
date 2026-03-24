@@ -13,6 +13,35 @@ import {
   shouldHydrateTitleTooltipAttribute,
 } from './ui/titleTooltipObserver';
 
+// ─── PERF: Long Task Observer ────────────────────────────────────────────────
+// Logs any main-thread task that blocks for >50ms.  Remove after debugging.
+try {
+  if (typeof PerformanceObserver !== 'undefined') {
+    const obs = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        console.warn(`[PERF] Long task: ${entry.duration.toFixed(0)}ms (name=${entry.name})`);
+      }
+    });
+    obs.observe({ type: 'longtask', buffered: true });
+  }
+} catch { /* PerformanceObserver not supported */ }
+
+// ─── PERF: Frame-drop detector ──────────────────────────────────────────────
+// Detects when rAF callbacks are delayed >100ms (i.e. UI freeze).  Remove after debugging.
+try {
+  let _lastFrame = performance.now();
+  const _checkFrame = () => {
+    const now = performance.now();
+    const gap = now - _lastFrame;
+    if (gap > 100) {
+      console.warn(`[PERF] Frame gap: ${gap.toFixed(0)}ms (UI was frozen)`);
+    }
+    _lastFrame = now;
+    requestAnimationFrame(_checkFrame);
+  };
+  requestAnimationFrame(_checkFrame);
+} catch { /* rAF not available */ }
+
 // ─── Single-Tab Lock ─────────────────────────────────────────────────────────
 // Prevent multiple tabs from running simultaneously (shared IndexedDB,
 // WebRTC peer ID, and signaling connection would cause race conditions).
@@ -553,6 +582,8 @@ async function init(): Promise<void> {
     getMessageReceiptInfo: (messageId) => ctrl.getMessageReceiptInfo(messageId),
     getConnectionStatus: () => ctrl.getConnectionStatus(),
     retryReconnect: () => ctrl.retryReconnectNow(),
+    loadOlderMessages: (channelId) => ctrl.loadOlderMessages(channelId),
+    hasOlderMessages: (channelId) => ctrl.hasOlderMessages(channelId),
     listCompanyTemplates: async () => {
       const runtimeBridge = resolveCompanyTemplateRuntimeBridge();
       if (runtimeBridge?.listTemplates) {
@@ -771,6 +802,7 @@ async function init(): Promise<void> {
       (id) => ctrl.persistentStore.dequeueMessage(id),
       (peerId) => ctrl.persistentStore.dequeueAllForPeer(peerId),
       (id, patch) => ctrl.persistentStore.updateQueuedMessage(id, patch),
+      (ids) => ctrl.persistentStore.dequeueMessages(ids),
     );
 
     // Bootstrap transport + peer ID
@@ -989,14 +1021,19 @@ async function init(): Promise<void> {
     ctrl.setupTransportHandlers();
 
     // Restore persisted workspaces / messages
+    const _mainT0 = performance.now();
     await ctrl.restoreFromStorage();
+    const _mainT1 = performance.now();
     await ctrl.migrateLocalPeerId(previousStoredPeerId, myPeerId);
+    const _mainT2 = performance.now();
 
     // Restore contacts and direct conversations
     await ctrl.restoreContacts();
+    const _mainT3 = performance.now();
 
     // Register this peer in all known workspaces for signaling-server discovery
     ctrl.registerAllWorkspaces();
+    console.warn(`[PERF] main: restore=${(_mainT1-_mainT0).toFixed(0)}ms migrate=${(_mainT2-_mainT1).toFixed(0)}ms contacts=${(_mainT3-_mainT2).toFixed(0)}ms`);
 
     // Check for /join/CODE invite URL
     const joinMatch = path.match(/^\/join\/([A-Za-z0-9]+)/);
@@ -1075,22 +1112,8 @@ async function init(): Promise<void> {
 
       state.activeChannelId = restoredChannel?.id || ws.channels[0]?.id || null;
 
-      // Load persisted messages for all workspace channels (survives page refresh)
-      try {
-        const channelIds = ws.channels.map((ch: any) => ch.id);
-        for (const channelId of channelIds) {
-          const persisted = await ctrl.persistentStore.getMessagesByChannel(channelId);
-          if (persisted.length > 0) {
-            // Use forceAdd to bypass hash chain validation (already validated on first receipt)
-            for (const msg of persisted) {
-              ctrl.messageStore.forceAdd(msg);
-            }
-            console.log(`[DecentChat] Restored ${persisted.length} messages for channel ${channelId.slice(0, 8)}`);
-          }
-        }
-      } catch (err) {
-        console.warn('[DecentChat] Failed to restore persisted messages:', err);
-      }
+      // Messages are already loaded into messageStore by restoreFromStorage().
+      // No need to reload from IndexedDB here.
 
       ui.renderApp();
 

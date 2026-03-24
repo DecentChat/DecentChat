@@ -48,6 +48,25 @@ function createController(overrides: Record<string, unknown> = {}): any {
   ctrl.requestTimestampMessageSync = mock(async () => {});
   ctrl.requestNegentropyMessageSync = mock(async () => {});
   ctrl.peerSupportsCapability = () => false;
+  // Instance fields normally initialized by the constructor — required by
+  // setupTransportHandlers (onDisconnect uses handshakeInFlight) and
+  // requestMessageSync (checks messageSyncInFlight).
+  ctrl.handshakeInFlight = new Set<string>();
+  ctrl.messageSyncInFlight = new Map<string, Promise<void>>();
+  ctrl.retryUnackedInFlight = new Map<string, Promise<void>>();
+  ctrl._globalSyncLock = Promise.resolve();
+  // Additional instance fields used by onDisconnect handler
+  ctrl.pendingDeliveryRecoveryCooldowns = new Map<string, number>();
+  ctrl.lastOfflineQueueFlushAt = new Map<string, number>();
+  ctrl.pendingDeliveryWatchTimers = new Map<string, any>();
+  ctrl.pendingCompanyTemplateInstallRequests = new Map<string, any>();
+  ctrl.pendingCompanySimControlRequests = new Map<string, any>();
+  // Per-peer in-flight guards cleaned by onDisconnect
+  ctrl.offlineQueueFlushInFlight = new Map<string, Promise<void>>();
+  ctrl.scheduledOfflineQueueFlushes = new Map<string, any>();
+  ctrl.pendingPreKeyBundleFetches = new Map<string, any>();
+  ctrl.pendingStreams = new Map<string, any>();
+  ctrl.messageGuard = { rateLimiter: { removePeer: mock(() => {}) } };
   Object.assign(ctrl, overrides);
   return ctrl;
 }
@@ -160,7 +179,9 @@ describe('TopologyTelemetry', () => {
     ctrl.peerConnectedAt.set('admin-peer', now - (5 * 60 * 1000));
 
     const attempted = ctrl.runPeerMaintenanceNow('unit-test');
-    expect(attempted).toBe(2);
+    // With computeTargetPeerCount=3 and 2 already connected (owner-peer, admin-peer),
+    // only 1 more slot is available. overlap-peer is selected (multi-workspace overlap).
+    expect(attempted).toBe(1);
     expect(connect).toHaveBeenCalledWith('overlap-peer');
 
     const snapshot = ctrl.getTopologyDebugSnapshot('ws-1');
@@ -206,6 +227,8 @@ describe('TopologyTelemetry', () => {
 
     await (ctrl as any).requestMessageSync('peer-1');
     ctrl.requestTimestampMessageSync = mock(async () => { throw new Error('boom'); });
+    // Clear the throttle so the second sync actually runs the (now-throwing) mock
+    ctrl.lastMessageSyncRequestAt.delete('peer-1');
     await expect((ctrl as any).requestMessageSync('peer-1')).rejects.toThrow('boom');
 
     const events = ctrl.getTopologyDebugSnapshot('ws-1').recentEvents.filter((event: any) => event.kind === 'topology.peer');

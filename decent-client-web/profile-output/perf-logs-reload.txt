@@ -1,0 +1,8 @@
+[warning] [PERF] restore:parallelIDB=1ms
+[warning] [PERF] restore:settingsApply=1ms
+[warning] [PERF] restore:wsLoop=0ms
+[warning] [PERF] _flushDeferredPostConnectWork: 0 deferred peers
+[warning] [PERF] restoreFromStorage: 1.2ms
+[warning] [PERF] main: restore=1ms migrate=0ms contacts=0ms
+[warning] [Transport] markConnected: firing onConnect for 98057f7f inbound via wss://0.peerjs.com/
+[warning] [PERF] onConnect(98057f7f): createHandshake=0.2ms, total=0.3ms

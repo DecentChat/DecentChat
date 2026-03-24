@@ -38,6 +38,9 @@ function createPolicyController(overrides: Record<string, unknown> = {}): any {
   ctrl.startedAt = Date.now() - (10 * 60 * 1000);
   ctrl.requestMessageSync = mock(async () => {});
   ctrl.isPartialMeshEnabled = () => false;
+  // Instance fields normally initialized by the constructor — required by
+  // _runPeerMaintenance which calls requestMessageSync (checks messageSyncInFlight).
+  ctrl.messageSyncInFlight = new Map<string, Promise<void>>();
   Object.assign(ctrl, overrides);
   return ctrl;
 }

@@ -511,6 +511,149 @@ export class PersistentStore {
     return messages;
   }
 
+  /**
+   * Load the N most-recent messages for a channel using the compound
+   * (channelId, timestamp) index.  Returns messages sorted oldest-first.
+   * Falls back to getChannelMessages() if the compound index is unavailable.
+   */
+  async getRecentChannelMessages(channelId: string, limit: number): Promise<any[]> {
+    const messages: any[] = await new Promise((resolve, reject) => {
+      const tx = this.getDB().transaction('messages', 'readonly');
+      const store = tx.objectStore('messages');
+
+      let index: IDBIndex;
+      try {
+        index = store.index('channelTimestamp');
+      } catch {
+        // Compound index not available (older DB version) — fall back.
+        const req = store.index('channelId').getAll(channelId);
+        req.onsuccess = () => {
+          const msgs = req.result || [];
+          msgs.sort((a: any, b: any) => a.timestamp - b.timestamp);
+          resolve(msgs.slice(-limit));
+        };
+        req.onerror = () => reject(req.error);
+        return;
+      }
+
+      // Open a reverse cursor over [channelId, -Infinity] → [channelId, +Infinity]
+      const range = IDBKeyRange.bound([channelId, -Infinity], [channelId, Infinity]);
+      const request = index.openCursor(range, 'prev');
+      const collected: any[] = [];
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (cursor && collected.length < limit) {
+          collected.push(cursor.value);
+          cursor.continue();
+        } else {
+          // collected is newest-first; reverse to oldest-first
+          collected.reverse();
+          resolve(collected);
+        }
+      };
+      request.onerror = () => reject(request.error);
+    });
+
+    // T3.5: Decrypt message content if at-rest encryption is active
+    if (this.atRest) {
+      return Promise.all(
+        messages.map(async (msg) => {
+          if (typeof msg?.content === 'string' && AtRestEncryption.isEncrypted(msg.content)) {
+            return { ...msg, content: await this.atRest!.decrypt(msg.content) };
+          }
+          return msg;
+        }),
+      );
+    }
+
+    return messages;
+  }
+
+  /**
+   * Load the most recent messages for multiple channels in a single IDB
+   * transaction.  Returns a Map keyed by channelId.  Channels with no
+   * messages are omitted from the result.  At-rest decryption (if active)
+   * runs in parallel across all channels.
+   */
+  async getRecentMessagesForChannels(
+    channelIds: string[],
+    limitPerChannel: number,
+  ): Promise<Map<string, any[]>> {
+    if (channelIds.length === 0) return new Map();
+
+    const tx = this.getDB().transaction('messages', 'readonly');
+    const store = tx.objectStore('messages');
+
+    // Try the compound index (channelId, timestamp).
+    let hasCompoundIndex = true;
+    try {
+      store.index('channelTimestamp');
+    } catch {
+      hasCompoundIndex = false;
+    }
+
+    // Launch one cursor per channel concurrently within the SAME transaction.
+    const channelPromises = channelIds.map((channelId) =>
+      new Promise<[string, any[]]>((resolve, reject) => {
+        if (hasCompoundIndex) {
+          const idx = store.index('channelTimestamp');
+          const range = IDBKeyRange.bound([channelId, -Infinity], [channelId, Infinity]);
+          const request = idx.openCursor(range, 'prev');
+          const collected: any[] = [];
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (cursor && collected.length < limitPerChannel) {
+              collected.push(cursor.value);
+              cursor.continue();
+            } else {
+              collected.reverse();
+              resolve([channelId, collected]);
+            }
+          };
+          request.onerror = () => reject(request.error);
+        } else {
+          // Fallback for older DB without compound index
+          const idx = store.index('channelId');
+          const req = idx.getAll(channelId);
+          req.onsuccess = () => {
+            const msgs = req.result || [];
+            msgs.sort((a: any, b: any) => a.timestamp - b.timestamp);
+            resolve([channelId, msgs.slice(-limitPerChannel)]);
+          };
+          req.onerror = () => reject(req.error);
+        }
+      }),
+    );
+
+    const results = await Promise.all(channelPromises);
+
+    // At-rest decryption — decrypt all channels in parallel
+    const resultMap = new Map<string, any[]>();
+    if (this.atRest) {
+      const decryptPromises = results.map(async ([channelId, messages]) => {
+        if (messages.length === 0) return;
+        const decrypted = await Promise.all(
+          messages.map(async (msg) => {
+            if (typeof msg?.content === 'string' && AtRestEncryption.isEncrypted(msg.content)) {
+              return { ...msg, content: await this.atRest!.decrypt(msg.content) };
+            }
+            return msg;
+          }),
+        );
+        resultMap.set(channelId, decrypted);
+      });
+      await Promise.all(decryptPromises);
+    } else {
+      for (const [channelId, messages] of results) {
+        if (messages.length > 0) {
+          resultMap.set(channelId, messages);
+        }
+      }
+    }
+
+    return resultMap;
+  }
+
   async getMessageCount(channelId: string): Promise<number> {
     return new Promise((resolve, reject) => {
       const tx = this.getDB().transaction('messages', 'readonly');
@@ -519,6 +662,65 @@ export class PersistentStore {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
+  }
+
+  /**
+   * Load messages for a channel that are older than `beforeTimestamp`.
+   * Returns up to `limit` messages sorted oldest-first (ascending timestamp).
+   * Used for on-demand "load more" when the user scrolls up.
+   */
+  async getOlderChannelMessages(channelId: string, beforeTimestamp: number, limit: number): Promise<any[]> {
+    const messages: any[] = await new Promise((resolve, reject) => {
+      const tx = this.getDB().transaction('messages', 'readonly');
+      const store = tx.objectStore('messages');
+
+      let index: IDBIndex;
+      try {
+        index = store.index('channelTimestamp');
+      } catch {
+        // Compound index not available — fallback to full getAll + filter.
+        const req = store.index('channelId').getAll(channelId);
+        req.onsuccess = () => {
+          const msgs = (req.result || [])
+            .filter((m: any) => m.timestamp < beforeTimestamp)
+            .sort((a: any, b: any) => a.timestamp - b.timestamp);
+          resolve(msgs.slice(-limit));
+        };
+        req.onerror = () => reject(req.error);
+        return;
+      }
+
+      // Reverse cursor from just below beforeTimestamp back to the beginning of the channel.
+      const range = IDBKeyRange.bound([channelId, -Infinity], [channelId, beforeTimestamp], false, true);
+      const request = index.openCursor(range, 'prev');
+      const collected: any[] = [];
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (cursor && collected.length < limit) {
+          collected.push(cursor.value);
+          cursor.continue();
+        } else {
+          // collected is newest-first; reverse to oldest-first
+          collected.reverse();
+          resolve(collected);
+        }
+      };
+      request.onerror = () => reject(request.error);
+    });
+
+    // T3.5: Decrypt message content if at-rest encryption is active
+    if (this.atRest) {
+      return Promise.all(
+        messages.map(async (msg) => {
+          if (typeof msg?.content === 'string' && AtRestEncryption.isEncrypted(msg.content)) {
+            return { ...msg, content: await this.atRest!.decrypt(msg.content) };
+          }
+          return msg;
+        }),
+      );
+    }
+
+    return messages;
   }
 
   /**
@@ -600,6 +802,21 @@ export class PersistentStore {
 
   async dequeueMessage(id: number): Promise<void> {
     await this.delete('outbox', id);
+  }
+
+  /** Bulk-dequeue outbox messages by ID. Single IDB transaction instead of N separate ones. */
+  async dequeueMessages(ids: number[]): Promise<void> {
+    if (ids.length === 0) return;
+    if (ids.length === 1) { await this.delete('outbox', ids[0]); return; }
+    const tx = this.getDB().transaction('outbox', 'readwrite');
+    const store = tx.objectStore('outbox');
+    for (const id of ids) {
+      store.delete(id);
+    }
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
   }
 
   async updateQueuedMessage(id: number, patch: Record<string, any>): Promise<void> {

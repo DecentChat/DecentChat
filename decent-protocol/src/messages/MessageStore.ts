@@ -280,6 +280,39 @@ export class MessageStore {
   }
 
   /**
+   * Trim a channel to keep only the most recent `maxSize` messages.
+   * Returns the number of evicted messages, or 0 if no trimming was needed.
+   * The evicted messages are assumed to still exist in IndexedDB for on-demand loading.
+   */
+  trimChannel(channelId: string, maxSize: number): number {
+    const msgs = this.channels.get(channelId);
+    if (!msgs || msgs.length <= maxSize) return 0;
+    const evictCount = msgs.length - maxSize;
+    // Messages are sorted by timestamp; splice off the oldest.
+    msgs.splice(0, evictCount);
+    return evictCount;
+  }
+
+  /**
+   * Prepend older messages to the front of a channel's in-memory array.
+   * Messages must be sorted by timestamp ascending.
+   * Skips duplicates by ID.  Returns the number actually prepended.
+   */
+  prependMessages(channelId: string, older: PlaintextMessage[]): number {
+    if (older.length === 0) return 0;
+    if (!this.channels.has(channelId)) {
+      this.channels.set(channelId, []);
+    }
+    const existing = this.channels.get(channelId)!;
+    const existingIds = new Set(existing.map(m => m.id));
+    const deduped = older.filter(m => !existingIds.has(m.id));
+    if (deduped.length === 0) return 0;
+    // Prepend (older messages go to the front).
+    existing.unshift(...deduped);
+    return deduped.length;
+  }
+
+  /**
    * Clear a channel (for testing only)
    */
   clearChannel(channelId: string): void {

@@ -45,6 +45,8 @@ describe('ChatController manifest state persistence', () => {
     ctrl.publicWorkspaceController = {
       restoreFromStorage: mock(async () => {}),
       ingestWorkspaceSnapshot: mock(() => {}),
+      findStaleOwnedShellPlaceholders: mock(() => []),
+      removeWorkspace: mock(async () => {}),
     };
     ctrl.manifestStore = {
       importState: mock(() => {}),

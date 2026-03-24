@@ -62,7 +62,7 @@ export interface Transport {
    * @param peerId - The sender's peer ID.
    * @param data  - The deserialized payload (whatever was passed to send()).
    */
-  onMessage: ((peerId: string, data: unknown) => void) | null;
+  onMessage: ((peerId: string, data: unknown) => void | Promise<void>) | null;
 
   /**
    * Called when a transport-level error occurs.

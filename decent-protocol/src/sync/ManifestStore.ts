@@ -50,7 +50,9 @@ function domainKey(domain: SyncDomain, channelId?: string): string {
 
 function normalizeData(data?: Record<string, unknown>): Record<string, unknown> {
   if (!data) return {};
-  return JSON.parse(JSON.stringify(data));
+  // Shallow copy is sufficient — IDB structuredClone provides isolation on persist,
+  // and we no longer need the expensive JSON.parse(JSON.stringify()) deep clone.
+  return { ...data };
 }
 
 function deepClone<T>(value: T): T {
@@ -263,16 +265,30 @@ function sanitizeWorkspaceState(rawWorkspace: unknown): { workspaceId: string; s
   }
 
   if (Array.isArray(rawWorkspace.deltas)) {
+    // Track seen opIds per domain key for O(1) dedup instead of O(N) .some()
+    const seenOpIds = new Map<string, Set<string>>();
+
     for (const rawDelta of rawWorkspace.deltas) {
       const delta = sanitizeDelta(rawDelta, workspaceId);
       if (!delta || delta.workspaceId !== workspaceId) continue;
       const key = domainKey(delta.domain, delta.channelId);
-      const existing = deltas.get(key) ?? [];
-      if (!existing.some((entry) => entry.opId === delta.opId)) {
-        existing.push(delta);
-        existing.sort((a, b) => a.version - b.version || a.timestamp - b.timestamp || a.opId.localeCompare(b.opId));
-        deltas.set(key, existing);
+
+      let seen = seenOpIds.get(key);
+      if (!seen) {
+        seen = new Set<string>();
+        seenOpIds.set(key, seen);
       }
+      if (seen.has(delta.opId)) continue;
+      seen.add(delta.opId);
+
+      const existing = deltas.get(key) ?? [];
+      existing.push(delta);
+      deltas.set(key, existing);
+    }
+
+    // Sort once per domain key after all deltas are collected (not per-insert)
+    for (const [, domainDeltas] of deltas) {
+      domainDeltas.sort((a, b) => a.version - b.version || a.timestamp - b.timestamp || a.opId.localeCompare(b.opId));
     }
   }
 
@@ -350,13 +366,17 @@ export class ManifestStore {
     const ws = this.workspaces.get(workspaceId);
     if (!ws) return undefined;
 
+    // Use spread to create shallow copies of each entry.
+    // Deep cloning via JSON.parse(JSON.stringify()) is extremely expensive
+    // and unnecessary here: the data is plain objects (strings, numbers),
+    // and IDB's structuredClone handles isolation on write.
     const versions = [...ws.versions.values()]
       .sort((a, b) => {
         const domainCmp = a.domain.localeCompare(b.domain);
         if (domainCmp !== 0) return domainCmp;
         return (a.channelId ?? '').localeCompare(b.channelId ?? '');
       })
-      .map((entry) => deepClone(entry));
+      .map((entry) => ({ ...entry }));
 
     const deltas = [...ws.deltas.values()]
       .flat()
@@ -369,7 +389,7 @@ export class ManifestStore {
         if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
         return a.opId.localeCompare(b.opId);
       })
-      .map((delta) => deepClone(delta));
+      .map((delta) => ({ ...delta, data: delta.data ? { ...delta.data } : {} }));
 
     const snapshots = [...ws.snapshots.values()]
       .sort((a, b) => {
@@ -377,7 +397,7 @@ export class ManifestStore {
         if (domainCmp !== 0) return domainCmp;
         return (('channelId' in a ? a.channelId ?? '' : '')).localeCompare(('channelId' in b ? b.channelId ?? '' : ''));
       })
-      .map((snapshot) => deepClone(snapshot));
+      .map((snapshot) => ({ ...snapshot }));
 
     return {
       workspaceId,
@@ -405,7 +425,7 @@ export class ManifestStore {
             if (domainCmp !== 0) return domainCmp;
             return (a.channelId ?? '').localeCompare(b.channelId ?? '');
           })
-          .map((entry) => deepClone(entry));
+          .map((entry) => ({ ...entry }));
 
         const deltas = [...ws.deltas.values()]
           .flat()
@@ -418,7 +438,7 @@ export class ManifestStore {
             if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
             return a.opId.localeCompare(b.opId);
           })
-          .map((delta) => deepClone(delta));
+          .map((delta) => ({ ...delta, data: delta.data ? { ...delta.data } : {} }));
 
         const snapshots = [...ws.snapshots.values()]
           .sort((a, b) => {
@@ -426,7 +446,7 @@ export class ManifestStore {
             if (domainCmp !== 0) return domainCmp;
             return (('channelId' in a ? a.channelId ?? '' : '')).localeCompare(('channelId' in b ? b.channelId ?? '' : ''));
           })
-          .map((snapshot) => deepClone(snapshot));
+          .map((snapshot) => ({ ...snapshot }));
 
         return {
           workspaceId,
@@ -711,13 +731,36 @@ export class ManifestStore {
   }
 
   applyDelta(delta: ManifestDelta): ManifestDelta {
+    const changed = this.applyDeltaInternal(delta);
+    if (changed) this.notifyChange(delta.workspaceId);
+    return deepClone(delta);
+  }
+
+  /**
+   * Apply multiple deltas in a batch, only persisting once at the end.
+   * This avoids O(N * stateSize) serialization cost from per-delta persistence.
+   */
+  applyDeltaBatch(deltas: ManifestDelta[]): void {
+    const changedWorkspaces = new Set<string>();
+    for (const delta of deltas) {
+      const changed = this.applyDeltaInternal(delta);
+      if (changed) changedWorkspaces.add(delta.workspaceId);
+    }
+    for (const workspaceId of changedWorkspaces) {
+      this.notifyChange(workspaceId);
+    }
+  }
+
+  private applyDeltaInternal(delta: ManifestDelta): boolean {
     const ws = this.ensureWorkspace(delta.workspaceId);
     const key = domainKey(delta.domain, delta.channelId);
     const existing = ws.deltas.get(key) ?? [];
 
     let changed = false;
     if (!existing.some((entry) => entry.opId === delta.opId)) {
-      existing.push(deepClone(delta));
+      // Shallow spread is sufficient — delta data is simple records,
+      // and IDB structuredClone provides isolation on persist.
+      existing.push({ ...delta, data: delta.data ? { ...delta.data } : {} });
       existing.sort((a, b) => a.version - b.version || a.timestamp - b.timestamp || a.opId.localeCompare(b.opId));
       ws.deltas.set(key, existing);
       changed = true;
@@ -742,14 +785,13 @@ export class ManifestStore {
       changed = true;
     }
 
-    if (changed) this.notifyChange(delta.workspaceId);
-    return deepClone(delta);
+    return changed;
   }
 
   saveSnapshot(snapshot: SyncManifestSnapshot): void {
     const ws = this.ensureWorkspace(snapshot.workspaceId);
     const key = domainKey(snapshot.domain, snapshot.domain === 'channel-message' ? snapshot.channelId : undefined);
-    ws.snapshots.set(key, deepClone(snapshot));
+    ws.snapshots.set(key, { ...snapshot });
 
     const previous = ws.versions.get(key);
     ws.versions.set(key, {

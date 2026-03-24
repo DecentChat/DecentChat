@@ -15,6 +15,7 @@ interface ShellSyncContext {
   getFrequentReactions: () => string[];
   peerStatusClass: (peerId: string) => string;
   peerStatusTitle: (peerId: string) => string;
+  hasOlderMessages?: (channelId: string) => boolean;
 }
 
 export interface ShellSyncHelpers {
@@ -41,6 +42,7 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
     getFrequentReactions,
     peerStatusClass,
     peerStatusTitle,
+    hasOlderMessages,
   } = ctx;
 
   function syncShellRail(): void {
@@ -208,6 +210,7 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
     shellData.messages.myPeerId = state.myPeerId;
     shellData.messages.myDisplayName = getMyDisplayName();
     shellData.messages.frequentReactions = getFrequentReactions();
+    shellData.messages.hasOlderMessages = !!(state.activeChannelId && hasOlderMessages?.(state.activeChannelId));
   }
 
   function syncShellCompose(): void {

@@ -129,6 +129,22 @@ interface LocalSignedPreKeyRuntimeRecord extends LocalPreKeyRuntimeRecord {
 
 const PRE_KEY_POLICY = DEFAULT_PRE_KEY_LIFECYCLE_POLICY;
 
+/**
+ * How many one-time pre-keys to generate synchronously at startup.
+ * The remaining keys up to targetOneTimePreKeys are generated in the background
+ * to avoid blocking the UI thread. Firefox P-256 generateKey is ~600ms each,
+ * so generating all 20 at once would freeze the UI for ~12 seconds.
+ */
+const INITIAL_PRE_KEY_BATCH_SIZE = 3;
+
+/**
+ * Pool size for pre-generated ECDH P-256 key pairs.
+ * These are used by initAlice (ratchet DH step) and createHandshake (Bob's DH key).
+ * Each generateKey takes ~600ms on Firefox, so pre-generating avoids blocking
+ * the handshake critical path when multiple peers connect simultaneously.
+ */
+const DH_KEY_PAIR_POOL_TARGET = 4;
+
 export class MessageProtocol {
   private cryptoManager: CryptoManager;
   private cipher: MessageCipher;
@@ -140,6 +156,11 @@ export class MessageProtocol {
 
   /** Pre-generated ratchet DH key pair (used as Bob in handshake) */
   private ratchetDHKeyPair: CryptoKeyPair | null = null;
+
+  /** Pool of pre-generated ECDH P-256 key pairs for instant use in handshakes.
+   *  Avoids ~600ms Firefox P-256 generateKey on the critical path. */
+  private dhKeyPairPool: CryptoKeyPair[] = [];
+  private dhKeyPairPoolRefillInFlight = false;
 
   /** Legacy shared secrets (fallback for old peers) */
   private sharedSecrets = new Map<string, CryptoKey>();
@@ -179,6 +200,51 @@ export class MessageProtocol {
       ['deriveBits'],
     );
     await this.ensureLocalPreKeyMaterial();
+    // Start filling the DH key pair pool in the background
+    this.scheduleDHKeyPairPoolRefill();
+  }
+
+  /**
+   * Take a pre-generated DH key pair from the pool, or generate one on-demand.
+   * Triggers background refill when pool runs low.
+   */
+  private async takeDHKeyPair(): Promise<CryptoKeyPair> {
+    const pooled = this.dhKeyPairPool.shift();
+    if (this.dhKeyPairPool.length < 2) {
+      this.scheduleDHKeyPairPoolRefill();
+    }
+    if (pooled) return pooled;
+    // Pool empty — generate on demand (slow path, ~600ms Firefox)
+    return crypto.subtle.generateKey(
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      ['deriveBits'],
+    );
+  }
+
+  /**
+   * Refill the DH key pair pool in the background with event loop yields
+   * between each generation to avoid blocking the UI.
+   */
+  private scheduleDHKeyPairPoolRefill(): void {
+    if (this.dhKeyPairPoolRefillInFlight) return;
+    if (this.dhKeyPairPool.length >= DH_KEY_PAIR_POOL_TARGET) return;
+    this.dhKeyPairPoolRefillInFlight = true;
+
+    const fillOne = async () => {
+      while (this.dhKeyPairPool.length < DH_KEY_PAIR_POOL_TARGET) {
+        await new Promise<void>(r => setTimeout(r, 0)); // yield
+        const kp = await crypto.subtle.generateKey(
+          { name: 'ECDH', namedCurve: 'P-256' },
+          true,
+          ['deriveBits'],
+        );
+        this.dhKeyPairPool.push(kp);
+      }
+      this.dhKeyPairPoolRefillInFlight = false;
+    };
+
+    fillOne().catch(() => { this.dhKeyPairPoolRefillInFlight = false; });
   }
 
   setPersistence(persistence: RatchetPersistence): void {
@@ -193,10 +259,13 @@ export class MessageProtocol {
     const publicKey = await this.cryptoManager.exportPublicKey(keyPair.publicKey);
 
     let ratchetDHPublicKey: string | undefined;
-    if (this.ratchetDHKeyPair) {
-      const ratchetPubRaw = await crypto.subtle.exportKey('raw', this.ratchetDHKeyPair.publicKey);
-      ratchetDHPublicKey = arrayBufferToBase64(ratchetPubRaw);
+    // Use a key pair from the pool if the prior one was consumed (Bob role).
+    // This avoids ~600ms of Firefox P-256 generateKey on the handshake path.
+    if (!this.ratchetDHKeyPair) {
+      this.ratchetDHKeyPair = await this.takeDHKeyPair();
     }
+    const ratchetPubRaw = await crypto.subtle.exportKey('raw', this.ratchetDHKeyPair.publicKey);
+    ratchetDHPublicKey = arrayBufferToBase64(ratchetPubRaw);
 
     let signingPublicKey: string | undefined;
     if (this._signingKeyPair) {
@@ -226,15 +295,6 @@ export class MessageProtocol {
       }
     }
 
-    // Always derive a legacy shared secret for fallback
-    const sharedSecret = await this.cryptoManager.deriveSharedSecret(
-      peerPublicKey,
-      undefined,
-      this.myPeerId,
-      peerId,
-    );
-    this.sharedSecrets.set(peerId, sharedSecret);
-
     // If peer supports ratchet protocol
     if (handshake.protocolVersion === 2 && handshake.ratchetDHPublicKey) {
       // Check if we already have ratchet state (persisted or in-memory)
@@ -256,13 +316,26 @@ export class MessageProtocol {
       // Determine role: lower peerId is Alice (initiator)
       const isAlice = this.myPeerId < peerId;
 
-      // Derive initial shared secret (raw ECDH bytes for ratchet root key)
+      // Derive raw ECDH bytes ONCE — used for both ratchet init AND legacy fallback.
+      // This saves ~600ms on Firefox P-256 by eliminating the duplicate deriveBits call
+      // that was previously done separately in cryptoManager.deriveSharedSecret().
       const myKeyPair = await this.cryptoManager.getKeyPair();
-      const initialSecret = await crypto.subtle.deriveBits(
+      const rawEcdhBytes = await crypto.subtle.deriveBits(
         { name: 'ECDH', public: peerPublicKey },
         myKeyPair.privateKey,
         256,
       );
+
+      // Derive legacy AES-GCM shared secret from the same raw ECDH bytes (for v1 fallback)
+      const legacySecret = await this.cryptoManager.deriveSharedSecretFromRawBytes(
+        rawEcdhBytes,
+        this.myPeerId,
+        peerId,
+      );
+      this.sharedSecrets.set(peerId, legacySecret);
+
+      // Use the same raw bytes as the ratchet initial secret
+      const initialSecret = rawEcdhBytes;
 
       // Import peer's ratchet DH public key
       const peerRatchetDH = await crypto.subtle.importKey(
@@ -275,19 +348,28 @@ export class MessageProtocol {
 
       let state: RatchetState;
       if (isAlice) {
-        state = await DoubleRatchet.initAlice(initialSecret, peerRatchetDH);
+        // Use a pre-generated key pair from the pool to avoid ~600ms Firefox P-256
+        // generateKey on the critical handshake path.
+        const preGenDH = await this.takeDHKeyPair();
+        state = await DoubleRatchet.initAlice(initialSecret, peerRatchetDH, preGenDH);
       } else {
         state = await DoubleRatchet.initBob(initialSecret, this.ratchetDHKeyPair!);
-        // Generate a fresh DH key pair for the next handshake
-        this.ratchetDHKeyPair = await crypto.subtle.generateKey(
-          { name: 'ECDH', namedCurve: 'P-256' },
-          true,
-          ['deriveBits'],
-        );
+        // Mark the key pair as consumed — take a replacement from the pool
+        // so the next createHandshake() doesn't block on generateKey.
+        this.ratchetDHKeyPair = null;
       }
 
       this.ratchetStates.set(peerId, state);
       await this.persistState(peerId);
+    } else {
+      // v1 peer (no ratchet support) — derive legacy shared secret only
+      const sharedSecret = await this.cryptoManager.deriveSharedSecret(
+        peerPublicKey,
+        undefined,
+        this.myPeerId,
+        peerId,
+      );
+      this.sharedSecrets.set(peerId, sharedSecret);
     }
   }
 
@@ -751,7 +833,15 @@ export class MessageProtocol {
 
     this.localOneTimePreKeys.clear();
     this.nextOneTimePreKeyId = 1;
-    await this.generateMoreOneTimePreKeys(PRE_KEY_POLICY.targetOneTimePreKeys);
+    // Generate a small initial batch synchronously, then schedule the rest
+    // to avoid blocking the UI thread (~600ms per key on Firefox P-256).
+    const initialCount = Math.min(INITIAL_PRE_KEY_BATCH_SIZE, PRE_KEY_POLICY.targetOneTimePreKeys);
+    await this.generateMoreOneTimePreKeys(initialCount);
+
+    const remaining = PRE_KEY_POLICY.targetOneTimePreKeys - initialCount;
+    if (remaining > 0) {
+      this.scheduleBackgroundPreKeyGeneration(remaining);
+    }
   }
 
   private async rotateLocalSignedPreKey(now = Date.now()): Promise<void> {
@@ -807,8 +897,17 @@ export class MessageProtocol {
     }
 
     if (oneTimePlan.replenishCount > 0) {
-      await this.generateMoreOneTimePreKeys(oneTimePlan.replenishCount);
-      changed = true;
+      if (oneTimePlan.replenishCount <= INITIAL_PRE_KEY_BATCH_SIZE) {
+        // Small replenish: generate inline
+        await this.generateMoreOneTimePreKeys(oneTimePlan.replenishCount);
+        changed = true;
+      } else {
+        // Large replenish: generate a small batch inline, rest in background
+        const inline = INITIAL_PRE_KEY_BATCH_SIZE;
+        await this.generateMoreOneTimePreKeys(inline);
+        changed = true;
+        this.scheduleBackgroundPreKeyGeneration(oneTimePlan.replenishCount - inline);
+      }
     }
 
     return changed;
@@ -829,6 +928,45 @@ export class MessageProtocol {
         createdAt: Date.now(),
       });
     }
+  }
+
+  /** Track background pre-key generation so we don't schedule it twice */
+  private backgroundPreKeyGenPromise: Promise<void> | null = null;
+
+  /**
+   * Generate additional one-time pre-keys in the background, yielding to the
+   * event loop between each key so the UI stays responsive. Persists the
+   * updated local state once all keys are generated.
+   */
+  private scheduleBackgroundPreKeyGeneration(count: number): void {
+    if (this.backgroundPreKeyGenPromise) return; // already scheduled
+
+    this.backgroundPreKeyGenPromise = (async () => {
+      const _yieldToEventLoop = () => new Promise<void>((r) => setTimeout(r, 0));
+      try {
+        for (let i = 0; i < count; i++) {
+          await _yieldToEventLoop();
+          const keyId = this.nextOneTimePreKeyId++;
+          const pair = await crypto.subtle.generateKey(
+            { name: 'ECDH', namedCurve: 'P-256' },
+            true,
+            ['deriveBits'],
+          );
+          this.localOneTimePreKeys.set(keyId, {
+            keyId,
+            publicKey: pair.publicKey,
+            privateKey: pair.privateKey,
+            createdAt: Date.now(),
+          });
+        }
+        // Persist the updated state now that all keys are generated
+        await this.persistLocalPreKeyState();
+      } catch (e) {
+        console.warn('[PreKey] Background pre-key generation failed:', e);
+      } finally {
+        this.backgroundPreKeyGenPromise = null;
+      }
+    })();
   }
 
   private async snapshotLocalPreKeyBundle(): Promise<PreKeyBundle> {
@@ -938,10 +1076,12 @@ export class MessageProtocol {
       if (!isValid) return null;
 
       // Validate public keys are importable ECDH keys.
-      await this.importEcdhPublicKey(normalized.signedPreKey.publicKey);
-      for (const entry of normalized.oneTimePreKeys) {
-        await this.importEcdhPublicKey(entry.publicKey);
-      }
+      // Parallelize the imports — each is ~50-200ms on Firefox P-256,
+      // so sequential validation of 20 keys would take 1-4 seconds.
+      await Promise.all([
+        this.importEcdhPublicKey(normalized.signedPreKey.publicKey),
+        ...normalized.oneTimePreKeys.map((entry) => this.importEcdhPublicKey(entry.publicKey)),
+      ]);
       return normalized;
     } catch {
       return null;

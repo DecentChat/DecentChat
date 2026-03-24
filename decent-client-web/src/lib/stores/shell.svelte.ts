@@ -136,6 +136,8 @@ export const shellData = $state({
     frequentReactions: [] as string[],
     scrollTargetMessageId: null as string | null,
     scrollTargetNonce: 0,
+    hasOlderMessages: false,
+    loadingOlder: false,
   },
 
   // Compose area
@@ -254,6 +256,7 @@ export interface ShellCallbacks {
   onShowMessageInfo: (messageId: string) => void;
   onImageClick: (name: string, src: string, attachmentId?: string) => void | Promise<void>;
   resolveAttachmentImageUrl?: (attachmentId: string) => Promise<string | null>;
+  loadOlderMessages?: (channelId: string) => Promise<number>;
 
   // Compose
   onSend: (text: string, files: File[]) => Promise<void>;

@@ -92,6 +92,7 @@ import type { AppState } from '../main';
 import { TopologyTelemetry } from './topology/TopologyTelemetry';
 import { TopologyAnomalyDetector } from './topology/TopologyAnomalyDetector';
 import type { TopologyDebugSnapshot, TopologyMaintenanceEvent, TopologyPeerEvent } from './topology/TopologyTelemetry';
+import { WorkspaceStateSyncDeduper, buildWorkspaceStateFingerprint } from './workspaceStateSyncDeduper';
 
 const PROTOCOL_VERSION = 2;
 const NEGENTROPY_SYNC_CAPABILITY = 'negentropy-sync-v1';
@@ -122,6 +123,7 @@ const DIRECTORY_REQUEST_FAILOVER_TIMEOUT_MS = 1200;
 const MEDIUM_WORKSPACE_MEMBER_THRESHOLD = 100;
 const IMPORTANT_SHARD_MIN_REPLICAS = 2;
 const IMPORTANT_SHARD_PREFERRED_REPLICAS = 3;
+const WORKSPACE_STATE_DUPLICATE_SUPPRESS_MS = 3000;
 
 const DEV_SIGNAL_PORT = Number((import.meta as any).env?.VITE_SIGNAL_PORT || 9000);
 const DEV_SIGNAL_WS = `ws://localhost:${DEV_SIGNAL_PORT}`;
@@ -180,6 +182,7 @@ interface PeerConnectionSnapshot {
 interface WorkspacePeerCandidate {
   peerId: string;
   role: 'owner' | 'admin' | 'member';
+  isBot: boolean;
   joinedAt?: number;
   connected: boolean;
   connecting: boolean;
@@ -337,7 +340,14 @@ export class ChatController {
   private readonly publishedPreKeyVersionByWorkspace = new Map<string, string>();
   private lastMessageSyncRequestAt = new Map<string, number>();
   private readonly messageSyncInFlight = new Map<string, Promise<void>>();
+  /** Global serialization lock: only one full message sync runs at a time across all peers.
+   *  This prevents concurrent timestamp-sync responses from piling up in the message queue
+   *  and starving the event loop for 30-60+ seconds. */
+  private _globalSyncLock: Promise<void> = Promise.resolve();
   private readonly retryUnackedInFlight = new Map<string, Promise<void>>();
+  /** Global concurrency gate: at most one retryUnackedOutgoingForPeer scan runs at a time.
+   *  Additional peers queue behind it so multiple O(allMessages) scans don't run concurrently. */
+  private _retryUnackedGlobalGate: Promise<void> = Promise.resolve();
   private directoryRequestFailoverTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   /** DEP-002: Peer Exchange for signaling server discovery */
@@ -347,6 +357,14 @@ export class ChatController {
   private pexBroadcastInterval: number | null = null;
   private _quotaCheckInterval: ReturnType<typeof setInterval> | null = null;
   private _peerMaintenanceInterval: ReturnType<typeof setInterval> | null = null;
+
+  /** Set to true once restoreFromStorage() completes. Heavy post-connect work
+   *  (retryUnackedOutgoing, message sync, manifest exchange) is deferred until
+   *  this flag is set so that crypto handshakes during restore don't pile onto
+   *  the main thread and extend the freeze. */
+  private _restoreComplete = false;
+  /** Queued post-connect work that was deferred because restore was in progress. */
+  private _deferredPostConnectPeers: string[] = [];
 
   // T3.2: Gossip propagation
   /** Max relay hops a message may travel (0 = sent by original author, 1 = relayed once, …) */
@@ -379,6 +397,7 @@ export class ChatController {
   private static readonly JOIN_CONNECT_CANDIDATE_CAP = 8;
   private static readonly POST_CONNECT_RETRY_UNACKED_MIN_MS = 12_000;
   private static readonly POST_CONNECT_MESSAGE_SYNC_MIN_MS = 5_000;
+  private static readonly OFFLINE_QUEUE_FLUSH_MIN_MS = 2_500;
   private static readonly MESSAGE_SYNC_MIN_INTERVAL_MS = 20_000;
   private static readonly WORKSPACE_SHELL_PREFETCH_MIN_MS = 10_000;
   /** Cold peers are retried sparsely to avoid noisy constant reconnect churn. */
@@ -386,7 +405,9 @@ export class ChatController {
   /** Join validation timeout: provisional join workspace must be confirmed by owner/member workspace-state. */
   private static readonly JOIN_VALIDATION_TIMEOUT_MS = 30_000;
   private static readonly PERIODIC_MESSAGE_SYNC_INTERVAL_MS = 120 * 1000;
-  private static readonly RETRY_UNACKED_SCAN_YIELD_EVERY = 300;
+  private static readonly RETRY_UNACKED_SCAN_YIELD_EVERY = 50;
+  /** Max messages per channel kept in memory.  Older ones stay in IDB only. */
+  private static readonly MAX_IN_MEMORY_MESSAGES_PER_CHANNEL = 500;
   private static readonly PARTIAL_MESH_ENABLED = true;
   private static readonly PARTIAL_MESH_DESKTOP_TARGET = 8;
   private static readonly PARTIAL_MESH_MOBILE_TARGET = 5;
@@ -459,9 +480,18 @@ export class ChatController {
   private readonly peerConnectRetryAfterAt = new Map<string, number>();
   private readonly peerLastConnectFailureAt = new Map<string, number>();
   private readonly workspaceStateConnectSweepAt = new Map<string, number>();
+  private readonly workspaceStateSyncDeduper = new WorkspaceStateSyncDeduper(WORKSPACE_STATE_DUPLICATE_SUPPRESS_MS);
   private readonly workspaceShellPrefetchAt = new Map<string, number>();
+  private readonly offlineQueueFlushInFlight = new Map<string, Promise<void>>();
+  private readonly lastOfflineQueueFlushAt = new Map<string, number>();
   private lastPostConnectRetryUnackedAt = 0;
   private lastPostConnectMessageSyncAt = 0;
+  /** Timestamps of recent handshake completions for burst stagger detection. */
+  private readonly recentHandshakeTimestamps: number[] = [];
+  private static readonly HANDSHAKE_BURST_WINDOW_MS = 3_000;
+  private static readonly HANDSHAKE_BURST_STAGGER_MS = 800;
+  /** Peers currently mid-handshake processing — prevents duplicate concurrent handshakes. */
+  private readonly handshakeInFlight = new Set<string>();
   private topologyTelemetry?: TopologyTelemetry;
   private topologyAnomalyDetector?: TopologyAnomalyDetector;
   private topologyDesiredSetByWorkspace?: Map<string, string[]>;
@@ -1178,6 +1208,7 @@ export class ChatController {
     };
 
     this.transport.onConnect = async (peerId: string) => {
+      const _t0 = performance.now();
       this.state.connectedPeers.add(peerId);
       this.state.connectingPeers.delete(peerId);
       this.peerConnectedAt.set(peerId, Date.now());
@@ -1198,12 +1229,16 @@ export class ChatController {
 
       try {
         const handshake = await this.messageProtocol!.createHandshake();
+        const _t1 = performance.now();
         this.sendControlWithRetry(peerId, {
           type: 'handshake',
           ...handshake,
           capabilities: this.getAdvertisedControlCapabilities(this.state.activeWorkspaceId ?? undefined),
         }, { label: 'handshake' });
-        void this.publishPreKeyBundle(peerId);
+        console.warn(`[PERF] onConnect(${peerId.slice(0,8)}): createHandshake=${(_t1-_t0).toFixed(1)}ms, total=${(performance.now()-_t0).toFixed(1)}ms`);
+        // Pre-key bundle publishing is handled in the handshake response handler
+        // after crypto negotiation completes — removed from here to avoid
+        // competing WebCrypto work during the connection burst.
       } catch (err) {
         console.error('Handshake failed:', err);
       }
@@ -1213,9 +1248,11 @@ export class ChatController {
       this.state.connectedPeers.delete(peerId);
       this.state.connectingPeers.delete(peerId);
       this.state.readyPeers.delete(peerId);
+      this.handshakeInFlight.delete(peerId);
       this.peerConnectedAt.delete(peerId);
       this.clearPendingDeliveryWatchesForPeer(peerId);
       this.pendingDeliveryRecoveryCooldowns.delete(peerId);
+      this.lastOfflineQueueFlushAt.delete(peerId);
       this.peerDisconnectCount.set(peerId, (this.peerDisconnectCount.get(peerId) ?? 0) + 1);
       this.recordTopologyPeerEvent({
         level: 'info',
@@ -1250,11 +1287,60 @@ export class ChatController {
         pending.reject(new Error('Host control peer disconnected during company sim request'));
         this.pendingCompanySimControlRequests.delete(requestId);
       }
+
+      // --- Per-peer in-flight guards: stale entries block future operations after reconnect ---
+      this.messageSyncInFlight.delete(peerId);
+      this.retryUnackedInFlight.delete(peerId);
+      this.offlineQueueFlushInFlight.delete(peerId);
+
+      // Clear scheduled flush timer so it doesn't fire after disconnect
+      const scheduledFlush = this.scheduledOfflineQueueFlushes.get(peerId);
+      if (scheduledFlush) {
+        clearTimeout(scheduledFlush);
+        this.scheduledOfflineQueueFlushes.delete(peerId);
+      }
+
+      // Remove disconnected peer from pending pre-key bundle fetch candidate sets
+      for (const [requestId, pending] of this.pendingPreKeyBundleFetches) {
+        pending.pendingPeerIds.delete(peerId);
+        // If no more candidates remain, resolve(false) and clean up
+        if (pending.pendingPeerIds.size === 0) {
+          clearTimeout(pending.timer);
+          this.pendingPreKeyBundleFetches.delete(requestId);
+          pending.resolve(false);
+        }
+      }
+
+      // Clean up pending streams from this peer (streaming messages that will never finish)
+      for (const [messageId, pending] of this.pendingStreams) {
+        if (pending.senderId === peerId) {
+          this.pendingStreams.delete(messageId);
+          // Mark the partial message as no longer streaming so the UI shows what arrived
+          const msg = this.findMessageById(messageId);
+          if (msg) {
+            (msg as any).streaming = false;
+            this.ui?.updateStreamingMessage?.(messageId, msg.content);
+          }
+        }
+      }
+
+      // Clean up active chunked transfers from this peer (partial downloads that will never finish)
+      // ChunkedReceiver doesn't track senderId, so we can't filter — but orphaned receivers
+      // will be cleaned up naturally when a re-request starts. Leave as-is for now.
+
+      // Release rate limiter token buckets for this peer (keeps reputation across reconnects)
+      this.messageGuard.rateLimiter.removePeer(peerId);
+
+      // Clear sync request throttle so reconnect can sync immediately
+      this.lastMessageSyncRequestAt.delete(peerId);
+
       this.ui?.updateSidebar({ refreshContacts: false });
     };
 
     this.transport.onMessage = async (peerId: string, rawData: unknown) => {
+      const _mt0 = performance.now();
       const data = rawData as any;
+      const _msgType = data?.type || 'unknown';
       this.markPeerSeen(peerId);
       
       // Rate limit + validate before any processing.
@@ -1543,6 +1629,17 @@ export class ChatController {
 
         // --- Handshake ---
         if (data?.type === 'handshake') {
+          const _ht0 = performance.now();
+          // Prevent concurrent handshake processing for the same peer.
+          // If a peer rapidly disconnects/reconnects, the previous handshake's
+          // heavy async work (ECDH, IndexedDB, sync) may still be running.
+          if (this.handshakeInFlight.has(peerId)) {
+            console.debug(`[P2P] Dropping duplicate handshake from ${peerId.slice(0, 8)} — already in progress`);
+            return;
+          }
+          this.handshakeInFlight.add(peerId);
+
+          try {
           // DEP-003 / MITM protection: if we have a pre-stored public key for this peer
           // (e.g. from an invite URL), verify the handshake key matches before accepting.
           const wsId = this.state.activeWorkspaceId;
@@ -1562,9 +1659,11 @@ export class ChatController {
             return;
           }
 
+          const _ht1 = performance.now();
           await this.messageProtocol?.clearRatchetState(peerId);
           this.messageProtocol?.clearSharedSecret(peerId);
           await this.messageProtocol!.processHandshake(peerId, data);
+          const _ht2 = performance.now();
 
           // --- PeerId↔PublicKey binding verification (anti-impersonation) ---
           if (data.publicKey) {
@@ -1579,6 +1678,7 @@ export class ChatController {
               return;
             }
           }
+          const _ht3 = performance.now();
 
           // --- Initiate challenge-response auth ---
           // Send a challenge; peer must prove they own the signing key.
@@ -1623,18 +1723,26 @@ export class ChatController {
               ...(preKeyWorkspaceId ? { workspaceId: preKeyWorkspaceId } : {}),
             }, { label: 'pre-key-bundle.request' });
           }
-          void this.publishPreKeyBundle(peerId);
+          // Defer pre-key bundle publishing by 2.5s so it doesn't compete with
+          // handshake crypto and the post-connect sync burst.
+          setTimeout(() => {
+            if (this.state.readyPeers.has(peerId)) {
+              void this.publishPreKeyBundle(peerId);
+            }
+          }, 2_500);
 
           this.state.readyPeers.add(peerId);
           this.ensurePeerInActiveWorkspace(peerId, data.publicKey);
 
           // Persist peer — PersistentStore is the single source of truth for peers.
+          const _ht4 = performance.now();
           await this.persistentStore.savePeer({
             peerId,
             publicKey: data.publicKey,
             lastSeen: Date.now(),
           });
           await this.keyStore.storePeerPublicKey(peerId, data.publicKey);
+          const _ht5 = performance.now();
 
           this.state.connectedPeers.add(peerId);
           this.ui?.updateSidebar({ refreshContacts: false });
@@ -1646,43 +1754,28 @@ export class ChatController {
           const shouldRunRetryUnacked = now - this.lastPostConnectRetryUnackedAt >= ChatController.POST_CONNECT_RETRY_UNACKED_MIN_MS;
           if (shouldRunRetryUnacked) {
             this.lastPostConnectRetryUnackedAt = now;
-            // Retry missed historical sends before flushing the queued outbox so we don't
-            // immediately re-send items that were just removed from the queue.
-            await this.retryUnackedOutgoingForPeer(peerId);
           }
 
-          await this.flushOfflineQueue(peerId);
-          await this.offerDeferredGossipIntentsToPeer(peerId);
-          await this.processDeferredGossipIntentsForPeer(peerId);
-
-          const shouldRunMessageSync = now - this.lastPostConnectMessageSyncAt >= ChatController.POST_CONNECT_MESSAGE_SYNC_MIN_MS;
-          if (shouldRunMessageSync) {
-            this.lastPostConnectMessageSyncAt = now;
-            this.requestMessageSync(peerId).catch(err => console.warn('[Sync] Message sync request failed:', err));
+          // Compute burst stagger BEFORE postConnectWork so both post-connect
+          // and heavy sync work use the same stagger index.
+          const cutoff = now - ChatController.HANDSHAKE_BURST_WINDOW_MS;
+          while (this.recentHandshakeTimestamps.length > 0 && this.recentHandshakeTimestamps[0] < cutoff) {
+            this.recentHandshakeTimestamps.shift();
           }
+          const burstIndex = this.recentHandshakeTimestamps.length; // 0 = first peer, 1 = second, etc.
+          this.recentHandshakeTimestamps.push(now);
 
-          this.sendManifestSummary(peerId);
-          if (shouldRunRetryUnacked) {
-            this.requestCustodyRecovery(peerId);
-          }
-
-          // Send workspace state to new peer.
-          // Use forceInclude so the peer receives state even if not yet in
-          // the member list (e.g. a restored device joining via invite — the
-          // invite adds membership on the joiner's side, but the host hasn't
-          // seen the join yet).
-          this.sendWorkspaceState(peerId, this.state.activeWorkspaceId ?? undefined, { forceInclude: true });
-
-          // Shell-first + paged directory sync path for scalable public workspaces.
-          // Rate-limit these requests so simultaneous handshakes don't trigger a flood.
-          if (this.state.activeWorkspaceId) {
-            const wsId = this.state.activeWorkspaceId;
-            const lastShellPrefetchAt = this.workspaceShellPrefetchAt.get(wsId) ?? 0;
-            if (now - lastShellPrefetchAt >= ChatController.WORKSPACE_SHELL_PREFETCH_MIN_MS) {
-              this.workspaceShellPrefetchAt.set(wsId, now);
-              this.requestWorkspaceShell(peerId, wsId);
-              void this.prefetchWorkspaceMemberDirectory(wsId, peerId);
+          // Defer heavy post-connect work until restore is complete.
+          // Connections arriving during restoreFromStorage() only get the
+          // handshake/crypto; the expensive O(allMessages) scans, sync
+          // requests, and offline-queue flushes wait until the app is ready.
+          if (!this._restoreComplete) {
+            console.log(`[PostConnect] deferring heavy work for ${peerId.slice(0, 8)} — restore in progress`);
+            if (!this._deferredPostConnectPeers.includes(peerId)) {
+              this._deferredPostConnectPeers.push(peerId);
             }
+          } else {
+            this._runPostConnectWork(peerId, burstIndex, shouldRunRetryUnacked);
           }
 
           // Announce our display name for this workspace
@@ -1705,6 +1798,10 @@ export class ChatController {
           // Start clock sync with new peer
           const syncReq = this.clockSync.startSync(peerId);
           this.sendControlWithRetry(peerId, syncReq, { label: 'time-sync-request' });
+          console.warn(`[PERF] handshake(${peerId.slice(0,8)}): verify=${(_ht1-_ht0).toFixed(1)}ms, crypto=${(_ht2-_ht1).toFixed(1)}ms, peerIdBind=${(_ht3-_ht2).toFixed(1)}ms, idb=${(_ht5-_ht4).toFixed(1)}ms, total=${(performance.now()-_ht0).toFixed(1)}ms`);
+          } finally {
+            this.handshakeInFlight.delete(peerId);
+          }
           return;
         }
 
@@ -2431,6 +2528,10 @@ export class ChatController {
           // Always update sidebar so unread badge appears on non-active channels
           this.ui?.updateSidebar({ refreshContacts: false });
         }
+        const _mtElapsed = performance.now() - _mt0;
+        if (_mtElapsed > 20) {
+          console.warn(`[PERF] onMessage(${peerId.slice(0,8)}, ${_msgType}): ${_mtElapsed.toFixed(1)}ms`);
+        }
       } catch (error) {
         console.error('Message processing failed:', error);
       }
@@ -2616,10 +2717,10 @@ export class ChatController {
       console.log(`[Sync] Peer ${peerId.slice(0, 8)} not yet a member of workspace ${ws.id.slice(0, 8)}, but forceInclude=true — sending state`);
     }
 
-    console.log(`[Sync] Sending workspace state to ${peerId.slice(0, 8)}:`, {
-      name: ws.name, channels: ws.channels.length, members: ws.members.length,
-      isPeerMember, peerInWs: ws.members.filter(m => m.peerId === peerId).map(m => m.alias)
-    });
+    console.log(
+      `[Sync] Sending workspace state to ${peerId.slice(0, 8)} `
+      + `(ws=${ws.id.slice(0, 8)} channels=${ws.channels.length} members=${ws.members.length} peerMember=${isPeerMember})`,
+    );
 
     this.sendControlWithRetry(peerId, {
       type: 'workspace-sync',
@@ -3387,9 +3488,6 @@ export class ChatController {
 
     // Handle workspace state sync (channels, members, name)
     if (msg.sync?.type === 'workspace-state' && msg.workspaceId) {
-      console.log('[Sync] Received workspace-state from', peerId.slice(0,8), 
-        'ws:', msg.sync?.name, 
-        'channels:', msg.sync?.channels?.map((c:any) => c.name));
       await this.handleWorkspaceStateSync(peerId, msg.workspaceId, msg.sync);
       return;
     }
@@ -3737,13 +3835,55 @@ export class ChatController {
     }
   }
 
+  private buildWorkspaceStateSnapshotForFingerprint(workspace: any): Record<string, unknown> {
+    return {
+      name: workspace?.name,
+      description: workspace?.description,
+      inviteCode: workspace?.inviteCode,
+      channels: Array.isArray(workspace?.channels)
+        ? workspace.channels.map((channel: any) => ({
+            id: channel?.id,
+            name: channel?.name,
+            type: channel?.type,
+            members: Array.isArray(channel?.members) ? channel.members : [],
+          }))
+        : [],
+      members: Array.isArray(workspace?.members)
+        ? workspace.members.map((member: any) => ({
+            peerId: member?.peerId,
+            alias: member?.alias,
+            role: member?.role,
+            isBot: member?.isBot === true,
+            allowWorkspaceDMs: member?.allowWorkspaceDMs !== false,
+          }))
+        : [],
+      bans: Array.isArray(workspace?.bans)
+        ? workspace.bans.map((ban: any) => ({
+            peerId: ban?.peerId,
+            bannedAt: ban?.bannedAt,
+          }))
+        : [],
+    };
+  }
+
+  private shouldPushWorkspaceStateOnConnect(_peerId: string, workspaceId?: string): boolean {
+    if (!workspaceId) return false;
+    const workspace = this.workspaceManager.getWorkspace(workspaceId);
+    if (!workspace) return false;
+    if (this.pendingJoinValidationTimers.has(workspaceId)) return true;
+    if (this.workspaceManager.isOwner(workspaceId, this.state.myPeerId)) return true;
+
+    // Non-owners skip eager full-state pushes on connect to avoid O(n^2)
+    // workspace-state storms in larger meshes.
+    return false;
+  }
+
   /**
    * Handle incoming workspace state sync — update local channels, members, and name
    * to match the peer's state. This ensures both peers see the same channels.
    */
   private async handleWorkspaceStateSync(peerId: string, remoteWorkspaceId: string, sync: any): Promise<void> {
-    console.log(`[Sync] Received workspace state from ${peerId.slice(0, 8)}:`, sync);
-
+    const _wst0 = performance.now();
     // Find matching local workspace deterministically:
     // 1) exact workspace ID, 2) matching invite code.
     // Do NOT fallback to active workspace here — that can merge state across unrelated workspaces.
@@ -3837,6 +3977,28 @@ export class ChatController {
         }
       }
     }
+
+    const senderIsOwner = this.workspaceManager.isOwner(localWs.id, peerId);
+    if (!senderIsOwner) {
+      const localIsOwner = this.workspaceManager.isOwner(localWs.id, this.state.myPeerId);
+      const connectedOwnerExists = localWs.members.some(
+        (member: any) => member.role === 'owner' && this.state.connectedPeers.has(member.peerId),
+      );
+      const joinValidationPending = this.pendingJoinValidationTimers.has(localWs.id);
+      if ((localIsOwner || connectedOwnerExists) && !joinValidationPending) {
+        return;
+      }
+    }
+
+    const stateFingerprint = buildWorkspaceStateFingerprint(remoteWorkspaceId, sync);
+    if (!this.workspaceStateSyncDeduper.shouldProcess(localWs.id, peerId, stateFingerprint)) {
+      return;
+    }
+
+    const beforeFingerprint = buildWorkspaceStateFingerprint(
+      localWs.id,
+      this.buildWorkspaceStateSnapshotForFingerprint(localWs),
+    );
 
     // Update workspace name if it was using the invite code as name
     if (sync.name && localWs.name !== sync.name) {
@@ -4007,6 +4169,35 @@ export class ChatController {
           }
         }
       }
+
+      // Identity-based dedup: when a peer regenerates its peerId (e.g. new
+      // device key, reinstall) the old member entry lingers with the stale
+      // peerId.  Multiple entries for the same identityId waste maintenance
+      // budget trying to reconnect to the ghost peerId.  Merge duplicates
+      // keeping the entry with the most recent joinedAt.
+      const byIdentity = new Map<string, typeof localWs.members[0][]>();
+      for (const m of localWs.members) {
+        if (!m.identityId) continue;
+        let group = byIdentity.get(m.identityId);
+        if (!group) { group = []; byIdentity.set(m.identityId, group); }
+        group.push(m);
+      }
+      for (const [, group] of byIdentity) {
+        if (group.length <= 1) continue;
+        // Keep the most recently joined (highest joinedAt).
+        group.sort((a, b) => (b.joinedAt || 0) - (a.joinedAt || 0));
+        const keeper = group[0];
+        for (let i = 1; i < group.length; i++) {
+          const stale = group[i];
+          // Preserve higher role from the stale entry if keeper has lower.
+          const rolePriority: Record<string, number> = { owner: 3, admin: 2, member: 1 };
+          if ((rolePriority[stale.role] || 0) > (rolePriority[keeper.role] || 0)) {
+            keeper.role = stale.role;
+          }
+          const idx = localWs.members.indexOf(stale);
+          if (idx >= 0) localWs.members.splice(idx, 1);
+        }
+      }
     }
 
     // Defensive revocation fallback:
@@ -4038,6 +4229,15 @@ export class ChatController {
       if (iAmMember && (ownerValidated || memberSnapshotValidated)) {
         this.markJoinValidated(localWs.id);
       }
+    }
+
+    const afterFingerprint = buildWorkspaceStateFingerprint(
+      localWs.id,
+      this.buildWorkspaceStateSnapshotForFingerprint(localWs),
+    );
+    const workspaceStateChanged = beforeFingerprint !== afterFingerprint;
+    if (!workspaceStateChanged) {
+      return;
     }
 
     // Reconcile connectivity after workspace-state merge.
@@ -4078,7 +4278,7 @@ export class ChatController {
       data: { channelCount: localWs.channels.length },
     });
     this.ui?.renderApp();
-    console.log(`[Sync] Workspace state synced from ${peerId.slice(0, 8)}`);
+    console.warn(`[PERF] handleWorkspaceStateSync(${peerId.slice(0,8)}): ${(performance.now()-_wst0).toFixed(1)}ms`);
 
     // Channel remaps and membership updates can land after an initial reconnect sync
     // request has already started. Ask for one follow-up sync; requestMessageSync
@@ -4240,17 +4440,124 @@ export class ChatController {
   // T2.5: Proactive Peer Maintenance
   // =========================================================================
 
-  /** Start the peer maintenance sweep (every 60s) */
+  /** Start the peer maintenance sweep (every 20s) */
   startPeerMaintenance(): void {
     if (this._peerMaintenanceInterval) return;
-    // Run immediately, then every 20 s.
-    // 20 s is fast enough to recover from a simultaneous dual-browser refresh
-    // (where both browsers finish loading within a few seconds of each other)
-    // without generating excessive signaling traffic.
-    this._runPeerMaintenance();
+    // Defer the first sweep by 5 s so it doesn't pile onto the main thread
+    // right after restoreFromStorage.  Subsequent sweeps run every 20 s.
+    setTimeout(() => this._runPeerMaintenance(), 5_000);
     this._peerMaintenanceInterval = setInterval(() => {
       this._runPeerMaintenance();
     }, 20_000);
+  }
+
+  /**
+   * Run the heavy post-connect work for a peer (retry unacked, flush offline
+   * queue, sync, manifest exchange, etc.).  Extracted so it can be deferred
+   * when connections arrive before restoreFromStorage completes.
+   */
+  private _runPostConnectWork(peerId: string, burstIndex: number, shouldRunRetryUnacked: boolean): void {
+    const _pcTag = peerId.slice(0, 8);
+    const _pcT0 = performance.now();
+    console.warn(`[PERF] _runPostConnectWork(${_pcTag}): START burstIndex=${burstIndex} retryUnacked=${shouldRunRetryUnacked}`);
+    // Fire-and-forget: chain retry → flush → gossip sequentially but
+    // don't block the rest of the handshake handler.
+    const postConnectStaggerMs = burstIndex * (ChatController.HANDSHAKE_BURST_STAGGER_MS / 2);
+    const postConnectWork = (async () => {
+      if (postConnectStaggerMs > 0) {
+        console.warn(`[PERF] _runPostConnectWork(${_pcTag}): staggering ${postConnectStaggerMs}ms`);
+        await new Promise<void>(r => setTimeout(r, postConnectStaggerMs));
+        if (!this.state.readyPeers.has(peerId)) { console.warn(`[PERF] _runPostConnectWork(${_pcTag}): peer left during stagger`); return; }
+      }
+      if (shouldRunRetryUnacked) {
+        const _t1 = performance.now();
+        await this.retryUnackedOutgoingForPeer(peerId);
+        console.warn(`[PERF] _runPostConnectWork(${_pcTag}): retryUnackedOutgoing=${(performance.now()-_t1).toFixed(1)}ms`);
+      }
+      const _t2 = performance.now();
+      await this.flushOfflineQueue(peerId);
+      console.warn(`[PERF] _runPostConnectWork(${_pcTag}): flushOfflineQueue=${(performance.now()-_t2).toFixed(1)}ms`);
+      const _t3 = performance.now();
+      await this.offerDeferredGossipIntentsToPeer(peerId);
+      console.warn(`[PERF] _runPostConnectWork(${_pcTag}): offerDeferredGossip=${(performance.now()-_t3).toFixed(1)}ms`);
+      const _t4 = performance.now();
+      await this.processDeferredGossipIntentsForPeer(peerId);
+      console.warn(`[PERF] _runPostConnectWork(${_pcTag}): processDeferredGossip=${(performance.now()-_t4).toFixed(1)}ms`);
+      console.warn(`[PERF] _runPostConnectWork(${_pcTag}): postConnectWork TOTAL=${(performance.now()-_pcT0).toFixed(1)}ms`);
+    })();
+    postConnectWork.catch(err => console.warn('[PostConnect] background work failed:', (err as Error)?.message || err));
+
+    // Heavy sync work — spread across time via burst stagger
+    const heavySyncStaggerMs = burstIndex * ChatController.HANDSHAKE_BURST_STAGGER_MS;
+    const runHeavySyncWork = () => {
+      const _hsT0 = performance.now();
+      if (!this.state.readyPeers.has(peerId)) { console.warn(`[PERF] _runPostConnectWork(${_pcTag}): heavySync skipped — peer left`); return; }
+
+      const shouldRunMessageSync = Date.now() - this.lastPostConnectMessageSyncAt >= ChatController.POST_CONNECT_MESSAGE_SYNC_MIN_MS;
+      if (shouldRunMessageSync) {
+        this.lastPostConnectMessageSyncAt = Date.now();
+        const _syncT0 = performance.now();
+        this.requestMessageSync(peerId)
+          .then(() => console.warn(`[PERF] _runPostConnectWork(${_pcTag}): requestMessageSync RESOLVED=${(performance.now()-_syncT0).toFixed(1)}ms`))
+          .catch(err => console.warn('[Sync] Message sync request failed:', err));
+      } else {
+        console.warn(`[PERF] _runPostConnectWork(${_pcTag}): messageSync SKIPPED (cooldown)`);
+      }
+
+      const _t5 = performance.now();
+      this.sendManifestSummary(peerId);
+      console.warn(`[PERF] _runPostConnectWork(${_pcTag}): sendManifestSummary=${(performance.now()-_t5).toFixed(1)}ms`);
+      if (shouldRunRetryUnacked) {
+        const _t6 = performance.now();
+        this.requestCustodyRecovery(peerId);
+        console.warn(`[PERF] _runPostConnectWork(${_pcTag}): requestCustodyRecovery=${(performance.now()-_t6).toFixed(1)}ms`);
+      }
+
+      const activeWorkspaceId = this.state.activeWorkspaceId ?? undefined;
+      if (this.shouldPushWorkspaceStateOnConnect(peerId, activeWorkspaceId)) {
+        const _t7 = performance.now();
+        this.sendWorkspaceState(peerId, activeWorkspaceId, { forceInclude: true });
+        console.warn(`[PERF] _runPostConnectWork(${_pcTag}): sendWorkspaceState=${(performance.now()-_t7).toFixed(1)}ms`);
+      }
+
+      if (this.state.activeWorkspaceId) {
+        const wsId = this.state.activeWorkspaceId;
+        const lastShellPrefetchAt = this.workspaceShellPrefetchAt.get(wsId) ?? 0;
+        if (Date.now() - lastShellPrefetchAt >= ChatController.WORKSPACE_SHELL_PREFETCH_MIN_MS) {
+          this.workspaceShellPrefetchAt.set(wsId, Date.now());
+          const _t8 = performance.now();
+          this.requestWorkspaceShell(peerId, wsId);
+          console.warn(`[PERF] _runPostConnectWork(${_pcTag}): requestWorkspaceShell=${(performance.now()-_t8).toFixed(1)}ms`);
+          void this.prefetchWorkspaceMemberDirectory(wsId, peerId);
+        }
+      }
+      console.warn(`[PERF] _runPostConnectWork(${_pcTag}): heavySync TOTAL=${(performance.now()-_hsT0).toFixed(1)}ms (stagger=${heavySyncStaggerMs}ms)`);
+    };
+
+    if (heavySyncStaggerMs > 0) {
+      setTimeout(runHeavySyncWork, heavySyncStaggerMs);
+    } else {
+      setTimeout(runHeavySyncWork, 50);
+    }
+  }
+
+  /**
+   * Called once restoreFromStorage completes.  Drains the deferred post-connect
+   * queue so peers that connected during restore get their heavy sync work.
+   */
+  private _flushDeferredPostConnectWork(): void {
+    const peers = this._deferredPostConnectPeers?.splice(0) ?? [];
+    console.warn(`[PERF] _flushDeferredPostConnectWork: ${peers.length} deferred peers`);
+    for (let i = 0; i < peers.length; i++) {
+      const peerId = peers[i];
+      if (!this.state.readyPeers.has(peerId)) { console.warn(`[PERF] _flushDeferredPostConnectWork: ${peerId.slice(0,8)} no longer ready, skipping`); continue; }
+      // Stagger each deferred peer by 500ms to avoid burst
+      setTimeout(() => {
+        if (!this.state.readyPeers.has(peerId)) return;
+        console.warn(`[PERF] _flushDeferredPostConnectWork: running deferred work for ${peerId.slice(0, 8)} (index=${i}, delay=${i * 500}ms)`);
+        this._runPostConnectWork(peerId, i, true);
+      }, i * 500);
+    }
   }
 
   private isLikelyOnlinePeer(peerId: string, joinedAt?: number, now = Date.now()): boolean {
@@ -4363,6 +4670,7 @@ export class ChatController {
         return {
           peerId,
           role: member.role as 'owner' | 'admin' | 'member',
+          isBot: !!member.isBot,
           joinedAt: member.joinedAt,
           connected: snapshot.connected.has(peerId),
           connecting: snapshot.connecting.has(peerId),
@@ -4415,6 +4723,11 @@ export class ChatController {
     if (candidate.presenceAggregator) score += 5;
 
     score -= Math.min(30, candidate.disconnectCount * 10);
+
+    // Deprioritize bot peers — they are useful for receiving messages but
+    // should not consume connection budget over human peers.  This prevents
+    // company-sim agents from crowding out real user connections.
+    if (candidate.isBot) score -= 20;
 
     return score;
   }
@@ -5437,6 +5750,35 @@ export class ChatController {
         : '';
       console.log(`[Maintenance] reconnect=${attempted} prune=${pruned} [likely=${likelyTargets.length}, cold=${coldTargets.length}]${desiredDetail}`);
     }
+
+    // Prune stale peer-tracking Map entries to prevent unbounded memory growth.
+    // Remove entries for peers that are not current workspace members and haven't
+    // been seen in over an hour.
+    const STALE_PEER_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
+    const knownMemberPeerIds = new Set<string>();
+    for (const workspace of this.workspaceManager.getAllWorkspaces()) {
+      for (const member of workspace.members) {
+        knownMemberPeerIds.add(member.peerId);
+      }
+    }
+    const peerTrackingMaps = [
+      this.peerLastSeenAt,
+      this.peerLastConnectAttemptAt,
+      this.peerLastSuccessfulSyncAt,
+      this.peerConnectedAt,
+      this.peerDisconnectCount,
+      this.peerExplorerLastUsedAt,
+    ] as const;
+    for (const map of peerTrackingMaps) {
+      for (const peerId of map.keys()) {
+        if (knownMemberPeerIds.has(peerId)) continue;
+        const lastSeen = this.peerLastSeenAt.get(peerId) ?? 0;
+        if (now - lastSeen > STALE_PEER_THRESHOLD_MS) {
+          map.delete(peerId);
+        }
+      }
+    }
+
     return attempted;
   }
 
@@ -5512,18 +5854,43 @@ export class ChatController {
   }
 
   async restoreFromStorage(): Promise<void> {
-    await this.loadCustodianInbox().catch((error) => {
-      console.warn('[Custody] Failed to load custodian inbox', error);
-    });
-    await this.loadDeferredGossipIntents().catch((error) => {
-      console.warn('[GossipIntent] Failed to load deferred gossip intents', error);
-    });
+    const _rst0 = performance.now();
 
-    const savedAlias = await this.persistentStore.getSetting('myAlias');
+    // Fire all independent IDB reads in parallel instead of serial awaits.
+    // Each getSetting creates its own IDB transaction — running them
+    // concurrently eliminates the per-transaction overhead.
+    const [
+      /* custodian */ ,
+      /* gossip */ ,
+      savedAlias,
+      savedThreadRoots,
+      savedActivity,
+      savedWsAliases,
+      rawInviteRegistry,
+      /* manifest */ ,
+      /* publicWs */ ,
+      persistedWorkspaces,
+    ] = await Promise.all([
+      this.loadCustodianInbox().catch((error) => {
+        console.warn('[Custody] Failed to load custodian inbox', error);
+      }),
+      this.loadDeferredGossipIntents().catch((error) => {
+        console.warn('[GossipIntent] Failed to load deferred gossip intents', error);
+      }),
+      this.persistentStore.getSetting('myAlias'),
+      this.persistentStore.getSetting('threadRoots'),
+      this.persistentStore.getSetting('activityItems'),
+      this.persistentStore.getSetting('workspaceAliases'),
+      this.persistentStore.getSetting(ChatController.WORKSPACE_INVITES_SETTING_KEY),
+      this.restoreManifestState(),
+      this.publicWorkspaceController.restoreFromStorage(),
+      this.persistentStore.getAllWorkspaces(),
+    ]);
+    console.warn(`[PERF] restore:parallelIDB=${(performance.now()-_rst0).toFixed(0)}ms`);
+
     if (savedAlias) this.state.myAlias = savedAlias;
 
     // Restore thread root snapshots from IndexedDB
-    const savedThreadRoots = await this.persistentStore.getSetting('threadRoots');
     if (savedThreadRoots && typeof savedThreadRoots === 'object') {
       for (const [threadId, snapshot] of Object.entries(savedThreadRoots)) {
         if (snapshot && typeof snapshot === 'object') {
@@ -5533,68 +5900,81 @@ export class ChatController {
     }
 
     // Restore activity feed from IndexedDB
-    const savedActivity = await this.persistentStore.getSetting('activityItems');
     if (Array.isArray(savedActivity)) {
       this.activityItems = savedActivity;
     }
 
-    const savedWsAliases = await this.persistentStore.getSetting('workspaceAliases');
     if (savedWsAliases) {
       try { this.state.workspaceAliases = JSON.parse(savedWsAliases); } catch {}
     }
 
-    const rawInviteRegistry = await this.persistentStore.getSetting(ChatController.WORKSPACE_INVITES_SETTING_KEY);
     this.workspaceInviteRegistry = normalizeWorkspaceInviteRegistry(rawInviteRegistry);
-
-    await this.restoreManifestState();
-
-    // Shell-first boot path: restore lightweight workspace shells and any persisted
-    // member-directory pages before hydrating full legacy workspace blobs.
-    await this.publicWorkspaceController.restoreFromStorage();
-
-    const persistedWorkspaces = await this.persistentStore.getAllWorkspaces();
     const hydratedWorkspaceIds = new Set<string>();
+    const _rstSync = performance.now();
+    console.warn(`[PERF] restore:settingsApply=${(_rstSync-_rst0).toFixed(0)}ms`);
     console.log('[DecentChat] restoreFromStorage: found', persistedWorkspaces.length, 'full workspaces');
     for (const ws of persistedWorkspaces) {
+      const _wsT0 = performance.now();
       hydratedWorkspaceIds.add(ws.id);
       this.workspaceManager.importWorkspace(ws);
+      const _wsT1 = performance.now();
       this.publicWorkspaceController.ingestWorkspaceSnapshot(ws);
+      const _wsT2 = performance.now();
       await this.manifestStore.restoreWorkspace(ws.id);
+      const _wsT3 = performance.now();
 
       // DEP-002: Restore server discovery for this workspace
       await this.restoreServerDiscovery(ws.id, getDefaultSignalingServer());
+      const _wsT4 = performance.now();
+      console.warn(`[PERF] restore:ws(${ws.id.slice(0,8)}) import=${(_wsT1-_wsT0).toFixed(1)}ms ingest=${(_wsT2-_wsT1).toFixed(1)}ms manifest=${(_wsT3-_wsT2).toFixed(1)}ms serverDisc=${(_wsT4-_wsT3).toFixed(1)}ms total=${(_wsT4-_wsT0).toFixed(1)}ms`);
+      const _rstMsgStart = performance.now();
 
+      // Batch-load messages for ALL channels in a single IDB transaction.
+      // This replaces the old per-channel serial loop that created N separate
+      // IDB transactions and awaited each one — major perf win on restore.
+      const channelIds = ws.channels.map((ch: { id: string }) => ch.id);
+      const channelMessages = await this.persistentStore.getRecentMessagesForChannels(channelIds, 200);
+      const _rstMsgLoaded = performance.now();
+      console.warn(`[PERF] restore:batchIDB=${(_rstMsgLoaded-_rstMsgStart).toFixed(0)}ms channels=${channelIds.length} loaded=${channelMessages.size}`);
+
+      let channelCount = 0;
+      let totalMsgCount = 0;
       for (const channel of ws.channels) {
-        const messages = await this.persistentStore.getChannelMessages(channel.id);
-        const crdt = this.getOrCreateCRDT(channel.id);
+        const messages = channelMessages.get(channel.id);
+        if (!messages || messages.length === 0) continue;
+        totalMsgCount += messages.length;
+
+        // Fix streaming flags before bulk-insert (mutates in-place, lightweight)
         for (const msg of messages) {
-          try {
-            this.messageStore.forceAdd(msg);
-          } catch {}
-          // Clear streaming flag on recovered messages (interrupted streams)
           if ((msg as any).streaming) {
             (msg as any).streaming = false;
             this.persistMessage(msg).catch(() => {});
           }
-          try {
-            const crdtMsg = {
-              id: msg.id,
-              channelId: msg.channelId,
-              senderId: msg.senderId,
-              content: msg.content,
-              type: (msg.type || 'text') as any,
-              vectorClock: msg.vectorClock || {},
-              wallTime: msg.timestamp,
-              prevHash: msg.prevHash || '',
-            };
-            crdt.addMessage(crdtMsg);
-          } catch {}
-          // Register attachment metadata in MediaStore for images sent by us
+        }
+
+        // Bulk-insert into MessageStore — O(n log n) instead of per-message
+        // forceAdd which was O(n²) due to linear duplicate scan on growing array.
+        this.messageStore.bulkAdd(messages);
+
+        // Bulk-merge into CRDT — uses Map-based dedup (O(1) per message).
+        const crdt = this.getOrCreateCRDT(channel.id);
+        const crdtMsgs = messages.map(msg => ({
+          id: msg.id,
+          channelId: msg.channelId,
+          senderId: msg.senderId,
+          content: msg.content,
+          type: (msg.type || 'text') as any,
+          vectorClock: msg.vectorClock || {},
+          wallTime: msg.timestamp,
+          prevHash: msg.prevHash || '',
+        }));
+        crdt.merge(crdtMsgs);
+
+        // Register attachment metadata (fire-and-forget async lookups)
+        for (const msg of messages) {
           if ((msg as any).attachments?.length) {
             for (const att of (msg as any).attachments) {
-              // Only register if not already present (blob may or may not exist)
               if (!this.mediaStore.getAttachment(att.id)) {
-                // Check if blob exists locally (for attachments we sent)
                 const blobKey = `media:${ws.id}:${att.id}`;
                 this.blobStorage.has(blobKey).then(hasBlob => {
                   this.mediaStore.registerMeta(ws.id, att, hasBlob ? 'available' : 'pruned');
@@ -5605,9 +5985,18 @@ export class ChatController {
             }
           }
         }
+
+        // Yield every 5 channels so the event loop can service connections
+        // that arrived during the restore phase.
+        channelCount++;
+        if (channelCount % 5 === 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        }
       }
+      console.warn(`[PERF] restore:channelProcess=${(performance.now()-_rstMsgLoaded).toFixed(0)}ms channels=${channelCount} msgs=${totalMsgCount}`);
     }
 
+    console.warn(`[PERF] restore:wsLoop=${(performance.now()-_rstSync).toFixed(0)}ms`);
     const staleOwnedShells = this.publicWorkspaceController.findStaleOwnedShellPlaceholders(
       this.state.myPeerId,
       hydratedWorkspaceIds,
@@ -5628,6 +6017,13 @@ export class ChatController {
       this.startQuotaChecks();      // T2.4
       this.startGossipCleanup();    // T3.2
     }
+
+    // Mark restore complete and flush any deferred post-connect work for
+    // peers that connected during the restore phase.
+    this._restoreComplete = true;
+    this._flushDeferredPostConnectWork();
+
+    console.warn(`[PERF] restoreFromStorage: ${(performance.now()-_rst0).toFixed(1)}ms`);
   }
 
   async persistWorkspace(workspaceId: string): Promise<void> {
@@ -7291,25 +7687,27 @@ export class ChatController {
     // Re-import persisted conversations directly to preserve IDs
     for (const conv of conversations) {
       (this.directConversationStore as any).conversations?.set(conv.id, conv);
-      // Restore messages for this conversation
-      const messages = await this.persistentStore.getChannelMessages(conv.id);
+      // Restore only the most recent messages for this conversation
+      const messages = await this.persistentStore.getRecentChannelMessages(conv.id, 200);
+      if (messages.length === 0) continue;
+
+      // Bulk-insert into MessageStore — O(n log n) instead of per-message
+      // forceAdd which was O(n²) due to linear duplicate scan.
+      this.messageStore.bulkAdd(messages);
+
+      // Bulk-merge into CRDT
       const crdt = this.getOrCreateCRDT(conv.id);
-      for (const msg of messages) {
-        try { this.messageStore.forceAdd(msg); } catch {}
-        try {
-          const crdtMsg = {
-            id: msg.id,
-            channelId: msg.channelId,
-            senderId: msg.senderId,
-            content: msg.content,
-            type: (msg.type || 'text') as any,
-            vectorClock: msg.vectorClock || {},
-            wallTime: msg.timestamp,
-            prevHash: msg.prevHash || '',
-          };
-          crdt.addMessage(crdtMsg);
-        } catch {}
-      }
+      const crdtMsgs = messages.map(msg => ({
+        id: msg.id,
+        channelId: msg.channelId,
+        senderId: msg.senderId,
+        content: msg.content,
+        type: (msg.type || 'text') as any,
+        vectorClock: msg.vectorClock || {},
+        wallTime: msg.timestamp,
+        prevHash: msg.prevHash || '',
+      }));
+      crdt.merge(crdtMsgs);
     }
   }
 
@@ -8801,6 +9199,75 @@ export class ChatController {
     return (store.getMessages(channelId) as any[])?.length ?? 0;
   }
 
+  /** In-flight guard per channel to prevent overlapping loadOlderMessages calls. */
+  private _loadingOlder = new Set<string>();
+  /** Channels where we know IDB has no older messages than what's in memory. */
+  private _noOlderMessages = new Set<string>();
+
+  /**
+   * Whether older messages may exist in IDB for a channel beyond what's in memory.
+   */
+  hasOlderMessages(channelId: string): boolean {
+    if (this._noOlderMessages.has(channelId)) return false;
+    // If the channel was loaded at startup with windowing (≤200) or trimmed,
+    // there might be older messages.  We conservatively return true unless we
+    // have explicit evidence there aren't any.
+    return this.messageStore.getMessages(channelId).length > 0;
+  }
+
+  /**
+   * Load older messages from IndexedDB and prepend them to the in-memory store.
+   * Called by the UI when the user scrolls to the top of a channel.
+   * Returns the number of messages actually prepended (0 means nothing older exists).
+   */
+  async loadOlderMessages(channelId: string, batchSize = 100): Promise<number> {
+    if (!channelId) return 0;
+    if (this._loadingOlder.has(channelId)) return 0;
+    this._loadingOlder.add(channelId);
+
+    try {
+      const currentMsgs = this.messageStore.getMessages(channelId);
+      const oldestTimestamp = currentMsgs.length > 0 ? currentMsgs[0].timestamp : Date.now();
+
+      const older = await this.persistentStore.getOlderChannelMessages(channelId, oldestTimestamp, batchSize);
+      if (older.length === 0) {
+        this._noOlderMessages.add(channelId);
+        return 0;
+      }
+      if (older.length < batchSize) {
+        // Fetched fewer than requested — we've reached the beginning of history.
+        this._noOlderMessages.add(channelId);
+      }
+
+      // Prepend into MessageStore (handles dedup by ID).
+      const prepended = this.messageStore.prependMessages(channelId, older);
+
+      // Also add to CRDT for dedup consistency.
+      if (prepended > 0) {
+        const crdt = this.getOrCreateCRDT(channelId);
+        for (const msg of older) {
+          try {
+            crdt.addMessage({
+              id: msg.id, channelId: msg.channelId, senderId: msg.senderId,
+              content: msg.content,
+              type: (msg.type || 'text') as 'text' | 'file' | 'system',
+              vectorClock: msg.vectorClock || {},
+              wallTime: msg.timestamp,
+              prevHash: msg.prevHash || '',
+            });
+          } catch { /* dup safe to ignore */ }
+        }
+
+        // Re-render so the UI sees the new messages.
+        this.ui?.renderMessages();
+      }
+
+      return prepended;
+    } finally {
+      this._loadingOlder.delete(channelId);
+    }
+  }
+
   private async queueCustodyEnvelope(peerId: string, envelope: Parameters<CustodyStore['storeEnvelope']>[0], fallbackPayload?: any): Promise<void> {
     if (this.custodyStore && typeof this.custodyStore.storeEnvelope === 'function') {
       await this.custodyStore.storeEnvelope(envelope);
@@ -8813,18 +9280,20 @@ export class ChatController {
 
   private scheduleOfflineQueueFlush(peerId: string, delayMs = 250): void {
     if (!peerId) return;
-    const existing = this.scheduledOfflineQueueFlushes.get(peerId);
+    const flushMap = this.scheduledOfflineQueueFlushes;
+    if (!flushMap) return;
+    const existing = flushMap.get(peerId);
     if (existing) return;
 
     const timer = setTimeout(() => {
-      this.scheduledOfflineQueueFlushes.delete(peerId);
+      flushMap.delete(peerId);
       if (!this.state.readyPeers.has(peerId)) return;
       this.flushOfflineQueue(peerId).catch((err) => {
         console.warn('[OfflineQueue] scheduled flush failed:', (err as Error)?.message || err);
       });
     }, delayMs);
 
-    this.scheduledOfflineQueueFlushes.set(peerId, timer);
+    flushMap.set(peerId, timer);
   }
 
   private pendingDeliveryWatchKey(peerId: string, messageId: string): string {
@@ -8875,7 +9344,9 @@ export class ChatController {
 
     const timer = setTimeout(() => {
       timers.delete(key);
-      if (!this.state.readyPeers.has(peerId)) return;
+      // Guard against stale timers firing after controller teardown (or in test
+      // environments where the controller prototype mock is incomplete).
+      if (!this.state?.readyPeers?.has(peerId)) return;
       if (!this.isMessagePendingForPeer(channelId, messageId, peerId)) return;
 
       const now = Date.now();
@@ -8885,14 +9356,16 @@ export class ChatController {
       cooldowns.set(peerId, now);
 
       this.scheduleOfflineQueueFlush(peerId, 250);
-      this.retryUnackedOutgoingForPeer(peerId).catch((err) => {
+      this.retryUnackedOutgoingForPeer?.(peerId)?.catch?.((err: unknown) => {
         console.warn('[DeliveryWatch] retryUnackedOutgoingForPeer failed:', (err as Error)?.message || err);
       });
       if (workspaceId) {
-        this.requestCustodyRecovery(peerId);
-        this.requestMessageSync(peerId).catch((err) => {
-          console.warn('[DeliveryWatch] requestMessageSync failed:', (err as Error)?.message || err);
-        });
+        this.requestCustodyRecovery?.(peerId);
+        if (!this.messageSyncInFlight?.has(peerId)) {
+          this.requestMessageSync(peerId).catch((err) => {
+            console.warn('[DeliveryWatch] requestMessageSync failed:', (err as Error)?.message || err);
+          });
+        }
       }
     }, delayMs);
 
@@ -9014,8 +9487,10 @@ export class ChatController {
     const deltas = Array.isArray(data?.deltas) ? (data.deltas as ManifestDelta[]) : [];
     let needsMessageSync = false;
 
+    // Apply all deltas in a batch — this persists workspace state only once
+    // at the end instead of per-delta (avoids O(N * stateSize) serialization).
+    this.manifestStore.applyDeltaBatch(deltas);
     for (const delta of deltas) {
-      this.manifestStore.applyDelta(delta);
       if (delta.domain === 'channel-message') needsMessageSync = true;
     }
 
@@ -9446,35 +9921,62 @@ export class ChatController {
     if (!peerId) return;
     const inFlight = this.messageSyncInFlight.get(peerId);
     if (inFlight) {
+      console.warn(`[PERF] requestMessageSync(${peerId.slice(0,8)}): returning existing in-flight promise`);
       return inFlight;
     }
 
     const now = Date.now();
     const last = this.lastMessageSyncRequestAt.get(peerId) ?? 0;
     if (now - last < ChatController.MESSAGE_SYNC_MIN_INTERVAL_MS) {
+      console.warn(`[PERF] requestMessageSync(${peerId.slice(0,8)}): skipped (cooldown, ${now - last}ms since last)`);
       return;
     }
 
+    const _syncTag = peerId.slice(0, 8);
+    const _syncT0 = performance.now();
+    console.warn(`[PERF] requestMessageSync(${_syncTag}): START`);
+
     const runOnce = async (): Promise<void> => {
-      const workspaceId = this.resolveTopologyWorkspaceId(peerId);
-      this.lastMessageSyncRequestAt.set(peerId, Date.now());
+      // Stagger syncs globally: wait for any prior sync's request to be sent before
+      // starting ours.  With per-peer message queues, response chunks from different
+      // peers process in parallel, but staggering requests still avoids flooding
+      // the signaling/transport layer with simultaneous sync request sends.
+      const _lockT0 = performance.now();
+      await this._globalSyncLock;
+      console.warn(`[PERF] requestMessageSync(${_syncTag}): waited for globalSyncLock=${(performance.now()-_lockT0).toFixed(1)}ms`);
+      let releaseLock: () => void;
+      this._globalSyncLock = new Promise<void>((resolve) => { releaseLock = resolve; });
 
       try {
+        const workspaceId = this.resolveTopologyWorkspaceId(peerId);
+        this.lastMessageSyncRequestAt.set(peerId, Date.now());
+
         // Use Negentropy (set reconciliation) when peer supports it — efficient
         // for reconnects where both sides have mostly the same data.
         // If Negentropy fails/times out, gracefully fall back to timestamp sync
         // instead of failing the entire sync for freshly joined/restored peers.
         if (this.peerSupportsCapability(peerId, NEGENTROPY_SYNC_CAPABILITY)) {
-          console.log(`[Sync] Using Negentropy sync with ${peerId.slice(0, 8)}`);
+          console.warn(`[PERF] requestMessageSync(${_syncTag}): using Negentropy sync`);
           try {
+            const _negT0 = performance.now();
             await this.requestNegentropyMessageSync(peerId);
+            console.warn(`[PERF] requestMessageSync(${_syncTag}): Negentropy completed=${(performance.now()-_negT0).toFixed(1)}ms`);
           } catch (error) {
-            console.warn(`[Sync] Negentropy failed for ${peerId.slice(0, 8)}, falling back to timestamp sync:`, error);
+            console.warn(`[Sync] Negentropy failed for ${_syncTag}, falling back to timestamp sync:`, error);
+            const _tsT0 = performance.now();
             await this.requestTimestampMessageSync(peerId);
+            console.warn(`[PERF] requestMessageSync(${_syncTag}): timestamp fallback=${(performance.now()-_tsT0).toFixed(1)}ms`);
           }
         } else {
-          console.log(`[Sync] Peer ${peerId.slice(0, 8)} lacks Negentropy, falling back to timestamp sync`);
+          console.warn(`[PERF] requestMessageSync(${_syncTag}): using timestamp sync (no Negentropy)`);
+          const _tsT0 = performance.now();
           await this.requestTimestampMessageSync(peerId);
+          console.warn(`[PERF] requestMessageSync(${_syncTag}): timestamp sync=${(performance.now()-_tsT0).toFixed(1)}ms`);
+          // Give the first peer's response chunks time to flow through before
+          // the next peer's sync request fires.  Timestamp sync is fire-and-forget
+          // (responses arrive asynchronously), so a brief grace period here
+          // significantly reduces interleaving.
+          await new Promise<void>((resolve) => setTimeout(resolve, 500));
         }
         this.peerLastSuccessfulSyncAt.set(peerId, Date.now());
         this.recordTopologyPeerEvent({
@@ -9484,15 +9986,18 @@ export class ChatController {
           event: 'sync-succeeded',
           lastSyncAt: this.peerLastSuccessfulSyncAt.get(peerId),
         });
+        console.warn(`[PERF] requestMessageSync(${_syncTag}): TOTAL=${(performance.now()-_syncT0).toFixed(1)}ms`);
       } catch (error) {
         this.recordTopologyPeerEvent({
           level: 'warn',
-          workspaceId,
+          workspaceId: this.resolveTopologyWorkspaceId(peerId),
           peerId,
           event: 'sync-failed',
           reason: (error as Error)?.message ?? String(error),
         });
         throw error;
+      } finally {
+        releaseLock!();
       }
     };
 
@@ -9796,96 +10301,94 @@ export class ChatController {
       console.warn(`[Sync] Truncated message-sync-response for ${peerId.slice(0, 8)}: ${originalCount} -> ${MAX_SYNC_MESSAGES} messages`);
     }
 
-    // Chunk to avoid WebSocket frame size limits
-    const CHUNK_SIZE = 100;
+    // Send in larger chunks (was 100, now 500) to reduce the number of separate
+    // _messageQueue entries on the receiver.  Each chunk triggers a full
+    // handleMessageSyncResponse call with dedup-set construction, so fewer chunks
+    // = less redundant work.  Yield between sends so the event loop can breathe.
+    const CHUNK_SIZE = 500;
     for (let i = 0; i < allMessages.length; i += CHUNK_SIZE) {
       this.transport.send(peerId, {
         type: 'message-sync-response',
         workspaceId: wsId,
         messages: allMessages.slice(i, i + CHUNK_SIZE),
       });
+      if (i + CHUNK_SIZE < allMessages.length) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
     }
   }
 
   private async handleMessageSyncResponse(_peerId: string, data: any): Promise<void> {
+    const _msrT0 = performance.now();
+    const _msrTag = _peerId.slice(0, 8);
     try {
       const wsId = data.workspaceId;
       if (!wsId) { console.log('[Sync] handleMessageSyncResponse: no wsId'); return; }
       const ws = this.workspaceManager.getWorkspace(wsId);
       if (!ws) { console.log('[Sync] handleMessageSyncResponse: no workspace for', wsId); return; }
-      if (!ws.members.some((m: any) => m.peerId === _peerId)) { console.log('[Sync] handleMessageSyncResponse: peer not member', _peerId.slice(0, 8)); return; }
+      if (!ws.members.some((m: any) => m.peerId === _peerId)) { console.log('[Sync] handleMessageSyncResponse: peer not member', _msrTag); return; }
 
       const messages: any[] = data.messages || [];
-      console.log(`[Sync] handleMessageSyncResponse: ${messages.length} msgs from ${_peerId.slice(0, 8)} at ${Date.now()}`);
-      if (messages.length === 0) return;
+      if (messages.length === 0) { console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): 0 messages, skipping`); return; }
+      console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): START, ${messages.length} messages`);
 
       const channelIds = new Set(ws.channels.map((ch: any) => ch.id));
-      // Pre-build lookup maps per channel so sync can both dedup and repair
-      // already-present partial streamed messages with the full synced content.
-      const existingById = new Map<string, Map<string, PlaintextMessage>>();
-      for (const chId of channelIds) {
-        existingById.set(chId, new Map(this.messageStore.getMessages(chId).map(m => [m.id, m] as const)));
-      }
 
-      // Build reverse channel mapping: if message has an unknown channelId,
-      // map it to ANY local channel with the same name (handles post-remap mismatches)
+      // Track IDs seen in this chunk to dedup within the chunk itself.
+      const seenInChunk = new Set<string>();
+
       const unknownChannelRemap = new Map<string, string>();
-
-      let added = 0;
       let touchedActiveChannel = false;
-      const toSync: any[] = [];
-
-      // Phase 1: bulk insert via bulkAdd — O(n log n) instead of O(n²)
       const toInsert: any[] = [];
+      const toRepair: any[] = [];
+
+      const _phase1T0 = performance.now();
       for (const msg of messages) {
         let targetChannelId = msg.channelId;
         if (!channelIds.has(targetChannelId)) {
-          // Channel ID mismatch — try to map to a local channel
           if (unknownChannelRemap.has(targetChannelId)) {
             targetChannelId = unknownChannelRemap.get(targetChannelId)!;
-          } else {
-            // Incoming sync payloads do not carry channel names, so only remap when
-            // this workspace has exactly one local channel.
-            if (ws.channels.length === 1) {
-              const firstLocalCh = ws.channels[0]?.id;
-              if (firstLocalCh) {
-                unknownChannelRemap.set(targetChannelId, firstLocalCh);
-                targetChannelId = firstLocalCh;
-                console.log(`[Sync] Remapping unknown channel ${msg.channelId.slice(0, 8)} → ${firstLocalCh.slice(0, 8)}`);
-              } else {
-                continue;
-              }
+          } else if (ws.channels.length === 1) {
+            const firstLocalCh = ws.channels[0]?.id;
+            if (firstLocalCh) {
+              unknownChannelRemap.set(targetChannelId, firstLocalCh);
+              targetChannelId = firstLocalCh;
             } else {
-              console.warn(`[Sync] Skipping message ${msg.id?.slice?.(0, 8) || 'unknown'}: unknown channel ${msg.channelId?.slice?.(0, 8) || 'unknown'} in multi-channel workspace ${ws.id.slice(0, 8)}`);
               continue;
             }
+          } else {
+            continue;
           }
         }
-        if (!existingById.has(targetChannelId)) {
-          existingById.set(targetChannelId, new Map(this.messageStore.getMessages(targetChannelId).map(m => [m.id, m] as const)));
-        }
 
-        const existing = existingById.get(targetChannelId)!.get(msg.id);
-        if (existing) {
-          const incomingContent = typeof msg.content === 'string' ? msg.content : '';
-          const existingContent = typeof existing.content === 'string' ? existing.content : '';
-          const shouldRepair = incomingContent !== existingContent && (
-            incomingContent.length > existingContent.length ||
-            Boolean((existing as any).streaming)
-          );
+        // O(1) dedup check via the per-channel CRDT (Map-based) instead of
+        // scanning the entire message store across all workspace channels.
+        const crdt = this.getOrCreateCRDT(targetChannelId);
+        const alreadyKnown = crdt.hasMessage(msg.id) || seenInChunk.has(msg.id);
 
-          if (shouldRepair) {
-            existing.content = incomingContent;
-            existing.threadId = msg.threadId ?? existing.threadId;
-            existing.timestamp = Math.max(existing.timestamp, msg.timestamp || existing.timestamp);
-            existing.type = (msg.type || existing.type || 'text') as 'text' | 'file' | 'system';
-            existing.status = 'delivered';
-            (existing as any).streaming = false;
-            if (msg.vectorClock) {
-              (existing as any).vectorClock = msg.vectorClock;
+        if (alreadyKnown) {
+          // Check if this is a stream-repair (partial → full content).
+          // We only need the heavier Map lookup for messages that already exist.
+          const existingMsgs = this.messageStore.getMessages(targetChannelId);
+          const existing = existingMsgs.find(m => m.id === msg.id);
+          if (existing) {
+            const incomingContent = typeof msg.content === 'string' ? msg.content : '';
+            const existingContent = typeof existing.content === 'string' ? existing.content : '';
+            const shouldRepair = incomingContent !== existingContent && (
+              incomingContent.length > existingContent.length ||
+              Boolean((existing as any).streaming)
+            );
+            if (shouldRepair) {
+              existing.content = incomingContent;
+              existing.threadId = msg.threadId ?? existing.threadId;
+              existing.timestamp = Math.max(existing.timestamp, msg.timestamp || existing.timestamp);
+              existing.type = (msg.type || existing.type || 'text') as 'text' | 'file' | 'system';
+              existing.status = 'delivered';
+              (existing as any).streaming = false;
+              if (msg.vectorClock) (existing as any).vectorClock = msg.vectorClock;
+              toRepair.push(existing);
+              if (targetChannelId === this.state.activeChannelId) touchedActiveChannel = true;
             }
-            toSync.push(existing);
-            if (targetChannelId === this.state.activeChannelId) touchedActiveChannel = true;
           }
           continue;
         }
@@ -9904,57 +10407,81 @@ export class ChatController {
         };
 
         toInsert.push(syncMsg);
-        existingById.get(targetChannelId)!.set(msg.id, syncMsg as PlaintextMessage);
-        toSync.push(syncMsg);
+        seenInChunk.add(msg.id);
         if (targetChannelId === this.state.activeChannelId) touchedActiveChannel = true;
       }
+      console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): phase1 dedup=${(performance.now()-_phase1T0).toFixed(1)}ms, toInsert=${toInsert.length}, toRepair=${toRepair.length}`);
+
+      // Bulk-insert new messages — O(n log n) via push + sort, single call.
+      const _bulkT0 = performance.now();
       this.messageStore.bulkAdd(toInsert);
+      console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): bulkAdd=${(performance.now()-_bulkT0).toFixed(1)}ms`);
 
-      added = toSync.length;
+      // Yield to event loop so UI/connections can breathe between Phase 1 and Phase 2.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-      // Phase 2: CRDT + persist — deferred to not block message availability
-      // Messages are already in-memory and queryable via bulkAdd above.
-      setTimeout(() => {
-        const persistTasks: Array<Promise<void>> = [];
-        for (const msg of toSync) {
-          try {
-            const crdt = this.getOrCreateCRDT(msg.channelId);
-            crdt.addMessage({
-              id: msg.id, channelId: msg.channelId, senderId: msg.senderId,
-              content: msg.content, type: msg.type,
-              vectorClock: msg.vectorClock || {}, wallTime: msg.timestamp,
-              prevHash: msg.prevHash || '',
-            });
-          } catch { /* CRDT dup safe to ignore */ }
-          persistTasks.push(this.persistMessage(msg));
+      // Phase 2: CRDT integration (synchronous but lightweight — Map-based dedup)
+      const _crdtT0 = performance.now();
+      const toSync = [...toInsert, ...toRepair];
+      for (const msg of toSync) {
+        try {
+          const crdt = this.getOrCreateCRDT(msg.channelId);
+          crdt.addMessage({
+            id: msg.id, channelId: msg.channelId, senderId: msg.senderId,
+            content: msg.content, type: msg.type,
+            vectorClock: msg.vectorClock || {}, wallTime: msg.timestamp,
+            prevHash: msg.prevHash || '',
+          });
+        } catch { /* CRDT dup safe to ignore */ }
+      }
+      console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): phase2 CRDT=${(performance.now()-_crdtT0).toFixed(1)}ms, synced=${toSync.length}`);
+
+      // Phase 3: Batch-persist to IndexedDB in a single transaction instead of
+      // N concurrent individual puts that saturate the IDB transaction pool.
+      if (toSync.length > 0) {
+        const _idbT0 = performance.now();
+        try {
+          await this.persistentStore.saveMessages(toSync);
+          console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): phase3 IDB persist=${(performance.now()-_idbT0).toFixed(1)}ms`);
+        } catch (err) {
+          console.warn('[Sync] Batch persist error:', err);
         }
-        if (persistTasks.length > 0) {
-          Promise.all(persistTasks).catch(err =>
-            console.warn('[Sync] Batch persist error:', err),
-          );
+      }
+
+      // Phase 3.5: Trim in-memory stores so a single long-running session
+      // doesn't grow RAM unboundedly.  Evicted messages stay in IDB.
+      const _trimT0 = performance.now();
+      const trimmedChannels = new Set<string>();
+      for (const msg of toSync) {
+        if (!trimmedChannels.has(msg.channelId)) {
+          trimmedChannels.add(msg.channelId);
+          this.trimChannelMemory(msg.channelId);
         }
-      }, 0);
+      }
+      console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): phase3.5 trim=${(performance.now()-_trimT0).toFixed(1)}ms, channels=${trimmedChannels.size}`);
+
       if (touchedActiveChannel) {
         this.ui?.renderMessages();
       }
 
       // Record activity for synced thread replies + mentions (batch)
-      const activityLenBeforeSync = this.activityItems.length;
-      const activityUnreadBeforeSync = this.getActivityUnreadCount();
-      for (const msg of toSync) {
-        if (msg.senderId === this.state.myPeerId) continue;
-
-        this.maybeRecordMentionActivity(msg as any, msg.channelId, wsId);
-        if (msg.threadId) {
-          this.maybeRecordThreadActivity(msg as any, msg.channelId);
+      if (toSync.length > 0) {
+        const activityLenBefore = this.activityItems.length;
+        const activityUnreadBefore = this.getActivityUnreadCount();
+        for (const msg of toSync) {
+          if (msg.senderId === this.state.myPeerId) continue;
+          this.maybeRecordMentionActivity(msg as any, msg.channelId, wsId);
+          if (msg.threadId) {
+            this.maybeRecordThreadActivity(msg as any, msg.channelId);
+          }
+        }
+        if (this.activityItems.length !== activityLenBefore
+          || this.getActivityUnreadCount() !== activityUnreadBefore) {
+          this.ui?.updateChannelHeader();
+          this.ui?.updateWorkspaceRail?.();
         }
       }
-      const syncActivityChanged = this.activityItems.length !== activityLenBeforeSync
-        || this.getActivityUnreadCount() !== activityUnreadBeforeSync;
-      if (syncActivityChanged) {
-        this.ui?.updateChannelHeader();
-        this.ui?.updateWorkspaceRail?.();
-      }
+      console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): TOTAL=${(performance.now()-_msrT0).toFixed(1)}ms`);
     } catch (err) {
       console.error('[Sync] handleMessageSyncResponse FATAL:', (err as any)?.message, (err as any)?.stack);
     }
@@ -9969,6 +10496,20 @@ export class ChatController {
       this.messageCRDTs.set(channelId, new MessageCRDT(this.state.myPeerId));
     }
     return this.messageCRDTs.get(channelId)!;
+  }
+
+  /**
+   * Trim a channel's in-memory data (MessageStore + CRDT) to
+   * MAX_IN_MEMORY_MESSAGES_PER_CHANNEL.  Oldest messages are evicted from RAM
+   * but remain in IndexedDB.
+   */
+  private trimChannelMemory(channelId: string): void {
+    const cap = ChatController.MAX_IN_MEMORY_MESSAGES_PER_CHANNEL;
+    const evicted = this.messageStore.trimChannel(channelId, cap);
+    if (evicted > 0) {
+      const crdt = this.messageCRDTs.get(channelId);
+      if (crdt) crdt.trimChannel(channelId, cap);
+    }
   }
 
   private extractQueuedOpId(item: any): string | null {
@@ -10074,6 +10615,17 @@ export class ChatController {
     };
     const currentStatus = (msg.status ?? 'pending') as 'pending' | 'sent' | 'delivered' | 'read';
     const nextStatus = rank[currentStatus] > rank[computedStatus] ? currentStatus : computedStatus;
+    const currentRecipients = Array.isArray((msg as any).recipientPeerIds)
+      ? ((msg as any).recipientPeerIds as string[]).filter((value) => typeof value === 'string' && value.length > 0)
+      : [];
+    const normalizedCurrentRecipients = [...currentRecipients].sort();
+    const normalizedNextRecipients = [...recipients].sort();
+    const recipientsChanged = normalizedCurrentRecipients.length !== normalizedNextRecipients.length
+      || normalizedCurrentRecipients.some((value, index) => value !== normalizedNextRecipients[index]);
+
+    if (!recipientsChanged && nextStatus === currentStatus) {
+      return;
+    }
 
     if (recipients.length > 0) {
       (msg as any).recipientPeerIds = recipients;
@@ -10105,9 +10657,23 @@ export class ChatController {
     if (!this.state.readyPeers.has(peerId)) return;
 
     const inFlight = this.retryUnackedInFlight.get(peerId);
-    if (inFlight) return inFlight;
+    if (inFlight) { console.warn(`[PERF] retryUnacked(${peerId.slice(0,8)}): returning existing in-flight`); return inFlight; }
+
+    const _ruTag = peerId.slice(0, 8);
+    const _ruT0 = performance.now();
+    console.warn(`[PERF] retryUnacked(${_ruTag}): START`);
+
+    // Serialize globally: wait for any other peer's scan to finish first
+    // so we don't run N concurrent O(allMessages) scans.
+    const prevGate = this._retryUnackedGlobalGate;
 
     const task = (async () => {
+      const _gateT0 = performance.now();
+      await prevGate;
+      console.warn(`[PERF] retryUnacked(${_ruTag}): waited for globalGate=${(performance.now()-_gateT0).toFixed(1)}ms`);
+      if (!this.state.readyPeers.has(peerId)) { console.warn(`[PERF] retryUnacked(${_ruTag}): peer left while waiting`); return; }
+
+      const _qT0 = performance.now();
       const queued = typeof (this.offlineQueue as any).listQueued === 'function'
         ? await this.offlineQueue.listQueued(peerId)
         : await this.offlineQueue.getQueued(peerId);
@@ -10116,19 +10682,25 @@ export class ChatController {
         const opId = this.extractQueuedOpId(item);
         if (opId) queuedMessageIds.add(opId);
       }
+      console.warn(`[PERF] retryUnacked(${_ruTag}): offlineQueue fetch=${(performance.now()-_qT0).toFixed(1)}ms, queuedIds=${queuedMessageIds.size}`);
 
       if (this.custodyStore && typeof this.custodyStore.listAllForRecipient === 'function') {
+        const _cT0 = performance.now();
         const pendingEnvelopes = await this.custodyStore.listAllForRecipient(peerId);
         for (const envelope of pendingEnvelopes) {
           if (typeof envelope?.opId === 'string' && envelope.opId.length > 0) {
             queuedMessageIds.add(envelope.opId);
           }
         }
+        console.warn(`[PERF] retryUnacked(${_ruTag}): custodyStore fetch=${(performance.now()-_cT0).toFixed(1)}ms, totalQueuedIds=${queuedMessageIds.size}`);
       }
 
       const candidates: PlaintextMessage[] = [];
       let scanned = 0;
+      const _scanT0 = performance.now();
+      let channelCount = 0;
       for (const channelId of this.messageStore.getAllChannelIds()) {
+        channelCount++;
         const channelMessages = this.messageStore.getMessages(channelId) as PlaintextMessage[];
         for (const msg of channelMessages) {
           scanned += 1;
@@ -10150,10 +10722,12 @@ export class ChatController {
           candidates.push(msg);
         }
       }
+      console.warn(`[PERF] retryUnacked(${_ruTag}): scan=${(performance.now()-_scanT0).toFixed(1)}ms, channels=${channelCount}, scanned=${scanned}, candidates=${candidates.length}`);
 
       candidates.sort((a, b) => a.timestamp - b.timestamp);
 
       let replayed = 0;
+      const _replayT0 = performance.now();
       for (const msg of candidates) {
         if (!this.state.readyPeers.has(peerId)) break;
 
@@ -10187,6 +10761,8 @@ export class ChatController {
           console.warn('[OfflineQueue] resend/reconcile failed for', msg.id, (error as Error)?.message || error);
         }
       }
+      console.warn(`[PERF] retryUnacked(${_ruTag}): replay=${(performance.now()-_replayT0).toFixed(1)}ms, replayed=${replayed}`);
+      console.warn(`[PERF] retryUnacked(${_ruTag}): TOTAL=${(performance.now()-_ruT0).toFixed(1)}ms`);
     })().finally(() => {
       if (this.retryUnackedInFlight.get(peerId) === task) {
         this.retryUnackedInFlight.delete(peerId);
@@ -10194,156 +10770,193 @@ export class ChatController {
     });
 
     this.retryUnackedInFlight.set(peerId, task);
+    // Chain onto the global gate so the next peer waits for us to finish
+    this._retryUnackedGlobalGate = task.catch(() => {});
     return task;
   }
 
-  private async flushOfflineQueue(peerId: string): Promise<void> {
-    // Non-destructive replay: never dequeue before successful transport.send().
-    // This prevents message loss during reconnect/refresh races.
-    const queued = await this.offlineQueue.getQueued(peerId);
+  private async flushOfflineQueue(peerId: string, options?: { bypassCooldown?: boolean }): Promise<void> {
+    if (!peerId) return;
 
-    let delivered = 0;
-    let failed = 0;
-    let hitBackpressure = false;
+    const inFlight = this.offlineQueueFlushInFlight.get(peerId);
+    if (inFlight) return inFlight;
 
-    for (const item of queued as any[]) {
-      const queuedPayload = item?.data ?? item;
-      const custodyEnvelope = this.isCustodyEnvelope(queuedPayload) ? queuedPayload : null;
-      let envelope = custodyEnvelope ? custodyEnvelope.ciphertext : queuedPayload;
+    const now = Date.now();
+    const lastFlushAt = this.lastOfflineQueueFlushAt.get(peerId) ?? 0;
+    if (!options?.bypassCooldown && now - lastFlushAt < ChatController.OFFLINE_QUEUE_FLUSH_MIN_MS) {
+      return;
+    }
 
-      // Deferred plaintext fallback is intentional: these outbox entries were queued
-      // only when encryption state was unavailable. Re-encrypt now that handshake is ready.
-      if ((envelope as any)?._deferred) {
-        try {
-          const deferred = envelope as any;
-          const encrypted = await this.encryptMessageWithPreKeyBootstrap(peerId, deferred.content, deferred.workspaceId);
-          (encrypted as any).channelId = deferred.channelId;
-          (encrypted as any).workspaceId = deferred.workspaceId;
-          (encrypted as any).threadId = deferred.threadId;
-          (encrypted as any).vectorClock = deferred.vectorClock;
-          (encrypted as any).messageId = deferred.messageId;
-          (encrypted as any).timestamp = deferred.timestamp;
-          if (deferred.isDirect) {
-            (encrypted as any).isDirect = true;
-          }
-          if (deferred.workspaceContextId) {
-            (encrypted as any).workspaceContextId = deferred.workspaceContextId;
-          }
-          if (deferred.metadata) {
-            (encrypted as any).metadata = deferred.metadata;
-          }
-          if (Array.isArray(deferred.attachments) && deferred.attachments.length > 0) {
-            (encrypted as any).attachments = deferred.attachments;
-          }
-          if (deferred._originalMessageId) {
-            (encrypted as any)._originalMessageId = deferred._originalMessageId;
-          }
-          if (deferred._gossipOriginalSender) {
-            (encrypted as any)._gossipOriginalSender = deferred._gossipOriginalSender;
-          }
-          if (typeof deferred._gossipHop === 'number') {
-            (encrypted as any)._gossipHop = deferred._gossipHop;
-          }
+    const task = (async () => {
+      this.lastOfflineQueueFlushAt.set(peerId, Date.now());
 
-          // Include thread root snapshot for thread messages
-          if (deferred.threadId) {
-            const threadRoot = this.messageStore.getThreadRoot(deferred.threadId);
-            if (threadRoot) {
-              (encrypted as any).threadRootSnapshot = {
-                senderId: threadRoot.senderId,
-                senderIdentityId: (threadRoot as any).senderIdentityId,
-                content: threadRoot.content,
-                timestamp: threadRoot.timestamp,
-                attachments: (threadRoot as any).attachments,
-              };
+      // Non-destructive replay: never dequeue before successful transport.send().
+      // This prevents message loss during reconnect/refresh races.
+      const queued = await this.offlineQueue.getQueued(peerId);
+
+      let delivered = 0;
+      let failed = 0;
+      let hitBackpressure = false;
+      const deliveredIds: number[] = [];  // Batch-remove after loop
+
+      for (const item of queued as any[]) {
+        const queuedPayload = item?.data ?? item;
+        const custodyEnvelope = this.isCustodyEnvelope(queuedPayload) ? queuedPayload : null;
+        let envelope = custodyEnvelope ? custodyEnvelope.ciphertext : queuedPayload;
+
+        // Deferred plaintext fallback is intentional: these outbox entries were queued
+        // only when encryption state was unavailable. Re-encrypt now that handshake is ready.
+        if ((envelope as any)?._deferred) {
+          try {
+            const deferred = envelope as any;
+            const encrypted = await this.encryptMessageWithPreKeyBootstrap(peerId, deferred.content, deferred.workspaceId);
+            (encrypted as any).channelId = deferred.channelId;
+            (encrypted as any).workspaceId = deferred.workspaceId;
+            (encrypted as any).threadId = deferred.threadId;
+            (encrypted as any).vectorClock = deferred.vectorClock;
+            (encrypted as any).messageId = deferred.messageId;
+            (encrypted as any).timestamp = deferred.timestamp;
+            if (deferred.isDirect) {
+              (encrypted as any).isDirect = true;
+            }
+            if (deferred.workspaceContextId) {
+              (encrypted as any).workspaceContextId = deferred.workspaceContextId;
+            }
+            if (deferred.metadata) {
+              (encrypted as any).metadata = deferred.metadata;
+            }
+            if (Array.isArray(deferred.attachments) && deferred.attachments.length > 0) {
+              (encrypted as any).attachments = deferred.attachments;
+            }
+            if (deferred._originalMessageId) {
+              (encrypted as any)._originalMessageId = deferred._originalMessageId;
+            }
+            if (deferred._gossipOriginalSender) {
+              (encrypted as any)._gossipOriginalSender = deferred._gossipOriginalSender;
+            }
+            if (typeof deferred._gossipHop === 'number') {
+              (encrypted as any)._gossipHop = deferred._gossipHop;
+            }
+
+            // Include thread root snapshot for thread messages
+            if (deferred.threadId) {
+              const threadRoot = this.messageStore.getThreadRoot(deferred.threadId);
+              if (threadRoot) {
+                (encrypted as any).threadRootSnapshot = {
+                  senderId: threadRoot.senderId,
+                  senderIdentityId: (threadRoot as any).senderIdentityId,
+                  content: threadRoot.content,
+                  timestamp: threadRoot.timestamp,
+                  attachments: (threadRoot as any).attachments,
+                };
+              } else if (deferred.threadRootSnapshot) {
+                (encrypted as any).threadRootSnapshot = deferred.threadRootSnapshot;
+              }
             } else if (deferred.threadRootSnapshot) {
               (encrypted as any).threadRootSnapshot = deferred.threadRootSnapshot;
             }
-          } else if (deferred.threadRootSnapshot) {
-            (encrypted as any).threadRootSnapshot = deferred.threadRootSnapshot;
-          }
 
-          envelope = encrypted;
-        } catch (encryptErr) {
-          console.error('[OfflineQueue] deferred encrypt failed for', peerId, encryptErr);
+            envelope = encrypted;
+          } catch (encryptErr) {
+            console.error('[OfflineQueue] deferred encrypt failed for', peerId, encryptErr);
+            failed += 1;
+            if (typeof item?.id === 'number') {
+              await this.offlineQueue.markAttempt(peerId, item.id);
+            }
+            continue;
+          }
+        }
+
+        if (!envelope || typeof envelope !== 'object') {
+          if (typeof item?.id === 'number') {
+            deliveredIds.push(item.id);
+          }
+          continue;
+        }
+
+        // Mark replayed outbox traffic so receiver can route it through trusted
+        // replay lane instead of normal chat throttling.
+        (envelope as any)._offlineReplay = 1;
+        if (custodyEnvelope && !(envelope as any).envelopeId) {
+          (envelope as any).envelopeId = custodyEnvelope.envelopeId;
+        }
+
+        try {
+          const sent = this.transport.send(peerId, envelope);
+          if (!sent) {
+            // Transport backpressure/transient readiness race. Keep item queued
+            // and retry shortly without increasing attempt counters.
+            hitBackpressure = true;
+            break;
+          }
+          // Collect for batch-remove after the loop.
+          if (typeof item?.id === 'number') {
+            deliveredIds.push(item.id);
+          }
+          delivered += 1;
+
+          const msgId = custodyEnvelope?.opId ?? (envelope as any)?.messageId ?? (item?.data ?? item)?.messageId;
+          const watchChannelId = custodyEnvelope?.channelId ?? (envelope as any)?.channelId ?? (item?.data ?? item)?.channelId;
+          const watchWorkspaceId = custodyEnvelope?.workspaceId && custodyEnvelope.workspaceId !== 'direct'
+            ? custodyEnvelope.workspaceId
+            : ((item?.data ?? item)?.workspaceId || undefined);
+          if (watchChannelId && msgId) {
+            this.schedulePendingDeliveryWatch(peerId, watchChannelId, msgId, watchWorkspaceId);
+          }
+          await this.reconcileReplayedOutgoingMessage(peerId, msgId);
+        } catch (err) {
           failed += 1;
           if (typeof item?.id === 'number') {
             await this.offlineQueue.markAttempt(peerId, item.id);
           }
-          continue;
+          console.error('Failed to deliver queued message to', peerId, err);
         }
       }
 
-      if (!envelope || typeof envelope !== 'object') {
-        if (typeof item?.id === 'number') {
-          await this.offlineQueue.remove(peerId, item.id);
+      // Batch-remove all delivered/discarded items in a single IDB transaction
+      if (deliveredIds.length > 0) {
+        try {
+          await this.offlineQueue.removeBatch(peerId, deliveredIds);
+        } catch (batchErr) {
+          console.error('[OfflineQueue] batch remove failed, falling back to individual:', batchErr);
+          for (const id of deliveredIds) {
+            await this.offlineQueue.remove(peerId, id).catch(() => {});
+          }
         }
-        continue;
       }
 
-      // Mark replayed outbox traffic so receiver can route it through trusted
-      // replay lane instead of normal chat throttling.
-      (envelope as any)._offlineReplay = 1;
-      if (custodyEnvelope && !(envelope as any).envelopeId) {
-        (envelope as any).envelopeId = custodyEnvelope.envelopeId;
+      if (delivered > 0) {
+        this.ui?.showToast(
+          `📬 Delivered ${delivered} queued message${delivered > 1 ? 's' : ''} to ${peerId.slice(0, 8)}`,
+          'success',
+        );
+      }
+      if (failed > 0) {
+        this.ui?.showToast(
+          `⚠️ ${failed} queued message${failed > 1 ? 's' : ''} still pending for ${peerId.slice(0, 8)}`,
+          'error',
+        );
       }
 
-      try {
-        const sent = this.transport.send(peerId, envelope);
-        if (!sent) {
-          // Transport backpressure/transient readiness race. Keep item queued
-          // and retry shortly without increasing attempt counters.
-          hitBackpressure = true;
-          break;
-        }
-        // Remove only after successful transport acceptance.
-        if (typeof item?.id === 'number') {
-          await this.offlineQueue.remove(peerId, item.id);
-        }
-        delivered += 1;
-
-        const msgId = custodyEnvelope?.opId ?? (envelope as any)?.messageId ?? (item?.data ?? item)?.messageId;
-        const watchChannelId = custodyEnvelope?.channelId ?? (envelope as any)?.channelId ?? (item?.data ?? item)?.channelId;
-        const watchWorkspaceId = custodyEnvelope?.workspaceId && custodyEnvelope.workspaceId !== 'direct'
-          ? custodyEnvelope.workspaceId
-          : ((item?.data ?? item)?.workspaceId || undefined);
-        if (watchChannelId && msgId) {
-          this.schedulePendingDeliveryWatch(peerId, watchChannelId, msgId, watchWorkspaceId);
-        }
-        await this.reconcileReplayedOutgoingMessage(peerId, msgId);
-      } catch (err) {
-        failed += 1;
-        if (typeof item?.id === 'number') {
-          await this.offlineQueue.markAttempt(peerId, item.id);
-        }
-        console.error('Failed to deliver queued message to', peerId, err);
+      // Retry pending queue shortly while peer remains ready.
+      // Use fast retry after transient backpressure, otherwise normal retry.
+      if (failed > 0 || hitBackpressure) {
+        setTimeout(() => {
+          if (this.state.readyPeers.has(peerId)) {
+            this.flushOfflineQueue(peerId, { bypassCooldown: hitBackpressure }).catch((err) => {
+              console.warn('[OfflineQueue] retry flush failed:', (err as Error)?.message || err);
+            });
+          }
+        }, hitBackpressure ? 250 : 1_500);
       }
-    }
+    })().finally(() => {
+      if (this.offlineQueueFlushInFlight.get(peerId) === task) {
+        this.offlineQueueFlushInFlight.delete(peerId);
+      }
+    });
 
-    if (delivered > 0) {
-      this.ui?.showToast(
-        `📬 Delivered ${delivered} queued message${delivered > 1 ? 's' : ''} to ${peerId.slice(0, 8)}`,
-        'success',
-      );
-    }
-    if (failed > 0) {
-      this.ui?.showToast(
-        `⚠️ ${failed} queued message${failed > 1 ? 's' : ''} still pending for ${peerId.slice(0, 8)}`,
-        'error',
-      );
-    }
-
-    // Retry pending queue shortly while peer remains ready.
-    // Use fast retry after transient backpressure, otherwise normal retry.
-    if (failed > 0 || hitBackpressure) {
-      setTimeout(() => {
-        if (this.state.readyPeers.has(peerId)) {
-          this.flushOfflineQueue(peerId).catch((err) => {
-            console.warn('[OfflineQueue] retry flush failed:', (err as Error)?.message || err);
-          });
-        }
-      }, hitBackpressure ? 250 : 1_500);
-    }
+    this.offlineQueueFlushInFlight.set(peerId, task);
+    return task;
   }
 
   private isPublicWorkspaceDeliveryChannel(workspaceId?: string, channelId?: string): boolean {

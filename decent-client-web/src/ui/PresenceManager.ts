@@ -117,7 +117,14 @@ export class PresenceManager {
 
   destroy(): void {
     clearInterval(this.cleanupInterval);
+    this.typingState.clear();
+    this.readReceipts.clear();
+    this.subscriptionsByScope.clear();
+    this.scopeByPeerId.clear();
+    this.aggregatesByWorkspace.clear();
+    this.peerPresenceByWorkspace.clear();
     this.pageStateByScope.clear();
+    this.activeScope = null;
   }
 
   /**

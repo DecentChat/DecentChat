@@ -73,12 +73,15 @@ export class DoubleRatchet {
   /**
    * Initialize ratchet as the INITIATOR (Alice).
    * Alice sent first message, so she does the first DH ratchet step.
+   * If a pre-generated DH key pair is supplied, it's used directly to avoid
+   * the ~600ms P-256 generateKey cost on Firefox.
    */
   static async initAlice(
     sharedSecret: ArrayBuffer,
     peerDHPublicKey: CryptoKey,
+    preGeneratedDHKeyPair?: CryptoKeyPair,
   ): Promise<RatchetState> {
-    const dhKeyPair = await generateDHKeyPair();
+    const dhKeyPair = preGeneratedDHKeyPair ?? await generateDHKeyPair();
     const { rootKey, chainKey } = await rootKDF(
       sharedSecret,
       await deriveSharedSecret(dhKeyPair.privateKey, peerDHPublicKey),

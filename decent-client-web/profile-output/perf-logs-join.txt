@@ -1,0 +1,35 @@
+[warning] [PERF] restore:parallelIDB=1ms
+[warning] [PERF] restore:settingsApply=1ms
+[warning] [PERF] restore:wsLoop=0ms
+[warning] [PERF] _flushDeferredPostConnectWork: 0 deferred peers
+[warning] [PERF] restoreFromStorage: 0.8ms
+[warning] [PERF] main: restore=1ms migrate=0ms contacts=0ms
+[warning] [Transport] markConnected: firing onConnect for 98057f7f outbound via wss://0.peerjs.com/
+[warning] [PERF] onConnect(98057f7f): createHandshake=0.5ms, total=1.2ms
+[warning] [PERF] _runPostConnectWork(98057f7f): START burstIndex=0 retryUnacked=true
+[warning] [PERF] retryUnacked(98057f7f): START
+[warning] [PERF] handshake(98057f7f): verify=0.0ms, crypto=1.5ms, peerIdBind=0.2ms, idb=0.4ms, total=3.0ms
+[warning] [PERF] retryUnacked(98057f7f): waited for globalGate=0.4ms
+[warning] [PERF] retryUnacked(98057f7f): offlineQueue fetch=4.0ms, queuedIds=0
+[warning] [PERF] retryUnacked(98057f7f): custodyStore fetch=1.7ms, totalQueuedIds=0
+[warning] [PERF] retryUnacked(98057f7f): scan=0.0ms, channels=0, scanned=0, candidates=0
+[warning] [PERF] retryUnacked(98057f7f): replay=0.0ms, replayed=0
+[warning] [PERF] retryUnacked(98057f7f): TOTAL=6.2ms
+[warning] [PERF] _runPostConnectWork(98057f7f): retryUnackedOutgoing=6.3ms
+[warning] [PERF] _runPostConnectWork(98057f7f): flushOfflineQueue=0.7ms
+[warning] [PERF] _runPostConnectWork(98057f7f): offerDeferredGossip=0.1ms
+[warning] [PERF] _runPostConnectWork(98057f7f): processDeferredGossip=0.0ms
+[warning] [PERF] _runPostConnectWork(98057f7f): postConnectWork TOTAL=7.2ms
+[warning] [PERF] requestMessageSync(98057f7f): START
+[warning] [PERF] _runPostConnectWork(98057f7f): sendManifestSummary=0.2ms
+[warning] [PERF] _runPostConnectWork(98057f7f): requestCustodyRecovery=0.1ms
+[warning] [PERF] _runPostConnectWork(98057f7f): sendWorkspaceState=0.5ms
+[warning] [PERF] _runPostConnectWork(98057f7f): requestWorkspaceShell=0.0ms
+[warning] [PERF] _runPostConnectWork(98057f7f): heavySync TOTAL=1.0ms (stagger=0ms)
+[warning] [PERF] requestMessageSync(98057f7f): waited for globalSyncLock=0.9ms
+[warning] [PERF] requestMessageSync(98057f7f): using Negentropy sync
+[warning] [PERF] requestMessageSync(98057f7f): returning existing in-flight promise
+[warning] [PERF] Long task: 56ms (name=self)
+[warning] [PERF] requestMessageSync(98057f7f): timestamp fallback=0.2ms
+[warning] [PERF] requestMessageSync(98057f7f): TOTAL=8001.8ms
+[warning] [PERF] _runPostConnectWork(98057f7f): requestMessageSync RESOLVED=8001.9ms

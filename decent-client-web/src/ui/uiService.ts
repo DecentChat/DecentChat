@@ -112,6 +112,9 @@ export function createUIService(
   let sidebarSyncQueued = false;
   let sidebarNeedsContactsRefresh = false;
   let contactsRefreshInFlight = false;
+  let messageSyncQueued = false;
+  let headerSyncQueued = false;
+  let appRenderQueued = false;
 
   async function refreshContactsCache(): Promise<void> {
     const requestSeq = ++contactsCacheRefreshSeq;
@@ -159,6 +162,7 @@ export function createUIService(
     getFrequentReactions,
     peerStatusClass,
     peerStatusTitle,
+    hasOlderMessages: callbacks.hasOlderMessages,
   });
 
   const {
@@ -300,14 +304,36 @@ export function createUIService(
     shellData.view = 'welcome';
   }
 
+  function scheduleAppRender(): void {
+    if (appRenderQueued) return;
+    appRenderQueued = true;
+    const run = () => {
+      appRenderQueued = false;
+      hideLoading();
+      syncShellAll();
+      shellData.view = 'app';
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else setTimeout(run, 16);
+  }
+
   function renderApp(): void {
-    hideLoading();
-    syncShellAll();
-    shellData.view = 'app';
+    scheduleAppRender();
+  }
+
+  function scheduleMessageSync(): void {
+    if (messageSyncQueued) return;
+    messageSyncQueued = true;
+    const run = () => {
+      messageSyncQueued = false;
+      syncShellMessages();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else setTimeout(run, 16);
   }
 
   function renderMessages(): void {
-    syncShellMessages();
+    scheduleMessageSync();
   }
 
   function renderThreadMessages(): void {
@@ -345,8 +371,19 @@ export function createUIService(
     scheduleSidebarSync();
   }
 
+  function scheduleHeaderSync(): void {
+    if (headerSyncQueued) return;
+    headerSyncQueued = true;
+    const run = () => {
+      headerSyncQueued = false;
+      syncShellHeader();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else setTimeout(run, 16);
+  }
+
   function updateChannelHeader(): void {
-    syncShellHeader();
+    scheduleHeaderSync();
   }
 
   function updateWorkspaceRail(): void {

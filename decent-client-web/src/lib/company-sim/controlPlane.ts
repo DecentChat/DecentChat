@@ -223,9 +223,11 @@ export function normalizeCompanySimRoutingPreview(value: unknown, request: Compa
 }
 
 let companySimControlPlaneTransport: CompanySimControlPlaneTransport | null = null;
+let cachedControlPlaneClient: CompanySimControlPlaneClient | null = null;
 
 export function setCompanySimControlPlaneTransport(transport: CompanySimControlPlaneTransport | null): void {
   companySimControlPlaneTransport = transport;
+  cachedControlPlaneClient = null; // invalidate cached client when transport changes
 }
 
 export function getCompanySimControlPlaneTransport(): CompanySimControlPlaneTransport | null {
@@ -246,5 +248,8 @@ export function createCompanySimControlPlaneClient(
 
 export function getCompanySimControlPlaneClient(): CompanySimControlPlaneClient | null {
   if (!companySimControlPlaneTransport) return null;
-  return createCompanySimControlPlaneClient(companySimControlPlaneTransport);
+  if (!cachedControlPlaneClient) {
+    cachedControlPlaneClient = createCompanySimControlPlaneClient(companySimControlPlaneTransport);
+  }
+  return cachedControlPlaneClient;
 }

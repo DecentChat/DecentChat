@@ -31,6 +31,13 @@ function makeReceiptController(message: any, workspaces: any[] = []): any {
   ctrl.persistentStore = { getPeer: mock(async () => null), saveMessage: mock(async () => {}), saveSetting: mock(async () => {}) };
   ctrl.ui = { updateMessageStatus: mock(() => {}) };
 
+  // Instance fields normally initialized by the constructor — required by
+  // setupTransportHandlers (onDisconnect uses handshakeInFlight) and
+  // schedulePendingDeliveryWatch (checks messageSyncInFlight).
+  ctrl.handshakeInFlight = new Set<string>();
+  ctrl.messageSyncInFlight = new Map<string, Promise<void>>();
+  ctrl.retryUnackedInFlight = new Map<string, Promise<void>>();
+
   ChatController.prototype.setupTransportHandlers.call(ctrl);
   return ctrl;
 }

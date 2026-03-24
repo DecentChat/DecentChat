@@ -130,6 +130,48 @@ export class CryptoManager {
   }
 
   /**
+   * Derive an AES-GCM shared secret from pre-computed raw ECDH bytes.
+   * This avoids a second deriveBits call when the raw bytes are already available
+   * (e.g., from the ratchet handshake path which shares the same ECDH computation).
+   */
+  async deriveSharedSecretFromRawBytes(
+    rawEcdhBytes: ArrayBuffer,
+    myPeerId: string,
+    theirPeerId: string,
+  ): Promise<CryptoKey> {
+    const importedSecret = await crypto.subtle.importKey(
+      'raw',
+      rawEcdhBytes,
+      'HKDF',
+      false,
+      ['deriveKey']
+    );
+
+    const pair = [myPeerId, theirPeerId].sort().join(':');
+    const hashedSalt = await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(pair),
+    );
+    const salt = new Uint8Array(hashedSalt);
+
+    return await crypto.subtle.deriveKey(
+      {
+        name: 'HKDF',
+        hash: 'SHA-256',
+        salt,
+        info: new TextEncoder().encode('p2p-chat-aes-gcm'),
+      },
+      importedSecret,
+      {
+        name: 'AES-GCM',
+        length: 256,
+      },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  }
+
+  /**
    * Generate signing key pair (ECDSA)
    */
   /** Import an ECDSA signing public key from Base64 JWK (for signature verification) */

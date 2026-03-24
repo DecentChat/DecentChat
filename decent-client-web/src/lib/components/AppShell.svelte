@@ -277,6 +277,9 @@
                     frequentReactions={shellData.messages.frequentReactions}
                     scrollTargetMessageId={shellData.messages.scrollTargetMessageId}
                     scrollTargetNonce={shellData.messages.scrollTargetNonce}
+                    hasOlderMessages={shellData.messages.hasOlderMessages}
+                    loadingOlder={shellData.messages.loadingOlder}
+                    onLoadOlder={cb.loadOlderMessages}
                     getThread={cb.getThread}
                     getPeerAlias={cb.getPeerAlias}
                     isBot={cb.isBot}

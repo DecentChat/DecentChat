@@ -1,0 +1,15 @@
+[debug] [vite] connecting...
+[debug] [vite] connected.
+[log] [DecentChat] HD device key derivation: device=0, peerId=151d2351…, identityId=9ec06686…
+[log] [DecentChat] At-rest encryption enabled
+[log] [DecentChat] Connected to 1/1 signaling servers as 151d2351e5da1f5651
+[log] [DecentChat] Svelte 5 bridge + AppShell initialized
+[warning] [PERF] restore:parallelIDB=1ms
+[warning] [PERF] restore:settingsApply=1ms
+[log] [DecentChat] restoreFromStorage: found 0 full workspaces
+[warning] [PERF] restore:wsLoop=0ms
+[warning] [PERF] _flushDeferredPostConnectWork: 0 deferred peers
+[warning] [PERF] restoreFromStorage: 1.2ms
+[warning] [PERF] main: restore=1ms migrate=0ms contacts=0ms
+[warning] [Transport] markConnected: firing onConnect for 98057f7f inbound via wss://0.peerjs.com/
+[warning] [PERF] onConnect(98057f7f): createHandshake=0.2ms, total=0.3ms

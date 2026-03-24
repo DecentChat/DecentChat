@@ -129,6 +129,8 @@ interface ActiveConnection {
   status: 'connecting' | 'connected' | 'failed';
   /** Which signaling server this connection came through */
   signalingServer: string;
+  /** true if the remote peer initiated this connection */
+  inbound: boolean;
 }
 
 interface SignalingInstance {
@@ -139,6 +141,9 @@ interface SignalingInstance {
 }
 
 export class PeerTransport implements Transport {
+  private static readonly PEER_CONNECT_FAILURE_THRESHOLD = 2;
+  private static readonly PEER_CONNECT_QUARANTINE_BASE_MS = 2 * 60_000;
+  private static readonly PEER_CONNECT_QUARANTINE_MAX_MS = 30 * 60_000;
   /** All active signaling server connections */
   private signalingInstances: SignalingInstance[] = [];
   /** Deduplicated peer connections (one per remote peer) */
@@ -154,6 +159,9 @@ export class PeerTransport implements Transport {
   private _reconnectAttempts = new Map<string, number>();
   private _reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly _reconnectDelays = [5000, 15000, 30000, 60000, 120000];
+  private _peerConnectFailures = new Map<string, number>();
+  private _peerConnectQuarantineUntil = new Map<string, number>();
+  private _peerConnectQuarantineLevel = new Map<string, number>();
 
   // ── Signaling server reconnect state ────────────────────────────────────
   private _signalingReconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -177,10 +185,19 @@ export class PeerTransport implements Transport {
   private _managedTimeouts = new Set<ReturnType<typeof setTimeout>>();
   private _destroyed = false;
 
+  // ── Per-peer serial inbound message queues ───────────────────────────────
+  // Inbound messages are serialized per-peer: messages from the same peer
+  // run in order, but messages from DIFFERENT peers run in parallel.
+  // This eliminates the bottleneck where 3 handshakes (~1.8s each on Firefox
+  // P-256) serialized through a single global queue took ~5.4s total.
+  // After each handler completes we yield to the event loop (setTimeout 0)
+  // so the browser can paint / respond between operations.
+  private _peerMessageQueues = new Map<string, Promise<void>>();
+
   // ── Transport callbacks ───────────────────────────────────────────────────
   public onConnect: ((peerId: string) => void) | null = null;
   public onDisconnect: ((peerId: string) => void) | null = null;
-  public onMessage: ((peerId: string, data: unknown) => void) | null = null;
+  public onMessage: ((peerId: string, data: unknown) => void | Promise<void>) | null = null;
   public onError: ((error: Error) => void) | null = null;
   /** Notifies UI/controller when signaling connectivity changes. */
   public onSignalingStateChange: ((status: { url: string; label: string; connected: boolean }[]) => void) | null = null;
@@ -262,6 +279,13 @@ export class PeerTransport implements Transport {
   }
 
   async connect(peerId: string): Promise<void> {
+    const now = Date.now();
+    const quarantinedUntil = this._peerConnectQuarantineUntil.get(peerId) ?? 0;
+    if (quarantinedUntil > now) {
+      const remainingMs = quarantinedUntil - now;
+      throw new Error(`Peer ${peerId} temporarily quarantined for ${Math.ceil(remainingMs / 1000)}s after repeated connect failures`);
+    }
+
     this._manuallyDisconnected.delete(peerId);
 
     if (this.signalingInstances.length === 0) {
@@ -271,8 +295,9 @@ export class PeerTransport implements Transport {
     if (this.connectingTo.has(peerId)) return; // Already attempting
 
     this.connectingTo.add(peerId);
-    const maxRetries = this.config.maxRetries ?? 3;
+    const maxRetries = this.config.maxRetries ?? 1;
     const baseDelay = this.config.retryDelayMs ?? 2000;
+    let lastError: Error | null = null;
 
     try {
       // If all signaling servers are currently disconnected, wait briefly for
@@ -290,18 +315,26 @@ export class PeerTransport implements Transport {
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
           try {
             await this._attemptConnect(instance, peerId);
+            this._clearPeerConnectFailure(peerId);
             return; // Success
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
+            lastError = err instanceof Error ? err : new Error(msg);
 
             // PeerJS race: peer became disconnected between our check and the actual call.
             // Wait for reconnect and then retry this instance once more.
             if (msg.includes('disconnecting from server') || msg.includes('disconnected from server')) {
               await this._waitForAnySignalingReconnect(6000).catch(() => null);
+              // Guard: an inbound connection may have connected while we waited.
+              const curSig = this.connections.get(peerId);
+              if (curSig && curSig.status === 'connected') {
+                return; // Already connected via inbound — done.
+              }
               this.connections.delete(peerId);
               // Retry this attempt once
               try {
                 await this._attemptConnect(instance, peerId);
+                this._clearPeerConnectFailure(peerId);
                 return;
               } catch {
                 // Fall through to next attempt / server
@@ -311,12 +344,22 @@ export class PeerTransport implements Transport {
             if (attempt < maxRetries) {
               const delay = baseDelay * Math.pow(2, attempt);
               await new Promise(r => setTimeout(r, delay));
+              // Only clear the Map entry if it is NOT an already-connected
+              // inbound connection that won the race.  Blindly deleting here
+              // would nuke the live inbound and cause a duplicate onConnect
+              // when the next outbound attempt succeeds.
+              const cur = this.connections.get(peerId);
+              if (cur && cur.status === 'connected') {
+                // A connection (likely inbound) is already live — stop retrying.
+                return;
+              }
               this.connections.delete(peerId);
             }
           }
         }
       }
 
+      this._notePeerConnectFailure(peerId, lastError);
       throw new Error(`Failed to connect to ${peerId} via any signaling server`);
     } finally {
       this.connectingTo.delete(peerId);
@@ -327,6 +370,7 @@ export class PeerTransport implements Transport {
     this._manuallyDisconnected.add(peerId);
     this._cancelReconnect(peerId);
     this._stopHeartbeat(peerId);
+    this._clearPeerConnectFailure(peerId);
 
     const active = this.connections.get(peerId);
     if (active) {
@@ -397,6 +441,9 @@ export class PeerTransport implements Transport {
     this._reconnectTimers.forEach(t => clearTimeout(t));
     this._reconnectTimers.clear();
     this._reconnectAttempts.clear();
+    this._peerConnectFailures.clear();
+    this._peerConnectQuarantineUntil.clear();
+    this._peerConnectQuarantineLevel.clear();
     this._manuallyDisconnected.clear();
 
     // Clean up signaling reconnect timers
@@ -421,6 +468,8 @@ export class PeerTransport implements Transport {
 
     this.connections.forEach(({ conn }) => conn.close());
     this.connections.clear();
+    // Per-peer message queues drain naturally; clear the map to release references.
+    this._peerMessageQueues.clear();
     this.connectingTo.clear();
     for (const instance of this.signalingInstances) {
       try {
@@ -464,7 +513,11 @@ export class PeerTransport implements Transport {
     const attempt = this._reconnectAttempts.get(peerId) ?? 0;
     // After exhausting the back-off table, keep retrying at the longest
     // delay (120 s) indefinitely — connectivity can return at any time.
-    const delay = this._reconnectDelays[Math.min(attempt, this._reconnectDelays.length - 1)];
+    const baseDelay = this._reconnectDelays[Math.min(attempt, this._reconnectDelays.length - 1)];
+    const now = Date.now();
+    const quarantinedUntil = this._peerConnectQuarantineUntil.get(peerId) ?? 0;
+    const quarantineDelay = quarantinedUntil > now ? quarantinedUntil - now : 0;
+    const delay = Math.max(baseDelay, quarantineDelay);
     const timer = setTimeout(async () => {
       this._reconnectTimers.delete(peerId);
 
@@ -483,6 +536,39 @@ export class PeerTransport implements Transport {
     }, delay);
 
     this._reconnectTimers.set(peerId, timer);
+  }
+
+  private _isPeerUnavailableError(error: Error | null, peerId: string): boolean {
+    if (!error) return false;
+    const msg = error.message || '';
+    if (!msg) return false;
+    return msg.includes(`Could not connect to peer ${peerId}`)
+      || msg.includes(`Failed to connect to ${peerId}`)
+      || msg.includes(`Connection to ${peerId}`)
+      || msg.includes('peer-unavailable');
+  }
+
+  private _notePeerConnectFailure(peerId: string, error: Error | null): void {
+    if (!this._isPeerUnavailableError(error, peerId)) return;
+    const failures = (this._peerConnectFailures.get(peerId) ?? 0) + 1;
+    this._peerConnectFailures.set(peerId, failures);
+    if (failures < PeerTransport.PEER_CONNECT_FAILURE_THRESHOLD) return;
+
+    const level = (this._peerConnectQuarantineLevel.get(peerId) ?? 0) + 1;
+    this._peerConnectQuarantineLevel.set(peerId, level);
+    this._peerConnectFailures.set(peerId, 0);
+
+    const quarantineMs = Math.min(
+      PeerTransport.PEER_CONNECT_QUARANTINE_BASE_MS * (2 ** Math.max(0, level - 1)),
+      PeerTransport.PEER_CONNECT_QUARANTINE_MAX_MS,
+    );
+    this._peerConnectQuarantineUntil.set(peerId, Date.now() + quarantineMs);
+  }
+
+  private _clearPeerConnectFailure(peerId: string): void {
+    this._peerConnectFailures.delete(peerId);
+    this._peerConnectQuarantineUntil.delete(peerId);
+    this._peerConnectQuarantineLevel.delete(peerId);
   }
 
   // ── DEP-004: Heartbeat ──────────────────────────────────────────────────
@@ -901,7 +987,7 @@ export class PeerTransport implements Transport {
 
   private _setupPeerEvents(instance: SignalingInstance): void {
     instance.peer.on('connection', (conn) => {
-      this._setupConnection(conn, instance.url);
+      this._setupConnection(conn, instance.url, true);
     });
 
     // Signaling server (re)connected — flip connected flag back on.
@@ -1017,9 +1103,17 @@ export class PeerTransport implements Transport {
   private _attemptConnect(instance: SignalingInstance, peerId: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const conn = instance.peer.connect(peerId, { reliable: true });
+
+      // Guard: PeerJS can return null/undefined when the signaling instance is
+      // disconnected or destroyed between our pre-check and the connect() call.
+      if (!conn) {
+        reject(new Error(`Failed to create DataConnection to ${peerId} via ${instance.label} (peer.connect returned ${conn})`));
+        return;
+      }
+
       const timeout = setTimeout(() => {
         // Timed out handshaking this DataConnection — close to avoid stale half-open state.
-        conn.close();
+        try { conn.close(); } catch { /* already closed or destroyed */ }
         reject(new Error(`Connection to ${peerId} via ${instance.label} timed out`));
       }, 10000);
 
@@ -1033,48 +1127,91 @@ export class PeerTransport implements Transport {
         reject(err);
       });
 
-      this._setupConnection(conn, instance.url);
+      this._setupConnection(conn, instance.url, false);
     });
   }
 
   /**
-   * Setup connection with deduplication.
+   * Setup connection with deduplication and glare resolution.
    * If we already have a connection to this peer (from another signaling server),
    * keep the existing one and close the new one.
+   * @param inbound true if this connection was initiated by the remote peer.
    */
-  private _setupConnection(conn: DataConnection, signalingServer: string): void {
+  private _setupConnection(conn: DataConnection, signalingServer: string, inbound: boolean): void {
     const { peer: peerId } = conn;
 
     // ── DEDUPLICATION ──
     const existing = this.connections.get(peerId);
     if (existing && existing.status === 'connected') {
       // Already have a working connection to this peer — close the duplicate
+      console.warn(`[Transport] dedup: rejecting ${inbound?'inbound':'outbound'} to ${peerId.slice(0,8)} (already connected)`);
       conn.close();
       return;
     }
+    if (existing && existing.status === 'connecting' && this.myPeerId) {
+      if (existing.inbound !== inbound) {
+        // True glare: one is inbound, one is outbound.
+        // Rule: lower peer ID's outbound wins.
+        const weAreLowest = this.myPeerId < peerId;
+        if (inbound && weAreLowest) {
+          // New is inbound, but we have lower ID — keep our outbound (existing).
+          console.warn(`[Transport] glare: rejecting inbound from ${peerId.slice(0,8)} (our outbound wins)`);
+          conn.close();
+          return;
+        }
+        if (!inbound && !weAreLowest) {
+          // New is outbound, but they have lower ID — keep their inbound (existing).
+          console.warn(`[Transport] glare: rejecting outbound to ${peerId.slice(0,8)} (their inbound wins)`);
+          conn.close();
+          return;
+        }
+        // Otherwise: let the new connection overwrite (the correct direction won).
+        console.warn(`[Transport] glare: overwriting ${existing.inbound?'inbound':'outbound'} with ${inbound?'inbound':'outbound'} for ${peerId.slice(0,8)}`);
+      } else {
+        // Same-direction duplicate (e.g. two inbound connections from the same
+        // peer via different signaling servers).  Keep the existing one — it
+        // was first.  Close the newcomer to prevent orphaned 'open' listeners
+        // that would fire duplicate onConnect events.
+        console.warn(`[Transport] dedup: rejecting same-dir ${inbound?'inbound':'outbound'} to ${peerId.slice(0,8)} (first one kept)`);
+        conn.close();
+        return;
+      }
+    }
 
-    const active: ActiveConnection = { conn, peerId, status: 'connecting', signalingServer };
+    // If we are overwriting an existing entry (e.g. glare winner replaces loser),
+    // close the displaced connection to ensure its 'open' listener cannot fire.
+    if (existing) {
+      try { existing.conn.close(); } catch {}
+    }
+
+    const active: ActiveConnection = { conn, peerId, status: 'connecting', signalingServer, inbound };
     this.connections.set(peerId, active);
 
+    let alreadyConnected = false;
     const markConnected = () => {
+      if (alreadyConnected) return; // Prevent double-fire if conn.open was already true
+
       // Double-check dedup: another connection may have won the race
       const current = this.connections.get(peerId);
       if (current && current !== active && current.status === 'connected') {
+        console.warn(`[Transport] markConnected: race-lost for ${peerId.slice(0,8)} ${inbound?'inbound':'outbound'}, closing`);
         conn.close();
         return;
       }
 
+      alreadyConnected = true;
       active.status = 'connected';
       this.connections.set(peerId, active);
       this._startHeartbeat(peerId);
+      console.warn(`[Transport] markConnected: firing onConnect for ${peerId.slice(0,8)} ${inbound?'inbound':'outbound'} via ${signalingServer}`);
       this.onConnect?.(peerId);
     };
 
     if (conn.open) {
       markConnected();
+    } else {
+      conn.on('open', markConnected);
     }
-
-    conn.on('open', markConnected);
 
     conn.on('data', (data) => {
       // Only process data from the active connection for this peer
@@ -1096,18 +1233,34 @@ export class PeerTransport implements Transport {
         return;
       }
 
-      this.onMessage?.(peerId, data);
+      // Serialize inbound message processing per-peer: messages from the same
+      // peer run in order, but different peers' messages run in parallel.
+      // This lets 3 handshakes (~1.8s each) run concurrently instead of
+      // serializing through a single global queue (~5.4s total).
+      const prevQueue = this._peerMessageQueues.get(peerId) ?? Promise.resolve();
+      const nextQueue = prevQueue
+        .then(async () => {
+          await this.onMessage?.(peerId, data);
+          // Yield so the browser can paint / handle input between handlers.
+          await new Promise<void>(r => setTimeout(r, 0));
+        })
+        .catch(() => {});
+      this._peerMessageQueues.set(peerId, nextQueue);
     });
 
     conn.on('close', () => {
       // Only fire disconnect if this was the active connection
       const current = this.connections.get(peerId);
       if (current?.conn === conn) {
+        console.warn(`[Transport] conn.close for ${peerId.slice(0,8)} ${inbound?'inbound':'outbound'} — firing onDisconnect`);
         this._stopHeartbeat(peerId);
         active.status = 'failed';
         this.connections.delete(peerId);
+        this._peerMessageQueues.delete(peerId);
         this.onDisconnect?.(peerId);
         this._scheduleReconnect(peerId);
+      } else {
+        console.warn(`[Transport] conn.close for ${peerId.slice(0,8)} ${inbound?'inbound':'outbound'} — NOT active, ignoring`);
       }
     });
 

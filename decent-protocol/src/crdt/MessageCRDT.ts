@@ -41,6 +41,11 @@ export class MessageCRDT {
     this.clock = new VectorClock();
   }
 
+  /** O(1) check whether a message ID is already known. */
+  hasMessage(id: string): boolean {
+    return this.messages.has(id);
+  }
+
   /**
    * Create a new message (increments local clock)
    */
@@ -100,6 +105,31 @@ export class MessageCRDT {
     }
 
     return newMessages;
+  }
+
+  /**
+   * Evict the oldest messages for a channel, keeping only the most recent
+   * `keepCount`.  Uses wallTime for ordering (same as display).
+   * Returns the number of entries removed from the Map.
+   */
+  trimChannel(channelId: string, keepCount: number): number {
+    const channelMsgs: CRDTMessage[] = [];
+    for (const msg of this.messages.values()) {
+      if (msg.channelId === channelId) channelMsgs.push(msg);
+    }
+    if (channelMsgs.length <= keepCount) return 0;
+    // Sort newest-first by wallTime (ties broken by id for determinism).
+    channelMsgs.sort((a, b) => b.wallTime - a.wallTime || b.id.localeCompare(a.id));
+    // IDs to keep = first `keepCount` entries.
+    const keepIds = new Set(channelMsgs.slice(0, keepCount).map(m => m.id));
+    let removed = 0;
+    for (const msg of channelMsgs) {
+      if (!keepIds.has(msg.id)) {
+        this.messages.delete(msg.id);
+        removed++;
+      }
+    }
+    return removed;
   }
 
   /**

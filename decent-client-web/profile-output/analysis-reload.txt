@@ -1,0 +1,241 @@
+
+================================================================================
+CPU PROFILE ANALYSIS
+================================================================================
+Total profile time: 90254.8ms
+Total samples: 580684
+Unique functions sampled: 122
+
+────────────────────────────────────────────────────────────────────────────────
+TOP 50 FUNCTIONS BY SELF-TIME
+────────────────────────────────────────────────────────────────────────────────
+Rank  Self-Time     %       Hits    Function
+────────────────────────────────────────────────────────────────────────────────
+1     89098.4ms     98.7%   574115  (idle)@:-1
+2     1025.6ms      1.1%    5778    (program)@:-1
+3     21.7ms        0.0%    140     mod@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:981
+4     16.6ms        0.0%    99      requestAnimationFrame@:-1
+5     15.2ms        0.0%    98      visitNode@:266
+6     14.9ms        0.0%    84      (garbage collector)@:-1
+7     13.8ms        0.0%    83      _checkFrame@http://127.0.0.1:5173/src/main.ts:19
+8     4.0ms         0.0%    26      mul@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1259
+9     3.7ms         0.0%    24      visitChild@:318
+10    3.4ms         0.0%    22      add@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1253
+11    2.7ms         0.0%    3       getRegex@http://127.0.0.1:5173/node_modules/.vite/deps/marked.js?v=6e7e444c:17
+12    2.5ms         0.0%    13      importKey@:-1
+13    2.1ms         0.0%    13      RTCPeerConnection@:-1
+14    1.5ms         0.0%    9       now@:-1
+15    1.2ms         0.0%    8       appendChild@:-1
+16    1.2ms         0.0%    8       init@http://127.0.0.1:5173/src/main.ts:234
+17    1.2ms         0.0%    7       setAttribute@:-1
+18    1.1ms         0.0%    7       expectValue@:288
+19    0.9ms         0.0%    6       _Point@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2383
+20    0.8ms         0.0%    1       set@http://127.0.0.1:5173/node_modules/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:4071
+21    0.8ms         0.0%    5       ensureCachedData@:23
+22    0.7ms         0.0%    4       (anonymous)@http://127.0.0.1:5173/node_modules/.vite/deps/marked.js?v=6e7e444c:-1
+23    0.7ms         0.0%    4       insertAdjacentElement@:-1
+24    0.7ms         0.0%    4       precomputeWindow@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1601
+25    0.7ms         0.0%    3       create_fragment_from_html@http://127.0.0.1:5173/node_modules/.vite/deps/chunk-YU7U4AMN.js?v=6e7e444c:93
+26    0.7ms         0.0%    4       exportKey@:-1
+27    0.6ms         0.0%    4       invert@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:985
+28    0.5ms         0.0%    3       (anonymous)@http://127.0.0.1:5173/node_modules/.vite/deps/peerjs.js?v=6e7e444c:-1
+29    0.5ms         0.0%    3       (anonymous)@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:960
+30    0.4ms         0.0%    2       addIceCandidate@:-1
+31    0.4ms         0.0%    2       unpack@http://127.0.0.1:5173/node_modules/.vite/deps/peerjs.js?v=6e7e444c:675
+32    0.3ms         0.0%    2       deriveBits@:-1
+33    0.3ms         0.0%    1       exportPublicKey@http://127.0.0.1:5173/@fs/Users/claw/Projects/decent-chat/decent-protocol/src/crypto/CryptoManager.ts:36
+34    0.3ms         0.0%    2       transport.onMessage@http://127.0.0.1:5173/src/app/ChatController.ts:932
+35    0.3ms         0.0%    2       captureSnapshot@:256
+36    0.3ms         0.0%    2       sqr@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1250
+37    0.3ms         0.0%    2       get@:-1
+38    0.3ms         0.0%    2       fromAffine@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2396
+39    0.3ms         0.0%    2       (anonymous)@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1510
+40    0.3ms         0.0%    2       bytesToBase64Url@http://127.0.0.1:5173/@fs/Users/claw/Projects/decent-chat/decent-protocol/src/identity/HDKeyDerivation.ts:188
+41    0.3ms         0.0%    1       (anonymous)@http://127.0.0.1:5173/src/lib/components/messages/MessageItem.svelte?svelte&type=style&lang.css:-1
+42    0.2ms         0.0%    1       (anonymous)@http://127.0.0.1:5173/@vite/client:-1
+43    0.2ms         0.0%    1       setTimeout@:-1
+44    0.2ms         0.0%    1       isTrustedSyncControlMessage@http://127.0.0.1:5173/src/app/ChatController.ts:392
+45    0.2ms         0.0%    1       (anonymous)@:-1
+46    0.2ms         0.0%    1       (anonymous)@:0
+47    0.2ms         0.0%    1       dataChannel.onmessage@http://127.0.0.1:5173/node_modules/.vite/deps/peerjs.js?v=6e7e444c:5764
+48    0.2ms         0.0%    1       fillOne@http://127.0.0.1:5173/@fs/Users/claw/Projects/decent-chat/decent-client-core/src/messages/MessageProtocol.ts:84
+49    0.2ms         0.0%    1       get popover@:-1
+50    0.2ms         0.0%    1       init@http://127.0.0.1:5173/@fs/Users/claw/Projects/decent-chat/decent-protocol/src/storage/PersistentStore.ts:26
+
+────────────────────────────────────────────────────────────────────────────────
+SELF-TIME BY SOURCE FILE (top 20)
+────────────────────────────────────────────────────────────────────────────────
+     90190.7ms   99.9%  (native)
+        34.8ms    0.0%  node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c
+        15.1ms    0.0%  src/main.ts
+         3.4ms    0.0%  node_modules/.vite/deps/marked.js?v=6e7e444c
+         2.6ms    0.0%  node_modules/.vite/deps/peerjs.js?v=6e7e444c
+         1.7ms    0.0%  node_modules/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c
+         0.7ms    0.0%  src/app/ChatController.ts
+         0.7ms    0.0%  node_modules/.vite/deps/chunk-YU7U4AMN.js?v=6e7e444c
+         0.6ms    0.0%  src/messages/MessageProtocol.ts
+         0.5ms    0.0%  node_modules/.vite/deps/dompurify.js?v=6e7e444c
+         0.5ms    0.0%  src/storage/PersistentStore.ts
+         0.4ms    0.0%  http://127.0.0.1:5173/@vite/client
+         0.3ms    0.0%  src/crypto/CryptoManager.ts
+         0.3ms    0.0%  src/identity/SeedPhrase.ts
+         0.3ms    0.0%  src/identity/HDKeyDerivation.ts
+         0.3ms    0.0%  src/lib/components/messages/MessageItem.svelte?svelte&type=style&lang.css
+         0.2ms    0.0%  src/security/RateLimiter.ts
+         0.2ms    0.0%  src/ui/uiService.ts
+         0.2ms    0.0%  src/storage/StorageQuotaManager.ts
+         0.2ms    0.0%  src/lib/components/shared/SvelteReady.svelte
+
+────────────────────────────────────────────────────────────────────────────────
+LONGEST CONTIGUOUS EXECUTION RUNS (>50ms)
+────────────────────────────────────────────────────────────────────────────────
+      83.5ms    537 samples  (idle)@:-1
+      83.0ms    534 samples  (idle)@:-1
+      68.5ms    442 samples  (idle)@:-1
+      68.5ms    441 samples  (idle)@:-1
+      68.2ms    439 samples  (idle)@:-1
+      66.7ms    429 samples  (idle)@:-1
+      66.6ms    429 samples  (idle)@:-1
+      66.5ms    429 samples  (idle)@:-1
+      66.5ms    428 samples  (idle)@:-1
+      66.4ms    428 samples  (idle)@:-1
+      66.3ms    427 samples  (idle)@:-1
+      66.1ms    426 samples  (idle)@:-1
+      65.7ms    424 samples  (idle)@:-1
+      65.7ms    424 samples  (idle)@:-1
+      64.7ms    416 samples  (idle)@:-1
+      51.8ms    333 samples  (idle)@:-1
+      51.8ms    334 samples  (idle)@:-1
+      51.8ms    334 samples  (idle)@:-1
+      51.8ms    333 samples  (idle)@:-1
+      51.7ms    334 samples  (idle)@:-1
+
+────────────────────────────────────────────────────────────────────────────────
+HEAVIEST CALL STACKS (top 10 by accumulated self-time)
+────────────────────────────────────────────────────────────────────────────────
+
+  Stack #1: 16.6ms (0.0%)
+    → _checkFrame (src/main.ts:19)
+      → requestAnimationFrame (:-1)
+
+  Stack #2: 13.8ms (0.0%)
+    → _checkFrame (src/main.ts:19)
+
+  Stack #3: 11.2ms (0.0%)
+    → deriveKeyPairAtPath (src/identity/HDKeyDerivation.ts:85)
+      → importP256PrivateKey (src/identity/HDKeyDerivation.ts:151)
+        → getPublicKey (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2807)
+          → multiply (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2566)
+            → mul (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2571)
+              → cached (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1675)
+                → getPrecomputes (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1663)
+                  → precomputeWindow (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1601)
+                    → add (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2502)
+                      → mul (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1259)
+                        → mod (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:981)
+
+  Stack #4: 3.8ms (0.0%)
+    → (anonymous) (:-1)
+      → captureSnapshot (:256)
+        → visitNode (:266)
+          → visitChild (:318)
+            → visitNode (:266)
+              → visitChild (:318)
+                → visitNode (:266)
+                  → visitChild (:318)
+                    → visitNode (:266)
+                      → visitChild (:318)
+                        → visitNode (:266)
+                          → visitChild (:318)
+                            → visitNode (:266)
+                              → visitChild (:318)
+                                → visitNode (:266)
+                                  → visitChild (:318)
+                                    → visitNode (:266)
+                                      → visitChild (:318)
+                                        → visitNode (:266)
+
+  Stack #5: 3.8ms (0.0%)
+    → deriveKeyPairAtPath (src/identity/HDKeyDerivation.ts:85)
+      → importP256PrivateKey (src/identity/HDKeyDerivation.ts:151)
+        → getPublicKey (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2807)
+          → multiply (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2566)
+            → mul (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2571)
+              → cached (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1675)
+                → getPrecomputes (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1663)
+                  → precomputeWindow (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1601)
+                    → add (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2502)
+                      → add (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1253)
+                        → mod (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:981)
+
+  Stack #6: 3.4ms (0.0%)
+    → deriveKeyPairAtPath (src/identity/HDKeyDerivation.ts:85)
+      → importP256PrivateKey (src/identity/HDKeyDerivation.ts:151)
+        → getPublicKey (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2807)
+          → multiply (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2566)
+            → mul (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2571)
+              → cached (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1675)
+                → getPrecomputes (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1663)
+                  → precomputeWindow (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1601)
+                    → add (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2502)
+                      → add (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1253)
+
+  Stack #7: 3.0ms (0.0%)
+    → (anonymous) (:-1)
+      → captureSnapshot (:256)
+        → visitNode (:266)
+          → visitChild (:318)
+            → visitNode (:266)
+              → visitChild (:318)
+                → visitNode (:266)
+                  → visitChild (:318)
+                    → visitNode (:266)
+                      → visitChild (:318)
+                        → visitNode (:266)
+                          → visitChild (:318)
+                            → visitNode (:266)
+                              → visitChild (:318)
+                                → visitNode (:266)
+                                  → visitChild (:318)
+                                    → visitNode (:266)
+
+  Stack #8: 2.7ms (0.0%)
+    → (anonymous) (nm/.vite/deps/marked.js?v=6e7e444c:-1)
+      → getRegex (nm/.vite/deps/marked.js?v=6e7e444c:17)
+
+  Stack #9: 2.3ms (0.0%)
+    → deriveKeyPairAtPath (src/identity/HDKeyDerivation.ts:85)
+      → importP256PrivateKey (src/identity/HDKeyDerivation.ts:151)
+        → getPublicKey (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2807)
+          → multiply (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2566)
+            → mul (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2571)
+              → cached (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1675)
+                → getPrecomputes (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1663)
+                  → precomputeWindow (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1601)
+                    → add (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2502)
+                      → mul (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1259)
+
+  Stack #10: 2.1ms (0.0%)
+    → deriveKeyPairAtPath (src/identity/HDKeyDerivation.ts:85)
+      → importP256PrivateKey (src/identity/HDKeyDerivation.ts:151)
+        → getPublicKey (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2807)
+          → multiply (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2566)
+            → mul (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2571)
+              → cached (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1675)
+                → getPrecomputes (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1663)
+                  → (anonymous) (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2571)
+                    → normalizeZ (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1508)
+                      → (anonymous) (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1510)
+                        → toAffine (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2613)
+                          → (anonymous) (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:960)
+                            → (anonymous) (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2344)
+                              → mul (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1259)
+                                → mod (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:981)
+
+────────────────────────────────────────────────────────────────────────────────
+TIME BREAKDOWN: App vs Native vs Idle
+────────────────────────────────────────────────────────────────────────────────
+  App code:                64.1ms  0.1%
+  Native/built-in:       1077.4ms  1.2%
+  Idle:                 89098.4ms  98.7%
+  GC:                      14.9ms  0.0%

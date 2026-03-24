@@ -1,0 +1,209 @@
+
+================================================================================
+CPU PROFILE ANALYSIS
+================================================================================
+Total profile time: 42824.5ms
+Total samples: 276059
+Unique functions sampled: 306
+
+────────────────────────────────────────────────────────────────────────────────
+TOP 50 FUNCTIONS BY SELF-TIME
+────────────────────────────────────────────────────────────────────────────────
+Rank  Self-Time     %       Hits    Function
+────────────────────────────────────────────────────────────────────────────────
+1     42030.0ms     98.1%   271601  (idle)@:-1
+2     549.3ms       1.3%    2904    (program)@:-1
+3     22.5ms        0.1%    145     mod@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:981
+4     22.0ms        0.1%    113     (garbage collector)@:-1
+5     16.3ms        0.0%    107     applyDeltaInternal@http://127.0.0.1:5173/@fs/Users/claw/Projects/decent-chat/decent-protocol/src/sync/ManifestStore.ts:538
+6     13.9ms        0.0%    88      getTargetWindowSize@http://127.0.0.1:5173/src/lib/components/messages/MessageList.svelte:206
+7     12.9ms        0.0%    82      visitNode@:266
+8     8.6ms         0.0%    51      requestAnimationFrame@:-1
+9     8.2ms         0.0%    53      (anonymous)@http://127.0.0.1:5173/@fs/Users/claw/Projects/decent-chat/decent-protocol/src/storage/PersistentStore.ts:937
+10    7.4ms         0.0%    44      _checkFrame@http://127.0.0.1:5173/src/main.ts:19
+11    6.2ms         0.0%    39      RTCPeerConnection@:-1
+12    5.8ms         0.0%    37      mul@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1259
+13    5.2ms         0.0%    34      (anonymous)@http://127.0.0.1:5173/@fs/Users/claw/Projects/decent-chat/decent-protocol/src/sync/ManifestStore.ts:543
+14    5.2ms         0.0%    33      (anonymous)@http://127.0.0.1:5173/src/app/workspace/PublicWorkspaceController.ts:64
+15    4.8ms         0.0%    31      deepClone@http://127.0.0.1:5173/@fs/Users/claw/Projects/decent-chat/decent-protocol/src/sync/ManifestStore.ts:8
+16    4.7ms         0.0%    30      unpack_string@http://127.0.0.1:5173/node_modules/.vite/deps/peerjs.js?v=6e7e444c:792
+17    4.1ms         0.0%    27      unpack@http://127.0.0.1:5173/node_modules/.vite/deps/peerjs.js?v=6e7e444c:675
+18    3.1ms         0.0%    20      unpack_map@http://127.0.0.1:5173/node_modules/.vite/deps/peerjs.js?v=6e7e444c:823
+19    2.8ms         0.0%    18      visitChild@:318
+20    2.7ms         0.0%    16      (anonymous)@http://127.0.0.1:5173/@fs/Users/claw/Projects/decent-chat/decent-protocol/src/sync/ManifestStore.ts:545
+21    2.7ms         0.0%    17      read@http://127.0.0.1:5173/node_modules/.vite/deps/peerjs.js?v=6e7e444c:847
+22    2.5ms         0.0%    16      put@:-1
+23    2.1ms         0.0%    13      importKey@:-1
+24    1.8ms         0.0%    11      transport.onMessage@http://127.0.0.1:5173/src/app/ChatController.ts:932
+25    1.7ms         0.0%    12      create_fragment_from_html@http://127.0.0.1:5173/node_modules/.vite/deps/chunk-YU7U4AMN.js?v=6e7e444c:93
+26    1.7ms         0.0%    8       captureSnapshot@:256
+27    1.6ms         0.0%    11      (anonymous)@http://127.0.0.1:5173/node_modules/.vite/deps/chunk-M75UIXQT.js?v=6e7e444c:314
+28    1.5ms         0.0%    9       close@:-1
+29    1.5ms         0.0%    10      add@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1253
+30    1.4ms         0.0%    9       appendChild@:-1
+31    1.3ms         0.0%    1       push@http://127.0.0.1:5173/node_modules/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:644
+32    1.3ms         0.0%    8       ensureWorkspace@http://127.0.0.1:5173/@fs/Users/claw/Projects/decent-chat/decent-protocol/src/sync/ManifestStore.ts:395
+33    1.2ms         0.0%    8       (anonymous)@http://127.0.0.1:5173/node_modules/.vite/deps/chunk-M75UIXQT.js?v=6e7e444c:650
+34    1.2ms         0.0%    8       update_reaction@http://127.0.0.1:5173/node_modules/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:3523
+35    1.1ms         0.0%    7       (anonymous)@http://127.0.0.1:5173/@fs/Users/claw/Projects/decent-chat/decent-protocol/src/sync/ManifestStore.ts:253
+36    0.9ms         0.0%    6       (anonymous)@http://127.0.0.1:5173/@fs/Users/claw/Projects/decent-chat/decent-transport-webrtc/src/PeerTransport.ts:875
+37    0.9ms         0.0%    1       derived@http://127.0.0.1:5173/node_modules/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:1751
+38    0.8ms         0.0%    5       $e8379818650e2442$var$concatArrayBuffers@http://127.0.0.1:5173/node_modules/.vite/deps/peerjs.js?v=6e7e444c:646
+39    0.8ms         0.0%    5       exportKey@:-1
+40    0.8ms         0.0%    5       init@http://127.0.0.1:5173/src/main.ts:234
+41    0.8ms         0.0%    5       remove@:-1
+42    0.7ms         0.0%    5       (anonymous)@:0
+43    0.7ms         0.0%    4       now@:-1
+44    0.7ms         0.0%    4       _runPeerMaintenance@http://127.0.0.1:5173/src/app/ChatController.ts:4146
+45    0.7ms         0.0%    4       applyDeltaBatch@http://127.0.0.1:5173/@fs/Users/claw/Projects/decent-chat/decent-protocol/src/sync/ManifestStore.ts:528
+46    0.6ms         0.0%    4       before@:-1
+47    0.6ms         0.0%    4       eql@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1247
+48    0.6ms         0.0%    4       isValid@http://127.0.0.1:5173/node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1229
+49    0.6ms         0.0%    4       insertAdjacentElement@:-1
+50    0.6ms         0.0%    4       joinWorkspace@http://127.0.0.1:5173/src/app/ChatController.ts:4963
+
+────────────────────────────────────────────────────────────────────────────────
+SELF-TIME BY SOURCE FILE (top 20)
+────────────────────────────────────────────────────────────────────────────────
+     42656.8ms   99.6%  (native)
+        35.0ms    0.1%  node_modules/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c
+        33.3ms    0.1%  src/sync/ManifestStore.ts
+        21.4ms    0.1%  node_modules/.vite/deps/peerjs.js?v=6e7e444c
+        14.5ms    0.0%  src/lib/components/messages/MessageList.svelte
+        12.8ms    0.0%  src/app/ChatController.ts
+         9.6ms    0.0%  src/main.ts
+         8.7ms    0.0%  src/storage/PersistentStore.ts
+         8.1ms    0.0%  node_modules/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c
+         5.8ms    0.0%  node_modules/.vite/deps/chunk-M75UIXQT.js?v=6e7e444c
+         5.5ms    0.0%  src/app/workspace/PublicWorkspaceController.ts
+         2.2ms    0.0%  src/PeerTransport.ts
+         2.0ms    0.0%  src/messages/MessageProtocol.ts
+         1.9ms    0.0%  node_modules/.vite/deps/chunk-YU7U4AMN.js?v=6e7e444c
+         0.6ms    0.0%  http://127.0.0.1:5173/@vite/client
+         0.6ms    0.0%  src/lib/components/shared/ModalImpl.svelte
+         0.5ms    0.0%  src/identity/HDKeyDerivation.ts
+         0.5ms    0.0%  node_modules/.vite/deps/chunk-B4Q33VKO.js?v=6e7e444c
+         0.5ms    0.0%  src/ui/uiService.ts
+         0.4ms    0.0%  src/identity/SeedPhrase.ts
+
+────────────────────────────────────────────────────────────────────────────────
+LONGEST CONTIGUOUS EXECUTION RUNS (>50ms)
+────────────────────────────────────────────────────────────────────────────────
+     149.8ms    967 samples  (idle)@:-1
+     126.3ms    817 samples  (idle)@:-1
+     124.6ms    805 samples  (idle)@:-1
+     123.3ms    797 samples  (idle)@:-1
+     117.3ms    760 samples  (idle)@:-1
+     100.0ms    648 samples  (idle)@:-1
+      99.9ms    648 samples  (idle)@:-1
+      99.8ms    645 samples  (idle)@:-1
+      99.7ms    644 samples  (idle)@:-1
+      99.2ms    642 samples  (idle)@:-1
+      98.3ms    637 samples  (idle)@:-1
+      93.0ms    602 samples  (idle)@:-1
+      93.0ms    600 samples  (idle)@:-1
+      93.0ms    601 samples  (idle)@:-1
+      93.0ms    602 samples  (idle)@:-1
+      90.0ms    579 samples  (idle)@:-1
+      90.0ms    581 samples  (idle)@:-1
+      89.6ms    578 samples  (idle)@:-1
+      85.1ms    550 samples  (idle)@:-1
+      85.0ms    550 samples  (idle)@:-1
+
+────────────────────────────────────────────────────────────────────────────────
+HEAVIEST CALL STACKS (top 10 by accumulated self-time)
+────────────────────────────────────────────────────────────────────────────────
+
+  Stack #1: 16.3ms (0.0%)
+    → transport.onMessage (src/app/ChatController.ts:932)
+      → handleManifestDiffResponse (src/app/ChatController.ts:7365)
+        → applyDeltaBatch (src/sync/ManifestStore.ts:528)
+          → applyDeltaInternal (src/sync/ManifestStore.ts:538)
+
+  Stack #2: 13.9ms (0.0%)
+    → (anonymous) (nm/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:713)
+      → run_micro_tasks (nm/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:705)
+        → run_all (nm/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:46)
+          → (anonymous) (nm/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:2430)
+            → flush (nm/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:2359)
+              → flush_effects (nm/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:2602)
+                → process (nm/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:2302)
+                  → flush_queued_effects (nm/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:2663)
+                    → update_effect (nm/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:3668)
+                      → update_reaction (nm/.vite/deps/chunk-IPTVIGSN.js?v=6e7e444c:3523)
+                        → (anonymous) (src/lib/components/messages/MessageList.svelte:485)
+                          → resetWindowToLatest (src/lib/components/messages/MessageList.svelte:226)
+                            → currentWindowSize (src/lib/components/messages/MessageList.svelte:218)
+                              → getTargetWindowSize (src/lib/components/messages/MessageList.svelte:206)
+
+  Stack #3: 11.5ms (0.0%)
+    → deriveKeyPairAtPath (src/identity/HDKeyDerivation.ts:85)
+      → importP256PrivateKey (src/identity/HDKeyDerivation.ts:151)
+        → getPublicKey (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2807)
+          → multiply (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2566)
+            → mul (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2571)
+              → cached (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1675)
+                → getPrecomputes (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1663)
+                  → precomputeWindow (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1601)
+                    → add (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2502)
+                      → mul (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1259)
+                        → mod (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:981)
+
+  Stack #4: 8.6ms (0.0%)
+    → _checkFrame (src/main.ts:19)
+      → requestAnimationFrame (:-1)
+
+  Stack #5: 7.4ms (0.0%)
+    → _checkFrame (src/main.ts:19)
+
+  Stack #6: 5.2ms (0.0%)
+    → transport.onMessage (src/app/ChatController.ts:932)
+      → handleManifestDiffResponse (src/app/ChatController.ts:7365)
+        → applyDeltaBatch (src/sync/ManifestStore.ts:528)
+          → applyDeltaInternal (src/sync/ManifestStore.ts:538)
+            → (anonymous) (src/sync/ManifestStore.ts:543)
+
+  Stack #7: 5.2ms (0.0%)
+    → joinWorkspace (src/app/ChatController.ts:4963)
+      → onWorkspaceActivated (src/app/ChatController.ts:8916)
+        → prefetchWorkspaceMemberDirectory (src/app/ChatController.ts:2428)
+          → getSnapshot (src/app/workspace/PublicWorkspaceController.ts:46)
+            → (anonymous) (src/app/workspace/PublicWorkspaceController.ts:64)
+
+  Stack #8: 4.8ms (0.0%)
+    → deriveKeyPairAtPath (src/identity/HDKeyDerivation.ts:85)
+      → importP256PrivateKey (src/identity/HDKeyDerivation.ts:151)
+        → getPublicKey (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2807)
+          → multiply (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2566)
+            → mul (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2571)
+              → cached (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1675)
+                → getPrecomputes (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1663)
+                  → precomputeWindow (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1601)
+                    → add (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:2502)
+                      → mul (nm/.vite/deps/@noble_curves_nist__js.js?v=6e7e444c:1259)
+
+  Stack #9: 4.8ms (0.0%)
+    → transport.onMessage (src/app/ChatController.ts:932)
+      → handleManifestDiffResponse (src/app/ChatController.ts:7365)
+        → applyDeltaBatch (src/sync/ManifestStore.ts:528)
+          → applyDeltaInternal (src/sync/ManifestStore.ts:538)
+            → deepClone (src/sync/ManifestStore.ts:8)
+
+  Stack #10: 4.0ms (0.0%)
+    → transport.onMessage (src/app/ChatController.ts:932)
+      → handleManifestDiffResponse (src/app/ChatController.ts:7365)
+        → applyDeltaBatch (src/sync/ManifestStore.ts:528)
+          → notifyChange (src/sync/ManifestStore.ts:377)
+            → persistWorkspaceState (src/sync/ManifestStore.ts:385)
+              → (anonymous) (src/app/ChatController.ts:100)
+                → saveManifest (src/storage/PersistentStore.ts:783)
+                  → put (src/storage/PersistentStore.ts:936)
+                    → (anonymous) (src/storage/PersistentStore.ts:937)
+
+────────────────────────────────────────────────────────────────────────────────
+TIME BREAKDOWN: App vs Native vs Idle
+────────────────────────────────────────────────────────────────────────────────
+  App code:               167.8ms  0.4%
+  Native/built-in:        604.7ms  1.4%
+  Idle:                 42030.0ms  98.1%
+  GC:                      22.0ms  0.1%

@@ -31,6 +31,9 @@
     frequentReactions: string[];
     scrollTargetMessageId?: string | null;
     scrollTargetNonce?: number;
+    hasOlderMessages?: boolean;
+    loadingOlder?: boolean;
+    onLoadOlder?: (channelId: string) => Promise<number>;
     // Callbacks
     getThread: (channelId: string, messageId: string) => PlaintextMessage[];
     getPeerAlias: (peerId: string) => string;
@@ -56,6 +59,9 @@
     frequentReactions,
     scrollTargetMessageId = null,
     scrollTargetNonce = 0,
+    hasOlderMessages = false,
+    loadingOlder = false,
+    onLoadOlder,
     getThread,
     getPeerAlias,
     isBot,
@@ -607,6 +613,34 @@
     scrollAndHighlightMessage(messageId);
   });
 
+  // Load-older-messages detection: when the user scrolls near the top of
+  // the message list and the virtual window already starts at index 0,
+  // request older messages from IndexedDB.
+  let loadOlderScheduled = false;
+
+  function checkLoadOlder(container: HTMLElement): void {
+    if (inThreadView || !onLoadOlder || !hasOlderMessages || loadingOlder || loadOlderScheduled) return;
+    if (windowStart > 0) return; // virtualizer hasn't reached the top yet
+    // Trigger when within 200px of the top (generous threshold so it feels seamless)
+    if (container.scrollTop > 200) return;
+    if (!activeChannelId) return;
+
+    loadOlderScheduled = true;
+    const chId = activeChannelId;
+    const prevScrollHeight = container.scrollHeight;
+    onLoadOlder(chId).then((count) => {
+      if (count > 0) {
+        // After prepend, preserve the user's visual scroll position.
+        requestAnimationFrame(() => {
+          const newScrollHeight = container.scrollHeight;
+          container.scrollTop += newScrollHeight - prevScrollHeight;
+          markOffsetsDirty();
+          updateSpacerHeights();
+        });
+      }
+    }).finally(() => { loadOlderScheduled = false; });
+  }
+
   // Scroll-driven adaptive window sync.
   $effect(() => {
     if (!mounted) return;
@@ -621,6 +655,7 @@
       if (!isNearBottom) keepBottomAnchoredUntil = 0;
       if (performance.now() < suppressScrollVirtualizationUntil) return;
       scheduleWindowSync(container);
+      checkLoadOlder(container);
     };
 
     container.addEventListener('scroll', onScroll, { passive: true });
@@ -737,6 +772,10 @@
       <div class="thread-root-separator"><span>Thread</span></div>
     {/if}
 
+    {#if loadingOlder && !inThreadView}
+      <div class="load-older-indicator" aria-live="polite">Loading older messages...</div>
+    {/if}
+
     <div class="message-virtual-anchor" aria-hidden="true"></div>
 
     {#if topSpacerHeight > 0}
@@ -806,5 +845,13 @@
     flex: 0 0 auto;
     width: 100%;
     pointer-events: none;
+  }
+
+  .load-older-indicator {
+    text-align: center;
+    padding: 8px 0;
+    font-size: 12px;
+    color: var(--text-light, #888);
+    user-select: none;
   }
 </style>

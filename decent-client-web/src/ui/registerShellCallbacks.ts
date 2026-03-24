@@ -286,6 +286,19 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     onRememberReaction: (emoji) => rememberReaction(emoji),
     onShowMessageInfo: (messageId) => showMessageInfo(messageId),
     resolveAttachmentImageUrl: callbacks.resolveAttachmentImageUrl,
+    loadOlderMessages: callbacks.loadOlderMessages
+      ? async (channelId: string) => {
+          shellData.messages.loadingOlder = true;
+          try {
+            const count = await callbacks.loadOlderMessages!(channelId);
+            // After prepending, refresh messages so the UI sees the new data.
+            syncShellMessages();
+            return count;
+          } finally {
+            shellData.messages.loadingOlder = false;
+          }
+        }
+      : undefined,
     onImageClick: async (name, src, attachmentId) => {
       if (attachmentId && callbacks.resolveAttachmentImageUrl) {
         try {

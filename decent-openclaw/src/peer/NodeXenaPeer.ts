@@ -281,6 +281,7 @@ export class NodeXenaPeer {
   private static readonly INBOUND_HANDSHAKE_COOLDOWN_MS = 5_000;
   private static readonly PEER_MAINTENANCE_RETRY_BASE_MS = 30_000;
   private static readonly PEER_MAINTENANCE_RETRY_MAX_MS = 10 * 60_000;
+  private static readonly TRANSPORT_ERROR_LOG_WINDOW_MS = 30_000;
 
   private readonly store: FileStore;
   private readonly workspaceManager: WorkspaceManager;
@@ -307,6 +308,7 @@ export class NodeXenaPeer {
   private readonly inboundHandshakeAtByPeer = new Map<string, number>();
   private readonly peerMaintenanceRetryAtByPeer = new Map<string, number>();
   private readonly peerMaintenanceAttemptsByPeer = new Map<string, number>();
+  private readonly throttledTransportErrors = new Map<string, { windowStart: number; suppressed: number }>();
   private companySimProfileLoaded = false;
   private companySimProfile: WorkspaceMember["companySim"] | undefined;
   private companyTemplateInstallLock: Promise<void> = Promise.resolve();
@@ -487,6 +489,13 @@ export class NodeXenaPeer {
       this.transport.onDisconnect = (peerId) => {
         this.opts.log?.info(`[xena-peer] peer disconnected: ${peerId}`);
         this.messageProtocol?.clearSharedSecret(peerId);
+        // Clear per-peer cooldowns so the next connect always proceeds.
+        // Without this, a reconnect within CONNECT_HANDSHAKE_COOLDOWN_MS
+        // silently drops the connect event — no handshake, no session resume,
+        // the remote peer sees a dead connection and closes it.
+        this.connectHandshakeAtByPeer.delete(peerId);
+        this.inboundHandshakeAtByPeer.delete(peerId);
+        this.decryptRecoveryAtByPeer.delete(peerId);
       };
 
       this.transport.onMessage = (fromPeerId, rawData) => {
@@ -495,7 +504,7 @@ export class NodeXenaPeer {
 
       this.transport.onError = (err) => {
         this.notePeerMaintenanceFailure(this.extractPeerIdFromTransportError(err), Date.now());
-        this.opts.log?.error?.(`[xena-peer] transport error: ${err.message}`);
+        this.logTransportError(err);
       };
 
       this.myPeerId = await this.transport.init(this.myPeerId);
@@ -867,6 +876,31 @@ export class NodeXenaPeer {
   private extractPeerIdFromTransportError(error: Error): string | null {
     const match = /Could not connect to peer ([a-z0-9]+)/i.exec(error.message);
     return match?.[1] ?? null;
+  }
+
+  private logTransportError(error: Error): void {
+    const message = error.message || String(error);
+    const peerId = this.extractPeerIdFromTransportError(error);
+    if (!peerId) {
+      this.opts.log?.error?.(`[xena-peer] transport error: ${message}`);
+      return;
+    }
+
+    const now = Date.now();
+    const current = this.throttledTransportErrors.get(peerId);
+    if (!current || now - current.windowStart >= NodeXenaPeer.TRANSPORT_ERROR_LOG_WINDOW_MS) {
+      if (current && current.suppressed > 0) {
+        this.opts.log?.warn?.(`[xena-peer] transport error repeats for ${peerId.slice(0, 8)} suppressed=${current.suppressed}`);
+      }
+      this.throttledTransportErrors.set(peerId, { windowStart: now, suppressed: 0 });
+      this.opts.log?.error?.(`[xena-peer] transport error: ${message}`);
+      return;
+    }
+
+    current.suppressed += 1;
+    if (current.suppressed % 20 === 0) {
+      this.opts.log?.warn?.(`[xena-peer] transport error repeats for ${peerId.slice(0, 8)} suppressed=${current.suppressed}`);
+    }
   }
 
   private notePeerMaintenanceFailure(peerId: string | null, now = Date.now()): void {
@@ -1252,6 +1286,12 @@ export class NodeXenaPeer {
           publicKey: typeof msg.publicKey === 'string' ? msg.publicKey : undefined,
         });
       }
+      // Always reply with our own handshake so the remote peer can complete
+      // crypto setup.  Without this, a peer that hard-refreshed (lost its
+      // shared secret) sends us a handshake, we process it on our side, but
+      // never reply — the remote peer never enters readyPeers and sees us
+      // as permanently offline.
+      await this.sendHandshake(fromPeerId);
       await this.resumePeerSession(fromPeerId);
       return;
     }
@@ -1374,7 +1414,13 @@ export class NodeXenaPeer {
       content = await this.messageProtocol.decryptMessage(fromPeerId, msg, peerPublicKey);
     } catch (err) {
       if (this.shouldIgnoreDecryptReplay(fromPeerId, msg, err)) {
-        this.opts.log?.info?.(`[xena-peer] ignoring replayed pre-key session from ${fromPeerId}`);
+        // The peer sent a pre-key session init but we already have a ratchet.
+        // This means the peer lost its ratchet state (e.g. page reload) and is
+        // trying to bootstrap a new session.  Trigger recovery so both sides
+        // re-establish a fresh ratchet instead of waiting for a non-pre-key
+        // message to fail (which may never come).
+        this.opts.log?.info?.(`[xena-peer] replayed pre-key from ${fromPeerId} — triggering recovery handshake`);
+        await this.triggerDecryptRecoveryHandshake(fromPeerId);
         return;
       }
       this.opts.log?.warn?.(`[xena-peer] decrypt threw for ${fromPeerId}, resetting ratchet: ${String(err)}`);
@@ -2157,6 +2203,10 @@ export class NodeXenaPeer {
     }
 
     this.connectHandshakeAtByPeer.set(peerId, now);
+    // Always send a handshake on connect, even if we have an existing session.
+    // The remote peer may have lost their crypto state (e.g. hard refresh)
+    // and needs our handshake to enter readyPeers.
+    await this.sendHandshake(peerId);
     if (this.hasProtocolSession(peerId)) {
       await this.resumePeerSession(peerId);
       return;
@@ -3461,11 +3511,17 @@ export class NodeXenaPeer {
     if (!workspaceId) return;
 
     const deltas = Array.isArray(msg?.deltas) ? (msg.deltas as ManifestDelta[]) : [];
+    // Apply all deltas in a batch — persists only once at the end.
+    this.manifestStore.applyDeltaBatch(deltas);
+    let needsSync = false;
     for (const delta of deltas) {
-      this.manifestStore.applyDelta(delta);
       if (delta.domain === 'channel-message') {
-        this.requestSyncForPeer(peerId);
+        needsSync = true;
+        break;
       }
+    }
+    if (needsSync) {
+      this.requestSyncForPeer(peerId);
     }
 
     const snapshots = Array.isArray(msg?.snapshots) ? msg.snapshots : [];
@@ -4069,12 +4125,13 @@ export class NodeXenaPeer {
 
     let sentCount = 0;
     let failedCount = 0;
+    const deliveredIds: number[] = [];  // Batch-remove after loop
 
     for (const queuedItem of queued) {
       const item = (queuedItem?.data ?? queuedItem) as any;
       if (!item || typeof item !== 'object') {
         if (typeof queuedItem?.id === 'number') {
-          await this.offlineQueue.remove(peerId, queuedItem.id);
+          deliveredIds.push(queuedItem.id);
         }
         continue;
       }
@@ -4121,7 +4178,7 @@ export class NodeXenaPeer {
             });
 
             if (typeof queuedItem?.id === 'number') {
-              await this.offlineQueue.remove(peerId, queuedItem.id);
+              deliveredIds.push(queuedItem.id);
             }
             sentCount += 1;
             continue;
@@ -4159,7 +4216,7 @@ export class NodeXenaPeer {
           }
 
           if (typeof queuedItem?.id === 'number') {
-            await this.offlineQueue.remove(peerId, queuedItem.id);
+            deliveredIds.push(queuedItem.id);
           }
           sentCount += 1;
           continue;
@@ -4169,7 +4226,7 @@ export class NodeXenaPeer {
           const accepted = this.transport.send(peerId, item);
           if (!accepted) throw new Error('transport rejected queued receipt send');
           if (typeof queuedItem?.id === 'number') {
-            await this.offlineQueue.remove(peerId, queuedItem.id);
+            deliveredIds.push(queuedItem.id);
           }
           sentCount += 1;
           continue;
@@ -4177,7 +4234,7 @@ export class NodeXenaPeer {
 
         if (typeof item.content !== 'string') {
           if (typeof queuedItem?.id === 'number') {
-            await this.offlineQueue.remove(peerId, queuedItem.id);
+            deliveredIds.push(queuedItem.id);
           }
           continue;
         }
@@ -4201,7 +4258,7 @@ export class NodeXenaPeer {
         if (!accepted) throw new Error('transport rejected queued send');
 
         if (typeof queuedItem?.id === 'number') {
-          await this.offlineQueue.remove(peerId, queuedItem.id);
+          deliveredIds.push(queuedItem.id);
         }
         sentCount += 1;
       } catch (err) {
@@ -4210,6 +4267,18 @@ export class NodeXenaPeer {
           await this.offlineQueue.markAttempt(peerId, queuedItem.id);
         }
         this.opts.log?.warn?.(`[xena-peer] failed queued send to ${peerId}: ${String(err)}`);
+      }
+    }
+
+    // Batch-remove all delivered/discarded items in a single IDB transaction
+    if (deliveredIds.length > 0) {
+      try {
+        await this.offlineQueue.removeBatch(peerId, deliveredIds);
+      } catch (batchErr) {
+        this.opts.log?.error?.(`[xena-peer] batch remove failed, falling back to individual: ${String(batchErr)}`);
+        for (const id of deliveredIds) {
+          await this.offlineQueue.remove(peerId, id).catch(() => {});
+        }
       }
     }
 

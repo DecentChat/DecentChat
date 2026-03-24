@@ -55,6 +55,7 @@ describe('focused channel switching', () => {
       peerStatusTitle: mock(() => 'Offline'),
       showToast: mock(() => {}),
       toggleMobileSidebar: mock(() => {}),
+      closeMobileSidebar: mock(() => {}),
       closeLightbox: mock(() => {}),
       syncShellHuddle: mock(() => {}),
     });

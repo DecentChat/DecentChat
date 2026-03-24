@@ -26,7 +26,7 @@ export const DEFAULT_LIMITS: Record<RateLimitAction, BucketConfig> = {
   message:    { max: 30,       refillRate: 10 },        // 30 burst, 10/sec sustained
   bytes:      { max: 5242880,  refillRate: 102400 },     // 5MB burst, 100KB/sec
   connection: { max: 5,        refillRate: 1/60 },       // 5 burst, 1/min
-  sync:       { max: 30,       refillRate: 5 },          // 30 burst, 5/sec sustained
+  sync:       { max: 120,      refillRate: 20 },         // 120 burst, 20/sec sustained
   media:      { max: 100,      refillRate: 20 },         // 100 burst, 20/sec
   handshake:  { max: 3,        refillRate: 1/10 },       // 3 burst, 1 per 10sec
 };
@@ -135,7 +135,10 @@ export class RateLimiter {
     const retryAfterMs = Math.ceil((deficit / bucket.config.refillRate) * 1000);
 
     // Media should throttle only (no reputation escalation / no temp bans).
-    if (action === 'media') {
+    // Sync should also throttle only — sync is inherently bursty during
+    // connection setup (manifest diffs, negentropy rounds, timestamp sync)
+    // and banning peers for normal sync traffic breaks connectivity.
+    if (action === 'media' || action === 'sync') {
       const violation: Violation = {
         peerId,
         action,
