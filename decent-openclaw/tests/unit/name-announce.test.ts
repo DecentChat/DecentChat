@@ -2,7 +2,7 @@ import { describe, expect, test, mock } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { NodeXenaPeer } from '../../src/peer/NodeXenaPeer.ts';
+import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
 
 const VALID_SEED = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
@@ -15,15 +15,15 @@ function makeAccount(overrides: Partial<any> = {}): any {
     seedPhrase: VALID_SEED,
     signalingServer: 'https://decentchat.app/peerjs',
     invites: [],
-    alias: 'Xena',
+    alias: 'DecentChat Bot',
     dataDir: mkdtempSync(join(tmpdir(), 'openclaw-name-test-')),
     ...overrides,
   };
 }
 
-describe('NodeXenaPeer name-announce flow', () => {
+describe('DecentChatNodePeer name-announce flow', () => {
   test('sends name-announce immediately after handshake', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -56,7 +56,7 @@ describe('NodeXenaPeer name-announce flow', () => {
     expect(sent[1]?.peerId).toBe('peer-1');
     expect(sent[1]?.msg.type).toBe('pre-key-bundle.publish');
     expect(sent[2]?.peerId).toBe('peer-1');
-    expect(sent[2]?.msg).toEqual({ type: 'name-announce', alias: 'Xena', isBot: true });
+    expect(sent[2]?.msg).toEqual({ type: 'name-announce', alias: 'DecentChat Bot', isBot: true });
   });
 
   test('name-announce includes bootstrap target workspace id when peer membership is still converging', async () => {
@@ -68,7 +68,7 @@ describe('NodeXenaPeer name-announce flow', () => {
       },
     });
 
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account,
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -81,7 +81,7 @@ describe('NodeXenaPeer name-announce flow', () => {
       description: '',
       inviteCode: 'INV123',
       channels: [],
-      members: [{ peerId: me, alias: 'Xena', publicKey: '', role: 'member', joinedAt: Date.now() }],
+      members: [{ peerId: me, alias: 'DecentChat Bot', publicKey: '', role: 'member', joinedAt: Date.now() }],
       permissions: {},
       createdAt: Date.now(),
       createdBy: me,
@@ -111,14 +111,14 @@ describe('NodeXenaPeer name-announce flow', () => {
     expect(sent).toHaveLength(3);
     expect(sent[2]?.msg).toMatchObject({
       type: 'name-announce',
-      alias: 'Xena',
+      alias: 'DecentChat Bot',
       isBot: true,
       workspaceId: 'ws-target',
     });
   });
 
   test('resolveSenderName prefers cached alias over peer ID', () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -139,7 +139,7 @@ describe('NodeXenaPeer name-announce flow', () => {
   });
 
   test('caches alias in store on name-announce', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -165,7 +165,7 @@ describe('NodeXenaPeer name-announce flow', () => {
   });
 
   test('name-announce with workspaceId upserts previously unknown member and triggers sync', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -178,7 +178,7 @@ describe('NodeXenaPeer name-announce flow', () => {
       description: '',
       inviteCode: 'INV',
       channels: [],
-      members: [{ peerId: me, alias: 'Xena', publicKey: '', role: 'owner', joinedAt: Date.now() }],
+      members: [{ peerId: me, alias: 'DecentChat Bot', publicKey: '', role: 'owner', joinedAt: Date.now() }],
       permissions: {},
       createdAt: Date.now(),
       createdBy: me,
@@ -205,7 +205,7 @@ describe('NodeXenaPeer name-announce flow', () => {
   });
 
   test('workspace-state channel merge reuses same-name channel instead of creating duplicate ids', () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -218,7 +218,7 @@ describe('NodeXenaPeer name-announce flow', () => {
       description: '',
       inviteCode: 'INV',
       channels: [{ id: 'local-general', workspaceId: 'ws-1', name: 'general', type: 'channel', members: [], createdBy: me, createdAt: Date.now() }],
-      members: [{ peerId: me, alias: 'Xena', publicKey: '', role: 'owner', joinedAt: Date.now() }],
+      members: [{ peerId: me, alias: 'DecentChat Bot', publicKey: '', role: 'owner', joinedAt: Date.now() }],
       permissions: {},
       createdAt: Date.now(),
       createdBy: me,

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { NodeXenaPeer } from '../../src/peer/NodeXenaPeer.ts';
+import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
 import type { ResolvedDecentChatAccount } from '../../src/types.ts';
 
 function makeAccount(root: string): ResolvedDecentChatAccount {
@@ -64,9 +64,9 @@ describe('company member profile propagation', () => {
     const root = join(tmpdir(), `company-peer-${Date.now()}`);
     mkdirSync(root, { recursive: true });
     try {
-      const peer = Object.create(NodeXenaPeer.prototype) as any;
+      const peer = Object.create(DecentChatNodePeer.prototype) as any;
       peer.opts = { account: makeAccount(root), log: { warn() {} } };
-      const profile = NodeXenaPeer.prototype['getMyCompanySimProfile'].call(peer);
+      const profile = DecentChatNodePeer.prototype['getMyCompanySimProfile'].call(peer);
       expect(profile).toEqual({
         automationKind: 'openclaw-agent',
         roleTitle: 'Backend Engineer',
@@ -82,15 +82,15 @@ describe('company member profile propagation', () => {
     mkdirSync(root, { recursive: true });
     try {
       const warns: string[] = [];
-      const peer = Object.create(NodeXenaPeer.prototype) as any;
+      const peer = Object.create(DecentChatNodePeer.prototype) as any;
       peer.opts = {
         account: makeAccount(root),
         log: { warn(message: string) { warns.push(message); } },
       };
 
-      const first = NodeXenaPeer.prototype['getMyCompanySimProfile'].call(peer);
+      const first = DecentChatNodePeer.prototype['getMyCompanySimProfile'].call(peer);
       unlinkSync(join(root, 'COMMUNICATION.md'));
-      const second = NodeXenaPeer.prototype['getMyCompanySimProfile'].call(peer);
+      const second = DecentChatNodePeer.prototype['getMyCompanySimProfile'].call(peer);
 
       expect(second).toEqual(first);
       expect(warns).toHaveLength(0);

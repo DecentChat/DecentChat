@@ -82,7 +82,7 @@ describe("company-sim channel mute", () => {
         log: { info: () => {}, warn: () => {}, error: () => {} },
       },
       core,
-      xenaPeer: {
+      nodePeer: {
         startStream: async () => {},
         startDirectStream: async () => {},
         sendStreamDelta: async () => {},

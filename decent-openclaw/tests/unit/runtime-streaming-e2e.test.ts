@@ -85,7 +85,7 @@ describe("runtime streaming relay integration", () => {
       },
     } as any;
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -113,7 +113,7 @@ describe("runtime streaming relay integration", () => {
       },
       ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(recorded).toHaveLength(1);
@@ -148,7 +148,7 @@ describe("runtime streaming relay integration", () => {
       },
     } as any;
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -175,7 +175,7 @@ describe("runtime streaming relay integration", () => {
       },
       ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     await relayInboundMessageToPeer({
@@ -191,7 +191,7 @@ describe("runtime streaming relay integration", () => {
       },
       ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(recorded).toHaveLength(2);
@@ -225,7 +225,7 @@ describe("runtime streaming relay integration", () => {
       },
     } as any;
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -251,7 +251,7 @@ describe("runtime streaming relay integration", () => {
       },
       ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(recorded).toHaveLength(1);
@@ -285,7 +285,7 @@ describe("runtime streaming relay integration", () => {
       },
     } as any;
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -312,7 +312,7 @@ describe("runtime streaming relay integration", () => {
       },
       ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(recorded).toHaveLength(1);
@@ -356,7 +356,7 @@ describe("runtime streaming relay integration", () => {
       },
     } as any;
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -393,7 +393,7 @@ describe("runtime streaming relay integration", () => {
         },
       },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     const routeLog = logs.find((line) => line.includes("[decentchat] route"));
@@ -430,7 +430,7 @@ describe("runtime streaming relay integration", () => {
       },
     } as any;
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -466,7 +466,7 @@ describe("runtime streaming relay integration", () => {
         },
       },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     const routeLog = logs.find((line) => line.includes("[decentchat] route"));
@@ -504,7 +504,7 @@ describe("runtime streaming relay integration", () => {
       },
     } as any;
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -531,7 +531,7 @@ describe("runtime streaming relay integration", () => {
       },
       ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(recorded).toHaveLength(1);
@@ -564,7 +564,7 @@ describe("runtime streaming relay integration", () => {
       },
     } as any;
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -591,7 +591,7 @@ describe("runtime streaming relay integration", () => {
       },
       ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(recorded).toHaveLength(1);
@@ -632,7 +632,7 @@ describe("runtime streaming relay integration", () => {
       },
     } as any;
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -663,7 +663,7 @@ describe("runtime streaming relay integration", () => {
       },
       ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(recorded).toHaveLength(1);
@@ -696,7 +696,7 @@ describe("runtime streaming relay integration", () => {
       },
     } as any;
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -723,7 +723,7 @@ describe("runtime streaming relay integration", () => {
       },
       ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(recorded).toHaveLength(1);
@@ -756,7 +756,7 @@ describe("runtime streaming relay integration", () => {
       },
     } as any;
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -783,7 +783,7 @@ describe("runtime streaming relay integration", () => {
       },
       ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(recorded).toHaveLength(1);
@@ -796,7 +796,7 @@ describe("runtime streaming relay integration", () => {
     const streamDone: Array<{ peerId: string; messageId: string }> = [];
     const persistedReplies: Array<{ peerId: string; content: string; threadId?: string; replyToId?: string; messageId?: string }> = [];
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async (args: { peerId: string; messageId: string }) => {
         streamStarts.push(args);
@@ -823,7 +823,7 @@ describe("runtime streaming relay integration", () => {
         accountId: "acct-1",
       },
       core: makeRuntime({ partials: ["Hel", "lo", " world"], finalText: "Hello world" }),
-      xenaPeer,
+      nodePeer,
     });
 
     expect(streamStarts).toHaveLength(1);
@@ -848,7 +848,7 @@ describe("runtime streaming relay integration", () => {
     const streamDone: Array<{ channelId: string; workspaceId: string; messageId: string }> = [];
     const persistedReplies: Array<{ channelId: string; content: string; threadId?: string; replyToId?: string; messageId?: string }> = [];
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async (args: { channelId: string; workspaceId: string; messageId: string; threadId?: string; replyToId?: string }) => {
         streamStarts.push(args);
       },
@@ -882,7 +882,7 @@ describe("runtime streaming relay integration", () => {
         accountId: 'acct-1',
       },
       core: makeRuntime({ partials: ['Hey there'], finalText: 'Hey there' }),
-      xenaPeer: xenaPeer as any,
+      nodePeer: nodePeer as any,
     });
 
     expect(streamStarts).toHaveLength(1);
@@ -917,7 +917,7 @@ describe("runtime streaming relay integration", () => {
   test("channel replies send typing start immediately and stop after first streamed output", async () => {
     const calls: string[] = [];
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => { calls.push('startStream'); },
       startDirectStream: async () => {},
       sendStreamDelta: async (args: { channelId: string; workspaceId: string; messageId: string; content: string }) => {
@@ -946,7 +946,7 @@ describe("runtime streaming relay integration", () => {
         accountId: 'acct-1',
       },
       core: makeRuntime({ partials: ['Hello'], finalText: 'Hello' }),
-      xenaPeer: xenaPeer as any,
+      nodePeer: nodePeer as any,
     });
 
     expect(calls[0]).toBe('typingStart');
@@ -960,7 +960,7 @@ describe("runtime streaming relay integration", () => {
   test("channel replies send typing start immediately and stop after non-stream final reply", async () => {
     const calls: string[] = [];
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -986,7 +986,7 @@ describe("runtime streaming relay integration", () => {
         accountId: 'acct-1',
       },
       core: makeRuntime({ finalText: 'single final reply' }),
-      xenaPeer: xenaPeer as any,
+      nodePeer: nodePeer as any,
     });
 
     expect(calls[0]).toBe('typingStart');
@@ -1002,7 +1002,7 @@ describe("runtime streaming relay integration", () => {
     const streamDone: Array<{ peerId: string; messageId: string }> = [];
     const persistedReplies: Array<{ peerId: string; content: string; threadId?: string; replyToId?: string }> = [];
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async (args: { peerId: string; messageId: string }) => {
         streamStarts.push(args);
@@ -1030,7 +1030,7 @@ describe("runtime streaming relay integration", () => {
         accountId: "acct-1",
       },
       core: makeRuntime({ finalText: "single final reply" }),
-      xenaPeer,
+      nodePeer,
     });
 
     expect(streamStarts).toHaveLength(0);
@@ -1049,7 +1049,7 @@ describe("runtime streaming relay integration", () => {
   test("empty partial reply text is ignored", async () => {
     const streamDeltas: Array<{ peerId: string; messageId: string; content: string }> = [];
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -1069,7 +1069,7 @@ describe("runtime streaming relay integration", () => {
         accountId: "acct-1",
       },
       core: makeRuntime({ partials: ["", "OK"], finalText: "OK" }),
-      xenaPeer,
+      nodePeer,
     });
 
     expect(streamDeltas.map((d) => d.content)).toEqual(["OK"]);
@@ -1079,7 +1079,7 @@ describe("runtime streaming relay integration", () => {
     const streamDeltas: Array<{ peerId: string; messageId: string; content: string }> = [];
     const persistedReplies: Array<{ peerId: string; content: string; threadId?: string; replyToId?: string }> = [];
 
-    const xenaPeer = {
+    const nodePeer = {
       startStream: async () => {},
       startDirectStream: async () => {},
       sendStreamDelta: async () => {},
@@ -1102,7 +1102,7 @@ describe("runtime streaming relay integration", () => {
         accountId: "acct-1",
       },
       core: makeRuntime({ partials: [mismatch], finalText: mismatch }),
-      xenaPeer,
+      nodePeer,
     });
 
     expect(streamDeltas).toHaveLength(0);

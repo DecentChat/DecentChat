@@ -114,7 +114,7 @@ describe('company thread routing continuity runtime', () => {
     const recorded: Array<{ accountId: string; sessionKey: string; ctx: any }> = [];
     const readReceipts: string[] = [];
     const core = makeCore(recorded);
-    const xenaPeer = makePeer(readReceipts);
+    const nodePeer = makePeer(readReceipts);
 
     await relayInboundMessageToPeer({
       incoming: {
@@ -130,7 +130,7 @@ describe('company thread routing continuity runtime', () => {
       },
       ctx: makeCtx('backend-dev', manifestPath),
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     await relayInboundMessageToPeer({
@@ -147,7 +147,7 @@ describe('company thread routing continuity runtime', () => {
       },
       ctx: makeCtx('tester', manifestPath),
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(recorded).toHaveLength(1);
@@ -159,7 +159,7 @@ describe('company thread routing continuity runtime', () => {
     const recorded: Array<{ accountId: string; sessionKey: string; ctx: any }> = [];
     const readReceipts: string[] = [];
     const core = makeCore(recorded);
-    const xenaPeer = makePeer(readReceipts);
+    const nodePeer = makePeer(readReceipts);
 
     await relayInboundMessageToPeer({
       incoming: {
@@ -175,7 +175,7 @@ describe('company thread routing continuity runtime', () => {
       },
       ctx: makeCtx('tester', manifestPath),
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     await relayInboundMessageToPeer({
@@ -192,7 +192,7 @@ describe('company thread routing continuity runtime', () => {
       },
       ctx: makeCtx('backend-dev', manifestPath),
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(recorded).toHaveLength(1);

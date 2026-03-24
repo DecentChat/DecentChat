@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test';
 import { MessageStore, SyncProtocol as LegacySyncProtocol, WorkspaceManager } from 'decent-protocol';
 import { SyncProtocol } from '../../src/peer/SyncProtocol.ts';
-import { NodeXenaPeer } from '../../src/peer/NodeXenaPeer.ts';
+import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,7 +17,7 @@ function makeAccount(overrides: Partial<any> = {}): any {
     seedPhrase: VALID_SEED,
     signalingServer: 'https://decentchat.app/peerjs',
     invites: [],
-    alias: 'Xena',
+    alias: 'DecentChat Bot',
     dataDir: mkdtempSync(join(tmpdir(), 'openclaw-negentropy-test-')),
     ...overrides,
   };
@@ -196,8 +196,8 @@ describe('SyncProtocol runtime Negentropy sync', () => {
     expect(sendLegacySyncRequest).toHaveBeenCalledWith('bob', ws.id);
   });
 
-  test('NodeXenaPeer reconnect flow requests sync for shared workspaces', async () => {
-    const peer = new NodeXenaPeer({
+  test('DecentChatNodePeer reconnect flow requests sync for shared workspaces', async () => {
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},

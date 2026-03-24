@@ -6,7 +6,7 @@
  *
  * Under jiti (OpenClaw's TypeScript loader), all static imports are hoisted
  * to require() calls in order — so the FIRST import wins. Keep this as the
- * very first import in NodeXenaPeer.ts.
+ * very first import in DecentChatNodePeer.ts.
  */
 
 if (typeof RTCPeerConnection === 'undefined') {

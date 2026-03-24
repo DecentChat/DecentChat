@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decentChatPlugin } from "../../src/channel.ts";
-import { NodeXenaPeer } from "../../src/peer/NodeXenaPeer.ts";
+import { DecentChatNodePeer } from "../../src/peer/DecentChatNodePeer.ts";
 import { setActivePeer } from "../../src/peer-registry.ts";
 
 const VALID_SEED = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -17,15 +17,15 @@ function makeAccount(overrides: Partial<any> = {}): any {
     seedPhrase: VALID_SEED,
     signalingServer: "https://decentchat.app/peerjs",
     invites: [],
-    alias: "Xena",
+    alias: "DecentChat Bot",
     dataDir: mkdtempSync(join(tmpdir(), "openclaw-directory-live-test-")),
     ...overrides,
   };
 }
 
 describe("decent-openclaw live directory", () => {
-  test("NodeXenaPeer lists peers/groups from workspace cache", () => {
-    const peer = new NodeXenaPeer({
+  test("DecentChatNodePeer lists peers/groups from workspace cache", () => {
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -38,7 +38,7 @@ describe("decent-openclaw live directory", () => {
           id: "ws-1",
           name: "Workspace One",
           members: [
-            { peerId: "self-peer", alias: "Xena" },
+            { peerId: "self-peer", alias: "DecentChat Bot" },
             { peerId: "peer-a", alias: "Alice" },
             { peerId: "peer-b", alias: "Bob" },
           ],

@@ -4,7 +4,7 @@ import { finalizePeerStream } from '../../src/monitor.ts';
 describe('stream finalization', () => {
   test('direct chat finalization sends only direct stream-done', async () => {
     const calls: string[] = [];
-    const xenaPeer = {
+    const nodePeer = {
       sendDirectStreamDone: async (_args: { peerId: string; messageId: string }) => {
         calls.push('sendDirectStreamDone');
       },
@@ -18,7 +18,7 @@ describe('stream finalization', () => {
     } as any;
 
     await finalizePeerStream({
-      xenaPeer,
+      nodePeer,
       chatType: 'direct',
       senderId: 'peer-1',
       channelId: 'ch-1',
@@ -31,7 +31,7 @@ describe('stream finalization', () => {
 
   test('group chat finalization sends only workspace stream-done', async () => {
     const calls: string[] = [];
-    const xenaPeer = {
+    const nodePeer = {
       sendDirectStreamDone: async (_args: { peerId: string; messageId: string }) => {
         calls.push('sendDirectStreamDone');
       },
@@ -44,7 +44,7 @@ describe('stream finalization', () => {
     } as any;
 
     await finalizePeerStream({
-      xenaPeer,
+      nodePeer,
       chatType: 'group',
       senderId: 'peer-1',
       channelId: 'ch-1',
@@ -57,13 +57,13 @@ describe('stream finalization', () => {
 
   test('no-op when stream message id is missing', async () => {
     const calls: string[] = [];
-    const xenaPeer = {
+    const nodePeer = {
       sendDirectStreamDone: async () => { calls.push('sendDirectStreamDone'); },
       sendStreamDone: async () => { calls.push('sendStreamDone'); },
     } as any;
 
     await finalizePeerStream({
-      xenaPeer,
+      nodePeer,
       chatType: 'group',
       senderId: 'peer-1',
       channelId: 'ch-1',

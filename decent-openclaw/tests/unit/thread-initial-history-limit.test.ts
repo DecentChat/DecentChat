@@ -60,7 +60,7 @@ describe("thread.initialHistoryLimit bootstrap", () => {
       recorded,
     });
 
-    const xenaPeer = makePeer({
+    const nodePeer = makePeer({
       getThreadHistory: () => [
         { id: "m1", senderId: "peer-1", content: "first", timestamp: 100 },
         { id: "m2", senderId: "peer-2", content: "second", timestamp: 200 },
@@ -81,7 +81,7 @@ describe("thread.initialHistoryLimit bootstrap", () => {
       },
       ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(recorded).toHaveLength(1);
@@ -107,7 +107,7 @@ describe("thread.initialHistoryLimit bootstrap", () => {
       recorded,
     });
 
-    const xenaPeer = makePeer({
+    const nodePeer = makePeer({
       getThreadHistory: () => {
         lookupCalls += 1;
         return [];
@@ -128,7 +128,7 @@ describe("thread.initialHistoryLimit bootstrap", () => {
       },
       ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(lookupCalls).toBe(0);
@@ -152,7 +152,7 @@ describe("thread.initialHistoryLimit bootstrap", () => {
       recorded,
     });
 
-    const xenaPeer = makePeer({
+    const nodePeer = makePeer({
       getThreadHistory: () => {
         lookupCalls += 1;
         return [{ id: "m1", senderId: "peer-1", content: "first", timestamp: 100 }];
@@ -173,7 +173,7 @@ describe("thread.initialHistoryLimit bootstrap", () => {
       },
       ctx: { account: { streamEnabled: false } as any, accountId: "acct-1" },
       core,
-      xenaPeer,
+      nodePeer,
     });
 
     expect(lookupCalls).toBe(0);

@@ -11,7 +11,7 @@
       "seedPhrase": { "type": "string" },
       "signalingServer": { "type": "string", "default": "https://decentchat.app/peerjs" },
       "invites": { "type": "array", "items": { "type": "string" } },
-      "alias": { "type": "string", "default": "Xena AI" },
+      "alias": { "type": "string", "default": "DecentChat Bot" },
       "dataDir": { "type": "string" },
       "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist", "disabled"], "default": "open" },
       "channels": { "type": "object" }
@@ -22,7 +22,7 @@
     "seedPhrase": { "label": "Seed Phrase (12 words)", "sensitive": true },
     "signalingServer": { "label": "Signaling Server", "placeholder": "https://decentchat.app/peerjs" },
     "invites": { "label": "Invite URLs" },
-    "alias": { "label": "Bot Display Name", "placeholder": "Xena AI" },
+    "alias": { "label": "Bot Display Name", "placeholder": "DecentChat Bot" },
     "dataDir": { "label": "Data Directory" },
     "dmPolicy": { "label": "DM Policy" },
     "channels": { "label": "Channel Rules" }

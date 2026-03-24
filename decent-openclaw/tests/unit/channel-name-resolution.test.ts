@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { NodeXenaPeer } from '../../src/peer/NodeXenaPeer.ts';
+import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
 
-describe('NodeXenaPeer channel name lookup compatibility', () => {
+describe('DecentChatNodePeer channel name lookup compatibility', () => {
   test('resolveChannelNameById delegates to channel lookup for routing consumers', () => {
-    const peer = Object.create(NodeXenaPeer.prototype) as NodeXenaPeer & {
+    const peer = Object.create(DecentChatNodePeer.prototype) as DecentChatNodePeer & {
       workspaceManager: { getAllWorkspaces: () => Array<any> };
     };
     peer.workspaceManager = {

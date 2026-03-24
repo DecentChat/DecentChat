@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { NodeXenaPeer } from '../../src/peer/NodeXenaPeer.ts';
+import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
 
 const VALID_SEED = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
@@ -16,15 +16,15 @@ function makeAccount(overrides: Partial<any> = {}): any {
     seedPhrase: VALID_SEED,
     signalingServer: 'https://decentchat.app/peerjs',
     invites: [],
-    alias: 'Xena',
+    alias: 'DecentChat Bot',
     dataDir: mkdtempSync(join(tmpdir(), 'openclaw-company-control-')),
     ...overrides,
   };
 }
 
-describe('NodeXenaPeer company-template control plane', () => {
+describe('DecentChatNodePeer company-template control plane', () => {
   test('advertises company-template control capability when bridge handler is configured', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -85,7 +85,7 @@ describe('NodeXenaPeer company-template control plane', () => {
       manualActionItems: [],
     }));
 
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -147,7 +147,7 @@ describe('NodeXenaPeer company-template control plane', () => {
 
   test('rejects install requests from non-admin members', async () => {
     const installTemplate = mock(async () => ({ provisioningMode: 'config-provisioned' as const }));
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -218,7 +218,7 @@ describe('NodeXenaPeer company-template control plane', () => {
     }));
     const writeConfigFile = mock(async (_next: Record<string, unknown>) => {});
 
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -309,7 +309,7 @@ describe('NodeXenaPeer company-template control plane', () => {
       };
     });
 
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},

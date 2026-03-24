@@ -1,5 +1,5 @@
 /**
- * NodeXenaPeer — Xena as a permanent DecentChat P2P peer.
+ * DecentChatNodePeer — permanent DecentChat P2P peer runtime.
  */
 
 // MUST be first import — installs RTCPeerConnection globals before PeerJS loads
@@ -46,17 +46,17 @@ import type { CompanyTemplateQuestionValue } from '../company-sim/template-types
 
 const COMPANY_TEMPLATE_CONTROL_CAPABILITY = 'company-template-control-v1';
 
-let nodeXenaPeerStartupLock: Promise<void> = Promise.resolve();
+let decentChatNodePeerStartupLock: Promise<void> = Promise.resolve();
 
-export function resetNodeXenaPeerStartupLockForTests(): void {
-  nodeXenaPeerStartupLock = Promise.resolve();
+export function resetDecentChatNodePeerStartupLockForTests(): void {
+  decentChatNodePeerStartupLock = Promise.resolve();
 }
 
-export async function runNodeXenaPeerStartupLocked<T>(task: () => Promise<T>): Promise<T> {
-  const waitForPrevious = nodeXenaPeerStartupLock;
+export async function runDecentChatNodePeerStartupLocked<T>(task: () => Promise<T>): Promise<T> {
+  const waitForPrevious = decentChatNodePeerStartupLock;
   let releaseCurrent: (() => void) | null = null;
 
-  nodeXenaPeerStartupLock = new Promise<void>((resolve) => {
+  decentChatNodePeerStartupLock = new Promise<void>((resolve) => {
     releaseCurrent = resolve;
   });
 
@@ -69,7 +69,7 @@ export async function runNodeXenaPeerStartupLocked<T>(task: () => Promise<T>): P
   }
 }
 
-export interface NodeXenaPeerOptions {
+export interface DecentChatNodePeerOptions {
   account: ResolvedDecentChatAccount;
   onIncomingMessage: (params: {
     channelId: string;
@@ -273,7 +273,7 @@ type DirectoryEntry = {
   raw?: unknown;
 };
 
-export class NodeXenaPeer {
+export class DecentChatNodePeer {
   private static readonly CUSTODIAN_REPLICATION_TARGET = 2;
   private static readonly PRE_KEY_FETCH_TIMEOUT_MS = 2_500;
   private static readonly DECRYPT_RECOVERY_HANDSHAKE_COOLDOWN_MS = 5_000;
@@ -299,7 +299,7 @@ export class NodeXenaPeer {
   private readonly manifestStore: ManifestStore;
   private readonly custodianInbox = new Map<string, CustodyEnvelope>();
   private readonly pendingCustodyOffers = new Map<string, string[]>();
-  private readonly opts: NodeXenaPeerOptions;
+  private readonly opts: DecentChatNodePeerOptions;
   private readonly pendingMediaRequests = new Map<string, PendingMediaRequest>();
   private readonly pendingPreKeyBundleFetches = new Map<string, PendingPreKeyBundleFetch>();
   private readonly publishedPreKeyVersionByWorkspace = new Map<string, string>();
@@ -316,7 +316,7 @@ export class NodeXenaPeer {
   private manifestPersistTimer: ReturnType<typeof setTimeout> | null = null;
   public botHuddle: BotHuddleManager | null = null;
 
-  constructor(opts: NodeXenaPeerOptions) {
+  constructor(opts: DecentChatNodePeerOptions) {
     this.opts = opts;
     this.store = new FileStore(opts.account.dataDir);
     this.workspaceManager = new WorkspaceManager();
@@ -400,7 +400,7 @@ export class NodeXenaPeer {
   async start(): Promise<void> {
     const seedPhrase = this.opts.account.seedPhrase;
     if (!seedPhrase) {
-      throw new Error('Xena seed phrase not configured (channels.decentchat.seedPhrase)');
+      throw new Error('DecentChat seed phrase not configured (channels.decentchat.seedPhrase)');
     }
 
     const seedMgr = new SeedPhraseManager();
@@ -409,7 +409,7 @@ export class NodeXenaPeer {
       throw new Error(`Invalid seed phrase in channels.decentchat.seedPhrase: ${validation.error}`);
     }
 
-    await runNodeXenaPeerStartupLocked(async () => {
+    await runDecentChatNodePeerStartupLocked(async () => {
       const { ecdhKeyPair, ecdsaKeyPair } = await seedMgr.deriveKeys(seedPhrase);
       this.myPeerId = await seedMgr.derivePeerId(seedPhrase);
 
@@ -470,7 +470,7 @@ export class NodeXenaPeer {
         signalingServers: allServers,
         // useTurn defaults to true → uses STUN + open-relay TURN for NAT traversal
       });
-      this.opts.log?.info(`[xena-peer] signaling servers: ${allServers.join(', ')}`);
+      this.opts.log?.info(`[decentchat-peer] signaling servers: ${allServers.join(', ')}`);
 
       this.syncProtocol = new SyncProtocol(
         this.workspaceManager,
@@ -487,7 +487,7 @@ export class NodeXenaPeer {
       };
 
       this.transport.onDisconnect = (peerId) => {
-        this.opts.log?.info(`[xena-peer] peer disconnected: ${peerId}`);
+        this.opts.log?.info(`[decentchat-peer] peer disconnected: ${peerId}`);
         this.messageProtocol?.clearSharedSecret(peerId);
         // Clear per-peer cooldowns so the next connect always proceeds.
         // Without this, a reconnect within CONNECT_HANDSHAKE_COOLDOWN_MS
@@ -508,7 +508,7 @@ export class NodeXenaPeer {
       };
 
       this.myPeerId = await this.transport.init(this.myPeerId);
-      this.opts.log?.info(`[xena-peer] online as ${this.myPeerId}, signaling: ${allServers.join(', ')}`);
+      this.opts.log?.info(`[decentchat-peer] online as ${this.myPeerId}, signaling: ${allServers.join(', ')}`);
       this.startPeerMaintenance();
 
       // Initialize huddle manager after transport is ready (if enabled)
@@ -605,7 +605,7 @@ export class NodeXenaPeer {
 
       if (attempt < maxAttempts - 1) {
         const delay = delays[Math.min(attempt, delays.length - 1)];
-        this.opts.log?.info?.(`[xena-peer] join retry in ${delay / 1000}s (attempt ${attempt + 1}/${maxAttempts})`);
+        this.opts.log?.info?.(`[decentchat-peer] join retry in ${delay / 1000}s (attempt ${attempt + 1}/${maxAttempts})`);
         await new Promise(r => setTimeout(r, delay));
       }
     }
@@ -631,7 +631,7 @@ export class NodeXenaPeer {
     const added = await this.messageStore.addMessage(msg);
     if (added.success) {
       this.persistMessagesForChannel(channelId);
-      this.opts.log?.info?.(`[xena-peer] persisted message locally: ${msg.id.slice(0, 8)} (${content.length} chars)`);
+      this.opts.log?.info?.(`[decentchat-peer] persisted message locally: ${msg.id.slice(0, 8)} (${content.length} chars)`);
     }
   }
 
@@ -748,7 +748,7 @@ export class NodeXenaPeer {
         });
         await this.replicateToCustodians(peerId, { workspaceId, channelId, opId: msg.id, domain: 'channel-message' });
       } catch (err) {
-        this.opts.log?.error?.(`[xena-peer] failed to prepare outbound for ${peerId}: ${String(err)}`);
+        this.opts.log?.error?.(`[decentchat-peer] failed to prepare outbound for ${peerId}: ${String(err)}`);
         await this.enqueueOffline(peerId, {
           content: content.trim(),
           channelId,
@@ -771,13 +771,13 @@ export class NodeXenaPeer {
     try {
       const invite = InviteURI.decode(inviteUri);
       if (!invite.peerId) {
-        this.opts.log?.warn?.('[xena-peer] invite missing peer ID; cannot auto-join');
+        this.opts.log?.warn?.('[decentchat-peer] invite missing peer ID; cannot auto-join');
         return;
       }
 
       // Validate invite expiration
       if (InviteURI.isExpired(invite)) {
-        this.opts.log?.warn?.('[xena-peer] invite has expired; skipping join');
+        this.opts.log?.warn?.('[decentchat-peer] invite has expired; skipping join');
         return;
       }
 
@@ -794,9 +794,9 @@ export class NodeXenaPeer {
       };
 
       this.syncProtocol.requestJoin(invite.peerId, invite.inviteCode, member, invite.inviteId);
-      this.opts.log?.info(`[xena-peer] join request sent to ${invite.peerId}`);
+      this.opts.log?.info(`[decentchat-peer] join request sent to ${invite.peerId}`);
     } catch (err) {
-      this.opts.log?.error?.(`[xena-peer] join failed: ${String(err)}`);
+      this.opts.log?.error?.(`[decentchat-peer] join failed: ${String(err)}`);
     }
   }
 
@@ -825,7 +825,7 @@ export class NodeXenaPeer {
     this.botHuddle?.destroy();
     this.botHuddle = null;
     this.transport?.destroy();
-    this.opts.log?.info('[xena-peer] stopped');
+    this.opts.log?.info('[decentchat-peer] stopped');
   }
 
   /**
@@ -882,24 +882,24 @@ export class NodeXenaPeer {
     const message = error.message || String(error);
     const peerId = this.extractPeerIdFromTransportError(error);
     if (!peerId) {
-      this.opts.log?.error?.(`[xena-peer] transport error: ${message}`);
+      this.opts.log?.error?.(`[decentchat-peer] transport error: ${message}`);
       return;
     }
 
     const now = Date.now();
     const current = this.throttledTransportErrors.get(peerId);
-    if (!current || now - current.windowStart >= NodeXenaPeer.TRANSPORT_ERROR_LOG_WINDOW_MS) {
+    if (!current || now - current.windowStart >= DecentChatNodePeer.TRANSPORT_ERROR_LOG_WINDOW_MS) {
       if (current && current.suppressed > 0) {
-        this.opts.log?.warn?.(`[xena-peer] transport error repeats for ${peerId.slice(0, 8)} suppressed=${current.suppressed}`);
+        this.opts.log?.warn?.(`[decentchat-peer] transport error repeats for ${peerId.slice(0, 8)} suppressed=${current.suppressed}`);
       }
       this.throttledTransportErrors.set(peerId, { windowStart: now, suppressed: 0 });
-      this.opts.log?.error?.(`[xena-peer] transport error: ${message}`);
+      this.opts.log?.error?.(`[decentchat-peer] transport error: ${message}`);
       return;
     }
 
     current.suppressed += 1;
     if (current.suppressed % 20 === 0) {
-      this.opts.log?.warn?.(`[xena-peer] transport error repeats for ${peerId.slice(0, 8)} suppressed=${current.suppressed}`);
+      this.opts.log?.warn?.(`[decentchat-peer] transport error repeats for ${peerId.slice(0, 8)} suppressed=${current.suppressed}`);
     }
   }
 
@@ -908,8 +908,8 @@ export class NodeXenaPeer {
     const attempt = (this.peerMaintenanceAttemptsByPeer.get(peerId) ?? 0) + 1;
     this.peerMaintenanceAttemptsByPeer.set(peerId, attempt);
     const delay = Math.min(
-      NodeXenaPeer.PEER_MAINTENANCE_RETRY_BASE_MS * (2 ** Math.max(0, attempt - 1)),
-      NodeXenaPeer.PEER_MAINTENANCE_RETRY_MAX_MS,
+      DecentChatNodePeer.PEER_MAINTENANCE_RETRY_BASE_MS * (2 ** Math.max(0, attempt - 1)),
+      DecentChatNodePeer.PEER_MAINTENANCE_RETRY_MAX_MS,
     );
     this.peerMaintenanceRetryAtByPeer.set(peerId, now + delay);
   }
@@ -1225,7 +1225,7 @@ export class NodeXenaPeer {
       });
     } catch (error) {
       const message = normalizeCompanyTemplateControlErrorMessage(error);
-      this.opts.log?.warn?.(`[xena-peer] rejected company template install request: ${message}`);
+      this.opts.log?.warn?.(`[decentchat-peer] rejected company template install request: ${message}`);
       this.sendCompanyTemplateInstallResponse({
         targetPeerId: fromPeerId,
         workspaceId,
@@ -1404,7 +1404,7 @@ export class NodeXenaPeer {
 
     const peerPubKeyB64 = this.getPeerPublicKey(fromPeerId);
     if (!peerPubKeyB64) {
-      this.opts.log?.warn?.(`[xena-peer] missing public key for ${fromPeerId}, skipping message`);
+      this.opts.log?.warn?.(`[decentchat-peer] missing public key for ${fromPeerId}, skipping message`);
       return;
     }
 
@@ -1414,22 +1414,16 @@ export class NodeXenaPeer {
       content = await this.messageProtocol.decryptMessage(fromPeerId, msg, peerPublicKey);
     } catch (err) {
       if (this.shouldIgnoreDecryptReplay(fromPeerId, msg, err)) {
-        // The peer sent a pre-key session init but we already have a ratchet.
-        // This means the peer lost its ratchet state (e.g. page reload) and is
-        // trying to bootstrap a new session.  Trigger recovery so both sides
-        // re-establish a fresh ratchet instead of waiting for a non-pre-key
-        // message to fail (which may never come).
-        this.opts.log?.info?.(`[xena-peer] replayed pre-key from ${fromPeerId} — triggering recovery handshake`);
-        await this.triggerDecryptRecoveryHandshake(fromPeerId);
+        this.opts.log?.info?.(`[decentchat-peer] replayed pre-key from ${fromPeerId} ignored`);
         return;
       }
-      this.opts.log?.warn?.(`[xena-peer] decrypt threw for ${fromPeerId}, resetting ratchet: ${String(err)}`);
+      this.opts.log?.warn?.(`[decentchat-peer] decrypt threw for ${fromPeerId}, resetting ratchet: ${String(err)}`);
       await this.triggerDecryptRecoveryHandshake(fromPeerId);
       return;
     }
     if (!content) {
       // decryptMessage returned null (internal error) — ratchet desynced, reset it
-      this.opts.log?.warn?.(`[xena-peer] decrypt returned null for ${fromPeerId}, resetting ratchet`);
+      this.opts.log?.warn?.(`[decentchat-peer] decrypt returned null for ${fromPeerId}, resetting ratchet`);
       await this.triggerDecryptRecoveryHandshake(fromPeerId);
       return;
     }
@@ -1454,7 +1448,7 @@ export class NodeXenaPeer {
 
     const result = await this.messageStore.addMessage(created);
     if (!result.success) {
-      this.opts.log?.warn?.(`[xena-peer] rejected message ${created.id}: ${result.error}`);
+      this.opts.log?.warn?.(`[decentchat-peer] rejected message ${created.id}: ${result.error}`);
       return;
     }
 
@@ -1528,7 +1522,7 @@ export class NodeXenaPeer {
       channelId,
       response,
     });
-    this.opts.log?.info?.(`[xena-peer] Negentropy query from ${fromPeerId.slice(0, 8)} for channel ${channelId.slice(0, 8)}: ${localItems.length} local messages`);
+    this.opts.log?.info?.(`[decentchat-peer] Negentropy query from ${fromPeerId.slice(0, 8)} for channel ${channelId.slice(0, 8)}: ${localItems.length} local messages`);
   }
 
   private async handleFetchRequest(fromPeerId: string, msg: any): Promise<void> {
@@ -1572,7 +1566,7 @@ export class NodeXenaPeer {
         messages: allMessages,
       });
     }
-    this.opts.log?.info?.(`[xena-peer] Fetch request from ${fromPeerId.slice(0, 8)}: sent ${allMessages.length} messages`);
+    this.opts.log?.info?.(`[decentchat-peer] Fetch request from ${fromPeerId.slice(0, 8)}: sent ${allMessages.length} messages`);
   }
 
   private resolveSharedWorkspaceIds(peerId: string): string[] {
@@ -1787,7 +1781,7 @@ export class NodeXenaPeer {
         await this.publishPreKeyBundleToDomain(sharedWorkspaceId, bundle);
       }
     } catch (error) {
-      this.opts.log?.warn?.(`[xena-peer] failed to publish pre-key bundle to ${peerId.slice(0, 8)}: ${String(error)}`);
+      this.opts.log?.warn?.(`[decentchat-peer] failed to publish pre-key bundle to ${peerId.slice(0, 8)}: ${String(error)}`);
     }
   }
 
@@ -1836,7 +1830,7 @@ export class NodeXenaPeer {
     if (candidates.length === 0) return false;
 
     const requestId = randomUUID();
-    const timeoutMs = Math.max(250, opts?.timeoutMs ?? NodeXenaPeer.PRE_KEY_FETCH_TIMEOUT_MS);
+    const timeoutMs = Math.max(250, opts?.timeoutMs ?? DecentChatNodePeer.PRE_KEY_FETCH_TIMEOUT_MS);
     const querySource = opts?.querySource ?? 'peer-broadcast';
 
     const result = await new Promise<boolean>((resolve) => {
@@ -1974,7 +1968,7 @@ export class NodeXenaPeer {
           bundle,
         });
       } catch (error) {
-        this.opts.log?.warn?.(`[xena-peer] failed to respond with pre-key bundle to ${fromPeerId.slice(0, 8)}: ${String(error)}`);
+        this.opts.log?.warn?.(`[decentchat-peer] failed to respond with pre-key bundle to ${fromPeerId.slice(0, 8)}: ${String(error)}`);
       }
       return true;
     }
@@ -2170,7 +2164,7 @@ export class NodeXenaPeer {
   private async triggerDecryptRecoveryHandshake(peerId: string): Promise<void> {
     const now = Date.now();
     const lastRecoveryAt = this.decryptRecoveryAtByPeer.get(peerId) ?? 0;
-    if (now - lastRecoveryAt < NodeXenaPeer.DECRYPT_RECOVERY_HANDSHAKE_COOLDOWN_MS) {
+    if (now - lastRecoveryAt < DecentChatNodePeer.DECRYPT_RECOVERY_HANDSHAKE_COOLDOWN_MS) {
       return;
     }
 
@@ -2193,20 +2187,16 @@ export class NodeXenaPeer {
   }
 
   private async handlePeerConnect(peerId: string): Promise<void> {
-    this.opts.log?.info(`[xena-peer] peer connected: ${peerId}`);
+    this.opts.log?.info(`[decentchat-peer] peer connected: ${peerId}`);
     this.clearPeerMaintenanceFailure(peerId);
 
     const now = Date.now();
     const lastHandshakeAt = this.connectHandshakeAtByPeer.get(peerId) ?? 0;
-    if (now - lastHandshakeAt < NodeXenaPeer.CONNECT_HANDSHAKE_COOLDOWN_MS) {
+    if (now - lastHandshakeAt < DecentChatNodePeer.CONNECT_HANDSHAKE_COOLDOWN_MS) {
       return;
     }
 
     this.connectHandshakeAtByPeer.set(peerId, now);
-    // Always send a handshake on connect, even if we have an existing session.
-    // The remote peer may have lost their crypto state (e.g. hard refresh)
-    // and needs our handshake to enter readyPeers.
-    await this.sendHandshake(peerId);
     if (this.hasProtocolSession(peerId)) {
       await this.resumePeerSession(peerId);
       return;
@@ -2218,7 +2208,7 @@ export class NodeXenaPeer {
     const now = Date.now();
     const lastHandshakeAt = this.inboundHandshakeAtByPeer.get(peerId) ?? 0;
     const hasSession = this.hasProtocolSession(peerId);
-    if (hasSession && now - lastHandshakeAt < NodeXenaPeer.INBOUND_HANDSHAKE_COOLDOWN_MS) {
+    if (hasSession && now - lastHandshakeAt < DecentChatNodePeer.INBOUND_HANDSHAKE_COOLDOWN_MS) {
       return true;
     }
 
@@ -2249,14 +2239,14 @@ export class NodeXenaPeer {
         ...(announceWorkspaceId ? { workspaceId: announceWorkspaceId } : {}),
       });
     } catch (err) {
-      this.opts.log?.error?.(`[xena-peer] handshake failed for ${peerId}: ${String(err)}`);
+      this.opts.log?.error?.(`[decentchat-peer] handshake failed for ${peerId}: ${String(err)}`);
     }
   }
 
   private async handleSyncEvent(event: SyncEvent): Promise<void> {
     switch (event.type) {
       case 'workspace-joined': {
-        this.opts.log?.info(`[xena-peer] joined workspace: ${event.workspace.id}`);
+        this.opts.log?.info(`[decentchat-peer] joined workspace: ${event.workspace.id}`);
         this.persistWorkspaces();
         this.recordManifestDomain('workspace-manifest', event.workspace.id, {
           operation: 'update',
@@ -2339,7 +2329,7 @@ export class NodeXenaPeer {
         break;
       }
       case 'join-rejected':
-        this.opts.log?.warn?.(`[xena-peer] join REJECTED: ${(event as any).reason || 'unknown reason'}`);
+        this.opts.log?.warn?.(`[decentchat-peer] join REJECTED: ${(event as any).reason || 'unknown reason'}`);
         break;
       case 'sync-complete':
       default:
@@ -2415,7 +2405,7 @@ export class NodeXenaPeer {
       if (!persisted) return;
       this.manifestStore.importState(persisted);
     } catch (error) {
-      this.opts.log?.warn?.(`[xena-peer] failed to restore manifest state: ${String(error)}`);
+      this.opts.log?.warn?.(`[decentchat-peer] failed to restore manifest state: ${String(error)}`);
     }
   }
 
@@ -2423,7 +2413,7 @@ export class NodeXenaPeer {
     try {
       this.store.set(this.manifestStateKey(), this.manifestStore.exportState());
     } catch (error) {
-      this.opts.log?.warn?.(`[xena-peer] failed to persist manifest state: ${String(error)}`);
+      this.opts.log?.warn?.(`[decentchat-peer] failed to persist manifest state: ${String(error)}`);
     }
   }
 
@@ -2448,17 +2438,17 @@ export class NodeXenaPeer {
     const senderListedInSync = remoteMembers.some((member: any) => member?.peerId === fromPeerId);
 
     if (!senderListedInSync) {
-      this.opts.log?.warn?.(`[xena-peer] ignoring workspace-state for ${workspaceId.slice(0, 8)}: sender ${fromPeerId.slice(0, 8)} missing from member list`);
+      this.opts.log?.warn?.(`[decentchat-peer] ignoring workspace-state for ${workspaceId.slice(0, 8)}: sender ${fromPeerId.slice(0, 8)} missing from member list`);
       return;
     }
 
     if (ws && !ws.members.some((member: any) => member.peerId === fromPeerId)) {
-      this.opts.log?.warn?.(`[xena-peer] ignoring workspace-state for ${workspaceId.slice(0, 8)} from non-member ${fromPeerId.slice(0, 8)}`);
+      this.opts.log?.warn?.(`[decentchat-peer] ignoring workspace-state for ${workspaceId.slice(0, 8)} from non-member ${fromPeerId.slice(0, 8)}`);
       return;
     }
 
     if (ws && this.workspaceManager.isBanned(workspaceId, fromPeerId)) {
-      this.opts.log?.warn?.(`[xena-peer] ignoring workspace-state for ${workspaceId.slice(0, 8)} from banned peer ${fromPeerId.slice(0, 8)}`);
+      this.opts.log?.warn?.(`[decentchat-peer] ignoring workspace-state for ${workspaceId.slice(0, 8)} from banned peer ${fromPeerId.slice(0, 8)}`);
       return;
     }
 
@@ -2516,7 +2506,7 @@ export class NodeXenaPeer {
 
       this.workspaceManager.importWorkspace(workspace);
       this.ensureBotFlag();
-      this.opts.log?.info(`[xena-peer] imported workspace ${workspaceId.slice(0, 8)} "${sync.name}" with ${workspace.members.length} members, ${workspace.channels.length} channels`);
+      this.opts.log?.info(`[decentchat-peer] imported workspace ${workspaceId.slice(0, 8)} "${sync.name}" with ${workspace.members.length} members, ${workspace.channels.length} channels`);
     } else {
       // Update existing workspace: sync members and channels
       if (sync.name && ws.name !== sync.name) ws.name = sync.name;
@@ -2602,7 +2592,7 @@ export class NodeXenaPeer {
         });
       }
 
-      this.opts.log?.info(`[xena-peer] updated workspace ${workspaceId.slice(0, 8)} "${ws.name}" — now ${ws.members.length} members, ${ws.channels.length} channels`);
+      this.opts.log?.info(`[decentchat-peer] updated workspace ${workspaceId.slice(0, 8)} "${ws.name}" — now ${ws.members.length} members, ${ws.channels.length} channels`);
     }
 
     this.persistWorkspaces();
@@ -2862,7 +2852,7 @@ export class NodeXenaPeer {
         },
       });
     } catch (err) {
-      this.opts.log?.error?.(`[xena-peer] DM to ${peerId} failed: ${String(err)}`);
+      this.opts.log?.error?.(`[decentchat-peer] DM to ${peerId} failed: ${String(err)}`);
       await this.enqueueOffline(peerId, {
         content: content.trim(),
         senderId: this.myPeerId,
@@ -2896,7 +2886,7 @@ export class NodeXenaPeer {
         await this.enqueueOffline(peerId, payload);
       }
     } catch (err) {
-      this.opts.log?.warn?.(`[xena-peer] failed to send read receipt to ${peerId}: ${String(err)}`);
+      this.opts.log?.warn?.(`[decentchat-peer] failed to send read receipt to ${peerId}: ${String(err)}`);
       await this.enqueueOffline(peerId, payload);
     }
 
@@ -3273,7 +3263,7 @@ export class NodeXenaPeer {
         teamId: context.employee.teamId,
       } : undefined;
     } catch (err) {
-      this.opts.log?.warn?.(`[xena-peer] failed to load company profile for ${this.opts.account.accountId}: ${String(err)}`);
+      this.opts.log?.warn?.(`[decentchat-peer] failed to load company profile for ${this.opts.account.accountId}: ${String(err)}`);
       this.companySimProfile = { automationKind: 'openclaw-agent' };
     }
     this.companySimProfileLoaded = true;
@@ -3726,7 +3716,7 @@ export class NodeXenaPeer {
     }
   }
 
-  private selectCustodianPeers(workspaceId: string, recipientPeerId: string, limit = NodeXenaPeer.CUSTODIAN_REPLICATION_TARGET): string[] {
+  private selectCustodianPeers(workspaceId: string, recipientPeerId: string, limit = DecentChatNodePeer.CUSTODIAN_REPLICATION_TARGET): string[] {
     if (!this.transport) return [];
     const workspace = this.workspaceManager.getWorkspace(workspaceId);
     if (!workspace) return [];
@@ -4023,7 +4013,7 @@ export class NodeXenaPeer {
           continue;
         }
       } catch (err) {
-        this.opts.log?.warn?.(`[xena-peer] resend pending failed for ${peerId}: ${String(err)}`);
+        this.opts.log?.warn?.(`[decentchat-peer] resend pending failed for ${peerId}: ${String(err)}`);
       }
     }
   }
@@ -4091,7 +4081,7 @@ export class NodeXenaPeer {
           });
           return;
         } catch (err) {
-          this.opts.log?.warn?.(`[xena-peer] encryption failed while queueing offline payload for ${peerId}: ${String(err)}`);
+          this.opts.log?.warn?.(`[decentchat-peer] encryption failed while queueing offline payload for ${peerId}: ${String(err)}`);
           // Fall back to deferred plaintext path below.
         }
       }
@@ -4110,9 +4100,9 @@ export class NodeXenaPeer {
         replicationClass: 'standard',
         deliveryState: 'stored',
       });
-      this.opts.log?.info?.(`[xena-peer] queued outbound message for offline peer ${peerId}`);
+      this.opts.log?.info?.(`[decentchat-peer] queued outbound message for offline peer ${peerId}`);
     } catch (err) {
-      this.opts.log?.error?.(`[xena-peer] failed to queue outbound message for ${peerId}: ${String(err)}`);
+      this.opts.log?.error?.(`[decentchat-peer] failed to queue outbound message for ${peerId}: ${String(err)}`);
     }
   }
 
@@ -4266,7 +4256,7 @@ export class NodeXenaPeer {
         if (typeof queuedItem?.id === 'number') {
           await this.offlineQueue.markAttempt(peerId, queuedItem.id);
         }
-        this.opts.log?.warn?.(`[xena-peer] failed queued send to ${peerId}: ${String(err)}`);
+        this.opts.log?.warn?.(`[decentchat-peer] failed queued send to ${peerId}: ${String(err)}`);
       }
     }
 
@@ -4275,7 +4265,7 @@ export class NodeXenaPeer {
       try {
         await this.offlineQueue.removeBatch(peerId, deliveredIds);
       } catch (batchErr) {
-        this.opts.log?.error?.(`[xena-peer] batch remove failed, falling back to individual: ${String(batchErr)}`);
+        this.opts.log?.error?.(`[decentchat-peer] batch remove failed, falling back to individual: ${String(batchErr)}`);
         for (const id of deliveredIds) {
           await this.offlineQueue.remove(peerId, id).catch(() => {});
         }
@@ -4283,12 +4273,11 @@ export class NodeXenaPeer {
     }
 
     if (sentCount > 0) {
-      this.opts.log?.info?.(`[xena-peer] flushed ${sentCount} queued messages to ${peerId}`);
+      this.opts.log?.info?.(`[decentchat-peer] flushed ${sentCount} queued messages to ${peerId}`);
     }
     if (failedCount > 0) {
-      this.opts.log?.warn?.(`[xena-peer] ${failedCount} queued message(s) remain pending for ${peerId}`);
+      this.opts.log?.warn?.(`[decentchat-peer] ${failedCount} queued message(s) remain pending for ${peerId}`);
     }
   }
 
 }
-export const DecentChatNodePeer = NodeXenaPeer;

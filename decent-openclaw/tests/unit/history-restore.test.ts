@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { NodeXenaPeer } from '../../src/peer/NodeXenaPeer.ts';
+import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
 
 const VALID_SEED = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
@@ -15,15 +15,15 @@ function makeAccount(overrides: Partial<any> = {}): any {
     seedPhrase: VALID_SEED,
     signalingServer: 'https://decentchat.app/peerjs',
     invites: [],
-    alias: 'Xena',
+    alias: 'DecentChat Bot',
     dataDir: mkdtempSync(join(tmpdir(), 'openclaw-restore-test-')),
     ...overrides,
   };
 }
 
-describe('NodeXenaPeer message restore', () => {
+describe('DecentChatNodePeer message restore', () => {
   test('restores persisted message buckets even when not in current workspace channel list', () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -68,7 +68,7 @@ describe('NodeXenaPeer message restore', () => {
   });
 
   test('getThreadHistory returns latest N thread messages and honors excludeMessageId', () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},

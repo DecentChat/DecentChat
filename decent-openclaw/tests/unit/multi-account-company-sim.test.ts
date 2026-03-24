@@ -33,7 +33,7 @@ describe('decent-openclaw multi-account company-sim', () => {
       channels: {
         decentchat: {
           seedPhrase: 'seed-legacy',
-          alias: 'Xena AI',
+          alias: 'DecentChat Bot',
         },
       },
     } as any;
@@ -41,7 +41,7 @@ describe('decent-openclaw multi-account company-sim', () => {
     expect(listDecentChatAccountIds(cfg)).toEqual(['default']);
     expect(resolveDefaultDecentChatAccountId(cfg)).toBe('default');
     const account = resolveDecentChatAccount(cfg);
-    expect(account.alias).toBe('Xena AI');
+    expect(account.alias).toBe('DecentChat Bot');
     expect(account.dataDir).toBeUndefined();
     expect(listDecentChatStartupAccountIds(cfg)).toEqual(['default']);
     expect(resolveDecentChatStartupDelayMs(cfg, 'default')).toBe(0);

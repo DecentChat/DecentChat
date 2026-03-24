@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { NodeXenaPeer } from '../../src/peer/NodeXenaPeer.ts';
+import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
 
 const VALID_SEED = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
@@ -15,15 +15,15 @@ function makeAccount(overrides: Partial<any> = {}): any {
     seedPhrase: VALID_SEED,
     signalingServer: 'https://decentchat.app/peerjs',
     invites: [],
-    alias: 'Xena',
+    alias: 'DecentChat Bot',
     dataDir: mkdtempSync(join(tmpdir(), 'openclaw-offline-queue-test-')),
     ...overrides,
   };
 }
 
-describe('NodeXenaPeer offline queue reconnect flush', () => {
+describe('DecentChatNodePeer offline queue reconnect flush', () => {
   test('sendDirectToPeer queues while offline and flushes after reconnect handshake', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -68,7 +68,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
   });
 
   test('channel send queues offline recipient and flushes with channel metadata after reconnect handshake', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -117,7 +117,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
   });
 
   test('channel send respects explicit channel members instead of all workspace members', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount({ alias: 'Mira PM' }),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -167,7 +167,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
 
 
   test('keeps pending message until ack and clears after ack', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -203,7 +203,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
   });
 
   test('ACK can clear a queued offline payload by messageId before reconnect flush', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -225,7 +225,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
 
 
   test('incoming handshake preserves existing session state while re-processing', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -264,7 +264,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
   });
 
   test('decrypt failure triggers ratchet reset and recovery handshake', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -306,7 +306,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
 
   test('incoming direct encrypted message without channelId is delivered as a DM and ACKed', async () => {
     const incoming: any[] = [];
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount({ alias: 'Mira PM' }),
       onIncomingMessage: async (msg) => { incoming.push(msg); },
       onReply: () => {},
@@ -336,7 +336,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
       protocolVersion: 2,
       isDirect: true,
       senderId: 'peer-main',
-      senderName: 'Xena AI',
+      senderName: 'DecentChat Bot',
       messageId: 'msg-direct-1',
       timestamp: 123,
     });
@@ -346,7 +346,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
       channelId: 'peer-main',
       workspaceId: 'direct',
       senderId: 'peer-main',
-      senderName: 'Xena AI',
+      senderName: 'DecentChat Bot',
       messageId: 'msg-direct-1',
       content: 'hello from direct DM',
       chatType: 'direct',
@@ -359,7 +359,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
   });
 
   test('handshake still resends pre-existing pending ACK messages', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -383,7 +383,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
       messageId: 'pending-1',
       content: 'resend me',
       senderId: 'self',
-      senderName: 'Xena',
+      senderName: 'DecentChat Bot',
       queuedAt: Date.now(),
     }]);
 
@@ -399,7 +399,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
   });
 
   test('handshake announces manifest summary and requests custody recovery', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -442,7 +442,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
   test('restores persisted manifest state on peer restart', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'openclaw-manifest-state-test-'));
 
-    const peer1 = new NodeXenaPeer({
+    const peer1 = new DecentChatNodePeer({
       account: makeAccount({ dataDir }),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -473,7 +473,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
     (peer1 as any).persistManifestState();
     peer1.destroy();
 
-    const peer2 = new NodeXenaPeer({
+    const peer2 = new DecentChatNodePeer({
       account: makeAccount({ dataDir }),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -489,7 +489,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
   });
 
   test('offline workspace send offers custody replication to selected custodian peers', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -524,7 +524,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
   });
 
   test('sync.summary from a newer peer requests manifest diff', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -576,7 +576,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
   });
 
   test('handshake publishes pre-key bundles into custody-backed domain and offers replication', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -635,7 +635,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
   });
 
   test('offline first send fetches peer pre-key bundle before falling back to deferred plaintext queue', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -725,7 +725,7 @@ describe('NodeXenaPeer offline queue reconnect flush', () => {
 
 
   test('pre-key bootstrap falls back from custodian-targeted lookup to broader peer lookup', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},

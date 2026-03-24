@@ -307,7 +307,7 @@ function normalizeModelMeta(selection?: { provider?: string; model?: string }): 
 }
 
 export async function finalizePeerStream(params: {
-  xenaPeer: {
+  nodePeer: {
     sendDirectStreamDone: (args: { peerId: string; messageId: string }) => Promise<void>;
     sendStreamDone: (args: { channelId: string; workspaceId: string; messageId: string }) => Promise<void>;
   };
@@ -320,14 +320,14 @@ export async function finalizePeerStream(params: {
   if (!params.streamMessageId) return;
 
   if (params.chatType === "direct") {
-    await params.xenaPeer.sendDirectStreamDone({
+    await params.nodePeer.sendDirectStreamDone({
       peerId: params.senderId,
       messageId: params.streamMessageId,
     });
     return;
   }
 
-  await params.xenaPeer.sendStreamDone({
+  await params.nodePeer.sendStreamDone({
     channelId: params.channelId,
     workspaceId: params.workspaceId,
     messageId: params.streamMessageId,
@@ -338,10 +338,10 @@ export async function relayInboundMessageToPeer(params: {
   incoming: IncomingPeerMessage;
   ctx: Pick<PeerContext, "account" | "accountId" | "log">;
   core: ReturnType<typeof getDecentChatRuntime>;
-  xenaPeer: StreamingPeerAdapter;
+  nodePeer: StreamingPeerAdapter;
   onFinalizeReady?: (finalize: () => Promise<void>) => void;
 }): Promise<void> {
-  const { incoming, ctx, core, xenaPeer } = params;
+  const { incoming, ctx, core, nodePeer } = params;
   let streamMessageId: string | null = null;
   let streamTimer: ReturnType<typeof setTimeout> | null = null;
   let streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -357,11 +357,11 @@ export async function relayInboundMessageToPeer(params: {
 
   const setTyping = async (typing: boolean) => {
     if (incoming.chatType === 'direct') return;
-    if (!xenaPeer.sendTyping) return;
+    if (!nodePeer.sendTyping) return;
     if (typingActive == typing) return;
     typingActive = typing;
     try {
-      await xenaPeer.sendTyping({ channelId: incoming.channelId, workspaceId: incoming.workspaceId, typing });
+      await nodePeer.sendTyping({ channelId: incoming.channelId, workspaceId: incoming.workspaceId, typing });
     } catch (err) {
       ctx.log?.warn?.(`[decentchat] typing ${typing ? 'start' : 'stop'} failed: ${String(err)}`);
     }
@@ -374,13 +374,13 @@ export async function relayInboundMessageToPeer(params: {
     if (content === lastSentStreamContent) return;
 
     if (incoming.chatType === "direct") {
-      await xenaPeer.sendDirectStreamDelta({
+      await nodePeer.sendDirectStreamDelta({
         peerId: incoming.senderId,
         messageId: streamMessageId,
         content,
       });
     } else {
-      await xenaPeer.sendStreamDelta({
+      await nodePeer.sendStreamDelta({
         channelId: incoming.channelId,
         workspaceId: incoming.workspaceId,
         messageId: streamMessageId,
@@ -434,13 +434,13 @@ export async function relayInboundMessageToPeer(params: {
       if (mid && streamEnabled && finalReply && finalReply !== lastSentStreamContent) {
         try {
           if (incoming.chatType === "direct") {
-            await xenaPeer.sendDirectStreamDelta({
+            await nodePeer.sendDirectStreamDelta({
               peerId: incoming.senderId,
               messageId: mid,
               content: finalReply,
             });
           } else {
-            await xenaPeer.sendStreamDelta({
+            await nodePeer.sendStreamDelta({
               channelId: incoming.channelId,
               workspaceId: incoming.workspaceId,
               messageId: mid,
@@ -455,7 +455,7 @@ export async function relayInboundMessageToPeer(params: {
       }
 
       await finalizePeerStream({
-        xenaPeer,
+        nodePeer,
         chatType: incoming.chatType === "direct" ? "direct" : "group",
         senderId: incoming.senderId,
         channelId: incoming.channelId,
@@ -477,7 +477,7 @@ export async function relayInboundMessageToPeer(params: {
       // rendering a duplicate bubble, and it covers peers that missed live stream events.
       try {
         if (incoming.chatType === "direct") {
-          await xenaPeer.sendDirectToPeer(
+          await nodePeer.sendDirectToPeer(
             incoming.senderId,
             finalReply,
             persistThreadId,
@@ -486,7 +486,7 @@ export async function relayInboundMessageToPeer(params: {
             selectedModel,
           );
         } else {
-          await xenaPeer.sendToChannel(
+          await nodePeer.sendToChannel(
             incoming.channelId,
             finalReply,
             persistThreadId,
@@ -522,7 +522,7 @@ export async function relayInboundMessageToPeer(params: {
   if (imageAttachments.length > 0) {
     ctx.log?.info?.(`[decentchat] requesting ${imageAttachments.length} full-quality image(s) from ${incoming.senderId.slice(0, 8)}`);
     const imageRequests = imageAttachments.map(async (att) => {
-      const buffer = await xenaPeer.requestFullImage(incoming.senderId, att.id);
+      const buffer = await nodePeer.requestFullImage(incoming.senderId, att.id);
       if (buffer) {
         fullImageBuffers.set(att.id, buffer);
         ctx.log?.info?.(`[decentchat] received full image ${att.id.slice(0, 8)} (${buffer.length} bytes)`);
@@ -551,7 +551,7 @@ export async function relayInboundMessageToPeer(params: {
     },
     { accountId: ctx.accountId, account: ctx.account, log: ctx.log },
     core,
-    xenaPeer,
+    nodePeer,
     async (replyText) => {
       if (TOOL_CALL_MISMATCH_RE.test(replyText.trim())) {
         ctx.log?.warn?.("[decentchat] suppressed tool-call mismatch error text");
@@ -574,9 +574,9 @@ export async function relayInboundMessageToPeer(params: {
             ? undefined
             : (incoming.threadId ?? incoming.messageId);
           if (incoming.chatType === "direct") {
-            await xenaPeer.startDirectStream({ peerId: incoming.senderId, messageId: streamMessageId, model: selectedModel });
+            await nodePeer.startDirectStream({ peerId: incoming.senderId, messageId: streamMessageId, model: selectedModel });
           } else {
-            await xenaPeer.startStream({
+            await nodePeer.startStream({
               channelId: incoming.channelId,
               workspaceId: incoming.workspaceId,
               messageId: streamMessageId,
@@ -629,10 +629,9 @@ let decentChatNodePeerCtorPromise: Promise<DecentChatNodePeerCtor> | null = null
 
 async function loadDecentChatNodePeerCtor(): Promise<DecentChatNodePeerCtor> {
   if (!decentChatNodePeerCtorPromise) {
-    decentChatNodePeerCtorPromise = import('./peer/NodeXenaPeer.js').then((mod) => {
+    decentChatNodePeerCtorPromise = import('./peer/DecentChatNodePeer.js').then((mod) => {
       const candidate = (mod as any).DecentChatNodePeer
-        ?? (mod as any).NodeXenaPeer
-        ?? ((mod as any).default && ((mod as any).default.DecentChatNodePeer ?? (mod as any).default.NodeXenaPeer))
+        ?? ((mod as any).default && (mod as any).default.DecentChatNodePeer)
         ?? (typeof (mod as any).default === 'function' ? (mod as any).default : undefined);
 
       if (typeof candidate !== 'function') {
@@ -658,20 +657,20 @@ async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
   const core = getDecentChatRuntime();
   const DecentChatNodePeer = await loadDecentChatNodePeerCtor();
 
-  let xenaPeer: InstanceType<DecentChatNodePeerCtor>;
+  let nodePeer: InstanceType<DecentChatNodePeerCtor>;
   let finalizeStream: () => Promise<void> = async () => {};
 
   const openClawWorkspaceRoot = process.env.OPENCLAW_WORKSPACE_DIR?.trim()
     || path.join(os.homedir(), '.openclaw', 'workspace');
 
-  xenaPeer = new DecentChatNodePeer({
+  nodePeer = new DecentChatNodePeer({
     account: ctx.account,
     onIncomingMessage: async (params) => {
       await relayInboundMessageToPeer({
         incoming: params,
         ctx,
         core,
-        xenaPeer,
+        nodePeer,
         onFinalizeReady: (nextFinalize) => {
           finalizeStream = nextFinalize;
         },
@@ -727,18 +726,18 @@ async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
     log: ctx.log,
   });
 
-  await xenaPeer.start();
-  setActivePeer(xenaPeer, ctx.accountId);
+  await nodePeer.start();
+  setActivePeer(nodePeer, ctx.accountId);
   ctx.setStatus({
     running: true,
-    peerId: xenaPeer.peerId,
+    peerId: nodePeer.peerId,
     lastError: null,
   });
 
   return new Promise<void>((resolve) => {
     const shutdown = () => {
       setActivePeer(null, ctx.accountId);
-      xenaPeer.destroy();
+      nodePeer.destroy();
       ctx.setStatus({ running: false });
       resolve();
     };
@@ -816,7 +815,7 @@ async function processInboundMessage(
   },
   ctx: { accountId: string; account?: ResolvedDecentChatAccount; log?: any },
   core: ReturnType<typeof getDecentChatRuntime>,
-  xenaPeer: Pick<StreamingPeerAdapter, "sendReadReceipt" | "getThreadHistory"> | {
+  nodePeer: Pick<StreamingPeerAdapter, "sendReadReceipt" | "getThreadHistory"> | {
     resolveChannelNameById?: (channelId: string) => string | undefined;
     sendReadReceipt?: (peerId: string, channelId: string, messageId: string) => Promise<void>;
     getThreadHistory?: (args: {
@@ -900,7 +899,7 @@ async function processInboundMessage(
 
   if (isCompanySimChannelMuted(effectiveAccount, msg.chatType, msg.channelId)) {
     ctx.log?.info?.(`[decentchat] company routing: silent account=${ctx.accountId} reason=muted-channel channel=${msg.channelId}`);
-    await xenaPeer.sendReadReceipt?.(msg.senderId, msg.channelId, msg.messageId);
+    await nodePeer.sendReadReceipt?.(msg.senderId, msg.channelId, msg.messageId);
     return;
   }
 
@@ -924,7 +923,7 @@ async function processInboundMessage(
     }
   }
   const channelName = msg.chatType === "channel"
-    ? (xenaPeer.resolveChannelNameById?.(msg.channelId) ?? msg.channelId)
+    ? (nodePeer.resolveChannelNameById?.(msg.channelId) ?? msg.channelId)
     : undefined;
   const routingThreadRef = (msg.threadId ?? msg.replyToId ?? '').trim();
   const currentThreadRoutingState = routingThreadRef
@@ -949,7 +948,7 @@ async function processInboundMessage(
   });
   if (!participationDecision.shouldRespond) {
     ctx.log?.info?.(`[decentchat] company routing: silent account=${ctx.accountId} reason=${participationDecision.reason} channel=${channelName ?? msg.channelId}`);
-    await xenaPeer.sendReadReceipt?.(msg.senderId, msg.channelId, msg.messageId);
+    await nodePeer.sendReadReceipt?.(msg.senderId, msg.channelId, msg.messageId);
     return;
   }
   const threadingFlags = resolveDecentThreadingFlags(cfg, msg.chatType === "direct" ? "direct" : "channel");
@@ -1052,10 +1051,10 @@ async function processInboundMessage(
   let threadContextPrefix = "";
   let threadHistoryCount = 0;
   const shouldBootstrapThreadHistory = isThreadReply && !previousTimestamp && threadingFlags.initialHistoryLimit > 0;
-  if (shouldBootstrapThreadHistory && xenaPeer.getThreadHistory) {
+  if (shouldBootstrapThreadHistory && nodePeer.getThreadHistory) {
     try {
       const history = await Promise.resolve(
-        xenaPeer.getThreadHistory({
+        nodePeer.getThreadHistory({
           channelId: msg.channelId,
           threadId: derivedThreadId,
           limit: threadingFlags.initialHistoryLimit,
@@ -1078,7 +1077,7 @@ async function processInboundMessage(
     }
   }
 
-  if (shouldBootstrapThreadHistory && !xenaPeer.getThreadHistory) {
+  if (shouldBootstrapThreadHistory && !nodePeer.getThreadHistory) {
     ctx.log?.warn?.("[decentchat] thread history bootstrap requested but adapter does not expose getThreadHistory");
   }
 
@@ -1203,5 +1202,5 @@ async function processInboundMessage(
     },
   });
 
-  await xenaPeer.sendReadReceipt?.(msg.senderId, msg.channelId, msg.messageId);
+  await nodePeer.sendReadReceipt?.(msg.senderId, msg.channelId, msg.messageId);
 }

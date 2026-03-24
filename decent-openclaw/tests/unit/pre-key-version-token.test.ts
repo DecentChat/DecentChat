@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { NodeXenaPeer } from '../../src/peer/NodeXenaPeer';
+import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer';
 
-describe('NodeXenaPeer pre-key publish dedupe token', () => {
+describe('DecentChatNodePeer pre-key publish dedupe token', () => {
   test('ignores generatedAt drift for identical key material', () => {
-    const peer = Object.create(NodeXenaPeer.prototype) as any;
+    const peer = Object.create(DecentChatNodePeer.prototype) as any;
 
     const baseBundle = {
       generatedAt: 100,
@@ -11,15 +11,15 @@ describe('NodeXenaPeer pre-key publish dedupe token', () => {
       oneTimePreKeys: [{ keyId: 2 }, { keyId: 4 }],
     };
 
-    const tokenA = (NodeXenaPeer.prototype as any).preKeyBundleVersionToken.call(peer, baseBundle);
-    const tokenB = (NodeXenaPeer.prototype as any).preKeyBundleVersionToken.call(peer, {
+    const tokenA = (DecentChatNodePeer.prototype as any).preKeyBundleVersionToken.call(peer, baseBundle);
+    const tokenB = (DecentChatNodePeer.prototype as any).preKeyBundleVersionToken.call(peer, {
       ...baseBundle,
       generatedAt: 200,
     });
 
     expect(tokenB).toBe(tokenA);
 
-    const tokenChanged = (NodeXenaPeer.prototype as any).preKeyBundleVersionToken.call(peer, {
+    const tokenChanged = (DecentChatNodePeer.prototype as any).preKeyBundleVersionToken.call(peer, {
       ...baseBundle,
       oneTimePreKeys: [{ keyId: 3 }, { keyId: 5 }],
     });

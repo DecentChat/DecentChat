@@ -1,17 +1,17 @@
 /**
- * Shared registry for active NodeXenaPeer instances, keyed by account id.
+ * Shared registry for active DecentChatNodePeer instances, keyed by account id.
  * Allows channel.ts adapters to deliver outbound messages and directory lookups
  * via the correct P2P peer when multiple DecentChat accounts are running.
  */
 
-import type { NodeXenaPeer } from "./peer/NodeXenaPeer.js";
+import type { DecentChatNodePeer } from "./peer/DecentChatNodePeer.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
 
-const activePeers = new Map<string, InstanceType<typeof NodeXenaPeer>>();
+const activePeers = new Map<string, InstanceType<typeof DecentChatNodePeer>>();
 
 export function setActivePeer(
-  peer: InstanceType<typeof NodeXenaPeer> | null,
+  peer: InstanceType<typeof DecentChatNodePeer> | null,
   accountId: string = DEFAULT_ACCOUNT_ID,
 ): void {
   const key = accountId?.trim() || DEFAULT_ACCOUNT_ID;
@@ -22,7 +22,7 @@ export function setActivePeer(
   }
 }
 
-export function getActivePeer(accountId: string = DEFAULT_ACCOUNT_ID): InstanceType<typeof NodeXenaPeer> | null {
+export function getActivePeer(accountId: string = DEFAULT_ACCOUNT_ID): InstanceType<typeof DecentChatNodePeer> | null {
   const key = accountId?.trim() || DEFAULT_ACCOUNT_ID;
   return activePeers.get(key) ?? null;
 }

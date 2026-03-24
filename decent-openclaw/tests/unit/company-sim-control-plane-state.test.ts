@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { NodeXenaPeer } from '../../src/peer/NodeXenaPeer.ts';
+import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
 import { getCompanySimControlState } from '../../src/company-sim/control-plane.ts';
 
 const VALID_SEED = 'flame damp wear dust sell puzzle twist family one post hawk weather';
@@ -199,13 +199,13 @@ describe('company sim control plane state', () => {
     }
   });
 
-  test('NodeXenaPeer responds to company-sim-state-request for workspace admins', async () => {
+  test('DecentChatNodePeer responds to company-sim-state-request for workspace admins', async () => {
     const root = mkdtempSync(join(tmpdir(), 'company-sim-control-state-peer-'));
     try {
       const { manifestPath, companyDir } = writeCompanyFixture(root);
       const config = makeConfig(root, manifestPath, companyDir);
 
-      const peer = new NodeXenaPeer({
+      const peer = new DecentChatNodePeer({
         account: makeAccount(),
         onIncomingMessage: async () => {},
         onReply: () => {},

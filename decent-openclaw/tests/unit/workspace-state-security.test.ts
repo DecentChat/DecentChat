@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { NodeXenaPeer } from '../../src/peer/NodeXenaPeer.ts';
+import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
 
 const VALID_SEED = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
@@ -15,15 +15,15 @@ function makeAccount(overrides: Partial<any> = {}): any {
     seedPhrase: VALID_SEED,
     signalingServer: 'https://decentchat.app/peerjs',
     invites: [],
-    alias: 'Xena',
+    alias: 'DecentChat Bot',
     dataDir: mkdtempSync(join(tmpdir(), 'openclaw-ws-sec-')),
     ...overrides,
   };
 }
 
-describe('NodeXenaPeer workspace-state security', () => {
+describe('DecentChatNodePeer workspace-state security', () => {
   test('ignores workspace-state from non-member peer for existing workspace', () => {
-    const peer = new NodeXenaPeer({ account: makeAccount(), onIncomingMessage: async () => {}, onReply: () => {} });
+    const peer = new DecentChatNodePeer({ account: makeAccount(), onIncomingMessage: async () => {}, onReply: () => {} });
     const me = (peer as any).myPeerId as string;
 
     (peer as any).workspaceManager.importWorkspace({
@@ -33,7 +33,7 @@ describe('NodeXenaPeer workspace-state security', () => {
       inviteCode: 'INV123',
       channels: [{ id: 'ch-1', workspaceId: 'ws-1', name: 'general', type: 'channel', members: [], createdBy: 'peer-owner', createdAt: 1 }],
       members: [
-        { peerId: me, alias: 'Xena', publicKey: '', role: 'member', joinedAt: 1 },
+        { peerId: me, alias: 'DecentChat Bot', publicKey: '', role: 'member', joinedAt: 1 },
         { peerId: 'peer-owner', alias: 'Owner', publicKey: 'pk-owner', role: 'owner', joinedAt: 1 },
       ],
       permissions: {},
@@ -54,7 +54,7 @@ describe('NodeXenaPeer workspace-state security', () => {
   });
 
   test('owner workspace-state syncs explicit channel access policy', () => {
-    const peer = new NodeXenaPeer({ account: makeAccount(), onIncomingMessage: async () => {}, onReply: () => {} });
+    const peer = new DecentChatNodePeer({ account: makeAccount(), onIncomingMessage: async () => {}, onReply: () => {} });
     const me = (peer as any).myPeerId as string;
 
     (peer as any).workspaceManager.importWorkspace({
@@ -64,7 +64,7 @@ describe('NodeXenaPeer workspace-state security', () => {
       inviteCode: 'INV123',
       channels: [{ id: 'ch-1', workspaceId: 'ws-1', name: 'general', type: 'channel', members: [], createdBy: 'peer-owner', createdAt: 1 }],
       members: [
-        { peerId: me, alias: 'Xena', publicKey: '', role: 'member', joinedAt: 1 },
+        { peerId: me, alias: 'DecentChat Bot', publicKey: '', role: 'member', joinedAt: 1 },
         { peerId: 'peer-owner', alias: 'Owner', publicKey: 'pk-owner', role: 'owner', joinedAt: 1 },
         { peerId: 'peer-target', alias: 'Target', publicKey: 'pk-target', role: 'member', joinedAt: 1 },
       ],
@@ -97,7 +97,7 @@ describe('NodeXenaPeer workspace-state security', () => {
   });
 
   test('non-owner workspace-state cannot escalate member role', () => {
-    const peer = new NodeXenaPeer({ account: makeAccount(), onIncomingMessage: async () => {}, onReply: () => {} });
+    const peer = new DecentChatNodePeer({ account: makeAccount(), onIncomingMessage: async () => {}, onReply: () => {} });
     const me = (peer as any).myPeerId as string;
 
     (peer as any).workspaceManager.importWorkspace({
@@ -107,7 +107,7 @@ describe('NodeXenaPeer workspace-state security', () => {
       inviteCode: 'INV123',
       channels: [],
       members: [
-        { peerId: me, alias: 'Xena', publicKey: '', role: 'member', joinedAt: 1 },
+        { peerId: me, alias: 'DecentChat Bot', publicKey: '', role: 'member', joinedAt: 1 },
         { peerId: 'peer-owner', alias: 'Owner', publicKey: 'pk-owner', role: 'owner', joinedAt: 1 },
         { peerId: 'peer-rogue', alias: 'Rogue', publicKey: 'pk-rogue', role: 'member', joinedAt: 1 },
         { peerId: 'peer-target', alias: 'Target', publicKey: 'pk-target', role: 'member', joinedAt: 1 },

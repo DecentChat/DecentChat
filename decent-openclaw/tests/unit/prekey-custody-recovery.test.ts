@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { NodeXenaPeer } from '../../src/peer/NodeXenaPeer.ts';
+import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
 
 const VALID_SEED = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
@@ -15,15 +15,15 @@ function makeAccount(overrides: Partial<any> = {}): any {
     seedPhrase: VALID_SEED,
     signalingServer: 'https://decentchat.app/peerjs',
     invites: [],
-    alias: 'Xena',
+    alias: 'DecentChat Bot',
     dataDir: mkdtempSync(join(tmpdir(), 'openclaw-prekey-custody-test-')),
     ...overrides,
   };
 }
 
-describe('NodeXenaPeer pre-key custody recovery', () => {
+describe('DecentChatNodePeer pre-key custody recovery', () => {
   test('sendDirectToPeer stores plaintext resend data when transport falls back to custody', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -56,7 +56,7 @@ describe('NodeXenaPeer pre-key custody recovery', () => {
       metadata: {
         isDirect: true,
         senderId: 'self-peer',
-        senderName: 'Xena',
+        senderName: 'DecentChat Bot',
         resend: {
           content: 'retry me',
           isDirect: true,
@@ -66,7 +66,7 @@ describe('NodeXenaPeer pre-key custody recovery', () => {
   });
 
   test('flushOfflineQueue re-encrypts custody payloads when plaintext resend data exists', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -108,7 +108,7 @@ describe('NodeXenaPeer pre-key custody recovery', () => {
         metadata: {
           isDirect: true,
           senderId: 'acct-1',
-          senderName: 'Xena',
+          senderName: 'DecentChat Bot',
           resend: {
             content: 'retry me',
             isDirect: true,
@@ -135,7 +135,7 @@ describe('NodeXenaPeer pre-key custody recovery', () => {
   });
 
   test('decrypt recovery sends only one handshake during a burst of repeated failures', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -182,7 +182,7 @@ describe('NodeXenaPeer pre-key custody recovery', () => {
   });
 
   test('reconnect burst sends only one outbound handshake and does not repeatedly clear session state', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -206,7 +206,7 @@ describe('NodeXenaPeer pre-key custody recovery', () => {
   });
 
   test('reconnect with an existing session resumes sync state without sending a new handshake', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -243,7 +243,7 @@ describe('NodeXenaPeer pre-key custody recovery', () => {
   });
 
   test('duplicate inbound handshakes in a reconnect burst are ignored after the first one', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -305,7 +305,7 @@ describe('NodeXenaPeer pre-key custody recovery', () => {
       'Ratchet already established with peer peer-main',
       'Pre-key one-time:7 unavailable',
     ]) {
-      const peer = new NodeXenaPeer({
+      const peer = new DecentChatNodePeer({
         account: makeAccount(),
         onIncomingMessage: async () => {},
         onReply: () => {},

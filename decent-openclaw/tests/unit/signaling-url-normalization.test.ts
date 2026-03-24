@@ -35,10 +35,10 @@ mock.module('decent-transport-webrtc', () => ({
 }));
 
 const {
-  NodeXenaPeer,
-  resetNodeXenaPeerStartupLockForTests,
-  runNodeXenaPeerStartupLocked,
-} = await import('../../src/peer/NodeXenaPeer.ts');
+  DecentChatNodePeer,
+  resetDecentChatNodePeerStartupLockForTests,
+  runDecentChatNodePeerStartupLocked,
+} = await import('../../src/peer/DecentChatNodePeer.ts');
 
 const VALID_SEED = new SeedPhraseManager().generate().mnemonic;
 
@@ -51,24 +51,24 @@ function makeAccount(overrides: Partial<any> = {}): any {
     seedPhrase: VALID_SEED,
     signalingServer: 'https://decentchat.app/peerjs',
     invites: [],
-    alias: 'Xena',
+    alias: 'DecentChat Bot',
     dataDir: mkdtempSync(join(tmpdir(), 'openclaw-nodepeer-test-')),
     ...overrides,
   };
 }
 
-describe('NodeXenaPeer signaling URL normalization', () => {
+describe('DecentChatNodePeer signaling URL normalization', () => {
   beforeEach(() => {
     MockPeerTransport.instances = [];
   });
 
   test('serializes overlapping peer startup work', async () => {
-    resetNodeXenaPeerStartupLockForTests();
+    resetDecentChatNodePeerStartupLockForTests();
 
     const events: string[] = [];
     const releases: Array<() => void> = [];
 
-    const run = (label: string) => runNodeXenaPeerStartupLocked(async () => {
+    const run = (label: string) => runDecentChatNodePeerStartupLocked(async () => {
       events.push(`${label}:start`);
       await new Promise<void>((resolve) => {
         releases.push(() => {
@@ -94,7 +94,7 @@ describe('NodeXenaPeer signaling URL normalization', () => {
   });
 
   test('deduplicates https://0.peerjs.com/ and https://0.peerjs.com:443/', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount({
         signalingServer: 'https://0.peerjs.com/',
         invites: ['decent://0.peerjs.com:443/CODE1234?secure=1&path=%2F&peer=peer-a'],
@@ -111,7 +111,7 @@ describe('NodeXenaPeer signaling URL normalization', () => {
   });
 
   test('deduplicates http://localhost:9000 and http://localhost:9000/', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount({
         signalingServer: 'http://localhost:9000',
         invites: ['decent://localhost:9000/CODE1234?path=%2F&peer=peer-b'],
@@ -128,7 +128,7 @@ describe('NodeXenaPeer signaling URL normalization', () => {
   });
 
   test('strips only default ports during dedup and keeps non-default ports distinct', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount({
         signalingServer: 'https://0.peerjs.com:8443/',
         invites: ['decent://0.peerjs.com:443/CODE1234?secure=1&path=%2F&peer=peer-c'],
@@ -145,7 +145,7 @@ describe('NodeXenaPeer signaling URL normalization', () => {
   });
 
   test('peer maintenance backs off repeated offline reconnect attempts for the same peer', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -177,7 +177,7 @@ describe('NodeXenaPeer signaling URL normalization', () => {
   });
 
   test('transport dial errors mark the peer for maintenance backoff', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount(),
       onIncomingMessage: async () => {},
       onReply: () => {},
@@ -206,7 +206,7 @@ describe('NodeXenaPeer signaling URL normalization', () => {
   });
 
   test('startup skips invite auto-join when the invited workspace is already restored locally', async () => {
-    const peer = new NodeXenaPeer({
+    const peer = new DecentChatNodePeer({
       account: makeAccount({
         invites: [
           'https://decentchat.app/join/TV3KL5RW?signal=0.peerjs.com%3A443&peer=peer-host&ws=workspace-1&secure=1&path=%2F',

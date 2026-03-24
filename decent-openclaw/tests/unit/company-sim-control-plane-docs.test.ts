@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { NodeXenaPeer } from '../../src/peer/NodeXenaPeer.ts';
+import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
 import { readCompanySimControlDocument, writeCompanySimControlDocument } from '../../src/company-sim/control-plane.ts';
 
 const VALID_SEED = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -130,13 +130,13 @@ describe('company sim control plane docs', () => {
     }
   });
 
-  test('NodeXenaPeer proxies doc read/write requests and rejects unknown paths', async () => {
+  test('DecentChatNodePeer proxies doc read/write requests and rejects unknown paths', async () => {
     const root = mkdtempSync(join(tmpdir(), 'company-sim-control-docs-peer-'));
     try {
       const { manifestPath, companyDir } = writeCompanyFixture(root);
       const config = makeConfig(root, manifestPath, companyDir);
 
-      const peer = new NodeXenaPeer({
+      const peer = new DecentChatNodePeer({
         account: makeAccount(),
         onIncomingMessage: async () => {},
         onReply: () => {},

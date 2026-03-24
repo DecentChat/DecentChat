@@ -1,5 +1,5 @@
 /**
- * FileStore — JSON file persistence for the Xena Node.js peer.
+ * FileStore — JSON file persistence for the DecentChat Node.js peer.
  * Replaces PersistentStore (IndexedDB) for Node.js environments.
  * Stores everything under dataDir (default: ~/.openclaw/data/decentchat/)
  */

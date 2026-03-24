@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const repoRoot = path.resolve(import.meta.dir, '../..');
-const nodeXenaPeerModulePath = path.join(repoRoot, 'src/peer/NodeXenaPeer.ts');
+const decentChatNodePeerModulePath = path.join(repoRoot, 'src/peer/DecentChatNodePeer.ts');
 
 function runNodeJitiProbe(entryPath: string) {
   const script = `
@@ -23,7 +23,7 @@ function runNodeJitiProbe(entryPath: string) {
       },
     });
     const mod = jiti(${JSON.stringify(entryPath)});
-    const value = mod.NodeXenaPeer ?? mod.nodeXenaPeerType;
+    const value = mod.DecentChatNodePeer ?? mod.decentChatNodePeerType;
     const valueType = typeof value === 'function' ? 'function' : value;
     if (valueType !== 'function') {
       throw new Error('unexpected export: ' + String(value));
@@ -38,20 +38,20 @@ function runNodeJitiProbe(entryPath: string) {
 }
 
 describe('OpenClaw Jiti compatibility', () => {
-  test('loads NodeXenaPeer through the same Jiti loader OpenClaw uses', () => {
-    const result = runNodeJitiProbe(nodeXenaPeerModulePath);
+  test('loads DecentChatNodePeer through the same Jiti loader OpenClaw uses', () => {
+    const result = runNodeJitiProbe(decentChatNodePeerModulePath);
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe('function');
   });
 
-  test('loads a Jiti module that statically imports NodeXenaPeer', () => {
+  test('loads a Jiti module that statically imports DecentChatNodePeer', () => {
     const fixtureDir = mkdtempSync(path.join(tmpdir(), 'openclaw-jiti-loader-'));
     const fixturePath = path.join(fixtureDir, 'probe.ts');
 
     writeFileSync(
       fixturePath,
-      `import { NodeXenaPeer } from ${JSON.stringify(nodeXenaPeerModulePath)};\nexport const nodeXenaPeerType = typeof NodeXenaPeer;\n`,
+      `import { DecentChatNodePeer } from ${JSON.stringify(decentChatNodePeerModulePath)};\nexport const decentChatNodePeerType = typeof DecentChatNodePeer;\n`,
     );
 
     const result = runNodeJitiProbe(fixturePath);
