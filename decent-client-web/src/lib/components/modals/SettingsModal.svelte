@@ -141,7 +141,6 @@
     if (key === 'debug') {
       document.body.classList.toggle('debug-mode', value);
       (window as any).__DECENT_DEBUG = value === true;
-      if (value) console.log('[DecentChat] Debug mode enabled');
     }
   }
 

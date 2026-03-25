@@ -1,3 +1,5 @@
+import { createLogger } from 'decent-protocol';
+
 export type TopologyLogLevel = 'info' | 'debug' | 'warn';
 
 export interface TopologyMaintenanceEvent {
@@ -111,6 +113,8 @@ type MaintenanceRecordInput = Omit<TopologyMaintenanceEvent, 'kind' | 'ts' | 'de
   desiredPeerIds: string[];
   previousDesiredPeerIds?: string[];
 };
+
+const topologyLogger = createLogger('TopologyTelemetry', 'topology');
 
 export class TopologyTelemetry {
   private readonly maxEvents: number;
@@ -231,8 +235,8 @@ export class TopologyTelemetry {
       : event.kind === 'topology.anomaly'
         ? '[TopologyAnomaly]'
         : '[TopologyPeer]';
-    if (event.level === 'warn') console.warn(prefix, event);
-    else if (event.level === 'debug') console.debug(prefix, event);
-    else console.info(prefix, event);
+    if (event.level === 'warn') topologyLogger.warn(prefix, event);
+    else if (event.level === 'debug') topologyLogger.debug(prefix, event);
+    else topologyLogger.info(prefix, event);
   }
 }

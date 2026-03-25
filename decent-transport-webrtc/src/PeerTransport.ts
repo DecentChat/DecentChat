@@ -14,6 +14,9 @@
 import { Peer } from 'peerjs';
 import type { DataConnection } from 'peerjs';
 import type { Transport } from 'decent-protocol';
+import { createLogger } from 'decent-protocol';
+
+const transportLog = createLogger('PeerTransport', 'transport');
 
 export interface SignalingServer {
   /** Server URL (e.g. "https://signal.example.com/peerjs") */
@@ -243,7 +246,7 @@ export class PeerTransport implements Transport {
 
     const connected = results.filter(r => r.status === 'fulfilled').length;
     const total = servers.length;
-    console.log(`[DecentChat] Connected to ${connected}/${total} signaling servers as ${assignedId}`);
+    transportLog.info(`Connected to ${connected}/${total} signaling servers as ${assignedId}`);
 
     this._setupNetworkListeners();
     return assignedId;
@@ -670,7 +673,7 @@ export class PeerTransport implements Transport {
     try {
       const pc = (active.conn as any).peerConnection as RTCPeerConnection | undefined;
       if (pc && typeof pc.restartIce === 'function') {
-        console.log(`[Heartbeat] Triggering ICE restart for ${peerId.slice(0, 8)}`);
+        transportLog.info(`Triggering ICE restart for ${peerId.slice(0, 8)}`);
         pc.restartIce();
         return;
       }
@@ -679,7 +682,7 @@ export class PeerTransport implements Transport {
     }
 
     // Fallback: close connection (triggers auto-reconnect via _scheduleReconnect)
-    console.log(`[Heartbeat] Closing dead connection to ${peerId.slice(0, 8)}`);
+    transportLog.info(`Closing dead connection to ${peerId.slice(0, 8)}`);
     active.conn.close();
   }
 
@@ -690,7 +693,7 @@ export class PeerTransport implements Transport {
     this._networkListenersSetup = true;
 
     const onOnline = () => {
-      console.log('[Network] Browser went online — pinging all peers');
+      transportLog.info('Browser went online — pinging all peers');
       // Immediately ping all connected peers
       for (const [peerId, active] of this.connections) {
         if (active.status === 'connected' && this._heartbeatEnabled) {
@@ -702,12 +705,12 @@ export class PeerTransport implements Transport {
     };
 
     const onOffline = () => {
-      console.log('[Network] Browser went offline');
+      transportLog.info('Browser went offline');
     };
 
     const onVisibilityChange = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        console.log('[Network] Tab became visible — pinging all peers');
+        transportLog.debug('Tab became visible — pinging all peers');
         for (const [peerId, active] of this.connections) {
           if (active.status === 'connected' && this._heartbeatEnabled) {
             this._sendPing(peerId);
@@ -735,7 +738,7 @@ export class PeerTransport implements Transport {
   private _probeSignalingServers(): void {
     for (const instance of this.signalingInstances) {
       if (!instance.connected && !instance.peer.destroyed) {
-        console.log(`[Network] Probing signaling server: ${instance.label}`);
+        transportLog.debug(`Probing signaling server: ${instance.label}`);
         try {
           instance.peer.reconnect();
         } catch {
@@ -782,14 +785,14 @@ export class PeerTransport implements Transport {
 
     // Check if already connected to this server
     if (this.signalingInstances.some(i => i.url === serverUrl)) {
-      console.log(`[PeerTransport] Already connected to ${serverUrl}`);
+      transportLog.debug(`Already connected to ${serverUrl}`);
       return true;
     }
 
     try {
-      console.log(`[PEX] Connecting to discovered server: ${serverUrl}`);
+      transportLog.info(`Connecting to discovered server: ${serverUrl}`);
       await this._initServer({ url: serverUrl, label: label || serverUrl }, this.myPeerId);
-      console.log(`[PEX] Successfully connected to ${serverUrl}`);
+      transportLog.info(`Successfully connected to ${serverUrl}`);
       return true;
     } catch (err) {
       console.warn(`[PEX] Failed to connect to ${serverUrl}:`, (err as Error).message);
@@ -890,10 +893,12 @@ export class PeerTransport implements Transport {
       // post-init error (e.g. peer-unavailable when a member goes offline).
       const initErrHandler = (error: any) => {
         peer.destroy();
-        if (error.type === 'unavailable-id' && attempt < 3) {
-          // Transient: previous WebSocket session still alive on the server — retry.
-          const delay = (attempt + 1) * 3000;
-          console.warn(`[PeerTransport] Peer ID temporarily taken, retrying in ${delay / 1000}s (attempt ${attempt + 1}/3)...`);
+        if (error.type === 'unavailable-id' && attempt < 5) {
+          // Transient: previous WebSocket session still alive on the server — retry
+          // with exponential backoff. After a gateway restart the old session may
+          // linger for 10-30s depending on the signaling server's TTL.
+          const delay = Math.min(3000 * Math.pow(2, attempt), 30000);
+          console.warn(`[PeerTransport] Peer ID temporarily taken, retrying in ${delay / 1000}s (attempt ${attempt + 1}/5)...`);
           this._setManagedTimeout(() => {
             this._initSingleServer(peerId, attempt + 1).then(resolve).catch(reject);
           }, delay);
@@ -945,9 +950,12 @@ export class PeerTransport implements Transport {
       const initErrHandler = (error: any) => {
         clearTimeout(timeout);
         peer.destroy();
-        if (error.type === 'unavailable-id' && attempt < 3) {
-          const delay = (attempt + 1) * 3000;
-          console.warn(`[PeerTransport] [${server.label}] Peer ID temporarily taken, retrying in ${delay / 1000}s (attempt ${attempt + 1}/3)...`);
+        if (error.type === 'unavailable-id' && attempt < 5) {
+          // Transient: previous WebSocket session still alive on the server — retry
+          // with exponential backoff. After a gateway restart the old session may
+          // linger for 10-30s depending on the signaling server's TTL.
+          const delay = Math.min(3000 * Math.pow(2, attempt), 30000);
+          console.warn(`[PeerTransport] [${server.label}] Peer ID temporarily taken, retrying in ${delay / 1000}s (attempt ${attempt + 1}/5)...`);
           this._setManagedTimeout(() => {
             this._initServer(server, peerId, attempt + 1).then(resolve).catch(reject);
           }, delay);
@@ -994,7 +1002,7 @@ export class PeerTransport implements Transport {
     // This fires both on initial connect AND after peer.reconnect() succeeds.
     instance.peer.on('open', () => {
       instance.connected = true;
-      console.log(`[DecentChat] Connected to signaling: ${instance.label}`);
+      transportLog.info(`Connected to signaling: ${instance.label}`);
       // Reset reconnect backoff on successful connection
       this._cancelSignalingReconnect(instance);
       this._emitSignalingStateChange();
@@ -1002,7 +1010,7 @@ export class PeerTransport implements Transport {
 
     instance.peer.on('disconnected', () => {
       instance.connected = false;
-      console.log(`[DecentChat] Disconnected from signaling: ${instance.label}`);
+      transportLog.info(`Disconnected from signaling: ${instance.label}`);
 
       // Auto-reconnect with exponential backoff retry loop
       this._scheduleSignalingReconnect(instance);
@@ -1011,7 +1019,7 @@ export class PeerTransport implements Transport {
 
     instance.peer.on('close', () => {
       instance.connected = false;
-      console.log(`[DecentChat] Signaling closed: ${instance.label}`);
+      transportLog.info(`Signaling closed: ${instance.label}`);
 
       // Some PeerJS failure modes (including peer-ID collisions / server-side
       // session replacement) surface as `close` instead of `disconnected`.
@@ -1059,7 +1067,7 @@ export class PeerTransport implements Transport {
 
     const delays = PeerTransport.SIGNALING_RECONNECT_DELAYS;
     const delay = delays[Math.min(attempt, delays.length - 1)];
-    console.log(`[DecentChat] Scheduling signaling reconnect #${attempt + 1} in ${delay}ms: ${instance.label}`);
+    transportLog.debug(`Scheduling signaling reconnect #${attempt + 1} in ${delay}ms: ${instance.label}`);
 
     const timer = this._setManagedTimeout(() => {
       this._signalingReconnectTimers.delete(instance.url);
@@ -1070,13 +1078,13 @@ export class PeerTransport implements Transport {
 
       if (!instance.peer.disconnected) {
         // Already reconnected (e.g. by PeerJS internal logic)
-        console.log(`[DecentChat] Signaling already reconnected: ${instance.label}`);
+        transportLog.debug(`Signaling already reconnected: ${instance.label}`);
         this._signalingReconnectAttempts.delete(instance.url);
         return;
       }
 
       this._signalingReconnectAttempts.set(instance.url, attempt + 1);
-      console.log(`[DecentChat] Attempting signaling reconnect #${attempt + 1}: ${instance.label}`);
+      transportLog.debug(`Attempting signaling reconnect #${attempt + 1}: ${instance.label}`);
       try {
         instance.peer.reconnect();
       } catch (err) {
@@ -1144,7 +1152,7 @@ export class PeerTransport implements Transport {
     const existing = this.connections.get(peerId);
     if (existing && existing.status === 'connected') {
       // Already have a working connection to this peer — close the duplicate
-      console.warn(`[Transport] dedup: rejecting ${inbound?'inbound':'outbound'} to ${peerId.slice(0,8)} (already connected)`);
+      transportLog.debug(`dedup: rejecting ${inbound?'inbound':'outbound'} to ${peerId.slice(0,8)} (already connected)`);
       conn.close();
       return;
     }
@@ -1155,24 +1163,24 @@ export class PeerTransport implements Transport {
         const weAreLowest = this.myPeerId < peerId;
         if (inbound && weAreLowest) {
           // New is inbound, but we have lower ID — keep our outbound (existing).
-          console.warn(`[Transport] glare: rejecting inbound from ${peerId.slice(0,8)} (our outbound wins)`);
+          transportLog.debug(`glare: rejecting inbound from ${peerId.slice(0,8)} (our outbound wins)`);
           conn.close();
           return;
         }
         if (!inbound && !weAreLowest) {
           // New is outbound, but they have lower ID — keep their inbound (existing).
-          console.warn(`[Transport] glare: rejecting outbound to ${peerId.slice(0,8)} (their inbound wins)`);
+          transportLog.debug(`glare: rejecting outbound to ${peerId.slice(0,8)} (their inbound wins)`);
           conn.close();
           return;
         }
         // Otherwise: let the new connection overwrite (the correct direction won).
-        console.warn(`[Transport] glare: overwriting ${existing.inbound?'inbound':'outbound'} with ${inbound?'inbound':'outbound'} for ${peerId.slice(0,8)}`);
+        transportLog.debug(`glare: overwriting ${existing.inbound?'inbound':'outbound'} with ${inbound?'inbound':'outbound'} for ${peerId.slice(0,8)}`);
       } else {
         // Same-direction duplicate (e.g. two inbound connections from the same
         // peer via different signaling servers).  Keep the existing one — it
         // was first.  Close the newcomer to prevent orphaned 'open' listeners
         // that would fire duplicate onConnect events.
-        console.warn(`[Transport] dedup: rejecting same-dir ${inbound?'inbound':'outbound'} to ${peerId.slice(0,8)} (first one kept)`);
+        transportLog.debug(`dedup: rejecting same-dir ${inbound?'inbound':'outbound'} to ${peerId.slice(0,8)} (first one kept)`);
         conn.close();
         return;
       }
@@ -1194,7 +1202,7 @@ export class PeerTransport implements Transport {
       // Double-check dedup: another connection may have won the race
       const current = this.connections.get(peerId);
       if (current && current !== active && current.status === 'connected') {
-        console.warn(`[Transport] markConnected: race-lost for ${peerId.slice(0,8)} ${inbound?'inbound':'outbound'}, closing`);
+        transportLog.debug(`markConnected: race-lost for ${peerId.slice(0,8)} ${inbound?'inbound':'outbound'}, closing`);
         conn.close();
         return;
       }
@@ -1203,7 +1211,7 @@ export class PeerTransport implements Transport {
       active.status = 'connected';
       this.connections.set(peerId, active);
       this._startHeartbeat(peerId);
-      console.warn(`[Transport] markConnected: firing onConnect for ${peerId.slice(0,8)} ${inbound?'inbound':'outbound'} via ${signalingServer}`);
+      transportLog.debug(`markConnected: firing onConnect for ${peerId.slice(0,8)} ${inbound?'inbound':'outbound'} via ${signalingServer}`);
       this.onConnect?.(peerId);
     };
 
@@ -1252,7 +1260,7 @@ export class PeerTransport implements Transport {
       // Only fire disconnect if this was the active connection
       const current = this.connections.get(peerId);
       if (current?.conn === conn) {
-        console.warn(`[Transport] conn.close for ${peerId.slice(0,8)} ${inbound?'inbound':'outbound'} — firing onDisconnect`);
+        transportLog.debug(`conn.close for ${peerId.slice(0,8)} ${inbound?'inbound':'outbound'} — firing onDisconnect`);
         this._stopHeartbeat(peerId);
         active.status = 'failed';
         this.connections.delete(peerId);
@@ -1260,7 +1268,7 @@ export class PeerTransport implements Transport {
         this.onDisconnect?.(peerId);
         this._scheduleReconnect(peerId);
       } else {
-        console.warn(`[Transport] conn.close for ${peerId.slice(0,8)} ${inbound?'inbound':'outbound'} — NOT active, ignoring`);
+        transportLog.debug(`conn.close for ${peerId.slice(0,8)} ${inbound?'inbound':'outbound'} — NOT active, ignoring`);
       }
     });
 

@@ -69,6 +69,10 @@ export type {
   TransferProgress, ThumbnailResult,
 } from './media';
 
+// ─── Logging ───────────────────────────────────────────────────────────────
+export { createLogger, getDecentLogBuffer, getDecentLogConfig, setDecentLogConfig, clearDecentLogConfig } from './logging/Logger';
+export type { DecentLogConfig, DecentLogEntry, DecentLogLevel, DecentLogger } from './logging/Logger';
+
 // ─── Time ───────────────────────────────────────────────────────────────────
 export { ClockSync } from './time/ClockSync';
 export type { TimeSyncRequest, TimeSyncResponse, PeerClockInfo } from './time/ClockSync';

@@ -50,3 +50,14 @@ export function resetDecentChatRuntimeBootstrapStateForTests(): void {
   bootstrapInFlight.clear();
   bootstrapCompleted.clear();
 }
+
+/**
+ * Invalidate a specific bootstrap key so the next `runDecentChatBootstrapOnce`
+ * call with the same key will re-run the task. Used during gateway restarts
+ * to ensure bootstrap logic (workspace creation, invite joins, etc.) is not
+ * permanently skipped when the gateway recycles within the same process.
+ */
+export function invalidateDecentChatBootstrapKey(key: string): void {
+  bootstrapCompleted.delete(key);
+  bootstrapInFlight.delete(key);
+}

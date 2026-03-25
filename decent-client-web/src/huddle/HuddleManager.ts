@@ -1,3 +1,5 @@
+import { createLogger } from 'decent-protocol';
+
 /**
  * HuddleManager — Slack-style voice huddles over WebRTC
  *
@@ -13,6 +15,8 @@
  *   huddle-ice       { type, channelId, candidate, fromPeerId } — ICE candidate
  *   huddle-mute      { type, channelId, peerId, muted }  — mute state change broadcast
  */
+
+const huddleLog = createLogger('HuddleManager', 'huddle');
 
 export type BotStatus = 'listening' | 'hearing' | 'transcribing' | 'thinking' | 'speaking' | 'interrupted';
 
@@ -84,7 +88,7 @@ export class HuddleManager {
 
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      console.log('[Huddle] startHuddle: got mic, tracks:', this.localStream.getTracks().map(t => `${t.kind}(enabled=${t.enabled},readyState=${t.readyState})`));
+      huddleLog.info('startHuddle: got mic tracks', this.localStream.getTracks().map(t => `${t.kind}(enabled=${t.enabled},readyState=${t.readyState})`));
     } catch (err) {
       console.error('[Huddle] startHuddle: getUserMedia failed', err);
       this.callbacks.onError('Microphone access denied. Please allow microphone in browser settings.');
@@ -121,7 +125,7 @@ export class HuddleManager {
 
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      console.log('[Huddle] joinHuddle: got mic, tracks:', this.localStream.getTracks().map(t => `${t.kind}(enabled=${t.enabled},readyState=${t.readyState})`));
+      huddleLog.info('joinHuddle: got mic tracks', this.localStream.getTracks().map(t => `${t.kind}(enabled=${t.enabled},readyState=${t.readyState})`));
     } catch (err) {
       console.error('[Huddle] joinHuddle: getUserMedia failed', err);
       this.callbacks.onError('Microphone access denied. Please allow microphone in browser settings.');
@@ -237,7 +241,7 @@ export class HuddleManager {
         await this.handleIce(fromPeerId, data);
         break;
       case 'huddle-stats':
-        console.log('[Huddle] stats from', fromPeerId.slice(0, 8), data.stats);
+        huddleLog.debug('stats update', fromPeerId.slice(0, 8), data.stats);
         break;
       case 'huddle-mute':
         this.handleMuteChange(fromPeerId, data);
@@ -306,7 +310,7 @@ export class HuddleManager {
   }
 
   private async handleOffer(fromPeerId: string, data: any): Promise<void> {
-    console.log('[Huddle] handleOffer from', fromPeerId, 'state:', this.state, 'channel match:', this.activeChannelId === data.channelId);
+    huddleLog.debug('handleOffer', fromPeerId, { state: this.state, channelMatch: this.activeChannelId === data.channelId });
     if (this.state !== 'in-call' || this.activeChannelId !== data.channelId) return;
 
     const pc = this.getOrCreatePeerConnection(fromPeerId);
@@ -323,7 +327,7 @@ export class HuddleManager {
   }
 
   private async handleAnswer(fromPeerId: string, data: any): Promise<void> {
-    console.log('[Huddle] handleAnswer from', fromPeerId);
+    huddleLog.debug('handleAnswer', fromPeerId);
     const pc = this.connections.get(fromPeerId);
     if (!pc) { console.warn('[Huddle] handleAnswer: no PC found for', fromPeerId); return; }
     await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
@@ -358,12 +362,12 @@ export class HuddleManager {
   private async initiateConnectionTo(peerId: string): Promise<void> {
     if (!this.localStream) { console.warn('[Huddle] initiateConnectionTo: no localStream!'); return; }
 
-    console.log('[Huddle] initiateConnectionTo', peerId);
+    huddleLog.debug('initiateConnectionTo', peerId);
     const pc = this.getOrCreatePeerConnection(peerId);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    console.log('[Huddle] sending huddle-offer to', peerId, 'sdp type:', offer.type);
+    huddleLog.debug('sending huddle-offer', peerId, { sdpType: offer.type });
     this.callbacks.sendSignal(peerId, {
       type: 'huddle-offer',
       channelId: this.activeChannelId,
@@ -388,7 +392,7 @@ export class HuddleManager {
     }
 
     pc.ontrack = (event) => {
-      console.log('[Huddle] ontrack fired for peer', peerId, '— track kind:', event.track.kind, 'streams:', event.streams.length, 'track.readyState:', event.track.readyState, 'muted:', event.track.muted);
+      huddleLog.debug('ontrack fired', peerId, { kind: event.track.kind, streams: event.streams.length, readyState: event.track.readyState, muted: event.track.muted });
       const remoteStream = event.streams[0] ?? new MediaStream([event.track]);
       let audioEl = this.audioElements.get(peerId);
       if (!audioEl) {
@@ -401,7 +405,7 @@ export class HuddleManager {
       this.attachRemoteAnalyser(peerId, remoteStream);
       // Explicit play() required — autoplay alone is blocked by Chrome's autoplay policy
       audioEl.play()
-        .then(() => console.log('[Huddle] audio play() succeeded for peer', peerId))
+        .then(() => huddleLog.debug('audio play() succeeded', peerId))
         .catch(err => {
           console.warn('[Huddle] Audio autoplay blocked, retrying on user gesture:', err);
           // Queue a one-shot retry on the next user interaction
@@ -460,7 +464,7 @@ export class HuddleManager {
             }
 
             if (maxAmp > 2 || diagCount < 5) {
-              console.log(`[Huddle-DIAG] peer=${peerId.slice(0,8)} amp=${maxAmp}/128 peak=${Math.round(peakHz)}Hz@${peakVal.toFixed(1)}dB`);
+              huddleLog.debug(`diag peer=${peerId.slice(0,8)} amp=${maxAmp}/128 peak=${Math.round(peakHz)}Hz@${peakVal.toFixed(1)}dB`);
             }
             diagCount++;
           }, 500);
@@ -498,10 +502,10 @@ export class HuddleManager {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url; a.download = 'huddle-capture.wav'; a.click();
-            console.log(`[Huddle-DIAG] Exported ${(totalSamples/48000).toFixed(1)}s WAV (${totalSamples} samples)`);
+            huddleLog.debug(`diag exported ${(totalSamples/48000).toFixed(1)}s WAV (${totalSamples} samples)`);
             return `Exported ${(totalSamples/48000).toFixed(1)}s`;
           };
-          console.log('[Huddle-DIAG] Audio capture started. Call __huddleDiagExport() in console to save WAV.');
+          huddleLog.debug('diag audio capture started. Call __huddleDiagExport() in console to save WAV.');
         } catch (err) {
           console.warn('[Huddle-DIAG] capture setup failed:', err);
         }
@@ -513,7 +517,7 @@ export class HuddleManager {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log('[Huddle] ICE candidate for', peerId, ':', event.candidate.type, event.candidate.protocol);
+        huddleLog.debug('ICE candidate', peerId, { type: event.candidate.type, protocol: event.candidate.protocol });
         this.callbacks.sendSignal(peerId, {
           type: 'huddle-ice',
           channelId: this.activeChannelId,
@@ -521,20 +525,20 @@ export class HuddleManager {
           fromPeerId: this.myPeerId,
         });
       } else {
-        console.log('[Huddle] ICE gathering complete for', peerId);
+        huddleLog.debug('ICE gathering complete', peerId);
       }
     };
 
     pc.onicegatheringstatechange = () => {
-      console.log('[Huddle] ICE gathering state for', peerId, ':', pc.iceGatheringState);
+      huddleLog.debug('ICE gathering state', peerId, pc.iceGatheringState);
     };
 
     pc.oniceconnectionstatechange = () => {
-      console.log('[Huddle] ICE connection state for', peerId, ':', pc.iceConnectionState);
+      huddleLog.debug('ICE connection state', peerId, pc.iceConnectionState);
     };
 
     pc.onconnectionstatechange = () => {
-      console.log('[Huddle] connection state for', peerId, ':', pc.connectionState);
+      huddleLog.debug('connection state', peerId, pc.connectionState);
       if (pc.connectionState === 'connected') {
         this.clearReconnectCleanup(peerId);
         const p = this.participants.get(peerId);

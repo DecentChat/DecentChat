@@ -7,7 +7,7 @@ import { z } from "zod";
 import { assertCompanyBootstrapAgentInstallation, ensureCompanyBootstrapRuntime, resolveCompanyManifestPath } from "./company-sim/bootstrap.js";
 import { startDecentChatPeer } from "./monitor.js";
 import { getActivePeer, listActivePeerAccountIds } from "./peer-registry.js";
-import { buildDecentChatRuntimeBootstrapKey, runDecentChatBootstrapOnce } from "./runtime.js";
+import { buildDecentChatRuntimeBootstrapKey, invalidateDecentChatBootstrapKey, runDecentChatBootstrapOnce } from "./runtime.js";
 import type { DecentChatChannelConfig, OpenClawConfigShape, ResolvedDecentChatAccount } from "./types.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
@@ -746,6 +746,19 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
         configured: ctx.account.configured,
       });
       try {
+        // Invalidate bootstrap guard so re-bootstrap runs on gateway restart.
+        // Without this, the module-level `bootstrapCompleted` Set would skip
+        // bootstrap on the second startAccount call within the same process.
+        const bootstrap = ctx.account.companySimBootstrap;
+        if (bootstrap?.enabled && bootstrap.mode !== "off") {
+          const manifestPath = bootstrap.manifestPath?.trim();
+          if (manifestPath) {
+            const resolvedManifestPath = resolveCompanyManifestPath(manifestPath);
+            const runtimeScope = buildCompanyBootstrapRuntimeScope(ctx.cfg, resolvedManifestPath);
+            invalidateDecentChatBootstrapKey(buildDecentChatRuntimeBootstrapKey(resolvedManifestPath, runtimeScope));
+          }
+        }
+
         await bootstrapDecentChatCompanySimForStartup({
           cfg: ctx.cfg,
           accountId: ctx.accountId,

@@ -788,19 +788,28 @@ async function startNodePeerRuntime(ctx: PeerContext): Promise<void> {
   });
 
   return new Promise<void>((resolve) => {
-    const shutdown = () => {
+    const shutdown = async () => {
       setActivePeer(null, ctx.accountId);
-      nodePeer.destroy();
+      try {
+        nodePeer.destroy();
+      } catch (err) {
+        ctx.log?.warn?.(`[decentchat] destroy error during shutdown: ${String(err)}`);
+      }
       ctx.setStatus({ running: false });
+      // Allow the PeerJS signaling server time to process the WebSocket
+      // disconnect before the gateway recreates a peer with the same ID.
+      // Without this delay, the new peer hits "unavailable-id" because the
+      // old session hasn't expired on the signaling server yet.
+      await new Promise<void>((r) => setTimeout(r, 2000));
       resolve();
     };
 
     if (ctx.abortSignal?.aborted) {
-      shutdown();
+      void shutdown();
       return;
     }
 
-    ctx.abortSignal?.addEventListener("abort", shutdown);
+    ctx.abortSignal?.addEventListener("abort", () => void shutdown());
   });
 }
 

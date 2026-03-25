@@ -37,6 +37,7 @@ import {
   MemoryDirectConversationStore,
   ServerDiscovery,
   PresenceProtocol,
+  createLogger,
 } from 'decent-protocol';
 import type { InviteData } from 'decent-protocol';
 import { MessageCipher } from 'decent-protocol';
@@ -128,6 +129,10 @@ const WORKSPACE_STATE_DUPLICATE_SUPPRESS_MS = 3000;
 const DEV_SIGNAL_PORT = Number((import.meta as any).env?.VITE_SIGNAL_PORT || 9000);
 const DEV_SIGNAL_WS = `ws://localhost:${DEV_SIGNAL_PORT}`;
 const PROD_SIGNAL_WS = 'wss://0.peerjs.com/'; // Free PeerJS cloud service (root path → PeerJS appends /peerjs)
+
+const chatLog = createLogger('ChatController', 'app');
+const perfLog = createLogger('ChatController', 'perf');
+const syncLog = createLogger('ChatController', 'sync');
 
 // Get the appropriate signaling server based on environment
 function getDefaultSignalingServer(): string {
@@ -591,7 +596,7 @@ export class ChatController {
     this._replaceTransport(nextTransport);
     const assignedId = await this.transport.init(peerId);
     this.setupTransportHandlers();
-    console.log(`[Reconnect] Recreated transport (${reason})`);
+    chatLog.info(`[Reconnect] Recreated transport (${reason})`);
     return assignedId;
   }
 
@@ -637,7 +642,7 @@ export class ChatController {
     }
 
     if (changed) {
-      console.log(`[Identity] Migrated stored workspace membership ${previous.slice(0, 8)} → ${current.slice(0, 8)}`);
+      chatLog.info(`[Identity] Migrated stored workspace membership ${previous.slice(0, 8)} → ${current.slice(0, 8)}`);
       this.ui?.updateSidebar({ refreshContacts: false });
       this.ui?.renderMessages();
     }
@@ -1235,7 +1240,7 @@ export class ChatController {
           ...handshake,
           capabilities: this.getAdvertisedControlCapabilities(this.state.activeWorkspaceId ?? undefined),
         }, { label: 'handshake' });
-        console.warn(`[PERF] onConnect(${peerId.slice(0,8)}): createHandshake=${(_t1-_t0).toFixed(1)}ms, total=${(performance.now()-_t0).toFixed(1)}ms`);
+        perfLog.debug(`onConnect(${peerId.slice(0,8)}): createHandshake=${(_t1-_t0).toFixed(1)}ms, total=${(performance.now()-_t0).toFixed(1)}ms`);
         // Pre-key bundle publishing is handled in the handshake response handler
         // after crypto negotiation completes — removed from here to avoid
         // competing WebCrypto work during the connection burst.
@@ -1637,7 +1642,7 @@ export class ChatController {
           // If a peer rapidly disconnects/reconnects, the previous handshake's
           // heavy async work (ECDH, IndexedDB, sync) may still be running.
           if (this.handshakeInFlight.has(peerId)) {
-            console.debug(`[P2P] Dropping duplicate handshake from ${peerId.slice(0, 8)} — already in progress`);
+            chatLog.debug(`[P2P] Dropping duplicate handshake from ${peerId.slice(0, 8)} — already in progress`);
             return;
           }
           this.handshakeInFlight.add(peerId);
@@ -1751,7 +1756,7 @@ export class ChatController {
           this.ui?.updateSidebar({ refreshContacts: false });
           const ratchetActive = this.messageProtocol!.hasRatchetState(peerId);
           // Connection toast removed — too noisy for end users
-          console.debug(`[P2P] ${ratchetActive ? "Forward-secret" : "Encrypted"} connection with ${peerId.slice(0, 8)}`);
+          chatLog.debug(`[P2P] ${ratchetActive ? "Forward-secret" : "Encrypted"} connection with ${peerId.slice(0, 8)}`);
 
           const now = Date.now();
           const shouldRunRetryUnacked = now - this.lastPostConnectRetryUnackedAt >= ChatController.POST_CONNECT_RETRY_UNACKED_MIN_MS;
@@ -1773,7 +1778,7 @@ export class ChatController {
           // handshake/crypto; the expensive O(allMessages) scans, sync
           // requests, and offline-queue flushes wait until the app is ready.
           if (!this._restoreComplete) {
-            console.log(`[PostConnect] deferring heavy work for ${peerId.slice(0, 8)} — restore in progress`);
+            chatLog.info(`[PostConnect] deferring heavy work for ${peerId.slice(0, 8)} — restore in progress`);
             if (!this._deferredPostConnectPeers.includes(peerId)) {
               this._deferredPostConnectPeers.push(peerId);
             }
@@ -1801,7 +1806,7 @@ export class ChatController {
           // Start clock sync with new peer
           const syncReq = this.clockSync.startSync(peerId);
           this.sendControlWithRetry(peerId, syncReq, { label: 'time-sync-request' });
-          console.warn(`[PERF] handshake(${peerId.slice(0,8)}): verify=${(_ht1-_ht0).toFixed(1)}ms, crypto=${(_ht2-_ht1).toFixed(1)}ms, peerIdBind=${(_ht3-_ht2).toFixed(1)}ms, idb=${(_ht5-_ht4).toFixed(1)}ms, total=${(performance.now()-_ht0).toFixed(1)}ms`);
+          perfLog.debug(`handshake(${peerId.slice(0,8)}): verify=${(_ht1-_ht0).toFixed(1)}ms, crypto=${(_ht2-_ht1).toFixed(1)}ms, peerIdBind=${(_ht3-_ht2).toFixed(1)}ms, idb=${(_ht5-_ht4).toFixed(1)}ms, total=${(performance.now()-_ht0).toFixed(1)}ms`);
           } finally {
             this.handshakeInFlight.delete(peerId);
           }
@@ -1853,7 +1858,7 @@ export class ChatController {
           this.pendingAuthChallenges.delete(peerId);
           if (valid) {
             this.authenticatedPeers.add(peerId);
-            console.log(`[Auth] Peer ${peerId.slice(0, 8)} authenticated ✓`);
+            chatLog.info(`[Auth] Peer ${peerId.slice(0, 8)} authenticated ✓`);
           } else {
             console.error(`[Auth] Peer ${peerId.slice(0, 8)} FAILED authentication — bad signature`);
             // Don't disconnect — TOFU fallback; log the failure for observability
@@ -2139,7 +2144,7 @@ export class ChatController {
 
           // Multi-device dedup for DMs
           if (data.messageId && this.multiDeviceDedup.isDuplicate(data.messageId)) {
-            console.log(`[MultiDevice] Dedup: skipping duplicate DM ${(data.messageId as string).slice(0, 8)} from ${peerId.slice(0, 8)}`);
+            chatLog.info(`[MultiDevice] Dedup: skipping duplicate DM ${(data.messageId as string).slice(0, 8)} from ${peerId.slice(0, 8)}`);
             return;
           }
           if (data.messageId) this.multiDeviceDedup.markSeen(data.messageId);
@@ -2406,7 +2411,7 @@ export class ChatController {
         // Multi-device dedup: if same message arrives from multiple device connections
         // of the same sender, skip duplicates. Uses messageId for dedup.
         if (msg.id && this.multiDeviceDedup?.isDuplicate(msg.id)) {
-          console.log(`[MultiDevice] Dedup: skipping duplicate message ${msg.id.slice(0, 8)} from ${peerId.slice(0, 8)}`);
+          chatLog.info(`[MultiDevice] Dedup: skipping duplicate message ${msg.id.slice(0, 8)} from ${peerId.slice(0, 8)}`);
           return;
         }
         if (msg.id) this.multiDeviceDedup?.markSeen(msg.id);
@@ -2539,7 +2544,7 @@ export class ChatController {
         }
         const _mtElapsed = performance.now() - _mt0;
         if (_mtElapsed > 20) {
-          console.warn(`[PERF] onMessage(${peerId.slice(0,8)}, ${_msgType}): ${_mtElapsed.toFixed(1)}ms`);
+          perfLog.debug(`onMessage(${peerId.slice(0,8)}, ${_msgType}): ${_mtElapsed.toFixed(1)}ms`);
         }
       } catch (error) {
         console.error('Message processing failed:', error);
@@ -2586,14 +2591,14 @@ export class ChatController {
       this.networkOnlineListenerBound = true;
       window.addEventListener('online', () => {
         const peers = this.transport.getConnectedPeers();
-        console.log(`[Network] Reconnected. Re-probing ${peers.length} peers...`);
+        chatLog.info(`[Network] Reconnected. Re-probing ${peers.length} peers...`);
         this.runPeerMaintenanceNow('browser-online');
         void this.reinitializeTransportIfStuck('browser-online');
         this.ui?.updateSidebar({ refreshContacts: false });
       });
 
       window.addEventListener('offline', () => {
-        console.log('[Network] Offline. Waiting for connectivity…');
+        chatLog.info('[Network] Offline. Waiting for connectivity…');
         this.ui?.updateSidebar({ refreshContacts: false });
       });
     }
@@ -2620,7 +2625,7 @@ export class ChatController {
       console.error('[Sync] Failed to persist workspace after channel-created:', err)
     );
 
-    console.log(`[Sync] Channel created by peer: #${channel.name} in workspace ${workspaceId.slice(0, 8)}`);
+    syncLog.info(`Channel created by peer: #${channel.name} in workspace ${workspaceId.slice(0, 8)}`);
 
     // Refresh sidebar so the new channel appears immediately
     this.ui?.updateSidebar({ refreshContacts: false });
@@ -2699,7 +2704,7 @@ export class ChatController {
           },
         }, { label: 'workspace-sync' });
       } else {
-        console.log(`[Sync] No eligible workspace for peer ${peerId.slice(0, 8)}, skipping state sync`);
+        syncLog.info(`No eligible workspace for peer ${peerId.slice(0, 8)}, skipping state sync`);
       }
       return;
     }
@@ -2719,14 +2724,14 @@ export class ChatController {
 
     const isPeerMember = ws.members.some(m => m.peerId === peerId);
     if (!isPeerMember && !options?.forceInclude) {
-      console.log(`[Sync] Peer ${peerId.slice(0, 8)} is not a member of workspace ${ws.id.slice(0, 8)}, skipping state sync`);
+      syncLog.info(`Peer ${peerId.slice(0, 8)} is not a member of workspace ${ws.id.slice(0, 8)}, skipping state sync`);
       return;
     }
     if (!isPeerMember && options?.forceInclude) {
-      console.log(`[Sync] Peer ${peerId.slice(0, 8)} not yet a member of workspace ${ws.id.slice(0, 8)}, but forceInclude=true — sending state`);
+      syncLog.info(`Peer ${peerId.slice(0, 8)} not yet a member of workspace ${ws.id.slice(0, 8)}, but forceInclude=true — sending state`);
     }
 
-    console.log(
+    chatLog.info(
       `[Sync] Sending workspace state to ${peerId.slice(0, 8)} `
       + `(ws=${ws.id.slice(0, 8)} channels=${ws.channels.length} members=${ws.members.length} peerMember=${isPeerMember})`,
     );
@@ -3815,7 +3820,7 @@ export class ChatController {
               sync: { type: 'device-ack', identityId: msg.sync.identityId, deviceId: msg.sync.device.deviceId },
               workspaceId: msg.workspaceId,
             });
-            console.log(`[MultiDevice] Registered device ${msg.sync.device.deviceLabel} for identity ${msg.sync.identityId.slice(0, 8)}`);
+            chatLog.info(`[MultiDevice] Registered device ${msg.sync.device.deviceLabel} for identity ${msg.sync.identityId.slice(0, 8)}`);
           } else {
             console.warn(`[MultiDevice] Rejected device-announce: ${result.reason}`);
           }
@@ -3836,7 +3841,7 @@ export class ChatController {
       if (discovery && msg.sync.servers) {
         discovery.mergeReceivedServers(msg.sync.servers);
         this.saveServerDiscovery(msg.workspaceId); // Persist updated state
-        console.log(`[PEX] Merged ${msg.sync.servers.length} servers from ${peerId.slice(0, 8)}`);
+        chatLog.info(`[PEX] Merged ${msg.sync.servers.length} servers from ${peerId.slice(0, 8)}`);
 
         // Try to connect to new high-ranked servers
         await this.connectToDiscoveredServers(discovery);
@@ -3943,10 +3948,10 @@ export class ChatController {
       // The owner must never adopt a joiner's provisional ID — that corrupts
       // the canonical workspace state for all existing members.
       if (this.workspaceManager.isOwner(localWs.id, this.state.myPeerId)) {
-        console.log(`[Sync] Skipping workspace ID adoption from ${peerId.slice(0, 8)}: I am the owner`);
+        syncLog.info(`Skipping workspace ID adoption from ${peerId.slice(0, 8)}: I am the owner`);
       } else {
         const oldWorkspaceId = localWs.id;
-        console.log(`[Sync] Adopting remote workspace ID ${remoteWorkspaceId.slice(0, 8)} (was ${oldWorkspaceId.slice(0, 8)}) for invite ${localWs.inviteCode}`);
+        syncLog.info(`Adopting remote workspace ID ${remoteWorkspaceId.slice(0, 8)} (was ${oldWorkspaceId.slice(0, 8)}) for invite ${localWs.inviteCode}`);
 
         // Remap local channel IDs to the owner's canonical channel IDs by name/type.
         if (Array.isArray(sync.channels)) {
@@ -4060,7 +4065,7 @@ export class ChatController {
           // Min-wins: only adopt the remote channel ID when it is lexicographically smaller.
           // This prevents a late-joining peer (with fresh UUIDs) from overwriting the
           // established channel ID and orphaning messages stored under the old key.
-          console.log(`[Sync] Remapping channel "${remoteCh.name}": ${localCh.id.slice(0, 8)} → ${remoteCh.id.slice(0, 8)}`);
+          syncLog.info(`Remapping channel "${remoteCh.name}": ${localCh.id.slice(0, 8)} → ${remoteCh.id.slice(0, 8)}`);
           const oldId = localCh.id;
           localCh.id = remoteCh.id;
 
@@ -4079,7 +4084,7 @@ export class ChatController {
           }
         } else if (!localCh) {
           // New channel from peer — add it locally
-          console.log(`[Sync] Adding new channel "${remoteCh.name}" from peer`);
+          syncLog.info(`Adding new channel "${remoteCh.name}" from peer`);
           localWs.channels.push({
             id: remoteCh.id,
             workspaceId: localWs.id,
@@ -4287,7 +4292,7 @@ export class ChatController {
       data: { channelCount: localWs.channels.length },
     });
     this.ui?.renderApp();
-    console.warn(`[PERF] handleWorkspaceStateSync(${peerId.slice(0,8)}): ${(performance.now()-_wst0).toFixed(1)}ms`);
+    perfLog.debug(`handleWorkspaceStateSync(${peerId.slice(0,8)}): ${(performance.now()-_wst0).toFixed(1)}ms`);
 
     // Channel remaps and membership updates can land after an initial reconnect sync
     // request has already started. Ask for one follow-up sync; requestMessageSync
@@ -4373,7 +4378,7 @@ export class ChatController {
 
     // Broadcast every 5 minutes
     this.pexBroadcastInterval = window.setInterval(broadcastPEX, 5 * 60 * 1000);
-    console.log('[PEX] Started periodic broadcasts (every 5 minutes)');
+    chatLog.info('[PEX] Started periodic broadcasts (every 5 minutes)');
   }
 
   /**
@@ -4468,31 +4473,31 @@ export class ChatController {
   private _runPostConnectWork(peerId: string, burstIndex: number, shouldRunRetryUnacked: boolean): void {
     const _pcTag = peerId.slice(0, 8);
     const _pcT0 = performance.now();
-    console.warn(`[PERF] _runPostConnectWork(${_pcTag}): START burstIndex=${burstIndex} retryUnacked=${shouldRunRetryUnacked}`);
+    perfLog.debug(`_runPostConnectWork(${_pcTag}): START burstIndex=${burstIndex} retryUnacked=${shouldRunRetryUnacked}`);
     // Fire-and-forget: chain retry → flush → gossip sequentially but
     // don't block the rest of the handshake handler.
     const postConnectStaggerMs = burstIndex * (ChatController.HANDSHAKE_BURST_STAGGER_MS / 2);
     const postConnectWork = (async () => {
       if (postConnectStaggerMs > 0) {
-        console.warn(`[PERF] _runPostConnectWork(${_pcTag}): staggering ${postConnectStaggerMs}ms`);
+        perfLog.debug(`_runPostConnectWork(${_pcTag}): staggering ${postConnectStaggerMs}ms`);
         await new Promise<void>(r => setTimeout(r, postConnectStaggerMs));
-        if (!this.state.readyPeers.has(peerId)) { console.warn(`[PERF] _runPostConnectWork(${_pcTag}): peer left during stagger`); return; }
+        if (!this.state.readyPeers.has(peerId)) { perfLog.debug(`_runPostConnectWork(${_pcTag}): peer left during stagger`); return; }
       }
       if (shouldRunRetryUnacked) {
         const _t1 = performance.now();
         await this.retryUnackedOutgoingForPeer(peerId);
-        console.warn(`[PERF] _runPostConnectWork(${_pcTag}): retryUnackedOutgoing=${(performance.now()-_t1).toFixed(1)}ms`);
+        perfLog.debug(`_runPostConnectWork(${_pcTag}): retryUnackedOutgoing=${(performance.now()-_t1).toFixed(1)}ms`);
       }
       const _t2 = performance.now();
       await this.flushOfflineQueue(peerId);
-      console.warn(`[PERF] _runPostConnectWork(${_pcTag}): flushOfflineQueue=${(performance.now()-_t2).toFixed(1)}ms`);
+      perfLog.debug(`_runPostConnectWork(${_pcTag}): flushOfflineQueue=${(performance.now()-_t2).toFixed(1)}ms`);
       const _t3 = performance.now();
       await this.offerDeferredGossipIntentsToPeer(peerId);
-      console.warn(`[PERF] _runPostConnectWork(${_pcTag}): offerDeferredGossip=${(performance.now()-_t3).toFixed(1)}ms`);
+      perfLog.debug(`_runPostConnectWork(${_pcTag}): offerDeferredGossip=${(performance.now()-_t3).toFixed(1)}ms`);
       const _t4 = performance.now();
       await this.processDeferredGossipIntentsForPeer(peerId);
-      console.warn(`[PERF] _runPostConnectWork(${_pcTag}): processDeferredGossip=${(performance.now()-_t4).toFixed(1)}ms`);
-      console.warn(`[PERF] _runPostConnectWork(${_pcTag}): postConnectWork TOTAL=${(performance.now()-_pcT0).toFixed(1)}ms`);
+      perfLog.debug(`_runPostConnectWork(${_pcTag}): processDeferredGossip=${(performance.now()-_t4).toFixed(1)}ms`);
+      perfLog.debug(`_runPostConnectWork(${_pcTag}): postConnectWork TOTAL=${(performance.now()-_pcT0).toFixed(1)}ms`);
     })();
     postConnectWork.catch(err => console.warn('[PostConnect] background work failed:', (err as Error)?.message || err));
 
@@ -4500,33 +4505,33 @@ export class ChatController {
     const heavySyncStaggerMs = burstIndex * ChatController.HANDSHAKE_BURST_STAGGER_MS;
     const runHeavySyncWork = () => {
       const _hsT0 = performance.now();
-      if (!this.state.readyPeers.has(peerId)) { console.warn(`[PERF] _runPostConnectWork(${_pcTag}): heavySync skipped — peer left`); return; }
+      if (!this.state.readyPeers.has(peerId)) { perfLog.debug(`_runPostConnectWork(${_pcTag}): heavySync skipped — peer left`); return; }
 
       const shouldRunMessageSync = Date.now() - this.lastPostConnectMessageSyncAt >= ChatController.POST_CONNECT_MESSAGE_SYNC_MIN_MS;
       if (shouldRunMessageSync) {
         this.lastPostConnectMessageSyncAt = Date.now();
         const _syncT0 = performance.now();
         this.requestMessageSync(peerId)
-          .then(() => console.warn(`[PERF] _runPostConnectWork(${_pcTag}): requestMessageSync RESOLVED=${(performance.now()-_syncT0).toFixed(1)}ms`))
+          .then(() => perfLog.debug(`_runPostConnectWork(${_pcTag}): requestMessageSync RESOLVED=${(performance.now()-_syncT0).toFixed(1)}ms`))
           .catch(err => console.warn('[Sync] Message sync request failed:', err));
       } else {
-        console.warn(`[PERF] _runPostConnectWork(${_pcTag}): messageSync SKIPPED (cooldown)`);
+        perfLog.debug(`_runPostConnectWork(${_pcTag}): messageSync SKIPPED (cooldown)`);
       }
 
       const _t5 = performance.now();
       this.sendManifestSummary(peerId);
-      console.warn(`[PERF] _runPostConnectWork(${_pcTag}): sendManifestSummary=${(performance.now()-_t5).toFixed(1)}ms`);
+      perfLog.debug(`_runPostConnectWork(${_pcTag}): sendManifestSummary=${(performance.now()-_t5).toFixed(1)}ms`);
       if (shouldRunRetryUnacked) {
         const _t6 = performance.now();
         this.requestCustodyRecovery(peerId);
-        console.warn(`[PERF] _runPostConnectWork(${_pcTag}): requestCustodyRecovery=${(performance.now()-_t6).toFixed(1)}ms`);
+        perfLog.debug(`_runPostConnectWork(${_pcTag}): requestCustodyRecovery=${(performance.now()-_t6).toFixed(1)}ms`);
       }
 
       const activeWorkspaceId = this.state.activeWorkspaceId ?? undefined;
       if (this.shouldPushWorkspaceStateOnConnect(peerId, activeWorkspaceId)) {
         const _t7 = performance.now();
         this.sendWorkspaceState(peerId, activeWorkspaceId, { forceInclude: true });
-        console.warn(`[PERF] _runPostConnectWork(${_pcTag}): sendWorkspaceState=${(performance.now()-_t7).toFixed(1)}ms`);
+        perfLog.debug(`_runPostConnectWork(${_pcTag}): sendWorkspaceState=${(performance.now()-_t7).toFixed(1)}ms`);
       }
 
       if (this.state.activeWorkspaceId) {
@@ -4536,11 +4541,11 @@ export class ChatController {
           this.workspaceShellPrefetchAt.set(wsId, Date.now());
           const _t8 = performance.now();
           this.requestWorkspaceShell(peerId, wsId);
-          console.warn(`[PERF] _runPostConnectWork(${_pcTag}): requestWorkspaceShell=${(performance.now()-_t8).toFixed(1)}ms`);
+          perfLog.debug(`_runPostConnectWork(${_pcTag}): requestWorkspaceShell=${(performance.now()-_t8).toFixed(1)}ms`);
           void this.prefetchWorkspaceMemberDirectory(wsId, peerId);
         }
       }
-      console.warn(`[PERF] _runPostConnectWork(${_pcTag}): heavySync TOTAL=${(performance.now()-_hsT0).toFixed(1)}ms (stagger=${heavySyncStaggerMs}ms)`);
+      perfLog.debug(`_runPostConnectWork(${_pcTag}): heavySync TOTAL=${(performance.now()-_hsT0).toFixed(1)}ms (stagger=${heavySyncStaggerMs}ms)`);
     };
 
     if (heavySyncStaggerMs > 0) {
@@ -4556,14 +4561,14 @@ export class ChatController {
    */
   private _flushDeferredPostConnectWork(): void {
     const peers = this._deferredPostConnectPeers?.splice(0) ?? [];
-    console.warn(`[PERF] _flushDeferredPostConnectWork: ${peers.length} deferred peers`);
+    perfLog.debug(`_flushDeferredPostConnectWork: ${peers.length} deferred peers`);
     for (let i = 0; i < peers.length; i++) {
       const peerId = peers[i];
-      if (!this.state.readyPeers.has(peerId)) { console.warn(`[PERF] _flushDeferredPostConnectWork: ${peerId.slice(0,8)} no longer ready, skipping`); continue; }
+      if (!this.state.readyPeers.has(peerId)) { perfLog.debug(`_flushDeferredPostConnectWork: ${peerId.slice(0,8)} no longer ready, skipping`); continue; }
       // Stagger each deferred peer by 500ms to avoid burst
       setTimeout(() => {
         if (!this.state.readyPeers.has(peerId)) return;
-        console.warn(`[PERF] _flushDeferredPostConnectWork: running deferred work for ${peerId.slice(0, 8)} (index=${i}, delay=${i * 500}ms)`);
+        perfLog.debug(`_flushDeferredPostConnectWork: running deferred work for ${peerId.slice(0, 8)} (index=${i}, delay=${i * 500}ms)`);
         this._runPostConnectWork(peerId, i, true);
       }, i * 500);
     }
@@ -5143,7 +5148,7 @@ export class ChatController {
   runPeerMaintenanceNow(reason = 'manual'): number {
     const attempted = this._runPeerMaintenance(reason);
     if (attempted > 0) {
-      console.log(`[Maintenance] ${reason}: attempted reconnect to ${attempted} peer(s)`);
+      chatLog.info(`[Maintenance] ${reason}: attempted reconnect to ${attempted} peer(s)`);
     }
     return attempted;
   }
@@ -5835,7 +5840,7 @@ export class ChatController {
       const desiredDetail = desiredSelection
         ? ` desired=${desiredSelection.desiredPeerIds.length}/${desiredSelection.budget} connectedDesired=${connectedDesiredCount}`
         : '';
-      console.log(`[Maintenance] reconnect=${attempted} prune=${pruned} [likely=${likelyTargets.length}, cold=${coldTargets.length}]${desiredDetail}`);
+      chatLog.info(`[Maintenance] reconnect=${attempted} prune=${pruned} [likely=${likelyTargets.length}, cold=${coldTargets.length}]${desiredDetail}`);
     }
 
     // Prune stale peer-tracking Map entries to prevent unbounded memory growth.
@@ -5895,7 +5900,7 @@ export class ChatController {
       const json = JSON.parse(saved);
       const discovery = ServerDiscovery.fromJSON(json, primaryServer);
       this.serverDiscovery.set(workspaceId, discovery);
-      console.log(`[PEX] Restored ${discovery.getRankedServers().length} servers for workspace ${workspaceId}`);
+      chatLog.info(`[PEX] Restored ${discovery.getRankedServers().length} servers for workspace ${workspaceId}`);
     } catch (err) {
       console.error('[PEX] Failed to restore server discovery:', err);
       this.getServerDiscovery(workspaceId, primaryServer);
@@ -5973,7 +5978,7 @@ export class ChatController {
       this.publicWorkspaceController.restoreFromStorage(),
       this.persistentStore.getAllWorkspaces(),
     ]);
-    console.warn(`[PERF] restore:parallelIDB=${(performance.now()-_rst0).toFixed(0)}ms`);
+    perfLog.debug(`restore:parallelIDB=${(performance.now()-_rst0).toFixed(0)}ms`);
 
     if (savedAlias) this.state.myAlias = savedAlias;
 
@@ -5998,8 +6003,8 @@ export class ChatController {
     this.workspaceInviteRegistry = normalizeWorkspaceInviteRegistry(rawInviteRegistry);
     const hydratedWorkspaceIds = new Set<string>();
     const _rstSync = performance.now();
-    console.warn(`[PERF] restore:settingsApply=${(_rstSync-_rst0).toFixed(0)}ms`);
-    console.log('[DecentChat] restoreFromStorage: found', persistedWorkspaces.length, 'full workspaces');
+    perfLog.debug(`restore:settingsApply=${(_rstSync-_rst0).toFixed(0)}ms`);
+    chatLog.info('[DecentChat] restoreFromStorage: found', persistedWorkspaces.length, 'full workspaces');
     for (const ws of persistedWorkspaces) {
       const _wsT0 = performance.now();
       hydratedWorkspaceIds.add(ws.id);
@@ -6013,7 +6018,7 @@ export class ChatController {
       // DEP-002: Restore server discovery for this workspace
       await this.restoreServerDiscovery(ws.id, getDefaultSignalingServer());
       const _wsT4 = performance.now();
-      console.warn(`[PERF] restore:ws(${ws.id.slice(0,8)}) import=${(_wsT1-_wsT0).toFixed(1)}ms ingest=${(_wsT2-_wsT1).toFixed(1)}ms manifest=${(_wsT3-_wsT2).toFixed(1)}ms serverDisc=${(_wsT4-_wsT3).toFixed(1)}ms total=${(_wsT4-_wsT0).toFixed(1)}ms`);
+      perfLog.debug(`restore:ws(${ws.id.slice(0,8)}) import=${(_wsT1-_wsT0).toFixed(1)}ms ingest=${(_wsT2-_wsT1).toFixed(1)}ms manifest=${(_wsT3-_wsT2).toFixed(1)}ms serverDisc=${(_wsT4-_wsT3).toFixed(1)}ms total=${(_wsT4-_wsT0).toFixed(1)}ms`);
       const _rstMsgStart = performance.now();
 
       // Batch-load messages for ALL channels in a single IDB transaction.
@@ -6022,7 +6027,7 @@ export class ChatController {
       const channelIds = ws.channels.map((ch: { id: string }) => ch.id);
       const channelMessages = await this.persistentStore.getRecentMessagesForChannels(channelIds, 200);
       const _rstMsgLoaded = performance.now();
-      console.warn(`[PERF] restore:batchIDB=${(_rstMsgLoaded-_rstMsgStart).toFixed(0)}ms channels=${channelIds.length} loaded=${channelMessages.size}`);
+      perfLog.debug(`restore:batchIDB=${(_rstMsgLoaded-_rstMsgStart).toFixed(0)}ms channels=${channelIds.length} loaded=${channelMessages.size}`);
 
       let channelCount = 0;
       let totalMsgCount = 0;
@@ -6080,10 +6085,10 @@ export class ChatController {
           await new Promise<void>((resolve) => setTimeout(resolve, 0));
         }
       }
-      console.warn(`[PERF] restore:channelProcess=${(performance.now()-_rstMsgLoaded).toFixed(0)}ms channels=${channelCount} msgs=${totalMsgCount}`);
+      perfLog.debug(`restore:channelProcess=${(performance.now()-_rstMsgLoaded).toFixed(0)}ms channels=${channelCount} msgs=${totalMsgCount}`);
     }
 
-    console.warn(`[PERF] restore:wsLoop=${(performance.now()-_rstSync).toFixed(0)}ms`);
+    perfLog.debug(`restore:wsLoop=${(performance.now()-_rstSync).toFixed(0)}ms`);
     const staleOwnedShells = this.publicWorkspaceController.findStaleOwnedShellPlaceholders(
       this.state.myPeerId,
       hydratedWorkspaceIds,
@@ -6110,7 +6115,7 @@ export class ChatController {
     this._restoreComplete = true;
     this._flushDeferredPostConnectWork();
 
-    console.warn(`[PERF] restoreFromStorage: ${(performance.now()-_rst0).toFixed(1)}ms`);
+    perfLog.debug(`restoreFromStorage: ${(performance.now()-_rst0).toFixed(1)}ms`);
   }
 
   async persistWorkspace(workspaceId: string): Promise<void> {
@@ -6563,7 +6568,7 @@ export class ChatController {
     inviteData?: InviteData,
     options?: { allowWorkspaceDMs?: boolean },
   ): Promise<void> {
-    console.log('[DecentChat] joinWorkspace called:', { code, alias, peerId, hasUI: !!this.ui });
+    chatLog.info('[DecentChat] joinWorkspace called:', { code, alias, peerId, hasUI: !!this.ui });
 
     // ── Invite security validation ──────────────────────────────────────
     if (inviteData) {
@@ -6610,7 +6615,7 @@ export class ChatController {
             this.ui?.showToast(msg, 'error');
             return;
           }
-          console.log('[DecentChat] Invite signature verified ✓');
+          chatLog.info('[DecentChat] Invite signature verified ✓');
         } catch (err) {
           console.warn('[DecentChat] Failed to verify invite signature:', err);
           // Don't block join — verification failure is non-fatal for backward compat
@@ -6636,7 +6641,7 @@ export class ChatController {
       ? `${inviteData.secure ? 'wss' : 'ws'}://${inviteData.host}:${inviteData.port}${inviteData.path || ''}`
       : getDefaultSignalingServer(); // Fallback to environment-appropriate server
 
-    console.log(`[PEX] Initializing server discovery with primary: ${primaryServer}`);
+    chatLog.info(`[PEX] Initializing server discovery with primary: ${primaryServer}`);
     this.getServerDiscovery(ws.id, primaryServer);
     
     // Add fallback servers from invite
@@ -6737,7 +6742,7 @@ export class ChatController {
     const orderedCandidates = Array.from(candidates);
     const cappedCandidates = orderedCandidates.slice(0, ChatController.JOIN_CONNECT_CANDIDATE_CAP);
 
-    console.log(`[Join] Attempting parallel connect to ${cappedCandidates.length}/${orderedCandidates.length} candidate peer(s):`,
+    chatLog.info(`[Join] Attempting parallel connect to ${cappedCandidates.length}/${orderedCandidates.length} candidate peer(s):`,
       cappedCandidates.map(p => p.slice(0, 8)));
 
     // Connect to a bounded candidate set in parallel — first one that responds and
@@ -6748,7 +6753,7 @@ export class ChatController {
 
     const connected = results.filter(r => r.status === 'fulfilled').length;
     const failed = results.filter(r => r.status === 'rejected').length;
-    console.log(`[Join] Parallel connect results: ${connected} succeeded, ${failed} failed`);
+    chatLog.info(`[Join] Parallel connect results: ${connected} succeeded, ${failed} failed`);
   }
 
   connectPeer(peerId: string): void {
@@ -10034,20 +10039,20 @@ export class ChatController {
     if (!peerId) return;
     const inFlight = this.messageSyncInFlight.get(peerId);
     if (inFlight) {
-      console.warn(`[PERF] requestMessageSync(${peerId.slice(0,8)}): returning existing in-flight promise`);
+      perfLog.debug(`requestMessageSync(${peerId.slice(0,8)}): returning existing in-flight promise`);
       return inFlight;
     }
 
     const now = Date.now();
     const last = this.lastMessageSyncRequestAt.get(peerId) ?? 0;
     if (now - last < ChatController.MESSAGE_SYNC_MIN_INTERVAL_MS) {
-      console.warn(`[PERF] requestMessageSync(${peerId.slice(0,8)}): skipped (cooldown, ${now - last}ms since last)`);
+      perfLog.debug(`requestMessageSync(${peerId.slice(0,8)}): skipped (cooldown, ${now - last}ms since last)`);
       return;
     }
 
     const _syncTag = peerId.slice(0, 8);
     const _syncT0 = performance.now();
-    console.warn(`[PERF] requestMessageSync(${_syncTag}): START`);
+    perfLog.debug(`requestMessageSync(${_syncTag}): START`);
 
     const runOnce = async (): Promise<void> => {
       // Stagger syncs globally: wait for any prior sync's request to be sent before
@@ -10056,7 +10061,7 @@ export class ChatController {
       // the signaling/transport layer with simultaneous sync request sends.
       const _lockT0 = performance.now();
       await this._globalSyncLock;
-      console.warn(`[PERF] requestMessageSync(${_syncTag}): waited for globalSyncLock=${(performance.now()-_lockT0).toFixed(1)}ms`);
+      perfLog.debug(`requestMessageSync(${_syncTag}): waited for globalSyncLock=${(performance.now()-_lockT0).toFixed(1)}ms`);
       let releaseLock: () => void;
       this._globalSyncLock = new Promise<void>((resolve) => { releaseLock = resolve; });
 
@@ -10069,11 +10074,11 @@ export class ChatController {
         // If Negentropy fails/times out, gracefully fall back to timestamp sync
         // instead of failing the entire sync for freshly joined/restored peers.
         if (this.peerSupportsCapability(peerId, NEGENTROPY_SYNC_CAPABILITY)) {
-          console.warn(`[PERF] requestMessageSync(${_syncTag}): using Negentropy sync`);
+          perfLog.debug(`requestMessageSync(${_syncTag}): using Negentropy sync`);
           try {
             const _negT0 = performance.now();
             await this.requestNegentropyMessageSync(peerId);
-            console.warn(`[PERF] requestMessageSync(${_syncTag}): Negentropy completed=${(performance.now()-_negT0).toFixed(1)}ms`);
+            perfLog.debug(`requestMessageSync(${_syncTag}): Negentropy completed=${(performance.now()-_negT0).toFixed(1)}ms`);
           } catch (error) {
             if (this.shouldRetryNegentropyOnce(error)) {
               console.warn(`[Sync] Negentropy rejected for ${_syncTag}; retrying once with backoff:`, error);
@@ -10081,25 +10086,25 @@ export class ChatController {
               try {
                 const _retryT0 = performance.now();
                 await this.requestNegentropyMessageSync(peerId);
-                console.warn(`[PERF] requestMessageSync(${_syncTag}): Negentropy retry completed=${(performance.now()-_retryT0).toFixed(1)}ms`);
+                perfLog.debug(`requestMessageSync(${_syncTag}): Negentropy retry completed=${(performance.now()-_retryT0).toFixed(1)}ms`);
               } catch (retryError) {
                 console.warn(`[Sync] Negentropy retry failed for ${_syncTag}, falling back to timestamp sync:`, retryError);
                 const _tsT0 = performance.now();
                 await this.requestTimestampMessageSync(peerId);
-                console.warn(`[PERF] requestMessageSync(${_syncTag}): timestamp fallback=${(performance.now()-_tsT0).toFixed(1)}ms`);
+                perfLog.debug(`requestMessageSync(${_syncTag}): timestamp fallback=${(performance.now()-_tsT0).toFixed(1)}ms`);
               }
             } else {
               console.warn(`[Sync] Negentropy failed for ${_syncTag}, falling back to timestamp sync:`, error);
               const _tsT0 = performance.now();
               await this.requestTimestampMessageSync(peerId);
-              console.warn(`[PERF] requestMessageSync(${_syncTag}): timestamp fallback=${(performance.now()-_tsT0).toFixed(1)}ms`);
+              perfLog.debug(`requestMessageSync(${_syncTag}): timestamp fallback=${(performance.now()-_tsT0).toFixed(1)}ms`);
             }
           }
         } else {
-          console.warn(`[PERF] requestMessageSync(${_syncTag}): using timestamp sync (no Negentropy)`);
+          perfLog.debug(`requestMessageSync(${_syncTag}): using timestamp sync (no Negentropy)`);
           const _tsT0 = performance.now();
           await this.requestTimestampMessageSync(peerId);
-          console.warn(`[PERF] requestMessageSync(${_syncTag}): timestamp sync=${(performance.now()-_tsT0).toFixed(1)}ms`);
+          perfLog.debug(`requestMessageSync(${_syncTag}): timestamp sync=${(performance.now()-_tsT0).toFixed(1)}ms`);
           // Give the first peer's response chunks time to flow through before
           // the next peer's sync request fires.  Timestamp sync is fire-and-forget
           // (responses arrive asynchronously), so a brief grace period here
@@ -10114,7 +10119,7 @@ export class ChatController {
           event: 'sync-succeeded',
           lastSyncAt: this.peerLastSuccessfulSyncAt.get(peerId),
         });
-        console.warn(`[PERF] requestMessageSync(${_syncTag}): TOTAL=${(performance.now()-_syncT0).toFixed(1)}ms`);
+        perfLog.debug(`requestMessageSync(${_syncTag}): TOTAL=${(performance.now()-_syncT0).toFixed(1)}ms`);
       } catch (error) {
         this.recordTopologyPeerEvent({
           level: 'warn',
@@ -10465,14 +10470,14 @@ export class ChatController {
     const _msrTag = _peerId.slice(0, 8);
     try {
       const wsId = data.workspaceId;
-      if (!wsId) { console.log('[Sync] handleMessageSyncResponse: no wsId'); return; }
+      if (!wsId) { syncLog.info('handleMessageSyncResponse: no wsId'); return; }
       const ws = this.workspaceManager.getWorkspace(wsId);
-      if (!ws) { console.log('[Sync] handleMessageSyncResponse: no workspace for', wsId); return; }
-      if (!ws.members.some((m: any) => m.peerId === _peerId)) { console.log('[Sync] handleMessageSyncResponse: peer not member', _msrTag); return; }
+      if (!ws) { syncLog.info('handleMessageSyncResponse: no workspace for', wsId); return; }
+      if (!ws.members.some((m: any) => m.peerId === _peerId)) { syncLog.info('handleMessageSyncResponse: peer not member', _msrTag); return; }
 
       const messages: any[] = data.messages || [];
-      if (messages.length === 0) { console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): 0 messages, skipping`); return; }
-      console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): START, ${messages.length} messages`);
+      if (messages.length === 0) { perfLog.debug(`handleMessageSyncResponse(${_msrTag}): 0 messages, skipping`); return; }
+      perfLog.debug(`handleMessageSyncResponse(${_msrTag}): START, ${messages.length} messages`);
 
       const channelIds = new Set(ws.channels.map((ch: any) => ch.id));
 
@@ -10552,12 +10557,12 @@ export class ChatController {
         seenInChunk.add(msg.id);
         if (targetChannelId === this.state.activeChannelId) touchedActiveChannel = true;
       }
-      console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): phase1 dedup=${(performance.now()-_phase1T0).toFixed(1)}ms, toInsert=${toInsert.length}, toRepair=${toRepair.length}`);
+      perfLog.debug(`handleMessageSyncResponse(${_msrTag}): phase1 dedup=${(performance.now()-_phase1T0).toFixed(1)}ms, toInsert=${toInsert.length}, toRepair=${toRepair.length}`);
 
       // Bulk-insert new messages — O(n log n) via push + sort, single call.
       const _bulkT0 = performance.now();
       this.messageStore.bulkAdd(toInsert);
-      console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): bulkAdd=${(performance.now()-_bulkT0).toFixed(1)}ms`);
+      perfLog.debug(`handleMessageSyncResponse(${_msrTag}): bulkAdd=${(performance.now()-_bulkT0).toFixed(1)}ms`);
 
       // Yield to event loop so UI/connections can breathe between Phase 1 and Phase 2.
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -10576,7 +10581,7 @@ export class ChatController {
           });
         } catch { /* CRDT dup safe to ignore */ }
       }
-      console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): phase2 CRDT=${(performance.now()-_crdtT0).toFixed(1)}ms, synced=${toSync.length}`);
+      perfLog.debug(`handleMessageSyncResponse(${_msrTag}): phase2 CRDT=${(performance.now()-_crdtT0).toFixed(1)}ms, synced=${toSync.length}`);
 
       // Phase 3: Batch-persist to IndexedDB in a single transaction instead of
       // N concurrent individual puts that saturate the IDB transaction pool.
@@ -10584,7 +10589,7 @@ export class ChatController {
         const _idbT0 = performance.now();
         try {
           await this.persistentStore.saveMessages(toSync);
-          console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): phase3 IDB persist=${(performance.now()-_idbT0).toFixed(1)}ms`);
+          perfLog.debug(`handleMessageSyncResponse(${_msrTag}): phase3 IDB persist=${(performance.now()-_idbT0).toFixed(1)}ms`);
         } catch (err) {
           console.warn('[Sync] Batch persist error:', err);
         }
@@ -10600,7 +10605,7 @@ export class ChatController {
           this.trimChannelMemory(msg.channelId);
         }
       }
-      console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): phase3.5 trim=${(performance.now()-_trimT0).toFixed(1)}ms, channels=${trimmedChannels.size}`);
+      perfLog.debug(`handleMessageSyncResponse(${_msrTag}): phase3.5 trim=${(performance.now()-_trimT0).toFixed(1)}ms, channels=${trimmedChannels.size}`);
 
       if (touchedActiveChannel) {
         this.ui?.renderMessages();
@@ -10623,7 +10628,7 @@ export class ChatController {
           this.ui?.updateWorkspaceRail?.();
         }
       }
-      console.warn(`[PERF] handleMessageSyncResponse(${_msrTag}): TOTAL=${(performance.now()-_msrT0).toFixed(1)}ms`);
+      perfLog.debug(`handleMessageSyncResponse(${_msrTag}): TOTAL=${(performance.now()-_msrT0).toFixed(1)}ms`);
     } catch (err) {
       console.error('[Sync] handleMessageSyncResponse FATAL:', (err as any)?.message, (err as any)?.stack);
     }
@@ -10810,11 +10815,11 @@ export class ChatController {
     if (!this.state.readyPeers.has(peerId)) return;
 
     const inFlight = this.retryUnackedInFlight.get(peerId);
-    if (inFlight) { console.warn(`[PERF] retryUnacked(${peerId.slice(0,8)}): returning existing in-flight`); return inFlight; }
+    if (inFlight) { perfLog.debug(`retryUnacked(${peerId.slice(0,8)}): returning existing in-flight`); return inFlight; }
 
     const _ruTag = peerId.slice(0, 8);
     const _ruT0 = performance.now();
-    console.warn(`[PERF] retryUnacked(${_ruTag}): START`);
+    perfLog.debug(`retryUnacked(${_ruTag}): START`);
 
     // Serialize globally: wait for any other peer's scan to finish first
     // so we don't run N concurrent O(allMessages) scans.
@@ -10823,8 +10828,8 @@ export class ChatController {
     const task = (async () => {
       const _gateT0 = performance.now();
       await prevGate;
-      console.warn(`[PERF] retryUnacked(${_ruTag}): waited for globalGate=${(performance.now()-_gateT0).toFixed(1)}ms`);
-      if (!this.state.readyPeers.has(peerId)) { console.warn(`[PERF] retryUnacked(${_ruTag}): peer left while waiting`); return; }
+      perfLog.debug(`retryUnacked(${_ruTag}): waited for globalGate=${(performance.now()-_gateT0).toFixed(1)}ms`);
+      if (!this.state.readyPeers.has(peerId)) { perfLog.debug(`retryUnacked(${_ruTag}): peer left while waiting`); return; }
 
       const _qT0 = performance.now();
       const queued = typeof (this.offlineQueue as any).listQueued === 'function'
@@ -10835,7 +10840,7 @@ export class ChatController {
         const opId = this.extractQueuedOpId(item);
         if (opId) queuedMessageIds.add(opId);
       }
-      console.warn(`[PERF] retryUnacked(${_ruTag}): offlineQueue fetch=${(performance.now()-_qT0).toFixed(1)}ms, queuedIds=${queuedMessageIds.size}`);
+      perfLog.debug(`retryUnacked(${_ruTag}): offlineQueue fetch=${(performance.now()-_qT0).toFixed(1)}ms, queuedIds=${queuedMessageIds.size}`);
 
       if (this.custodyStore && typeof this.custodyStore.listAllForRecipient === 'function') {
         const _cT0 = performance.now();
@@ -10845,7 +10850,7 @@ export class ChatController {
             queuedMessageIds.add(envelope.opId);
           }
         }
-        console.warn(`[PERF] retryUnacked(${_ruTag}): custodyStore fetch=${(performance.now()-_cT0).toFixed(1)}ms, totalQueuedIds=${queuedMessageIds.size}`);
+        perfLog.debug(`retryUnacked(${_ruTag}): custodyStore fetch=${(performance.now()-_cT0).toFixed(1)}ms, totalQueuedIds=${queuedMessageIds.size}`);
       }
 
       const candidates: PlaintextMessage[] = [];
@@ -10875,7 +10880,7 @@ export class ChatController {
           candidates.push(msg);
         }
       }
-      console.warn(`[PERF] retryUnacked(${_ruTag}): scan=${(performance.now()-_scanT0).toFixed(1)}ms, channels=${channelCount}, scanned=${scanned}, candidates=${candidates.length}`);
+      perfLog.debug(`retryUnacked(${_ruTag}): scan=${(performance.now()-_scanT0).toFixed(1)}ms, channels=${channelCount}, scanned=${scanned}, candidates=${candidates.length}`);
 
       candidates.sort((a, b) => a.timestamp - b.timestamp);
 
@@ -10914,8 +10919,8 @@ export class ChatController {
           console.warn('[OfflineQueue] resend/reconcile failed for', msg.id, (error as Error)?.message || error);
         }
       }
-      console.warn(`[PERF] retryUnacked(${_ruTag}): replay=${(performance.now()-_replayT0).toFixed(1)}ms, replayed=${replayed}`);
-      console.warn(`[PERF] retryUnacked(${_ruTag}): TOTAL=${(performance.now()-_ruT0).toFixed(1)}ms`);
+      perfLog.debug(`retryUnacked(${_ruTag}): replay=${(performance.now()-_replayT0).toFixed(1)}ms, replayed=${replayed}`);
+      perfLog.debug(`retryUnacked(${_ruTag}): TOTAL=${(performance.now()-_ruT0).toFixed(1)}ms`);
     })().finally(() => {
       if (this.retryUnackedInFlight.get(peerId) === task) {
         this.retryUnackedInFlight.delete(peerId);

@@ -13,35 +13,6 @@ import {
   shouldHydrateTitleTooltipAttribute,
 } from './ui/titleTooltipObserver';
 
-// ─── PERF: Long Task Observer ────────────────────────────────────────────────
-// Logs any main-thread task that blocks for >50ms.  Remove after debugging.
-try {
-  if (typeof PerformanceObserver !== 'undefined') {
-    const obs = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        console.warn(`[PERF] Long task: ${entry.duration.toFixed(0)}ms (name=${entry.name})`);
-      }
-    });
-    obs.observe({ type: 'longtask', buffered: true });
-  }
-} catch { /* PerformanceObserver not supported */ }
-
-// ─── PERF: Frame-drop detector ──────────────────────────────────────────────
-// Detects when rAF callbacks are delayed >100ms (i.e. UI freeze).  Remove after debugging.
-try {
-  let _lastFrame = performance.now();
-  const _checkFrame = () => {
-    const now = performance.now();
-    const gap = now - _lastFrame;
-    if (gap > 100) {
-      console.warn(`[PERF] Frame gap: ${gap.toFixed(0)}ms (UI was frozen)`);
-    }
-    _lastFrame = now;
-    requestAnimationFrame(_checkFrame);
-  };
-  requestAnimationFrame(_checkFrame);
-} catch { /* rAF not available */ }
-
 // ─── Single-Tab Lock ─────────────────────────────────────────────────────────
 // Prevent multiple tabs from running simultaneously (shared IndexedDB,
 // WebRTC peer ID, and signaling connection would cause race conditions).
@@ -121,8 +92,39 @@ import {
 import { setCompanySimControlPlaneTransport } from './lib/company-sim/controlPlane';
 import type { CompanyTemplateProvisioningMode } from './ui/types';
 import type { AppSettings } from './storage/types';
-import { SeedPhraseManager as _SeedPhraseManager, IdentityManager as _IdentityManager } from 'decent-protocol';
+import { SeedPhraseManager as _SeedPhraseManager, IdentityManager as _IdentityManager, createLogger } from 'decent-protocol';
 const _spm = new _SeedPhraseManager();
+const appLog = createLogger('Main', 'app');
+const perfLog = createLogger('Main', 'perf');
+
+// ─── PERF: Long Task Observer ────────────────────────────────────────────────
+// Logs any main-thread task that blocks for >50ms.  Remove after debugging.
+try {
+  if (typeof PerformanceObserver !== 'undefined') {
+    const obs = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        perfLog.debug(`Long task: ${entry.duration.toFixed(0)}ms (name=${entry.name})`);
+      }
+    });
+    obs.observe({ type: 'longtask', buffered: true });
+  }
+} catch { /* PerformanceObserver not supported */ }
+
+// ─── PERF: Frame-drop detector ──────────────────────────────────────────────
+// Detects when rAF callbacks are delayed >100ms (i.e. UI freeze).  Remove after debugging.
+try {
+  let _lastFrame = performance.now();
+  const _checkFrame = () => {
+    const now = performance.now();
+    const gap = now - _lastFrame;
+    if (gap > 100) {
+      perfLog.debug(`Frame gap: ${gap.toFixed(0)}ms (UI was frozen)`);
+    }
+    _lastFrame = now;
+    requestAnimationFrame(_checkFrame);
+  };
+  requestAnimationFrame(_checkFrame);
+} catch { /* rAF not available */ }
 
 function hydrateTitleTooltips(root: ParentNode = document): void {
   const elements = root.querySelectorAll<HTMLElement>('[title]');
@@ -813,6 +815,9 @@ async function init(): Promise<void> {
     const showReconnect = !!(settings as any).showLiveReconnectActivity;
     document.body.classList.toggle('show-reconnect-activity', showReconnect);
     (window as any).__DECENT_SHOW_RECONNECT_ACTIVITY = showReconnect;
+    const debugEnabled = !!(settings as any).debug;
+    document.body.classList.toggle('debug-mode', debugEnabled);
+    (window as any).__DECENT_DEBUG = debugEnabled;
 
     let seedPhrase = await ctrl.persistentStore.getSetting('seedPhrase');
 
@@ -826,7 +831,7 @@ async function init(): Promise<void> {
         const existingSettings = await ctrl.persistentStore.getSettings<any>({});
         await ctrl.persistentStore.saveSettings({ ...existingSettings, seedPhrase: mnemonic });
         seedPhrase = mnemonic;
-        console.log('[DecentChat] Auto-generated seed phrase for new identity');
+        appLog.info('Auto-generated seed phrase for new identity');
       } catch (err) {
         console.warn('[DecentChat] Failed to auto-generate seed phrase:', (err as Error).message);
       }
@@ -871,7 +876,7 @@ async function init(): Promise<void> {
           const atRest = new AtRestEncryption();
           await atRest.init(legacyKeys.masterSeed);
           ctrl.persistentStore.setAtRestEncryption(atRest);
-          console.log('[DecentChat] At-rest encryption enabled');
+          appLog.info('At-rest encryption enabled');
         } catch (err) {
           console.warn('[DecentChat] At-rest encryption init failed:', (err as Error).message);
         }
@@ -983,7 +988,7 @@ async function init(): Promise<void> {
       svelteRoot.id = "svelte-root";
       document.body.appendChild(svelteRoot);
       mount(App, { target: svelteRoot });
-      console.log("[DecentChat] Svelte 5 bridge + AppShell initialized");
+      appLog.info('Svelte 5 bridge + AppShell initialized');
     } catch (err) {
       console.warn("[DecentChat] Svelte mount failed (non-fatal):", err);
     }
@@ -1033,7 +1038,7 @@ async function init(): Promise<void> {
 
     // Register this peer in all known workspaces for signaling-server discovery
     ctrl.registerAllWorkspaces();
-    console.warn(`[PERF] main: restore=${(_mainT1-_mainT0).toFixed(0)}ms migrate=${(_mainT2-_mainT1).toFixed(0)}ms contacts=${(_mainT3-_mainT2).toFixed(0)}ms`);
+    perfLog.debug(`main: restore=${(_mainT1-_mainT0).toFixed(0)}ms migrate=${(_mainT2-_mainT1).toFixed(0)}ms contacts=${(_mainT3-_mainT2).toFixed(0)}ms`);
 
     // Check for /join/CODE invite URL
     const joinMatch = path.match(/^\/join\/([A-Za-z0-9]+)/);
@@ -1063,7 +1068,7 @@ async function init(): Promise<void> {
       // Store invite in sessionStorage BEFORE clearing URL (survives reload)
       sessionStorage.setItem('pendingInvite', JSON.stringify(pendingInvite));
       window.history.replaceState({}, '', '/');
-      console.log('[DecentChat] Invite link detected:', pendingInvite.code, pendingInvite.name);
+      appLog.info('Invite link detected', pendingInvite.code, pendingInvite.name);
     } else {
       // Check if we have a stored invite from a previous reload
       const stored = sessionStorage.getItem('pendingInvite');
@@ -1072,7 +1077,7 @@ async function init(): Promise<void> {
           const parsed = JSON.parse(stored);
           if (parsed.code) {
             pendingInvite = parsed;
-            console.log('[DecentChat] Restored invite from session:', parsed.code);
+            appLog.info('Restored invite from session', parsed.code);
           }
         } catch {}
       }
