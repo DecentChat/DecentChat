@@ -1,18 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 const RUN_LIVE = process.env.PW_RUN_LIVE_DELIVERY_DEBUG === '1';
-const INVITE_URL = process.env.PW_LIVE_INVITE_URL
-  || 'https://decentchat.app/join/TV3KL5RW?signal=0.peerjs.com%3A443&peer=69fae059671130cd8b&pk=eyJhbGciOiJFUzI1NiIsImNydiI6IlAtMjU2IiwiZXh0Ijp0cnVlLCJrZXlfb3BzIjpbInZlcmlmeSJdLCJrdHkiOiJFQyIsIngiOiJKMGZNc1gxMGEtRXhqVzcxSlFYVTg5TWdaRDV4cXRLclBOU0FRdm1tMEEwIiwieSI6ImFwMzZBbWpZWGJRNXJPRkZQZ0VoUUp4bDY2bmdsYVVzbGYydFVBY01fMkkifQ%3D%3D&name=XenaLand&ws=afcdbd3d-0473-4204-a72f-6b3b33271903&secure=1&path=%2F&exp=1774985600958&i=5b12dace5610&inviter=69fae059671130cd8b&sig=N5JybN-nrrZGuF_UCntNWVvTib5mkpmZRlVFzKK0o8m8eTXQBDK1eFDjJWSHWjXJ5iTNS20lVVkZacKvfr7o3A&peer=99685b59829839634b&peer=98057f7f5650604033&peer=1b210e6c954e71643f';
-const INVITE_CODE = (() => {
-  try {
-    const u = new URL(INVITE_URL);
-    const parts = u.pathname.split('/').filter(Boolean);
-    const idx = parts.findIndex((p) => p === 'join');
-    if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
-  } catch {}
-  return '';
-})();
-
+const INVITE_URL = process.env.PW_LIVE_INVITE_URL || '';
 type Snapshot = {
   myPeerId: string;
   readyPeers: string[];
@@ -81,6 +70,7 @@ test.setTimeout(240000);
 
 test('live workspace delivery + bot response debug', async ({ page }) => {
   test.skip(!RUN_LIVE, 'Opt in with PW_RUN_LIVE_DELIVERY_DEBUG=1');
+  test.skip(!INVITE_URL, 'Set PW_LIVE_INVITE_URL for live debug runs');
 
   const alias = `PW-Xena-${Date.now().toString().slice(-6)}`;
   const consoleLogs: string[] = [];
@@ -122,7 +112,7 @@ test('live workspace delivery + bot response debug', async ({ page }) => {
 
     await page.locator('.modal').first().waitFor({ state: 'visible', timeout: 20000 });
     const inviteInput = page.locator('.modal input[placeholder*="decentchat.app/join" i], .modal input[placeholder*="Invite" i]').first();
-    await inviteInput.fill(INVITE_URL || INVITE_CODE);
+    await inviteInput.fill(INVITE_URL);
 
     const displayNameInput = page.locator('.modal input[placeholder="Your name"], .modal input[name="alias"], .modal input[placeholder*="Display Name" i]').first();
     await displayNameInput.fill(alias);

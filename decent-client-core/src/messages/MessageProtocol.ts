@@ -185,6 +185,19 @@ export class MessageProtocol {
     return this.signingPublicKeys.get(peerId);
   }
 
+  async signData(data: string): Promise<string> {
+    if (!this._signingKeyPair) {
+      throw new Error('MessageProtocol not initialized with signing keys');
+    }
+    return this.cipher.sign(data, this._signingKeyPair.privateKey);
+  }
+
+  async verifyData(data: string, signature: string, peerId: string): Promise<boolean> {
+    const signingKey = this.signingPublicKeys.get(peerId);
+    if (!signingKey) return false;
+    return this.cipher.verify(data, signature, signingKey);
+  }
+
   constructor(cryptoManager: CryptoManager, myPeerId: string) {
     this.cryptoManager = cryptoManager;
     this.cipher = new MessageCipher();

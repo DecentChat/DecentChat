@@ -22,6 +22,7 @@ import type {
   PlaintextMessage,
   MessageMetadata,
   AssistantMessageMetadata,
+  KeyPair,
   CustodyEnvelope,
   DeliveryReceipt,
   SyncDomain,
@@ -32,7 +33,7 @@ import type {
   ManifestStoreState,
 } from 'decent-protocol';
 import { PeerTransport } from 'decent-transport-webrtc';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { FileStore } from './FileStore.js';
 import { NodeMessageProtocol } from './NodeMessageProtocol.js';
 import { SyncProtocol, type SyncEvent } from './SyncProtocol.js';
@@ -291,6 +292,7 @@ export class DecentChatNodePeer {
   private transport: PeerTransport | null = null;
   private syncProtocol: SyncProtocol | null = null;
   private messageProtocol: NodeMessageProtocol | null = null;
+  private signingKeyPair: KeyPair | null = null;
   private myPeerId = '';
   private myPublicKey = '';
   private destroyed = false;
@@ -432,6 +434,7 @@ export class DecentChatNodePeer {
         deleteLocalPreKeyState: async (ownerPeerId) => this.store.delete(`prekey-state-${ownerPeerId}`),
       });
       await this.messageProtocol.init(ecdsaKeyPair);
+      this.signingKeyPair = ecdsaKeyPair;
 
       this.restoreWorkspaces();
       this.restoreMessages();
@@ -669,6 +672,13 @@ export class DecentChatNodePeer {
     }
 
     const recipients = this.getChannelRecipientPeerIds(channelId, workspaceId);
+    const gossipOriginSignature = await this.signGossipOrigin({
+      messageId: msg.id,
+      channelId,
+      content: content.trim(),
+      threadId,
+      replyToId,
+    });
 
     for (const peerId of recipients) {
       try {
@@ -678,6 +688,9 @@ export class DecentChatNodePeer {
         (encrypted as any).senderId = this.myPeerId;
         (encrypted as any).senderName = this.opts.account.alias;
         (encrypted as any).messageId = msg.id;
+        if (gossipOriginSignature) {
+          (encrypted as any)._gossipOriginSignature = gossipOriginSignature;
+        }
         if (threadId) (encrypted as any).threadId = threadId;
         if (replyToId) (encrypted as any).replyToId = replyToId;
 
@@ -717,6 +730,7 @@ export class DecentChatNodePeer {
                   threadId,
                   replyToId,
                   isDirect: false,
+                  gossipOriginSignature,
                   metadata: modelMeta,
                 }),
               },
@@ -746,6 +760,7 @@ export class DecentChatNodePeer {
               threadId,
               replyToId,
               isDirect: false,
+              gossipOriginSignature,
               metadata: modelMeta,
             }),
           },
@@ -780,6 +795,80 @@ export class DecentChatNodePeer {
     }, fiveMin);
   }
 
+  private buildGossipOriginPayload(params: {
+    messageId: string;
+    channelId: string;
+    content: string;
+    threadId?: string;
+    replyToId?: string;
+  }): string {
+    const contentHash = createHash('sha256').update(params.content).digest('hex');
+    return `v1|${params.messageId}|${params.channelId}|${params.threadId ?? ''}|${params.replyToId ?? ''}|${contentHash}`;
+  }
+
+  private async signGossipOrigin(params: {
+    messageId: string;
+    channelId: string;
+    content: string;
+    threadId?: string;
+    replyToId?: string;
+  }): Promise<string | undefined> {
+    if (!this.signingKeyPair || !this.messageProtocol || typeof (this.messageProtocol as any).signData !== 'function') {
+      return undefined;
+    }
+    return (this.messageProtocol as any).signData(this.buildGossipOriginPayload(params));
+  }
+
+  private async resolveInboundSenderId(
+    fromPeerId: string,
+    trustedSenderId: string | undefined,
+    msg: any,
+    channelId: string,
+    messageId: string,
+    content: string,
+  ): Promise<{ senderId: string; allowRelay: boolean; verifiedGossipOrigin: boolean }> {
+    const gossipSender = typeof msg._gossipOriginalSender === 'string' && msg._gossipOriginalSender.length > 0
+      ? msg._gossipOriginalSender
+      : undefined;
+    if (!gossipSender || gossipSender === fromPeerId) {
+      return { senderId: trustedSenderId ?? fromPeerId, allowRelay: true, verifiedGossipOrigin: false };
+    }
+
+    const originSignature = typeof msg._gossipOriginSignature === 'string' && msg._gossipOriginSignature.length > 0
+      ? msg._gossipOriginSignature
+      : undefined;
+    if (!originSignature || !this.messageProtocol || typeof (this.messageProtocol as any).verifyData !== 'function') {
+      this.opts.log?.warn?.(
+        `[decentchat-peer] unsigned gossip origin claim ${gossipSender.slice(0, 8)} via ${fromPeerId.slice(0, 8)} for ${messageId.slice(0, 8)}; attributing to relay`,
+      );
+      return { senderId: fromPeerId, allowRelay: false, verifiedGossipOrigin: false };
+    }
+
+    let isValid = false;
+    try {
+      isValid = await (this.messageProtocol as any).verifyData(
+        this.buildGossipOriginPayload({
+          messageId,
+          channelId,
+          content,
+          threadId: typeof msg.threadId === 'string' ? msg.threadId : undefined,
+          replyToId: typeof msg.replyToId === 'string' ? msg.replyToId : undefined,
+        }),
+        originSignature,
+        gossipSender,
+      );
+    } catch {
+      isValid = false;
+    }
+    if (!isValid) {
+      this.opts.log?.warn?.(
+        `[decentchat-peer] invalid gossip origin signature ${gossipSender.slice(0, 8)} via ${fromPeerId.slice(0, 8)} for ${messageId.slice(0, 8)}; attributing to relay`,
+      );
+      return { senderId: fromPeerId, allowRelay: false, verifiedGossipOrigin: false };
+    }
+    return { senderId: gossipSender, allowRelay: true, verifiedGossipOrigin: true };
+  }
+
   private finalizeGossipRelayEnvelope(
     relayEnv: any,
     originalMsgId: string,
@@ -807,6 +896,9 @@ export class DecentChatNodePeer {
     relayEnv._originalMessageId = originalMsgId;
     relayEnv._gossipOriginalSender = originalSenderId;
     relayEnv._gossipHop = hop;
+    if (typeof envelope._gossipOriginSignature === 'string' && envelope._gossipOriginSignature.length > 0) {
+      relayEnv._gossipOriginSignature = envelope._gossipOriginSignature;
+    }
     return relayEnv;
   }
 
@@ -928,6 +1020,7 @@ export class DecentChatNodePeer {
     this.pendingPreKeyBundleFetches.clear();
     this.botHuddle?.destroy();
     this.botHuddle = null;
+    this.signingKeyPair = null;
     this.transport?.destroy();
     this.opts.log?.info('[decentchat-peer] stopped');
   }
@@ -1539,11 +1632,20 @@ export class DecentChatNodePeer {
     this.decryptRecoveryAtByPeer.delete(fromPeerId);
 
     const isDirect = msg.isDirect === true;
-    const actualSenderId: string = (msg._gossipOriginalSender as string | undefined)
-      ?? trustedSenderId
-      ?? fromPeerId;
     const channelId = (msg.channelId as string | undefined) ?? (isDirect ? fromPeerId : undefined);
     if (!channelId) return;
+    const envelopeMessageId = typeof msg.messageId === 'string' && msg.messageId.length > 0
+      ? msg.messageId
+      : (gossipOrigId ?? '');
+    const senderResolution = await this.resolveInboundSenderId(
+      fromPeerId,
+      trustedSenderId,
+      msg,
+      channelId,
+      envelopeMessageId,
+      content,
+    );
+    const actualSenderId = senderResolution.senderId;
 
     const created = await this.messageStore.createMessage(
       channelId,
@@ -1610,7 +1712,7 @@ export class DecentChatNodePeer {
       attachments,
     });
 
-    if (!isDirect) {
+    if (!isDirect && senderResolution.allowRelay) {
       void this.gossipRelay(fromPeerId, created.id, actualSenderId, content, channelId, msg);
     }
   }
@@ -1620,7 +1722,10 @@ export class DecentChatNodePeer {
     const channelId = msg.channelId as string | undefined;
     const requestId = msg.requestId as string | undefined;
     const query = msg.query;
-    const sendReject = (error: string): void => {
+    const sendReject = (reason: string): void => {
+      this.opts.log?.warn?.(
+        `[decentchat-peer] Negentropy query rejected from ${fromPeerId.slice(0, 8)}: ${reason}`,
+      );
       if (!this.transport || !requestId) return;
       this.transport.send(fromPeerId, {
         type: 'message-sync-negentropy-response',
@@ -1631,7 +1736,7 @@ export class DecentChatNodePeer {
           have: [],
           need: [],
         },
-        error,
+        error: 'rejected',
       });
     };
 
@@ -2223,6 +2328,7 @@ export class DecentChatNodePeer {
     threadId?: string;
     replyToId?: string;
     isDirect?: boolean;
+    gossipOriginSignature?: string;
     metadata?: MessageMetadata;
   }): Record<string, unknown> {
     return {
@@ -2237,6 +2343,7 @@ export class DecentChatNodePeer {
         ...(payload.threadId ? { threadId: payload.threadId } : {}),
         ...(payload.replyToId ? { replyToId: payload.replyToId } : {}),
         ...(payload.isDirect ? { isDirect: true } : {}),
+        ...(payload.gossipOriginSignature ? { gossipOriginSignature: payload.gossipOriginSignature } : {}),
         ...(payload.metadata ? { metadata: payload.metadata } : {}),
       },
     };
@@ -2251,6 +2358,7 @@ export class DecentChatNodePeer {
     threadId?: string;
     replyToId?: string;
     isDirect?: boolean;
+    gossipOriginSignature?: string;
     metadata?: MessageMetadata;
   } | null {
     const metadata = isRecord(envelope.metadata) ? envelope.metadata : null;
@@ -2267,6 +2375,7 @@ export class DecentChatNodePeer {
       threadId: typeof resend?.threadId === 'string' ? resend.threadId : undefined,
       replyToId: typeof resend?.replyToId === 'string' ? resend.replyToId : undefined,
       isDirect: resend?.isDirect === true,
+      gossipOriginSignature: typeof resend?.gossipOriginSignature === 'string' ? resend.gossipOriginSignature : undefined,
       metadata: resend?.metadata as MessageMetadata | undefined,
     };
   }
@@ -4309,6 +4418,9 @@ export class DecentChatNodePeer {
             }
             if (resendPayload.threadId) (envelope as any).threadId = resendPayload.threadId;
             if (resendPayload.replyToId) (envelope as any).replyToId = resendPayload.replyToId;
+            if (resendPayload.gossipOriginSignature) {
+              (envelope as any)._gossipOriginSignature = resendPayload.gossipOriginSignature;
+            }
 
             const accepted = this.transport.send(peerId, envelope);
             if (!accepted) throw new Error('transport rejected queued send');
@@ -4399,6 +4511,16 @@ export class DecentChatNodePeer {
         } else {
           (envelope as any).channelId = item.channelId;
           (envelope as any).workspaceId = item.workspaceId;
+          const gossipOriginSignature = await this.signGossipOrigin({
+            messageId: item.messageId,
+            channelId: item.channelId,
+            content: item.content,
+            threadId: item.threadId,
+            replyToId: item.replyToId,
+          });
+          if (gossipOriginSignature) {
+            (envelope as any)._gossipOriginSignature = gossipOriginSignature;
+          }
         }
         if (item.threadId) (envelope as any).threadId = item.threadId;
         if (item.replyToId) (envelope as any).replyToId = item.replyToId;

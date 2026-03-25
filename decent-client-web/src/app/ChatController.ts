@@ -2353,8 +2353,11 @@ export class ChatController {
 
         // Threading must be explicit. replyToId is only quote/reply metadata.
         const normalizedThreadId: string | undefined = data.threadId as string | undefined;
-        // T3.2: For gossip-relayed messages, use the original sender's peerId (not the relay node)
-        const actualSenderId: string = (data._gossipOriginalSender as string | undefined) ?? peerId;
+        const envelopeMessageId = typeof data.messageId === 'string' && data.messageId.length > 0
+          ? data.messageId
+          : (_gossipOrigId ?? '');
+        const senderResolution = await this.resolveInboundSenderId(peerId, data, channelId, envelopeMessageId, content);
+        const actualSenderId = senderResolution.senderId;
         const msg = await this.messageStore.createMessage(channelId, actualSenderId, content, 'text', normalizedThreadId);
         // Use sender's timestamp but guarantee it's strictly after our last stored message.
         // Without this guard the hash-chain timestamp check rejects messages that arrive
@@ -2434,7 +2437,8 @@ export class ChatController {
           });
 
           // DEP-005: Send delivery ACK back to sender (reverse-path for gossip-relayed messages)
-          this.sendInboundReceipt(peerId, data, channelId, msg.id, 'ack');
+          const receiptEnvelope = senderResolution.verifiedGossipOrigin ? data : { ...data, _gossipOriginalSender: undefined };
+          this.sendInboundReceipt(peerId, receiptEnvelope, channelId, msg.id, 'ack');
 
           // Ensure thread root snapshot for thread replies
           if (normalizedThreadId) {
@@ -2449,7 +2453,7 @@ export class ChatController {
           // gossip-relayed copy of this same message (which uses msg.id as _originalMessageId)
           // is caught by the early dedup check and dropped without re-rendering.
           this._gossipSeen.set(msg.id, Date.now());
-          if ((data._gossipOriginalSender as string | undefined) && actualSenderId !== peerId) {
+          if (senderResolution.verifiedGossipOrigin && actualSenderId !== peerId) {
             this._gossipReceiptRoutes.set(msg.id, {
               upstreamPeerId: peerId,
               originalSenderId: actualSenderId,
@@ -2458,7 +2462,9 @@ export class ChatController {
           }
 
           // T3.2: Gossip relay — re-encrypt and forward to workspace peers who might not have received this
-          void this._gossipRelay(peerId, msg.id, msg.senderId, content, channelId, data);
+          if (senderResolution.allowRelay) {
+            void this._gossipRelay(peerId, msg.id, msg.senderId, content, channelId, data);
+          }
 
           const wsIdForMsg = this.resolveWorkspaceIdByChannelId(channelId);
           const lenBefore = this.activityItems.length;
@@ -2490,7 +2496,7 @@ export class ChatController {
               this.ui?.appendMessageToDOM(msg, true);
             }
             // Message is visible in active channel.
-            this.sendInboundReceipt(peerId, data, channelId, msg.id, 'read');
+            this.sendInboundReceipt(peerId, receiptEnvelope, channelId, msg.id, 'read');
             (msg as any).localReadAt = Date.now();
             await this.persistentStore.saveMessage({ ...(msg as any), localReadAt: (msg as any).localReadAt });
 
@@ -5196,6 +5202,80 @@ export class ChatController {
    * to the sender; no session established with relay → skipped). CRDT dedup
    * handles the rare duplicate if two paths both deliver the same message.
    */
+  private async buildGossipOriginPayload(params: {
+    messageId: string;
+    channelId: string;
+    content: string;
+    threadId?: string;
+    replyToId?: string;
+  }): Promise<string> {
+    const data = new TextEncoder().encode(params.content);
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    const hashBytes = Array.from(new Uint8Array(digest));
+    const contentHash = hashBytes.map((b) => b.toString(16).padStart(2, '0')).join('');
+    return `v1|${params.messageId}|${params.channelId}|${params.threadId ?? ''}|${params.replyToId ?? ''}|${contentHash}`;
+  }
+
+  private async signGossipOrigin(params: {
+    messageId: string;
+    channelId: string;
+    content: string;
+    threadId?: string;
+    replyToId?: string;
+  }): Promise<string | undefined> {
+    if (!this.messageProtocol || typeof (this.messageProtocol as any).signData !== 'function') {
+      return undefined;
+    }
+    const payload = await this.buildGossipOriginPayload(params);
+    return (this.messageProtocol as any).signData(payload);
+  }
+
+  private async resolveInboundSenderId(
+    peerId: string,
+    envelope: any,
+    channelId: string,
+    messageId: string,
+    content: string,
+  ): Promise<{ senderId: string; allowRelay: boolean; verifiedGossipOrigin: boolean }> {
+    const gossipSender = typeof envelope._gossipOriginalSender === 'string' && envelope._gossipOriginalSender.length > 0
+      ? envelope._gossipOriginalSender
+      : undefined;
+    if (!gossipSender || gossipSender === peerId) {
+      return { senderId: peerId, allowRelay: true, verifiedGossipOrigin: false };
+    }
+
+    const originSignature = typeof envelope._gossipOriginSignature === 'string' && envelope._gossipOriginSignature.length > 0
+      ? envelope._gossipOriginSignature
+      : undefined;
+    if (!originSignature || !this.messageProtocol || typeof (this.messageProtocol as any).verifyData !== 'function') {
+      console.warn(`[Security] Unsigned gossip origin claim ${gossipSender.slice(0, 8)} via ${peerId.slice(0, 8)} for ${messageId.slice(0, 8)}; attributing to relay`);
+      return { senderId: peerId, allowRelay: false, verifiedGossipOrigin: false };
+    }
+
+    let isValid = false;
+    try {
+      const payload = await this.buildGossipOriginPayload({
+        messageId,
+        channelId,
+        content,
+        threadId: typeof envelope.threadId === 'string' ? envelope.threadId : undefined,
+        replyToId: typeof envelope.replyToId === 'string' ? envelope.replyToId : undefined,
+      });
+      isValid = await (this.messageProtocol as any).verifyData(
+        payload,
+        originSignature,
+        gossipSender,
+      );
+    } catch {
+      isValid = false;
+    }
+    if (!isValid) {
+      console.warn(`[Security] Invalid gossip origin signature ${gossipSender.slice(0, 8)} via ${peerId.slice(0, 8)} for ${messageId.slice(0, 8)}; attributing to relay`);
+      return { senderId: peerId, allowRelay: false, verifiedGossipOrigin: false };
+    }
+    return { senderId: gossipSender, allowRelay: true, verifiedGossipOrigin: true };
+  }
+
   private buildDeferredGossipRelayPayload(
     originalMsgId: string,
     originalSenderId: string,
@@ -5220,6 +5300,7 @@ export class ChatController {
       _originalMessageId: originalMsgId,
       _gossipOriginalSender: originalSenderId,
       _gossipHop: hop,
+      _gossipOriginSignature: envelope._gossipOriginSignature,
     };
   }
 
@@ -5273,6 +5354,9 @@ export class ChatController {
     (relayEnv as any)._originalMessageId = originalMsgId;    // dedup key (checked before decryption)
     (relayEnv as any)._gossipOriginalSender = originalSenderId; // real author
     (relayEnv as any)._gossipHop = hop;
+    if (typeof envelope._gossipOriginSignature === 'string' && envelope._gossipOriginSignature.length > 0) {
+      (relayEnv as any)._gossipOriginSignature = envelope._gossipOriginSignature;
+    }
     return relayEnv;
   }
 
@@ -6308,6 +6392,17 @@ export class ChatController {
         (envelope as any).threadId = threadId;
         (envelope as any).vectorClock = (msg as any).vectorClock;
         (envelope as any).messageId = msg.id; // For reaction targeting — receiver must use same ID
+        if (this.state.activeChannelId) {
+          const gossipOriginSignature = await this.signGossipOrigin({
+            messageId: msg.id,
+            channelId: this.state.activeChannelId,
+            content: safeContent,
+            threadId,
+          });
+          if (gossipOriginSignature) {
+            (envelope as any)._gossipOriginSignature = gossipOriginSignature;
+          }
+        }
 
         // Include thread root snapshot so receiver can reconstruct thread context
         if (threadId) {
@@ -8489,6 +8584,17 @@ export class ChatController {
         (envelope as any).workspaceId = this.state.activeWorkspaceId;
         (envelope as any).threadId = threadId;
         (envelope as any).messageId = msg.id;  // receiver must use same ID so reactions sync
+        if (this.state.activeChannelId) {
+          const gossipOriginSignature = await this.signGossipOrigin({
+            messageId: msg.id,
+            channelId: this.state.activeChannelId,
+            content,
+            threadId,
+          });
+          if (gossipOriginSignature) {
+            (envelope as any)._gossipOriginSignature = gossipOriginSignature;
+          }
+        }
         (envelope as any).timestamp = msg.timestamp;
         (envelope as any).vectorClock = (msg as any).vectorClock;
         (envelope as any).attachments = [meta]; // Metadata travels with message
@@ -10187,7 +10293,8 @@ export class ChatController {
   private shouldRetryNegentropyOnce(error: unknown): boolean {
     const message = String((error as Error)?.message ?? error ?? '').toLowerCase();
     if (!message) return false;
-    return message.includes('peer-not-member')
+    return message.includes('rejected')
+      || message.includes('peer-not-member')
       || message.includes('workspace-not-found')
       || message.includes('channel-not-found')
       || message.includes('invalid-request');
@@ -10578,6 +10685,16 @@ export class ChatController {
     (envelope as any).threadId = msg.threadId;
     (envelope as any).vectorClock = (msg as any).vectorClock;
     (envelope as any).messageId = msg.id;
+    const gossipOriginSignature = await this.signGossipOrigin({
+      messageId: msg.id,
+      channelId: msg.channelId,
+      content: msg.content,
+      threadId: msg.threadId,
+      replyToId: (msg as any).replyToId,
+    });
+    if (gossipOriginSignature) {
+      (envelope as any)._gossipOriginSignature = gossipOriginSignature;
+    }
     (envelope as any).timestamp = msg.timestamp;
 
     if ((msg as any).metadata) {
@@ -10872,6 +10989,9 @@ export class ChatController {
             }
             if (typeof deferred._gossipHop === 'number') {
               (encrypted as any)._gossipHop = deferred._gossipHop;
+            }
+            if (typeof deferred._gossipOriginSignature === 'string' && deferred._gossipOriginSignature.length > 0) {
+              (encrypted as any)._gossipOriginSignature = deferred._gossipOriginSignature;
             }
 
             // Include thread root snapshot for thread messages

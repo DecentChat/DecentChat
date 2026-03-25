@@ -50,10 +50,15 @@ describe('DecentChatNodePeer gossip relay runtime', () => {
       encrypted: `cipher:${content}`,
       ratchet: { n: 1 },
     }));
+    const verifyData = mock(async (_data: string, signature: string, peerId: string) => (
+      signature === 'sig-msg-1-channel-1' && peerId === 'peer-origin'
+    ));
 
     (peer as any).messageProtocol = {
       decryptMessage,
       encryptMessage,
+      verifyData,
+      signData: mock(async () => 'sig-msg-1-channel-1'),
     };
     (peer as any).cryptoManager.importPublicKey = mock(async () => ({}));
     (peer as any).getPeerPublicKey = () => 'public-key';
@@ -87,6 +92,7 @@ describe('DecentChatNodePeer gossip relay runtime', () => {
       messageId: 'msg-1',
       _originalMessageId: 'msg-1',
       _gossipOriginalSender: 'peer-origin',
+      _gossipOriginSignature: 'sig-msg-1-channel-1',
       _gossipHop: 0,
       timestamp: Date.now(),
     });
@@ -104,6 +110,7 @@ describe('DecentChatNodePeer gossip relay runtime', () => {
     expect(relay?.msg?.messageId).toBe('msg-1');
     expect(relay?.msg?._originalMessageId).toBe('msg-1');
     expect(relay?.msg?._gossipOriginalSender).toBe('peer-origin');
+    expect(relay?.msg?._gossipOriginSignature).toBe('sig-msg-1-channel-1');
     expect(relay?.msg?._gossipHop).toBe(1);
 
     await (peer as any).handlePeerMessage('peer-relay', {
@@ -114,11 +121,140 @@ describe('DecentChatNodePeer gossip relay runtime', () => {
       messageId: 'msg-1',
       _originalMessageId: 'msg-1',
       _gossipOriginalSender: 'peer-origin',
+      _gossipOriginSignature: 'sig-msg-1-channel-1',
       _gossipHop: 0,
       timestamp: Date.now(),
     });
 
     expect(decryptMessage).toHaveBeenCalledTimes(1);
+    expect(verifyData).toHaveBeenCalled();
+  });
+
+  test('falls back to relay sender when gossip origin signature is missing', async () => {
+    const incoming: Array<any> = [];
+    const peer = new DecentChatNodePeer({
+      account: makeAccount(),
+      onIncomingMessage: async (params) => {
+        incoming.push(params);
+      },
+      onReply: () => {},
+    });
+
+    (peer as any).myPeerId = 'peer-self';
+    (peer as any).syncProtocol = {};
+    const createMessage = mock(async (channelId: string, senderId: string, content: string, type: string, threadId?: string) => ({
+      id: 'msg-missing-sig',
+      channelId,
+      senderId,
+      content,
+      type,
+      threadId,
+      timestamp: Date.now(),
+    }));
+    (peer as any).messageProtocol = {
+      decryptMessage: mock(async () => 'unsigned relayed message'),
+      encryptMessage: mock(async () => ({ id: 'env-1', encrypted: 'cipher', ratchet: { n: 1 } })),
+      verifyData: mock(async () => true),
+    };
+    (peer as any).cryptoManager.importPublicKey = mock(async () => ({}));
+    (peer as any).getPeerPublicKey = () => 'public-key';
+    (peer as any).transport = {
+      send: mock(() => true),
+      getConnectedPeers: mock(() => [] as string[]),
+    };
+    (peer as any).messageStore = {
+      createMessage,
+      addMessage: async () => ({ success: true }),
+      getMessages: () => [] as any[],
+    };
+    (peer as any).persistMessagesForChannel = () => {};
+    (peer as any).recordManifestDomain = () => {};
+
+    await (peer as any).handlePeerMessage('peer-relay', {
+      encrypted: 'ciphertext',
+      ratchet: { n: 2 },
+      workspaceId: 'ws-1',
+      channelId: 'channel-1',
+      messageId: 'msg-missing-sig',
+      _originalMessageId: 'msg-missing-sig',
+      _gossipOriginalSender: 'peer-origin',
+      _gossipHop: 0,
+      timestamp: Date.now(),
+    });
+
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0].senderId).toBe('peer-relay');
+    expect(createMessage.mock.calls[0]?.[1]).toBe('peer-relay');
+  });
+
+  test('falls back to relay sender when gossip origin signature is invalid', async () => {
+    const incoming: Array<any> = [];
+    const peer = new DecentChatNodePeer({
+      account: makeAccount(),
+      onIncomingMessage: async (params) => {
+        incoming.push(params);
+      },
+      onReply: () => {},
+    });
+
+    (peer as any).myPeerId = 'peer-self';
+    (peer as any).syncProtocol = {};
+    const createMessage = mock(async (channelId: string, senderId: string, content: string, type: string, threadId?: string) => ({
+      id: 'msg-bad-sig',
+      channelId,
+      senderId,
+      content,
+      type,
+      threadId,
+      timestamp: Date.now(),
+    }));
+    const verifyData = mock(async () => false);
+    (peer as any).messageProtocol = {
+      decryptMessage: mock(async () => 'invalid-signature relayed message'),
+      encryptMessage: mock(async () => ({ id: 'env-1', encrypted: 'cipher', ratchet: { n: 1 } })),
+      verifyData,
+    };
+    (peer as any).cryptoManager.importPublicKey = mock(async () => ({}));
+    (peer as any).getPeerPublicKey = () => 'public-key';
+    const sent: Array<{ peerId: string; msg: any }> = [];
+    (peer as any).transport = {
+      send: mock((peerId: string, msg: any) => {
+        sent.push({ peerId, msg });
+        return true;
+      }),
+      getConnectedPeers: mock(() => ['peer-relay', 'peer-target'] as string[]),
+    };
+    (peer as any).workspaceManager.getWorkspace = () => ({
+      id: 'ws-1',
+      members: [{ peerId: 'peer-self' }, { peerId: 'peer-relay' }, { peerId: 'peer-target' }, { peerId: 'peer-origin' }],
+      channels: [{ id: 'channel-1', name: 'General', type: 'channel' }],
+    });
+    (peer as any).messageStore = {
+      createMessage,
+      addMessage: async () => ({ success: true }),
+      getMessages: () => [] as any[],
+    };
+    (peer as any).persistMessagesForChannel = () => {};
+    (peer as any).recordManifestDomain = () => {};
+
+    await (peer as any).handlePeerMessage('peer-relay', {
+      encrypted: 'ciphertext',
+      ratchet: { n: 2 },
+      workspaceId: 'ws-1',
+      channelId: 'channel-1',
+      messageId: 'msg-bad-sig',
+      _originalMessageId: 'msg-bad-sig',
+      _gossipOriginalSender: 'peer-origin',
+      _gossipOriginSignature: 'forged-signature',
+      _gossipHop: 0,
+      timestamp: Date.now(),
+    });
+
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0].senderId).toBe('peer-relay');
+    expect(createMessage.mock.calls[0]?.[1]).toBe('peer-relay');
+    expect(verifyData).toHaveBeenCalled();
+    expect(sent.some((entry) => entry.peerId === 'peer-target' && entry.msg?.encrypted)).toBe(false);
   });
 
   test('does not trust arbitrary senderId from wire envelopes', async () => {
