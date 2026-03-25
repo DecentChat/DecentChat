@@ -120,4 +120,58 @@ describe('DecentChatNodePeer gossip relay runtime', () => {
 
     expect(decryptMessage).toHaveBeenCalledTimes(1);
   });
+
+  test('does not trust arbitrary senderId from wire envelopes', async () => {
+    const incoming: Array<any> = [];
+    const peer = new DecentChatNodePeer({
+      account: makeAccount(),
+      onIncomingMessage: async (params) => {
+        incoming.push(params);
+      },
+      onReply: () => {},
+    });
+
+    (peer as any).myPeerId = 'peer-self';
+    (peer as any).syncProtocol = {};
+    (peer as any).messageProtocol = {
+      decryptMessage: mock(async () => 'forged sender attempt'),
+      encryptMessage: mock(async () => ({ id: 'env-1', encrypted: 'cipher', ratchet: { n: 1 } })),
+    };
+    (peer as any).cryptoManager.importPublicKey = mock(async () => ({}));
+    (peer as any).getPeerPublicKey = () => 'public-key';
+    (peer as any).transport = {
+      send: mock(() => true),
+      getConnectedPeers: mock(() => [] as string[]),
+    };
+    const createMessage = mock(async (channelId: string, senderId: string, content: string, type: string, threadId?: string) => ({
+        id: 'msg-forge-1',
+        channelId,
+        senderId,
+        content,
+        type,
+        threadId,
+        timestamp: Date.now(),
+      }));
+    (peer as any).messageStore = {
+      createMessage,
+      addMessage: async () => ({ success: true }),
+      getMessages: () => [] as any[],
+    };
+    (peer as any).persistMessagesForChannel = () => {};
+    (peer as any).recordManifestDomain = () => {};
+
+    await (peer as any).handlePeerMessage('peer-attacker', {
+      encrypted: 'ciphertext',
+      ratchet: { n: 2 },
+      isDirect: true,
+      channelId: 'peer-attacker',
+      senderId: 'peer-victim',
+      messageId: 'msg-forge-1',
+      timestamp: Date.now(),
+    });
+
+    expect(createMessage).toHaveBeenCalled();
+    expect(createMessage.mock.calls[0]?.[1]).toBe('peer-attacker');
+  });
+
 });

@@ -1343,7 +1343,7 @@ export class DecentChatNodePeer {
     }
   }
 
-  private async handlePeerMessage(fromPeerId: string, rawData: unknown): Promise<void> {
+  private async handlePeerMessage(fromPeerId: string, rawData: unknown, trustedSenderId?: string): Promise<void> {
     if (this.destroyed || !this.syncProtocol || !this.messageProtocol || !this.transport) return;
 
     const msg = rawData as any;
@@ -1540,7 +1540,7 @@ export class DecentChatNodePeer {
 
     const isDirect = msg.isDirect === true;
     const actualSenderId: string = (msg._gossipOriginalSender as string | undefined)
-      ?? (typeof msg.senderId === 'string' && msg.senderId.length > 0 ? msg.senderId : undefined)
+      ?? trustedSenderId
       ?? fromPeerId;
     const channelId = (msg.channelId as string | undefined) ?? (isDirect ? fromPeerId : undefined);
     if (!channelId) return;
@@ -4062,7 +4062,10 @@ export class DecentChatNodePeer {
               data: { recovered: true, envelopeId: envelope.envelopeId },
             });
           }
-          await this.handlePeerMessage(fromPeerId, envelope.ciphertext);
+          const trustedSenderId = typeof envelope.metadata?.senderId === 'string' && envelope.metadata.senderId.length > 0
+            ? envelope.metadata.senderId
+            : undefined;
+          await this.handlePeerMessage(fromPeerId, envelope.ciphertext, trustedSenderId);
         }
 
         if (recoveredIds.length > 0) {
