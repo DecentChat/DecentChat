@@ -282,6 +282,7 @@ export class DecentChatNodePeer {
   private static readonly PEER_MAINTENANCE_RETRY_BASE_MS = 30_000;
   private static readonly PEER_MAINTENANCE_RETRY_MAX_MS = 10 * 60_000;
   private static readonly TRANSPORT_ERROR_LOG_WINDOW_MS = 30_000;
+  private static readonly GOSSIP_TTL = 2;
 
   private readonly store: FileStore;
   private readonly workspaceManager: WorkspaceManager;
@@ -309,6 +310,8 @@ export class DecentChatNodePeer {
   private readonly peerMaintenanceRetryAtByPeer = new Map<string, number>();
   private readonly peerMaintenanceAttemptsByPeer = new Map<string, number>();
   private readonly throttledTransportErrors = new Map<string, { windowStart: number; suppressed: number }>();
+  private readonly _gossipSeen = new Map<string, number>();
+  private _gossipCleanupInterval: ReturnType<typeof setInterval> | null = null;
   private companySimProfileLoaded = false;
   private companySimProfile: WorkspaceMember["companySim"] | undefined;
   private companyTemplateInstallLock: Promise<void> = Promise.resolve();
@@ -510,6 +513,7 @@ export class DecentChatNodePeer {
       this.myPeerId = await this.transport.init(this.myPeerId);
       this.opts.log?.info(`[decentchat-peer] online as ${this.myPeerId}, signaling: ${allServers.join(', ')}`);
       this.startPeerMaintenance();
+      this.startGossipCleanup();
 
       // Initialize huddle manager after transport is ready (if enabled)
       const huddleConfig = this.opts.account.huddle;
@@ -765,6 +769,102 @@ export class DecentChatNodePeer {
     }
   }
 
+  private startGossipCleanup(): void {
+    if (this._gossipCleanupInterval) return;
+    const fiveMin = 5 * 60 * 1000;
+    this._gossipCleanupInterval = setInterval(() => {
+      const cutoff = Date.now() - fiveMin;
+      for (const [id, ts] of this._gossipSeen) {
+        if (ts < cutoff) this._gossipSeen.delete(id);
+      }
+    }, fiveMin);
+  }
+
+  private finalizeGossipRelayEnvelope(
+    relayEnv: any,
+    originalMsgId: string,
+    originalSenderId: string,
+    channelId: string,
+    workspaceId: string,
+    hop: number,
+    envelope: any,
+  ): any {
+    relayEnv.messageId = originalMsgId;
+    relayEnv.channelId = channelId;
+    relayEnv.workspaceId = workspaceId;
+    relayEnv.senderId = originalSenderId;
+    if (typeof envelope.senderName === 'string' && envelope.senderName.trim()) {
+      relayEnv.senderName = envelope.senderName;
+    }
+    if (envelope.threadId) relayEnv.threadId = envelope.threadId;
+    if (envelope.replyToId) relayEnv.replyToId = envelope.replyToId;
+    if (envelope.vectorClock) relayEnv.vectorClock = envelope.vectorClock;
+    if (envelope.metadata) relayEnv.metadata = envelope.metadata;
+    if (Array.isArray(envelope.attachments) && envelope.attachments.length > 0) {
+      relayEnv.attachments = envelope.attachments;
+    }
+    if (envelope.threadRootSnapshot) relayEnv.threadRootSnapshot = envelope.threadRootSnapshot;
+    relayEnv._originalMessageId = originalMsgId;
+    relayEnv._gossipOriginalSender = originalSenderId;
+    relayEnv._gossipHop = hop;
+    return relayEnv;
+  }
+
+  private async gossipRelay(
+    fromPeerId: string,
+    originalMsgId: string,
+    originalSenderId: string,
+    plaintext: string,
+    channelId: string,
+    envelope: any,
+  ): Promise<void> {
+    if (!this.transport || !this.messageProtocol) return;
+
+    const hop = (envelope._gossipHop ?? 0) + 1;
+    if (hop > DecentChatNodePeer.GOSSIP_TTL) return;
+
+    const workspaceId = typeof envelope.workspaceId === 'string' && envelope.workspaceId
+      ? envelope.workspaceId
+      : this.findWorkspaceIdForChannel(channelId);
+    if (!workspaceId || workspaceId === 'direct') return;
+
+    const ws = this.workspaceManager.getWorkspace(workspaceId);
+    if (!ws) return;
+
+    const connectedPeers = new Set(this.transport.getConnectedPeers());
+    for (const member of ws.members) {
+      const targetPeerId = member.peerId;
+      if (!targetPeerId || targetPeerId === this.myPeerId) continue;
+      if (targetPeerId === fromPeerId) continue;
+      if (targetPeerId === originalSenderId) continue;
+      if (!connectedPeers.has(targetPeerId)) continue;
+
+      try {
+        const encrypted = await this.encryptMessageWithPreKeyBootstrap(
+          targetPeerId,
+          plaintext,
+          envelope.metadata as MessageMetadata | undefined,
+          workspaceId,
+        );
+
+        const relayEnv = this.finalizeGossipRelayEnvelope(
+          encrypted,
+          originalMsgId,
+          originalSenderId,
+          channelId,
+          workspaceId,
+          hop,
+          envelope,
+        );
+        this.transport.send(targetPeerId, relayEnv);
+      } catch (error) {
+        this.opts.log?.warn?.(
+          `[decentchat-peer] gossip relay to ${targetPeerId.slice(0, 8)} failed: ${String((error as Error)?.message ?? error)}`,
+        );
+      }
+    }
+  }
+
   async joinWorkspace(inviteUri: string): Promise<void> {
     if (!this.syncProtocol || !this.transport) return;
 
@@ -802,6 +902,10 @@ export class DecentChatNodePeer {
 
   destroy(): void {
     this.destroyed = true;
+    if (this._gossipCleanupInterval) {
+      clearInterval(this._gossipCleanupInterval);
+      this._gossipCleanupInterval = null;
+    }
     if (this._maintenanceInterval) {
       clearInterval(this._maintenanceInterval);
       this._maintenanceInterval = null;
@@ -1392,6 +1496,11 @@ export class DecentChatNodePeer {
       return;
     }
 
+    const gossipOrigId = typeof msg?._originalMessageId === 'string' ? msg._originalMessageId : undefined;
+    if (gossipOrigId && this._gossipSeen.has(gossipOrigId)) {
+      return;
+    }
+
     // Route huddle signals to BotHuddleManager (unencrypted, like browser client)
     if (typeof msg?.type === 'string' && msg.type.startsWith('huddle-')) {
       await this.botHuddle?.handleSignal(fromPeerId, msg);
@@ -1430,12 +1539,15 @@ export class DecentChatNodePeer {
     this.decryptRecoveryAtByPeer.delete(fromPeerId);
 
     const isDirect = msg.isDirect === true;
+    const actualSenderId: string = (msg._gossipOriginalSender as string | undefined)
+      ?? (typeof msg.senderId === 'string' && msg.senderId.length > 0 ? msg.senderId : undefined)
+      ?? fromPeerId;
     const channelId = (msg.channelId as string | undefined) ?? (isDirect ? fromPeerId : undefined);
     if (!channelId) return;
 
     const created = await this.messageStore.createMessage(
       channelId,
-      (msg.senderId as string | undefined) ?? fromPeerId,
+      actualSenderId,
       content,
       'text',
       msg.threadId,
@@ -1451,6 +1563,7 @@ export class DecentChatNodePeer {
       this.opts.log?.warn?.(`[decentchat-peer] rejected message ${created.id}: ${result.error}`);
       return;
     }
+    this._gossipSeen.set(created.id, Date.now());
 
     this.persistMessagesForChannel(channelId);
 
@@ -1460,7 +1573,7 @@ export class DecentChatNodePeer {
       itemCount: this.messageStore.getMessages(channelId).length,
       operation: 'create',
       subject: created.id,
-      data: { messageId: created.id, senderId: fromPeerId },
+      data: { messageId: created.id, senderId: actualSenderId },
     });
 
     this.transport.send(fromPeerId, {
@@ -1470,7 +1583,7 @@ export class DecentChatNodePeer {
       ...(typeof msg.envelopeId === 'string' ? { envelopeId: msg.envelopeId } : {}),
     });
 
-    const senderName = this.resolveSenderName(workspaceId, fromPeerId, msg.senderName as string | undefined);
+    const senderName = this.resolveSenderName(workspaceId, actualSenderId, msg.senderName as string | undefined);
     const attachments = Array.isArray(msg.attachments)
       ? (msg.attachments as Array<{
         id: string;
@@ -1487,7 +1600,7 @@ export class DecentChatNodePeer {
       channelId,
       workspaceId,
       content,
-      senderId: fromPeerId,
+      senderId: actualSenderId,
       senderName,
       messageId: created.id,
       chatType: msg.isDirect ? 'direct' : 'channel',
@@ -1496,6 +1609,10 @@ export class DecentChatNodePeer {
       threadId: msg.threadId as string | undefined,
       attachments,
     });
+
+    if (!isDirect) {
+      void this.gossipRelay(fromPeerId, created.id, actualSenderId, content, channelId, msg);
+    }
   }
 
   private async handleNegentropyQuery(fromPeerId: string, msg: any): Promise<void> {
@@ -1503,12 +1620,39 @@ export class DecentChatNodePeer {
     const channelId = msg.channelId as string | undefined;
     const requestId = msg.requestId as string | undefined;
     const query = msg.query;
-    if (!wsId || !channelId || !requestId || !query) return;
+    const sendReject = (error: string): void => {
+      if (!this.transport || !requestId) return;
+      this.transport.send(fromPeerId, {
+        type: 'message-sync-negentropy-response',
+        requestId,
+        ...(wsId ? { workspaceId: wsId } : {}),
+        ...(channelId ? { channelId } : {}),
+        response: {
+          have: [],
+          need: [],
+        },
+        error,
+      });
+    };
+
+    if (!wsId || !channelId || !requestId || !query) {
+      sendReject('invalid-request');
+      return;
+    }
 
     const ws = this.workspaceManager.getWorkspace(wsId);
-    if (!ws) return;
-    if (!ws.members.some((m: any) => m.peerId === fromPeerId)) return;
-    if (!ws.channels.some((ch: any) => ch.id === channelId)) return;
+    if (!ws) {
+      sendReject('workspace-not-found');
+      return;
+    }
+    if (!ws.members.some((m: any) => m.peerId === fromPeerId)) {
+      sendReject('peer-not-member');
+      return;
+    }
+    if (!ws.channels.some((ch: any) => ch.id === channelId)) {
+      sendReject('channel-not-found');
+      return;
+    }
 
     const localItems = this.messageStore.getMessages(channelId).map((m) => ({ id: m.id, timestamp: m.timestamp }));
     const negentropy = new Negentropy();
@@ -2915,6 +3059,18 @@ export class DecentChatNodePeer {
         this.transport.send(peerId, envelope);
       }
     }
+  }
+
+  async sendDirectTyping(params: { peerId: string; typing: boolean }): Promise<void> {
+    if (!this.transport || !params.peerId) return;
+    if (!this.transport.getConnectedPeers().includes(params.peerId)) return;
+    this.transport.send(params.peerId, {
+      type: 'typing',
+      channelId: params.peerId,
+      workspaceId: '',
+      peerId: this.myPeerId,
+      typing: params.typing,
+    });
   }
 
   /** Send stream-start to all workspace peers (or direct peer for DMs) */

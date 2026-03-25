@@ -6,6 +6,11 @@ type RuntimeScript = {
   finalText?: string;
 };
 
+type RuntimeErrorScript = {
+  errorMessage: string;
+  throwAfterError?: boolean;
+};
+
 function makeRuntime(script: RuntimeScript): any {
   return {
     config: {
@@ -36,6 +41,39 @@ function makeRuntime(script: RuntimeScript): any {
             await replyOptions?.onPartialReply?.({ text: cumulative });
           }
           await dispatcherOptions.deliver({ text: script.finalText ?? "" });
+        },
+      },
+    },
+  };
+}
+
+function makeRuntimeWithError(script: RuntimeErrorScript): any {
+  return {
+    config: {
+      loadConfig: () => ({}),
+    },
+    channel: {
+      routing: {
+        resolveAgentRoute: () => ({
+          sessionKey: "session:direct:peer-user",
+          agentId: "agent-1",
+          accountId: "acct-1",
+        }),
+      },
+      session: {
+        resolveStorePath: () => "/tmp/decent-openclaw-stream-test-store",
+        readSessionUpdatedAt: () => undefined,
+        recordInboundSession: async () => {},
+      },
+      reply: {
+        resolveEnvelopeFormatOptions: () => ({}),
+        formatAgentEnvelope: (params: { body: string }) => params.body,
+        finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+        dispatchReplyWithBufferedBlockDispatcher: async ({ dispatcherOptions }: any) => {
+          dispatcherOptions.onError?.(new Error(script.errorMessage), { kind: 'dispatch' });
+          if (script.throwAfterError) {
+            throw new Error(script.errorMessage);
+          }
         },
       },
     },
@@ -994,6 +1032,72 @@ describe("runtime streaming relay integration", () => {
     expect(calls).toContain('typingStop');
     expect(calls.indexOf('typingStart')).toBeLessThan(calls.indexOf('sendToChannel'));
     expect(calls.indexOf('sendToChannel')).toBeLessThan(calls.indexOf('typingStop'));
+  });
+
+  test("direct replies emit direct typing when adapter supports it", async () => {
+    const calls: string[] = [];
+    const nodePeer = {
+      startStream: async () => {},
+      startDirectStream: async () => { calls.push('startDirectStream'); },
+      sendStreamDelta: async () => {},
+      sendDirectStreamDelta: async () => { calls.push('sendDirectStreamDelta'); },
+      sendStreamDone: async () => {},
+      sendDirectStreamDone: async () => { calls.push('sendDirectStreamDone'); },
+      sendDirectToPeer: async () => { calls.push('sendDirectToPeer'); },
+      sendToChannel: async () => {},
+      sendDirectTyping: async (args: { peerId: string; typing: boolean }) => {
+        void args;
+        calls.push(args.typing ? 'typingStart' : 'typingStop');
+      },
+    };
+
+    await relayInboundMessageToPeer({
+      incoming: makeIncoming({ messageId: 'inbound-direct-typing-1' }),
+      ctx: {
+        account: { streamEnabled: true } as any,
+        accountId: 'acct-1',
+      },
+      core: makeRuntime({ partials: ['Hi'], finalText: 'Hi' }),
+      nodePeer: nodePeer as any,
+    });
+
+    expect(calls[0]).toBe('typingStart');
+    expect(calls).toContain('sendDirectStreamDelta');
+    expect(calls).toContain('typingStop');
+    expect(calls.indexOf('typingStart')).toBeLessThan(calls.indexOf('sendDirectStreamDelta'));
+    expect(calls.indexOf('sendDirectStreamDelta')).toBeLessThan(calls.indexOf('typingStop'));
+  });
+
+  test("direct replies send a user-facing fallback when LLM dispatch errors", async () => {
+    const persistedReplies: Array<{ peerId: string; content: string; threadId?: string; replyToId?: string }> = [];
+    const nodePeer = {
+      startStream: async () => {},
+      startDirectStream: async () => {},
+      sendStreamDelta: async () => {},
+      sendDirectStreamDelta: async () => {},
+      sendStreamDone: async () => {},
+      sendDirectStreamDone: async () => {},
+      sendDirectToPeer: async (peerId: string, content: string, threadId?: string, replyToId?: string) => {
+        persistedReplies.push({ peerId, content, threadId, replyToId });
+      },
+      sendToChannel: async () => {},
+      sendDirectTyping: async () => {},
+    };
+
+    await relayInboundMessageToPeer({
+      incoming: makeIncoming({ messageId: 'inbound-direct-error-1' }),
+      ctx: {
+        account: { streamEnabled: true } as any,
+        accountId: 'acct-1',
+      },
+      core: makeRuntimeWithError({ errorMessage: 'provider unavailable', throwAfterError: true }),
+      nodePeer: nodePeer as any,
+    });
+
+    expect(persistedReplies).toHaveLength(1);
+    expect(persistedReplies[0]?.peerId).toBe('peer-user');
+    expect(persistedReplies[0]?.replyToId).toBe('inbound-direct-error-1');
+    expect(persistedReplies[0]?.content).toContain('internal error');
   });
 
   test("when streamEnabled=false, deliver callback persists final reply normally", async () => {

@@ -1407,12 +1407,13 @@ export class ChatController {
             ackedAt[logicalPeerId] = Date.now();
             (msg as any).ackedAt = ackedAt;
 
-            const expected = recipients.length;
-            const ackedCount = ackedBy.size;
+            const statusRecipients = this.getStatusMessageRecipients(msg, recipients);
+            const expected = statusRecipients.length;
+            const ackedCount = statusRecipients.filter((id) => ackedBy.has(id)).length;
             const readBy = new Set<string>(Array.isArray((msg as any).readBy) ? (msg as any).readBy : []);
-            const readCount = readBy.size;
-            const deliveredToAll = expected > 0 && recipients.every((id) => ackedBy.has(id));
-            const readByAll = expected > 0 && recipients.every((id) => readBy.has(id));
+            const readCount = statusRecipients.filter((id) => readBy.has(id)).length;
+            const deliveredToAll = expected > 0 && statusRecipients.every((id) => ackedBy.has(id));
+            const readByAll = expected > 0 && statusRecipients.every((id) => readBy.has(id));
             const nextStatus: 'pending' | 'sent' | 'delivered' | 'read' = readByAll ? 'read' : (deliveredToAll ? 'delivered' : 'sent');
 
             (msg as any).status = nextStatus;
@@ -1477,15 +1478,17 @@ export class ChatController {
             if (!ackedAt[logicalPeerId]) ackedAt[logicalPeerId] = Date.now();
             (msg as any).ackedAt = ackedAt;
 
-            const readByAll = recipients.length > 0 && recipients.every((id) => readBy.has(id));
-            const deliveredToAll = recipients.length > 0 && recipients.every((id) => ackedBy.has(id));
+            const statusRecipients = this.getStatusMessageRecipients(msg, recipients);
+            const expected = statusRecipients.length;
+            const readByAll = expected > 0 && statusRecipients.every((id) => readBy.has(id));
+            const deliveredToAll = expected > 0 && statusRecipients.every((id) => ackedBy.has(id));
             const nextStatus: 'pending' | 'sent' | 'delivered' | 'read' = readByAll ? 'read' : (deliveredToAll ? 'delivered' : 'sent');
             (msg as any).status = nextStatus;
 
             this.ui?.updateMessageStatus?.(messageId, nextStatus, {
-              acked: ackedBy.size,
-              total: recipients.length,
-              read: readBy.size,
+              acked: statusRecipients.filter((id) => ackedBy.has(id)).length,
+              total: expected,
+              read: statusRecipients.filter((id) => readBy.has(id)).length,
             });
 
             await this.persistentStore.saveMessage({ ...msg, status: nextStatus, recipientPeerIds: recipients, ackedBy: Array.from(ackedBy), ackedAt, readBy: Array.from(readBy), readAt });
@@ -6279,7 +6282,9 @@ export class ChatController {
       this.state.activeChannelId ?? undefined,
       this.state.activeWorkspaceId ?? undefined,
     );
+    const statusRecipientPeerIds = this.getOnlineRecipientPeerIds(recipientPeerIds);
     (msg as any).recipientPeerIds = recipientPeerIds;
+    (msg as any).statusRecipientPeerIds = statusRecipientPeerIds;
     (msg as any).ackedBy = [] as string[];
     (msg as any).ackedAt = {} as Record<string, number>;
     (msg as any).readBy = [] as string[];
@@ -6405,7 +6410,7 @@ export class ChatController {
         readBy: [],
         readAt: {},
       });
-      this.ui?.updateMessageStatus?.(msg.id, 'sent', { acked: 0, total: recipientPeerIds.length });
+      this.ui?.updateMessageStatus?.(msg.id, 'sent', { acked: 0, total: statusRecipientPeerIds.length });
     }
 
   }
@@ -6449,7 +6454,7 @@ export class ChatController {
             `[Connect] Failed to connect to ${peerId.slice(0, 8)} after ${attempts} attempts (${reason}):`,
             (err as Error)?.message ?? err,
           );
-          return;
+          throw err;
         }
         await new Promise(resolve => setTimeout(resolve, delayMs));
       }
@@ -8445,7 +8450,9 @@ export class ChatController {
       this.state.activeChannelId ?? undefined,
       this.state.activeWorkspaceId ?? undefined,
     );
+    const statusRecipientPeerIds = this.getOnlineRecipientPeerIds(recipientPeerIds);
     (msg as any).recipientPeerIds = recipientPeerIds;
+    (msg as any).statusRecipientPeerIds = statusRecipientPeerIds;
     (msg as any).ackedBy = [] as string[];
     (msg as any).ackedAt = {} as Record<string, number>;
     (msg as any).readBy = [] as string[];
@@ -8546,7 +8553,7 @@ export class ChatController {
         readBy: [],
         readAt: {},
       });
-      this.ui?.updateMessageStatus?.(msg.id, 'sent', { acked: 0, total: recipientPeerIds.length, read: 0 });
+      this.ui?.updateMessageStatus?.(msg.id, 'sent', { acked: 0, total: statusRecipientPeerIds.length, read: 0 });
     }
   }
 
@@ -9962,10 +9969,25 @@ export class ChatController {
             await this.requestNegentropyMessageSync(peerId);
             console.warn(`[PERF] requestMessageSync(${_syncTag}): Negentropy completed=${(performance.now()-_negT0).toFixed(1)}ms`);
           } catch (error) {
-            console.warn(`[Sync] Negentropy failed for ${_syncTag}, falling back to timestamp sync:`, error);
-            const _tsT0 = performance.now();
-            await this.requestTimestampMessageSync(peerId);
-            console.warn(`[PERF] requestMessageSync(${_syncTag}): timestamp fallback=${(performance.now()-_tsT0).toFixed(1)}ms`);
+            if (this.shouldRetryNegentropyOnce(error)) {
+              console.warn(`[Sync] Negentropy rejected for ${_syncTag}; retrying once with backoff:`, error);
+              await new Promise<void>((resolve) => setTimeout(resolve, 600));
+              try {
+                const _retryT0 = performance.now();
+                await this.requestNegentropyMessageSync(peerId);
+                console.warn(`[PERF] requestMessageSync(${_syncTag}): Negentropy retry completed=${(performance.now()-_retryT0).toFixed(1)}ms`);
+              } catch (retryError) {
+                console.warn(`[Sync] Negentropy retry failed for ${_syncTag}, falling back to timestamp sync:`, retryError);
+                const _tsT0 = performance.now();
+                await this.requestTimestampMessageSync(peerId);
+                console.warn(`[PERF] requestMessageSync(${_syncTag}): timestamp fallback=${(performance.now()-_tsT0).toFixed(1)}ms`);
+              }
+            } else {
+              console.warn(`[Sync] Negentropy failed for ${_syncTag}, falling back to timestamp sync:`, error);
+              const _tsT0 = performance.now();
+              await this.requestTimestampMessageSync(peerId);
+              console.warn(`[PERF] requestMessageSync(${_syncTag}): timestamp fallback=${(performance.now()-_tsT0).toFixed(1)}ms`);
+            }
           }
         } else {
           console.warn(`[PERF] requestMessageSync(${_syncTag}): using timestamp sync (no Negentropy)`);
@@ -10162,6 +10184,15 @@ export class ChatController {
     }
   }
 
+  private shouldRetryNegentropyOnce(error: unknown): boolean {
+    const message = String((error as Error)?.message ?? error ?? '').toLowerCase();
+    if (!message) return false;
+    return message.includes('peer-not-member')
+      || message.includes('workspace-not-found')
+      || message.includes('channel-not-found')
+      || message.includes('invalid-request');
+  }
+
   private async sendNegentropyQuery(
     peerId: string,
     workspaceId: string,
@@ -10221,6 +10252,10 @@ export class ChatController {
 
     clearTimeout(pending.timer);
     this.pendingNegentropyQueries.delete(requestId);
+    if (typeof data.error === 'string' && data.error.length > 0) {
+      pending.reject(new Error(`Negentropy query rejected by ${peerId.slice(0, 8)}: ${data.error}`));
+      return;
+    }
     pending.resolve(data.response as NegentropyResponse);
   }
 
@@ -10604,8 +10639,9 @@ export class ChatController {
     const ackedAt: Record<string, number> = { ...((msg as any).ackedAt || {}) };
     const readAt: Record<string, number> = { ...((msg as any).readAt || {}) };
 
-    const deliveredToAll = recipients.length > 0 && recipients.every((id) => ackedBy.has(id));
-    const readByAll = recipients.length > 0 && recipients.every((id) => readBy.has(id));
+    const statusRecipients = this.getStatusMessageRecipients(msg, recipients);
+    const deliveredToAll = statusRecipients.length > 0 && statusRecipients.every((id) => ackedBy.has(id));
+    const readByAll = statusRecipients.length > 0 && statusRecipients.every((id) => readBy.has(id));
     const computedStatus: 'pending' | 'sent' | 'delivered' | 'read' = readByAll ? 'read' : (deliveredToAll ? 'delivered' : 'sent');
     const rank: Record<'pending' | 'sent' | 'delivered' | 'read', number> = {
       pending: 0,
@@ -10647,9 +10683,9 @@ export class ChatController {
     await this.persistentStore.saveMessage(persistedMessage as unknown as PlaintextMessage);
 
     this.ui?.updateMessageStatus?.(msg.id, nextStatus, {
-      acked: ackedBy.size,
-      total: recipients.length,
-      read: readBy.size,
+      acked: statusRecipients.filter((id) => ackedBy.has(id)).length,
+      total: statusRecipients.length,
+      read: statusRecipients.filter((id) => readBy.has(id)).length,
     });
   }
 
@@ -11520,6 +11556,32 @@ export class ChatController {
 
   private getStableMessageRecipients(msg: PlaintextMessage): string[] {
     return this.getMessageRecipients(msg).filter((id) => id !== this.state.myPeerId);
+  }
+
+  private getOnlineRecipientPeerIds(recipientPeerIds: string[]): string[] {
+    if (!Array.isArray(recipientPeerIds) || recipientPeerIds.length === 0) return [];
+    const connectedViaTransport = new Set<string>(this.transport.getConnectedPeers() as string[]);
+    const online = new Set<string>([
+      ...Array.from(this.state.readyPeers),
+      ...Array.from(this.state.connectedPeers),
+      ...Array.from(connectedViaTransport),
+    ]);
+    return Array.from(new Set(
+      recipientPeerIds.filter((id) => typeof id === 'string' && id.length > 0 && id !== this.state.myPeerId && online.has(id)),
+    ));
+  }
+
+  private getStatusMessageRecipients(msg: PlaintextMessage, fallbackRecipients?: string[]): string[] {
+    const explicit = Array.isArray((msg as any).statusRecipientPeerIds)
+      ? (msg as any).statusRecipientPeerIds.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
+      : [];
+    if (explicit.length > 0) return Array.from(new Set(explicit));
+    const baseline = Array.isArray(fallbackRecipients) && fallbackRecipients.length > 0
+      ? fallbackRecipients
+      : this.getStableMessageRecipients(msg);
+    return Array.from(new Set(
+      baseline.filter((id) => typeof id === 'string' && id.length > 0 && id !== this.state.myPeerId),
+    ));
   }
 
   private getInboundReceiptPeerId(peerId: string, data: any): string {

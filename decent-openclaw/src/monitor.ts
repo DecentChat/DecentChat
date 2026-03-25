@@ -157,6 +157,7 @@ type StreamingPeerAdapter = {
   sendDirectStreamDone: (args: { peerId: string; messageId: string }) => Promise<void>;
   sendStreamDone: (args: { channelId: string; workspaceId: string; messageId: string }) => Promise<void>;
   sendTyping?: (args: { channelId: string; workspaceId: string; typing: boolean }) => Promise<void>;
+  sendDirectTyping?: (args: { peerId: string; typing: boolean }) => Promise<void>;
   sendDirectToPeer: (peerId: string, content: string, threadId?: string, replyToId?: string, messageId?: string, model?: AssistantModelMeta) => Promise<void>;
   sendToChannel: (channelId: string, content: string, threadId?: string, replyToId?: string, messageId?: string, model?: AssistantModelMeta) => Promise<void>;
   persistMessageLocally: (channelId: string, workspaceId: string, content: string, threadId?: string, replyToId?: string, messageId?: string, model?: AssistantModelMeta) => Promise<void>;
@@ -354,9 +355,54 @@ export async function relayInboundMessageToPeer(params: {
   let processingComplete = false; // Guard: prevent idle timer from finalizing mid-response
   let lastSentStreamContent = "";
   let typingActive = false;
+  let errorNoticeSent = false;
+
+  const sendProcessingFailureNotice = async (reason?: string): Promise<void> => {
+    if (errorNoticeSent) return;
+    if (streamedReply.trim().length > 0) return;
+    const reply = "Sorry - I ran into an internal error while generating a reply. Please try again.";
+    try {
+      if (incoming.chatType === "direct") {
+        await nodePeer.sendDirectToPeer(
+          incoming.senderId,
+          reply,
+          incoming.threadId,
+          incoming.messageId,
+          undefined,
+          selectedModel,
+        );
+      } else {
+        const threadId = incoming.threadId ?? incoming.messageId;
+        await nodePeer.sendToChannel(
+          incoming.channelId,
+          reply,
+          threadId,
+          incoming.messageId,
+          undefined,
+          selectedModel,
+        );
+      }
+      errorNoticeSent = true;
+      if (reason) {
+        ctx.log?.warn?.(`[decentchat] sent error fallback message after failure: ${reason}`);
+      }
+    } catch (err) {
+      ctx.log?.error?.(`[decentchat] failed to send error fallback message: ${String(err)}`);
+    }
+  };
 
   const setTyping = async (typing: boolean) => {
-    if (incoming.chatType === 'direct') return;
+    if (incoming.chatType === 'direct') {
+      if (!nodePeer.sendDirectTyping) return;
+      if (typingActive == typing) return;
+      typingActive = typing;
+      try {
+        await nodePeer.sendDirectTyping({ peerId: incoming.senderId, typing });
+      } catch (err) {
+        ctx.log?.warn?.(`[decentchat] direct typing ${typing ? 'start' : 'stop'} failed: ${String(err)}`);
+      }
+      return;
+    }
     if (!nodePeer.sendTyping) return;
     if (typingActive == typing) return;
     typingActive = typing;
@@ -597,7 +643,9 @@ export async function relayInboundMessageToPeer(params: {
         streamTimer = setTimeout(() => { void finalizeStream(); }, 200);
       }
     },
-    undefined,
+    async (reason) => {
+      await sendProcessingFailureNotice(reason);
+    },
     incoming.attachments,
     fullImageBuffers,
     {
@@ -611,6 +659,11 @@ export async function relayInboundMessageToPeer(params: {
     processingComplete = true;
 
     await finalizeStream();
+  } catch (err) {
+    processingComplete = true;
+    await sendProcessingFailureNotice(String((err as Error)?.message ?? err));
+    await finalizeStream();
+    ctx.log?.error?.(`[decentchat] inbound processing failed for ${incoming.chatType} message ${incoming.messageId}: ${String(err)}`);
   } finally {
     await setTyping(false);
   }
