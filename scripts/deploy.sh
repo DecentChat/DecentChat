@@ -37,6 +37,18 @@ else
     echo ""
   fi
 
+  # ── Gate 0.5: Secret scan ───────────────────────────────────────────────
+  if command -v detect-secrets &>/dev/null; then
+    echo "🔐 Scanning for leaked secrets..."
+    detect-secrets scan \
+      --baseline .secrets.baseline \
+      --exclude-files '(node_modules/|dist/|\.tmp/|bun\.lock$|\.detect-secrets\.cfg$|test-results/|playwright-report/|blob-report/|\.git/|ios/|\.worktrees/|profile-output/)' \
+      > /dev/null
+    echo "✅ No new secrets detected"
+  else
+    echo "⚠️  detect-secrets not installed — skipping secret scan (brew install detect-secrets)"
+  fi
+
   # ── Gate 1: Protocol unit tests ──────────────────────────────────────────
   echo "🧪 Running protocol unit tests..."
   (cd decent-protocol && bun test)

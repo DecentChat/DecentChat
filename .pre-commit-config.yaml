@@ -1,0 +1,46 @@
+# Pre-commit hooks for decent-chat
+# Install: pre-commit install
+# Run manually: pre-commit run --all-files
+#
+# See https://pre-commit.com for more information
+
+repos:
+  # Basic file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '(\.snap$|\.cpuprofile$|\.tsbuildinfo$|/dist/|profile-output/|^docs/)'
+      - id: end-of-file-fixer
+        exclude: '(\.snap$|\.cpuprofile$|\.tsbuildinfo$|/dist/|profile-output/|artifacts/|^docs/)'
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
+      - id: detect-private-key
+        exclude: '(^|/)(\.secrets\.baseline$|\.detect-secrets\.cfg$|\.pre-commit-config\.yaml$|.*\.test\.ts$)'
+
+  # Secret detection (same check runs in deploy.sh)
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args:
+          - --baseline
+          - .secrets.baseline
+          - --exclude-files
+          - '(node_modules/|dist/|\.tmp/|bun\.lock$|\.detect-secrets\.cfg$|test-results/|playwright-report/|blob-report/|\.git/|ios/|\.worktrees/|profile-output/)'
+
+  # Dependency vulnerability audit.
+  # Bun does not yet have a built-in `audit` command (bun pm scan requires
+  # a third-party scanner plugin). Re-enable once bun ships native auditing
+  # or a scanner is configured in bunfig.toml:
+  #
+  # - repo: local
+  #   hooks:
+  #     - id: bun-audit-prod
+  #       name: bun-audit-prod
+  #       entry: bun pm scan
+  #       language: system
+  #       pass_filenames: false
