@@ -931,7 +931,7 @@ async function init(): Promise<void> {
         const transportId = attempt === 0
           ? await ctrl.transport.init(myPeerId)
           : await ctrl.recreateTransportAndInit(myPeerId, `startup-retry-${attempt}`);
-        
+
         // Only use transport-returned ID if we don't have a seed-derived ID.
         // This ensures seed-based identity is stable across restarts.
         if (!derivedPeerId) {
@@ -1034,6 +1034,7 @@ async function init(): Promise<void> {
 
     // Restore contacts and direct conversations
     await ctrl.restoreContacts();
+    await ui.refreshContactsCache();
     const _mainT3 = performance.now();
 
     // Register this peer in all known workspaces for signaling-server discovery
@@ -1092,30 +1093,49 @@ async function init(): Promise<void> {
     } else if (!isAppRoute) {
       // Landing page is always reachable at /
       ui.renderWelcome();
-    } else if (ctrl.workspaceManager.getAllWorkspaces().length === 0) {
-      ui.renderWelcome();
     } else {
       const allWorkspaces = ctrl.workspaceManager.getAllWorkspaces();
+      const directConversations = await ctrl.getDirectConversations();
       const lastView = (settings as any)?.['ui:lastView'] as {
         workspaceId?: string | null;
         channelId?: string | null;
         threadId?: string | null;
         threadOpen?: boolean;
+        directConversationId?: string | null;
       } | undefined;
 
-      const restoredWorkspace = lastView?.workspaceId
-        ? ctrl.workspaceManager.getWorkspace(lastView.workspaceId)
+      const restoredDirectConversation = lastView?.directConversationId
+        ? directConversations.find((conv) => conv.id === lastView.directConversationId) ?? null
         : null;
+      const fallbackDirectConversation = directConversations[0] ?? null;
 
-      state.activeWorkspaceId = restoredWorkspace?.id || allWorkspaces[0].id;
-      void ctrl.onWorkspaceActivated(state.activeWorkspaceId);
-      const ws = ctrl.workspaceManager.getWorkspace(state.activeWorkspaceId!)!;
+      if (restoredDirectConversation) {
+        state.activeWorkspaceId = null;
+        state.activeDirectConversationId = restoredDirectConversation.id;
+        state.activeChannelId = restoredDirectConversation.id;
+      } else if (allWorkspaces.length > 0) {
+        const restoredWorkspace = lastView?.workspaceId
+          ? ctrl.workspaceManager.getWorkspace(lastView.workspaceId)
+          : null;
 
-      const restoredChannel = lastView?.channelId
-        ? ws.channels.find((ch: any) => ch.id === lastView.channelId)
-        : null;
+        state.activeWorkspaceId = restoredWorkspace?.id || allWorkspaces[0].id;
+        void ctrl.onWorkspaceActivated(state.activeWorkspaceId);
+        const ws = ctrl.workspaceManager.getWorkspace(state.activeWorkspaceId!)!;
 
-      state.activeChannelId = restoredChannel?.id || ws.channels[0]?.id || null;
+        const restoredChannel = lastView?.channelId
+          ? ws.channels.find((ch: any) => ch.id === lastView.channelId)
+          : null;
+
+        state.activeDirectConversationId = null;
+        state.activeChannelId = restoredChannel?.id || ws.channels[0]?.id || null;
+      } else if (fallbackDirectConversation) {
+        state.activeWorkspaceId = null;
+        state.activeDirectConversationId = fallbackDirectConversation.id;
+        state.activeChannelId = fallbackDirectConversation.id;
+      } else {
+        ui.renderWelcome();
+        return;
+      }
 
       // Messages are already loaded into messageStore by restoreFromStorage().
       // No need to reload from IndexedDB here.

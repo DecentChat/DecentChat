@@ -24,6 +24,39 @@ test.describe('DecentChat E2E', () => {
       }
     }, count);
   }
+  async function seedDirectConversation(page: any, options?: { peerId?: string; displayName?: string; message?: string }) {
+    return page.evaluate(async ({
+      peerId = 'dm-peer-1',
+      displayName = 'Bob',
+      message = 'Direct message that should survive refresh',
+    }) => {
+      const ctrl = (window as any).__ctrl;
+      if (!ctrl) throw new Error('window.__ctrl not available');
+
+      await ctrl.addContact({
+        peerId,
+        publicKey: `pk-${peerId}`,
+        displayName,
+        signalingServers: ['wss://signal.example'],
+        addedAt: Date.now(),
+        lastSeen: Date.now(),
+      });
+
+      const conv = await ctrl.startDirectMessage(peerId);
+      const msg = await ctrl.messageStore.createMessage(conv.id, ctrl.state.myPeerId, message, 'text');
+      const result = await ctrl.messageStore.addMessage(msg);
+      if (!result.success) throw new Error(result.error || 'failed to add DM seed message');
+
+      await ctrl.persistentStore.saveMessage(msg);
+      await ctrl.directConversationStore.updateLastMessage(conv.id, msg.timestamp);
+      const updatedConv = await ctrl.directConversationStore.get(conv.id);
+      await ctrl.persistentStore.saveDirectConversation(updatedConv || conv);
+      ctrl.ui?.updateSidebar?.({ refreshContacts: false });
+
+      return { conversationId: conv.id, peerId, displayName, message };
+    }, options || {});
+  }
+
 
   // ─── Loading & Welcome ─────────────────────────────────────────────────
 
@@ -444,10 +477,64 @@ test.describe('DecentChat E2E', () => {
     await page.reload();
     await waitForApp(page);
 
-    // Wait for messages to load from IndexedDB  
+    // Wait for messages to load from IndexedDB
     await page.waitForTimeout(2000);
     const messages = await getMessages(page);
     expect(messages).toContain('This should persist');
+  });
+
+  test('active direct conversation persists after refresh', async ({ page }) => {
+    await createWorkspace(page, 'Persistent DM Workspace', 'User');
+    const seeded = await seedDirectConversation(page, {
+      peerId: 'persistent-dm-peer',
+      displayName: 'Bob DM',
+      message: 'DM survives refresh',
+    });
+
+    await page.click('#ws-rail-dms');
+    const directConversationItem = page.locator(`[data-testid="direct-conversation-item"][data-direct-conv-id="${seeded.conversationId}"]`);
+    await expect(directConversationItem).toBeVisible();
+    await directConversationItem.click();
+    await expect(page.locator('.channel-header h2')).toContainText('Bob DM');
+
+    await page.waitForTimeout(1000);
+    await page.reload();
+    await waitForApp(page);
+
+    await expect(page.locator('#ws-rail-dms')).toHaveClass(/active/);
+    await expect(page.locator('.channel-header h2')).toContainText('Bob DM');
+    await expect(page.locator(`[data-testid="direct-conversation-item"][data-direct-conv-id="${seeded.conversationId}"]`)).toHaveClass(/active/);
+    const messages = await getMessages(page);
+    expect(messages).toContain('DM survives refresh');
+  });
+
+  test('missing saved direct conversation falls back gracefully on refresh', async ({ page }) => {
+    await createWorkspace(page, 'Fallback Workspace', 'User');
+    await seedDirectConversation(page, {
+      peerId: 'stale-dm-peer',
+      displayName: 'Stale DM',
+      message: 'This DM is not the fallback target',
+    });
+
+    await page.evaluate(async () => {
+      const ctrl = (window as any).__ctrl;
+      if (!ctrl) throw new Error('window.__ctrl not available');
+
+      await ctrl.persistentStore.saveSetting('ui:lastView', {
+        workspaceId: null,
+        channelId: 'missing-direct-conversation',
+        directConversationId: 'missing-direct-conversation',
+        threadId: null,
+        threadOpen: false,
+        at: Date.now(),
+      });
+    });
+
+    await page.reload();
+    await waitForApp(page);
+
+    await expect(page.locator('.channel-header h2')).toContainText('general');
+    await expect(page.locator('.sidebar-item.active[data-channel-id]')).toContainText('general');
   });
 
   // ─── Compose Area ─────────────────────────────────────────────────────
