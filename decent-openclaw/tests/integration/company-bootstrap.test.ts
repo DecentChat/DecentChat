@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { fileURLToPath } from 'node:url';
-import { buildCompanyBootstrapPlan } from '../../src/company-sim/bootstrap.ts';
+import { buildCompanyBootstrapPlan } from '@decentchat/company-sim';
 import { resolveDecentChatAccount } from '../../src/channel.ts';
 
 const manifestPath = fileURLToPath(new URL('../../../company-sims/software-studio/company.yaml', import.meta.url));

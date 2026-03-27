@@ -7,7 +7,7 @@ import {
   getCompanyTeamById,
   parseCompanyManifestFile,
   parseCompanyManifestText,
-} from '../../src/company-sim/manifest.ts';
+} from '@decentchat/company-sim';
 
 describe('company-sim manifest', () => {
   test('parses valid manifest text and supports employee/team lookup', () => {

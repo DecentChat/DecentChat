@@ -40,6 +40,7 @@
     "decent-client-web",
     "decent-client-core",
     "decent-client-mobile",
-    "decent-openclaw"
+    "decent-openclaw",
+    "decent-company-sim"
   ]
 }

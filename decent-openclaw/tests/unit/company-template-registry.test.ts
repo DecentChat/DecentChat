@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   getCompanySimTemplate,
   listCompanySimTemplates,
-} from '../../src/company-sim/template-registry.ts';
+} from '@decentchat/company-sim';
 
 const bundledTemplatesRoot = fileURLToPath(new URL('../../../company-sims/templates', import.meta.url));
 

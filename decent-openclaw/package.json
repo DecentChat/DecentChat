@@ -1,7 +1,8 @@
 {
-  "name": "decentchat",
-  "version": "0.1.0",
-  "description": "OpenClaw channel plugin for DecentChat",
+  "name": "@decentchat/decentclaw",
+  "version": "0.1.1",
+  "description": "OpenClaw channel plugin for DecentChat — P2P encrypted chat",
+  "type": "module",
   "main": "index.ts",
   "openclaw": {
     "extensions": [
@@ -15,14 +16,31 @@
       "blurb": "P2P encrypted chat via DecentChat."
     }
   },
+  "files": [
+    "src",
+    "index.ts",
+    "openclaw.plugin.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Alino/DecentChat.git",
+    "directory": "decent-openclaw"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
-    "decent-protocol": "file:../decent-protocol",
-    "decent-transport-webrtc": "file:../decent-transport-webrtc",
+    "@decentchat/company-sim": "^0.1.0",
+    "decent-protocol": "^0.1.0",
+    "decent-transport-webrtc": "^0.1.0",
     "node-datachannel": "^0.32.1",
-    "openclaw": "file:/Users/claw/.npm-global/lib/node_modules/openclaw",
     "opusscript": "^0.1.1",
     "yaml": "^2.8.2",
     "zod": "^3.24.1"
+  },
+  "peerDependencies": {
+    "openclaw": ">=0.1.0"
   },
   "devDependencies": {
     "playwright": "^1.58.2"

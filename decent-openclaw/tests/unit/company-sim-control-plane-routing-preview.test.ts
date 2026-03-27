@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
-import { previewCompanySimRouting } from '../../src/company-sim/control-plane.ts';
+import { previewCompanySimRouting } from '@decentchat/company-sim';
 
 const VALID_SEED = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 

@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import {
   resetCompanyPromptContextCacheForTests,
   resolveCompanyPromptContextForAccount,
-} from '../../src/company-sim/prompt-context.ts';
-import type { ResolvedDecentChatAccount } from '../../src/types.ts';
+} from '@decentchat/company-sim';
+import type { ResolvedDecentChatAccount } from '@decentchat/company-sim';
 
 function writeCompanyFixture(root: string): string {
   mkdirSync(join(root, 'teams'), { recursive: true });

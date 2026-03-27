@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
-import type { ResolvedDecentChatAccount } from '../../src/types.ts';
+import type { ResolvedDecentChatAccount } from '@decentchat/company-sim';
 
 function makeAccount(root: string): ResolvedDecentChatAccount {
   const manifestPath = join(root, 'company.yaml');

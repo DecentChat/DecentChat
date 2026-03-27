@@ -4,9 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InviteURI, SeedPhraseManager } from 'decent-protocol';
 
-import { planCompanyAgentTopology } from '../../src/company-sim/agent-topology.ts';
-import { parseCompanyManifestFile } from '../../src/company-sim/manifest.ts';
-import { materializeCompanyOpenClawConfig } from '../../src/company-sim/openclaw-config.ts';
+import { planCompanyAgentTopology, parseCompanyManifestFile, materializeCompanyOpenClawConfig } from '@decentchat/company-sim';
 
 type BootstrapFn = (params: {
   cfg: any;

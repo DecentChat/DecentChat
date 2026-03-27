@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import type { LoadedCompanyContext } from '../../src/company-sim/context-loader.ts';
-import { decideCompanyParticipation } from '../../src/company-sim/router.ts';
+import { decideCompanyParticipation } from '@decentchat/company-sim';
+import type { LoadedCompanyContext } from '@decentchat/company-sim';
 
 function makeContext(overrides: Partial<LoadedCompanyContext['employee']> = {}): LoadedCompanyContext {
   return {

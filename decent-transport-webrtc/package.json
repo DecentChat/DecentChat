@@ -3,16 +3,32 @@
   "version": "0.1.0",
   "description": "WebRTC/PeerJS transport implementation for decent-protocol",
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "bun": "./src/index.ts"
+    }
   },
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Alino/DecentChat.git",
+    "directory": "decent-transport-webrtc"
+  },
   "dependencies": {
-    "decent-protocol": "workspace:*",
+    "decent-protocol": "^0.1.0",
     "peerjs": "^1.5.4"
   },
   "devDependencies": {

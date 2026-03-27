@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
-import { getCompanySimControlState } from '../../src/company-sim/control-plane.ts';
+import { getCompanySimControlState } from '@decentchat/company-sim';
 
 const VALID_SEED = 'flame damp wear dust sell puzzle twist family one post hawk weather';
 

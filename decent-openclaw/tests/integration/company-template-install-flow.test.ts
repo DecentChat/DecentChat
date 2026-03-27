@@ -6,9 +6,12 @@ import { fileURLToPath } from 'node:url';
 import { SeedPhraseManager } from 'decent-protocol';
 
 import { resolveDecentChatAccount, bootstrapDecentChatCompanySimForStartup } from '../../src/channel.ts';
-import { assertCompanyBootstrapAgentInstallation } from '../../src/company-sim/bootstrap.ts';
-import { installCompanyTemplate } from '../../src/company-sim/template-installer.ts';
-import { getCompanySimTemplate, listCompanySimTemplates } from '../../src/company-sim/template-registry.ts';
+import {
+  assertCompanyBootstrapAgentInstallation,
+  installCompanyTemplate,
+  getCompanySimTemplate,
+  listCompanySimTemplates,
+} from '@decentchat/company-sim';
 
 const bundledTemplatesRoot = fileURLToPath(new URL('../../../company-sims/templates', import.meta.url));
 

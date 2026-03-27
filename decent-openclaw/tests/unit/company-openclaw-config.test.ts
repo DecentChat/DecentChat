@@ -3,9 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { planCompanyAgentTopology } from '../../src/company-sim/agent-topology.ts';
-import { materializeCompanyOpenClawConfig } from '../../src/company-sim/openclaw-config.ts';
-import type { CompanyManifest } from '../../src/company-sim/types.ts';
+import { planCompanyAgentTopology, materializeCompanyOpenClawConfig } from '@decentchat/company-sim';
+import type { CompanyManifest } from '@decentchat/company-sim';
 
 function createManifest(): CompanyManifest {
   return {

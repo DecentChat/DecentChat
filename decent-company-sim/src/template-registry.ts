@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { CompanyTemplateMetadataSchema, type CompanyTemplateMetadata } from './template-types.ts';
 
-const DEFAULT_TEMPLATES_ROOT = fileURLToPath(new URL('../../../company-sims/templates', import.meta.url));
+const DEFAULT_TEMPLATES_ROOT = fileURLToPath(new URL('../../company-sims/templates', import.meta.url));
 
 export interface CompanyTemplateRoleAssets {
   directoryPath: string;

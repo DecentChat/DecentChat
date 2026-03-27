@@ -1,8 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { fileURLToPath } from 'node:url';
-import { compileCompanyTemplateToManifest } from '../../src/company-sim/template-compiler.ts';
-import { getCompanySimTemplate } from '../../src/company-sim/template-registry.ts';
-import type { CompanyTemplateMetadata } from '../../src/company-sim/template-types.ts';
+import { compileCompanyTemplateToManifest, getCompanySimTemplate } from '@decentchat/company-sim';
+import type { CompanyTemplateMetadata } from '@decentchat/company-sim';
 
 const bundledTemplatesRoot = fileURLToPath(new URL('../../../company-sims/templates', import.meta.url));
 

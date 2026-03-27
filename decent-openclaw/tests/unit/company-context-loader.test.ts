@@ -3,8 +3,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { loadCompanyContextForAccount } from '../../src/company-sim/context-loader.ts';
-import type { ResolvedDecentChatAccount } from '../../src/types.ts';
+import { loadCompanyContextForAccount } from '@decentchat/company-sim';
+import type { ResolvedDecentChatAccount } from '@decentchat/company-sim';
 
 function writeCompanyFixture(root: string): string {
   mkdirSync(join(root, 'teams'), { recursive: true });

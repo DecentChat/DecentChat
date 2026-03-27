@@ -1,4 +1,4 @@
-import type { ResolvedDecentChatAccount } from '../types.ts';
+import type { ResolvedDecentChatAccount } from './types.ts';
 import {
   buildCompanyContextTrackedPaths,
   createCompanyContextVersionToken,

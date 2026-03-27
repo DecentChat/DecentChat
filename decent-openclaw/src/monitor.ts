@@ -5,9 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveDecentChatAccount } from "./channel.js";
 import { getDecentChatRuntime } from "./runtime.js";
-import { resolveCompanyPromptContextForAccount } from "./company-sim/prompt-context.js";
-import { resolveThreadRoutingStateUpdate, type CompanyThreadRoutingState } from "./company-sim/thread-routing-state.js";
-import { decideCompanyParticipation } from "./company-sim/router.js";
+import { resolveCompanyPromptContextForAccount, resolveThreadRoutingStateUpdate, decideCompanyParticipation, type CompanyThreadRoutingState } from "@decentchat/company-sim";
 import { setActivePeer } from "./peer-registry.js";
 import type { ResolvedDecentChatAccount } from "./types.js";
 

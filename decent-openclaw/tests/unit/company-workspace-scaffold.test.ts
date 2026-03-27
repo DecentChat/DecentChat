@@ -3,9 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { planCompanyAgentTopology } from '../../src/company-sim/agent-topology.ts';
-import { scaffoldCompanyAgentWorkspaces } from '../../src/company-sim/workspace-scaffold.ts';
-import type { CompanyManifest } from '../../src/company-sim/types.ts';
+import { planCompanyAgentTopology, scaffoldCompanyAgentWorkspaces } from '@decentchat/company-sim';
+import type { CompanyManifest } from '@decentchat/company-sim';
 
 describe('company workspace scaffold', () => {
   test('materializes per-agent workspace with identity/core files and copied company + employee markdown', () => {

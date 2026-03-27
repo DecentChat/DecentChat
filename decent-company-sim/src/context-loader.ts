@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import type { ResolvedDecentChatAccount } from '../types.ts';
+import type { ResolvedDecentChatAccount } from './types.ts';
 import { getCompanyEmployeeById, getCompanyTeamById, parseCompanyManifestFile } from './manifest.ts';
 import type { CompanyEmployeeConfig, CompanyManifest, CompanyTeamConfig } from './types.ts';
 

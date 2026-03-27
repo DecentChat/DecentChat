@@ -133,36 +133,36 @@ export class DeviceManager {
    * In-memory device registry for tracking known devices per identity.
    */
   static DeviceRegistry = class DeviceRegistry {
-    private devices = new Map<string, DeviceInfo[]>();
+    #devices = new Map<string, DeviceInfo[]>();
 
     /**
      * Add or update a device for an identity.
      * If a device with the same deviceId exists, it's updated.
      */
     addDevice(identityId: string, device: DeviceInfo): void {
-      const existing = this.devices.get(identityId) || [];
+      const existing = this.#devices.get(identityId) || [];
       const idx = existing.findIndex(d => d.deviceId === device.deviceId);
       if (idx >= 0) {
         existing[idx] = device;
       } else {
         existing.push(device);
       }
-      this.devices.set(identityId, existing);
+      this.#devices.set(identityId, existing);
     }
 
     /**
      * Remove a device from an identity.
      */
     removeDevice(identityId: string, deviceId: string): void {
-      const existing = this.devices.get(identityId) || [];
-      this.devices.set(identityId, existing.filter(d => d.deviceId !== deviceId));
+      const existing = this.#devices.get(identityId) || [];
+      this.#devices.set(identityId, existing.filter(d => d.deviceId !== deviceId));
     }
 
     /**
      * Get all devices for an identity.
      */
     getDevices(identityId: string): DeviceInfo[] {
-      return this.devices.get(identityId) || [];
+      return this.#devices.get(identityId) || [];
     }
 
     /**
@@ -176,7 +176,7 @@ export class DeviceManager {
      * Reverse lookup: find the identityId that owns a given peerId.
      */
     getIdentityForPeerId(peerId: string): string | undefined {
-      for (const [identityId, devices] of this.devices.entries()) {
+      for (const [identityId, devices] of this.#devices.entries()) {
         if (devices.some(d => d.peerId === peerId)) {
           return identityId;
         }
@@ -191,32 +191,32 @@ export class DeviceManager {
    * message arrives from different device connections.
    */
   static MessageDedup = class MessageDedup {
-    private seen: string[] = [];
-    private seenSet = new Set<string>();
-    private maxSize: number;
+    #seen: string[] = [];
+    #seenSet = new Set<string>();
+    #maxSize: number;
 
     constructor(maxSize = 10000) {
-      this.maxSize = maxSize;
+      this.#maxSize = maxSize;
     }
 
     /**
      * Check if a message ID has already been seen.
      */
     isDuplicate(messageId: string): boolean {
-      return this.seenSet.has(messageId);
+      return this.#seenSet.has(messageId);
     }
 
     /**
      * Mark a message ID as seen.
      */
     markSeen(messageId: string): void {
-      if (this.seenSet.has(messageId)) return;
-      this.seen.push(messageId);
-      this.seenSet.add(messageId);
+      if (this.#seenSet.has(messageId)) return;
+      this.#seen.push(messageId);
+      this.#seenSet.add(messageId);
       // Evict oldest when exceeding max size
-      while (this.seen.length > this.maxSize) {
-        const evicted = this.seen.shift()!;
-        this.seenSet.delete(evicted);
+      while (this.#seen.length > this.#maxSize) {
+        const evicted = this.#seen.shift()!;
+        this.#seenSet.delete(evicted);
       }
     }
   };

@@ -5,6 +5,7 @@ node_modules/
 decent-client-web/dist/
 decent-protocol/dist/
 decent-transport-webrtc/dist/
+decent-openclaw/dist/
 docs/.vitepress/dist/
 .tmp/
 

@@ -5,8 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SeedPhraseManager } from 'decent-protocol';
 
-import { getCompanySimTemplate } from '../../src/company-sim/template-registry.ts';
-import { installCompanyTemplate } from '../../src/company-sim/template-installer.ts';
+import { getCompanySimTemplate, installCompanyTemplate } from '@decentchat/company-sim';
 
 const bundledTemplatesRoot = fileURLToPath(new URL('../../../company-sims/templates', import.meta.url));
 

@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import { fileURLToPath } from 'node:url';
 
-import { evaluateCompanyCommunicationSuite } from '../../src/company-sim/communication-bench.ts';
-import { getBuiltInCommunicationBenchmarkSuite } from '../../src/company-sim/benchmark-suites.ts';
-import { buildTemplateBenchmarkSuiteSummary } from '../../src/company-sim/template-benchmark-summary.ts';
-import { compileCompanyTemplateToManifest } from '../../src/company-sim/template-compiler.ts';
-import { getCompanySimTemplate } from '../../src/company-sim/template-registry.ts';
+import {
+  evaluateCompanyCommunicationSuite,
+  getBuiltInCommunicationBenchmarkSuite,
+  buildTemplateBenchmarkSuiteSummary,
+  compileCompanyTemplateToManifest,
+  getCompanySimTemplate,
+} from '@decentchat/company-sim';
 
 const bundledTemplatesRoot = fileURLToPath(new URL('../../../company-sims/templates', import.meta.url));
 

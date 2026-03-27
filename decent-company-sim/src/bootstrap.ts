@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { InviteURI, SeedPhraseManager } from 'decent-protocol';
-import type { OpenClawConfigShape, OpenClawRouteBindingConfig, ResolvedDecentChatAccount } from '../types.ts';
+import type { OpenClawConfigShape, OpenClawRouteBindingConfig, ResolvedDecentChatAccount } from './types.ts';
 import { planCompanyAgentTopology } from './agent-topology.ts';
 import { parseCompanyManifestFile } from './manifest.ts';
 

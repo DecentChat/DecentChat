@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { planCompanyAgentTopology } from '../../src/company-sim/agent-topology.ts';
-import type { CompanyManifest } from '../../src/company-sim/types.ts';
+import { planCompanyAgentTopology } from '@decentchat/company-sim';
+import type { CompanyManifest } from '@decentchat/company-sim';
 
 describe('company agent topology planner', () => {
   test('derives per-employee agent topology, bindings, workspace, and local context source paths', () => {

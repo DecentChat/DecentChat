@@ -9,7 +9,7 @@ import { SeedPhraseManager } from 'decent-protocol';
 import {
   COMPANY_TEMPLATE_BRIDGE_HTTP_PATH,
   createCompanyTemplateBridgeHttpHandler,
-} from '../../src/company-sim/template-runtime-bridge-http.ts';
+} from '@decentchat/company-sim';
 
 function createMockRequest(
   method: string,

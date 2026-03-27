@@ -3,15 +3,26 @@
   "version": "0.1.0",
   "description": "Transport-agnostic protocol SDK for serverless, E2E-encrypted, CRDT-based P2P messaging",
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "bun": "./src/index.ts"
+    }
   },
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "test": "bun test",
     "test:coverage": "bun test --coverage",
     "test:watch": "bun test --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "p2p",
@@ -24,6 +35,11 @@
     "webrtc"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Alino/DecentChat.git",
+    "directory": "decent-protocol"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "fake-indexeddb": "^6.2.5",

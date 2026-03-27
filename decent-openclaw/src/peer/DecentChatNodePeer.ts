@@ -39,11 +39,17 @@ import { NodeMessageProtocol } from './NodeMessageProtocol.js';
 import { SyncProtocol, type SyncEvent } from './SyncProtocol.js';
 import type { ResolvedDecentChatAccount } from '../types.js';
 import { BotHuddleManager, type BotHuddleConfig } from '../huddle/BotHuddleManager.js';
-import { loadCompanyContextForAccount } from '../company-sim/context-loader.js';
-import { getCompanySimTemplate } from '../company-sim/template-registry.js';
-import { installCompanyTemplate } from '../company-sim/template-installer.js';
-import { getCompanySimControlState, readCompanySimControlDocument, writeCompanySimControlDocument, previewCompanySimRouting, getCompanySimEmployeeContext } from '../company-sim/control-plane.js';
-import type { CompanyTemplateQuestionValue } from '../company-sim/template-types.js';
+import {
+  loadCompanyContextForAccount,
+  getCompanySimTemplate,
+  installCompanyTemplate,
+  getCompanySimControlState,
+  readCompanySimControlDocument,
+  writeCompanySimControlDocument,
+  previewCompanySimRouting,
+  getCompanySimEmployeeContext,
+} from '@decentchat/company-sim';
+import type { CompanyTemplateQuestionValue } from '@decentchat/company-sim';
 
 const COMPANY_TEMPLATE_CONTROL_CAPABILITY = 'company-template-control-v1';
 

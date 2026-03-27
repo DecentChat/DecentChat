@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ChannelPlugin } from "openclaw/plugin-sdk";
 import { z } from "zod";
 
-import { assertCompanyBootstrapAgentInstallation, ensureCompanyBootstrapRuntime, resolveCompanyManifestPath } from "./company-sim/bootstrap.js";
+import { assertCompanyBootstrapAgentInstallation, ensureCompanyBootstrapRuntime, resolveCompanyManifestPath } from "@decentchat/company-sim";
 import { startDecentChatPeer } from "./monitor.js";
 import { getActivePeer, listActivePeerAccountIds } from "./peer-registry.js";
 import { buildDecentChatRuntimeBootstrapKey, invalidateDecentChatBootstrapKey, runDecentChatBootstrapOnce } from "./runtime.js";

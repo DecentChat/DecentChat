@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { buildCompanyPromptContext } from '../../src/company-sim/prompt-context.ts';
-import type { LoadedCompanyContext } from '../../src/company-sim/context-loader.ts';
+import { buildCompanyPromptContext } from '@decentchat/company-sim';
+import type { LoadedCompanyContext } from '@decentchat/company-sim';
 
 const context: LoadedCompanyContext = {
   manifestPath: '/tmp/company.yaml',

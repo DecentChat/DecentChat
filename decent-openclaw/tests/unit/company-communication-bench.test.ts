@@ -4,8 +4,8 @@ import {
   evaluateCompanyCommunicationScenario,
   evaluateCompanyCommunicationSuite,
   type CompanyCommunicationScenario,
-} from '../../src/company-sim/communication-bench.ts';
-import type { CompanyEmployeeConfig, CompanyManifest } from '../../src/company-sim/types.ts';
+} from '@decentchat/company-sim';
+import type { CompanyEmployeeConfig, CompanyManifest } from '@decentchat/company-sim';
 
 function makeEmployee(overrides: Partial<CompanyEmployeeConfig>): CompanyEmployeeConfig {
   return {
