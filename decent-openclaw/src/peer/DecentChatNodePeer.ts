@@ -15,7 +15,7 @@ import {
   SeedPhraseManager,
   WorkspaceManager,
   Negentropy,
-} from 'decent-protocol';
+} from '@decentchat/protocol';
 import type {
   Workspace,
   WorkspaceMember,
@@ -31,8 +31,8 @@ import type {
   SyncManifestSummary,
   SyncManifestSnapshot,
   ManifestStoreState,
-} from 'decent-protocol';
-import { PeerTransport } from 'decent-transport-webrtc';
+} from '@decentchat/protocol';
+import { PeerTransport } from '@decentchat/transport-webrtc';
 import { createHash, randomUUID } from 'node:crypto';
 import { FileStore } from './FileStore.js';
 import { NodeMessageProtocol } from './NodeMessageProtocol.js';

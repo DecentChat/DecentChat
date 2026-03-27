@@ -13,8 +13,8 @@
 // (default import `import Peer from 'peerjs'` breaks under jiti's ESM transform)
 import { Peer } from 'peerjs';
 import type { DataConnection } from 'peerjs';
-import type { Transport } from 'decent-protocol';
-import { createLogger } from 'decent-protocol';
+import type { Transport } from '@decentchat/protocol';
+import { createLogger } from '@decentchat/protocol';
 
 const transportLog = createLogger('PeerTransport', 'transport');
 
@@ -44,7 +44,7 @@ export interface PeerTransportConfig {
   useTurn?: boolean;
   /**
    * Custom TURN servers — overrides DEFAULT_TURN_SERVERS when provided.
-   * 
+   *
    * Recommended options:
    *   - Cloudflare: https://developers.cloudflare.com/calls/turn/
    *   - Metered free tier: https://www.metered.ca/tools/openrelay/
@@ -76,7 +76,7 @@ export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
 
 /**
  * Open relay TURN servers — free, no auth required, rate-limited.
- * 
+ *
  * ⚠️  For DEVELOPMENT only. In production, provide your own TURN credentials:
  *   - Cloudflare free tier: https://developers.cloudflare.com/calls/turn/
  *   - Metered.ca:           https://www.metered.ca/tools/openrelay/
@@ -882,7 +882,7 @@ export class PeerTransport implements Transport {
       }
 
       // In test/dev on localhost, skip STUN/TURN (host candidates suffice, STUN timeouts break tests)
-      const isLocalhost = typeof window !== 'undefined' && 
+      const isLocalhost = typeof window !== 'undefined' &&
         (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
       peerConfig.config = { iceServers: this._resolveIceServers(isLocalhost) };
 
@@ -924,7 +924,7 @@ export class PeerTransport implements Transport {
   private _initServer(server: { url: string; label: string }, peerId?: string, attempt = 0): Promise<string> {
     return new Promise((resolve, reject) => {
       const normalized = normalizePeerJsServer(server.url);
-      const isLocalhost = typeof window !== 'undefined' && 
+      const isLocalhost = typeof window !== 'undefined' &&
         (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
       const peerConfig: any = {

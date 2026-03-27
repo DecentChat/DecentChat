@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { DirectoryShardPlanner, WorkspaceManager, type MemberDirectoryPage, type WorkspaceShell } from 'decent-protocol';
+import { DirectoryShardPlanner, WorkspaceManager, type MemberDirectoryPage, type WorkspaceShell } from '@decentchat/protocol';
 import { PublicWorkspaceController } from '../../src/app/workspace/PublicWorkspaceController';
 
 class FakePersistentStore {

@@ -18,8 +18,8 @@ export default defineConfig({
   // Resolve workspace packages from source (monorepo development mode)
   resolve: {
     alias: {
-      'decent-protocol': path.resolve(__dirname, '../decent-protocol/src/index.ts'),
-      'decent-transport-webrtc': path.resolve(__dirname, '../decent-transport-webrtc/src/index.ts'),
+      '@decentchat/protocol': path.resolve(__dirname, '../decent-protocol/src/index.ts'),
+      '@decentchat/transport-webrtc': path.resolve(__dirname, '../decent-transport-webrtc/src/index.ts'),
       '$lib': path.resolve(__dirname, 'src/lib'),
     },
   },

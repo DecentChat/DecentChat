@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { AttachmentMeta } from 'decent-protocol';
+import type { AttachmentMeta } from '@decentchat/protocol';
 import { get } from 'svelte/store';
 import { MobileController } from '../src/app/MobileController';
 import * as appState from '../src/stores/appState';

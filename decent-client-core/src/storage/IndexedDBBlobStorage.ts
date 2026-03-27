@@ -1,4 +1,4 @@
-import type { BlobStorage } from 'decent-protocol';
+import type { BlobStorage } from '@decentchat/protocol';
 
 const DB_NAME = 'decent-chat-media';
 const DB_VERSION = 1;

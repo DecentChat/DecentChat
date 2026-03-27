@@ -5,7 +5,7 @@
  * This replaces the mount/unmount pattern with reactive state updates.
  */
 
-import type { PlaintextMessage, Contact, DirectConversation } from 'decent-protocol';
+import type { PlaintextMessage, Contact, DirectConversation } from '@decentchat/protocol';
 import type { HuddleState, HuddleParticipant } from '../../huddle/HuddleManager';
 import type { UICallbacks, ActivityItem } from '../../ui/types';
 

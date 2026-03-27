@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { RecoveryURI, SeedPhraseManager } from 'decent-protocol';
+import { RecoveryURI, SeedPhraseManager } from '@decentchat/protocol';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers

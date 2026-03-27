@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { InviteURI, SeedPhraseManager } from 'decent-protocol';
+import { InviteURI, SeedPhraseManager } from '@decentchat/protocol';
 
 import { planCompanyAgentTopology, parseCompanyManifestFile, materializeCompanyOpenClawConfig } from '@decentchat/company-sim';
 

@@ -1,5 +1,5 @@
-import type { WorkspaceManager, InviteData, Contact, WorkspacePermissions } from 'decent-protocol';
-import { InviteURI } from 'decent-protocol';
+import type { WorkspaceManager, InviteData, Contact, WorkspacePermissions } from '@decentchat/protocol';
+import { InviteURI } from '@decentchat/protocol';
 import type { AppState } from '../main';
 import type { UICallbacks, WorkspaceInviteItem, WorkspaceInviteLists, WorkspaceMemberDirectoryView } from './types';
 import { cachedData } from '../lib/stores/ui.svelte';
@@ -115,8 +115,8 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     }
 
     return ws.members
-      .filter((member: import('decent-protocol').WorkspaceMember) => member.peerId !== state.myPeerId)
-      .map((member: import('decent-protocol').WorkspaceMember) => ({
+      .filter((member: import('@decentchat/protocol').WorkspaceMember) => member.peerId !== state.myPeerId)
+      .map((member: import('@decentchat/protocol').WorkspaceMember) => ({
         peerId: member.peerId,
         name: member.alias,
         statusClass: peerStatusClass(member.peerId),
@@ -285,7 +285,7 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     if (!state.activeWorkspaceId) return;
     const ws = workspaceManager.getWorkspace(state.activeWorkspaceId)!;
     const otherMembers = ws.members.filter(
-      (m: import('decent-protocol').WorkspaceMember) => m.peerId !== state.myPeerId,
+      (m: import('@decentchat/protocol').WorkspaceMember) => m.peerId !== state.myPeerId,
     );
     if (otherMembers.length === 0) {
       showToast('No other members in workspace yet. Invite someone first!', 'error');

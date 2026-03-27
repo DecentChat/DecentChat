@@ -17,7 +17,7 @@ import {
   planLocalOneTimePreKeyLifecycle,
   normalizePeerPreKeyBundle as normalizePeerPreKeyBundlePolicy,
   hasPeerPreKeyBundleChanged,
-} from 'decent-protocol';
+} from '@decentchat/protocol';
 import type {
   KeyPair,
   RatchetState,
@@ -27,7 +27,7 @@ import type {
   PersistedLocalPreKeyState,
   PreKeySessionInitPayload,
   PreKeyType,
-} from 'decent-protocol';
+} from '@decentchat/protocol';
 
 interface EnvelopeMetadata {
   fileName?: string;

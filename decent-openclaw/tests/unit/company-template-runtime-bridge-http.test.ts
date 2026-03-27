@@ -4,7 +4,7 @@ import { Socket } from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SeedPhraseManager } from 'decent-protocol';
+import { SeedPhraseManager } from '@decentchat/protocol';
 
 import {
   COMPANY_TEMPLATE_BRIDGE_HTTP_PATH,

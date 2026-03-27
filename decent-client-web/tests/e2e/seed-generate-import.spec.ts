@@ -10,7 +10,7 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-import { SeedPhraseManager } from 'decent-protocol';
+import { SeedPhraseManager } from '@decentchat/protocol';
 import { clearStorage, waitForApp, createWorkspace } from './helpers';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

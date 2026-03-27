@@ -1,4 +1,4 @@
-import { createLogger } from 'decent-protocol';
+import { createLogger } from '@decentchat/protocol';
 
 export type TopologyLogLevel = 'info' | 'debug' | 'warn';
 

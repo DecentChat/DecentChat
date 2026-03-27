@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { PresenceProtocol } from 'decent-protocol';
+import { PresenceProtocol } from '@decentchat/protocol';
 import { ChatController } from '../../src/app/ChatController';
 import { PresenceManager } from '../../src/ui/PresenceManager';
 

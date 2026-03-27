@@ -1,7 +1,7 @@
 /**
  * Database - IndexedDB wrapper for app data
  *
- * @deprecated Use `PersistentStore` from `decent-protocol` instead.
+ * @deprecated Use `PersistentStore` from `@decentchat/protocol` instead.
  * `PersistentStore` now covers all capabilities previously provided here
  * (peers, settings via getSettings/saveSettings, messages, workspaces).
  * This file is kept for reference and will be removed in a future cleanup.
@@ -203,7 +203,7 @@ export class Database {
       const transaction = this.db!.transaction([storeName], 'readonly');
       const store = transaction.objectStore(storeName);
       const index = store.index(indexName);
-      const request = limit 
+      const request = limit
         ? index.getAll(IDBKeyRange.only(value), limit)
         : index.getAll(IDBKeyRange.only(value));
 

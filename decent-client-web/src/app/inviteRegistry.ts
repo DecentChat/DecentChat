@@ -1,4 +1,4 @@
-import type { InviteData } from 'decent-protocol';
+import type { InviteData } from '@decentchat/protocol';
 
 export interface WorkspaceInviteRecord {
   inviteId: string;

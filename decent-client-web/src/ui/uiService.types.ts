@@ -1,4 +1,4 @@
-import type { PlaintextMessage, InviteData } from 'decent-protocol';
+import type { PlaintextMessage, InviteData } from '@decentchat/protocol';
 import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
 
 export interface UIService {

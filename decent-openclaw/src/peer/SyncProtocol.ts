@@ -12,9 +12,9 @@ import {
   type WorkspaceMember,
   MessageStore,
   WorkspaceManager,
-} from 'decent-protocol';
-import type { ServerDiscovery } from 'decent-protocol';
-import type { NegentropyQuery, NegentropyResponse } from 'decent-protocol';
+} from '@decentchat/protocol';
+import type { ServerDiscovery } from '@decentchat/protocol';
+import type { NegentropyQuery, NegentropyResponse } from '@decentchat/protocol';
 
 export type SendFn = (peerId: string, data: any) => boolean;
 export type OnEvent = (event: SyncEvent) => void;

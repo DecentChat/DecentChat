@@ -7,7 +7,7 @@ import type {
   MessageStore,
   PlaintextMessage,
   InviteData,
-} from 'decent-protocol';
+} from '@decentchat/protocol';
 import type { HuddleState, HuddleParticipant } from '../huddle/HuddleManager';
 import type { AppState } from '../main';
 import type { UIService } from './uiService.types';

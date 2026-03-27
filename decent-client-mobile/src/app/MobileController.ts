@@ -24,9 +24,9 @@ import {
   type PlaintextMessage,
   type Workspace,
   type WorkspaceMember,
-} from 'decent-protocol';
+} from '@decentchat/protocol';
 import { KeyStore, MessageProtocol, type HandshakeData } from 'decent-client-core';
-import { PeerTransport as PeerJSTransport } from 'decent-transport-webrtc';
+import { PeerTransport as PeerJSTransport } from '@decentchat/transport-webrtc';
 import * as appState from '../stores/appState';
 import { CallManager } from './CallManager';
 

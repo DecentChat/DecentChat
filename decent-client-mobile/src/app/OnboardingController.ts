@@ -1,4 +1,4 @@
-import { SeedPhraseManager } from 'decent-protocol';
+import { SeedPhraseManager } from '@decentchat/protocol';
 
 export class OnboardingController {
   static readonly SEED_STORAGE_KEY = 'decentchat-seed-phrase';

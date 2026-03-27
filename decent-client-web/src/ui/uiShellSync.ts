@@ -1,4 +1,4 @@
-import type { WorkspaceManager, MessageStore, PlaintextMessage } from 'decent-protocol';
+import type { WorkspaceManager, MessageStore, PlaintextMessage } from '@decentchat/protocol';
 import type { AppState } from '../main';
 import type { UICallbacks } from './types';
 import { shellData } from '../lib/stores/shell.svelte';

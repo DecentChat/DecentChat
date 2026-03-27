@@ -8,7 +8,7 @@
  *   // Write: appState.activeWorkspaceId = 'new-id'
  */
 
-import type { Workspace, PlaintextMessage } from 'decent-protocol';
+import type { Workspace, PlaintextMessage } from '@decentchat/protocol';
 
 // ── App-wide reactive state ──────────────────────────────────────────────
 

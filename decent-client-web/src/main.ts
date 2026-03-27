@@ -92,7 +92,7 @@ import {
 import { setCompanySimControlPlaneTransport } from './lib/company-sim/controlPlane';
 import type { CompanyTemplateProvisioningMode } from './ui/types';
 import type { AppSettings } from './storage/types';
-import { SeedPhraseManager as _SeedPhraseManager, IdentityManager as _IdentityManager, createLogger } from 'decent-protocol';
+import { SeedPhraseManager as _SeedPhraseManager, IdentityManager as _IdentityManager, createLogger } from '@decentchat/protocol';
 const _spm = new _SeedPhraseManager();
 const appLog = createLogger('Main', 'app');
 const perfLog = createLogger('Main', 'perf');
@@ -250,7 +250,7 @@ async function clearLocalAppData(): Promise<void> {
   }
 
   // Fallback for browsers without indexedDB.databases() support.
-  dbNames.add('decent-protocol');
+  dbNames.add('@decentchat/protocol');
   dbNames.add('p2p-chat-keys');
 
   for (const dbName of dbNames) {
@@ -534,7 +534,7 @@ async function init(): Promise<void> {
     getDirectConversations: () => ctrl.getDirectConversations(),
     onSettingsAction: async (action) => {
       if (action === 'generateSeed') {
-        const { SeedPhraseManager } = await import('decent-protocol');
+        const { SeedPhraseManager } = await import('@decentchat/protocol');
         const seedPhrase = new SeedPhraseManager();
         const { mnemonic } = seedPhrase.generate();
         // Save to standalone key (used by peer ID derivation on startup)
@@ -824,7 +824,7 @@ async function init(): Promise<void> {
     // Auto-generate seed phrase if none exists — ensures deterministic peer ID from the start
     if (!seedPhrase || (typeof seedPhrase === 'string' && !seedPhrase.trim())) {
       try {
-        const { SeedPhraseManager } = await import('decent-protocol');
+        const { SeedPhraseManager } = await import('@decentchat/protocol');
         const spm = new SeedPhraseManager();
         const { mnemonic } = spm.generate();
         await ctrl.persistentStore.saveSetting('seedPhrase', mnemonic);
@@ -849,7 +849,7 @@ async function init(): Promise<void> {
 
     if (typeof seedPhrase === 'string' && seedPhrase.trim()) {
       try {
-        const { SeedPhraseManager, AtRestEncryption } = await import('decent-protocol');
+        const { SeedPhraseManager, AtRestEncryption } = await import('@decentchat/protocol');
         const seedPhraseManager = new SeedPhraseManager();
 
         // Derive device-specific keys from HD tree
@@ -1043,12 +1043,12 @@ async function init(): Promise<void> {
 
     // Check for /join/CODE invite URL
     const joinMatch = path.match(/^\/join\/([A-Za-z0-9]+)/);
-    let pendingInvite: { code: string; peerId: string; name: string; inviteData?: import('decent-protocol').InviteData } | null = null;
+    let pendingInvite: { code: string; peerId: string; name: string; inviteData?: import('@decentchat/protocol').InviteData } | null = null;
 
     if (joinMatch) {
       // Try to parse as full web invite URL
       try {
-        const { InviteURI } = await import('decent-protocol');
+        const { InviteURI } = await import('@decentchat/protocol');
         const fullUrl = window.location.href;
         const inviteData = InviteURI.decode(fullUrl);
         pendingInvite = {

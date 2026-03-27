@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SeedPhraseManager } from 'decent-protocol';
+import { SeedPhraseManager } from '@decentchat/protocol';
 
 class MockPeerTransport {
   static instances: MockPeerTransport[] = [];
@@ -30,7 +30,7 @@ class MockPeerTransport {
   destroy = mock(() => {});
 }
 
-mock.module('decent-transport-webrtc', () => ({
+mock.module('@decentchat/transport-webrtc', () => ({
   PeerTransport: MockPeerTransport,
 }));
 

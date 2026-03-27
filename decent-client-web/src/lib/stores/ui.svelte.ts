@@ -9,7 +9,7 @@
  * pattern with reactive stores that components can subscribe to.
  */
 
-import type { Contact, DirectConversation } from 'decent-protocol';
+import type { Contact, DirectConversation } from '@decentchat/protocol';
 import type { HuddleState, HuddleParticipant } from '../../huddle/HuddleManager';
 
 // ── Component ref type ──

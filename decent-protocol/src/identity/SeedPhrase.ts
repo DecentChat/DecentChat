@@ -2,17 +2,17 @@ import { p256 } from '@noble/curves/nist.js';
 
 /**
  * SeedPhrase — BIP39-style mnemonic seed for deterministic identity recovery
- * 
+ *
  * 12 words → 128 bits entropy → deterministic key derivation
  * Same seed always produces the same ECDH + ECDSA key pairs.
- * 
+ *
  * Flow:
  *   1. Generate 128 bits of entropy
  *   2. Convert to 12 mnemonic words (BIP39 wordlist)
- *   3. Derive master seed via PBKDF2 (seed phrase + "decent-protocol" salt)
+ *   3. Derive master seed via PBKDF2 (seed phrase + "decent-protocol-seed-v1" salt)
  *   4. Derive ECDH key pair via HKDF (master seed + "ecdh" context)
  *   5. Derive ECDSA key pair via HKDF (master seed + "ecdsa" context)
- * 
+ *
  * Security: 128 bits = 2^128 possibilities = heat death of universe to brute force
  */
 
@@ -85,7 +85,7 @@ export class SeedPhraseManager {
   /**
    * Derive key pairs from a seed phrase
    * DETERMINISTIC: same phrase always produces same keys
-   * 
+   *
    * Uses seed → PBKDF2 → master seed → HKDF → raw key bytes → PKCS#8 → CryptoKeyPair
    */
   async deriveKeys(mnemonic: string): Promise<DerivedKeys> {
@@ -122,16 +122,16 @@ export class SeedPhraseManager {
 
   /**
    * Derive key pairs for a SPECIFIC WORKSPACE (HD key derivation)
-   * 
+   *
    * Like Bitcoin HD wallets: one seed → unique keys per workspace.
    * People in different workspaces can't link your identity.
-   * 
+   *
    * Path: masterSeed → HKDF("decent-ecdh-key-v1/{index}") → unique ECDH keys
    *       masterSeed → HKDF("decent-ecdsa-key-v1/{index}") → unique ECDSA keys
-   * 
+   *
    * Index 0 = default/root identity (same as deriveKeys() for backwards compatibility)
    * Index 1+ = workspace-specific identities
-   * 
+   *
    * @param mnemonic - 12-word seed phrase
    * @param workspaceIndex - Workspace derivation index (0 = root, 1+ = workspace-specific)
    */
@@ -531,7 +531,7 @@ export class SeedPhraseManager {
    * Matches the exact format produced by Web Crypto's exportKey('pkcs8')
    * but without the optional public key component (which Web Crypto can recompute)
    */
-  
+
 
   private arrayBufferToBase64(buffer: ArrayBuffer): string {
     const bytes = new Uint8Array(buffer);

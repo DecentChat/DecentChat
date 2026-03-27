@@ -11,8 +11,8 @@
     "baseUrl": ".",
     "paths": {
       "decent-client-core/src/*": ["../decent-client-core/src/*"],
-      "decent-protocol": ["./node_modules/decent-protocol"],
-      "decent-transport-webrtc": ["./node_modules/decent-transport-webrtc"]
+      "@decentchat/protocol": ["./node_modules/@decentchat/protocol"],
+      "@decentchat/transport-webrtc": ["./node_modules/@decentchat/transport-webrtc"]
     },
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,

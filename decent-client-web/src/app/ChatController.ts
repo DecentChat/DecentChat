@@ -38,9 +38,9 @@ import {
   ServerDiscovery,
   PresenceProtocol,
   createLogger,
-} from 'decent-protocol';
-import type { InviteData } from 'decent-protocol';
-import { MessageCipher } from 'decent-protocol';
+} from '@decentchat/protocol';
+import type { InviteData } from '@decentchat/protocol';
+import { MessageCipher } from '@decentchat/protocol';
 import type {
   PlaintextMessage, Workspace, Channel,
   AttachmentMeta, Attachment, MediaChunk, MediaRequest, MediaResponse,
@@ -61,7 +61,7 @@ import type {
   SyncManifestSnapshot,
   ManifestStoreState,
   CustodyEnvelope,
-} from 'decent-protocol';
+} from '@decentchat/protocol';
 import {
   buildWorkspaceInviteLists,
   markInviteRevokedInRegistry,
@@ -75,7 +75,7 @@ import type {
 } from './inviteRegistry';
 import { PublicWorkspaceController } from './workspace/PublicWorkspaceController';
 
-import { PeerTransport, ICE_SERVERS_WITH_TURN } from 'decent-transport-webrtc';
+import { PeerTransport, ICE_SERVERS_WITH_TURN } from '@decentchat/transport-webrtc';
 import { KeyStore } from '../crypto/KeyStore';
 import { IndexedDBBlobStorage } from '../storage/IndexedDBBlobStorage';
 import { StorageQuotaManager } from '../storage/StorageQuotaManager';
@@ -1347,7 +1347,7 @@ export class ChatController {
       const data = rawData as any;
       const _msgType = data?.type || 'unknown';
       this.markPeerSeen(peerId);
-      
+
       // Rate limit + validate before any processing.
       // Trusted sync-control traffic gets its own lane (still authenticated by
       // workspace membership checks in handlers) so reconnect catch-up is not
@@ -6607,7 +6607,7 @@ export class ChatController {
       // Verify signature if present (optional — unsigned invites still work for backward compat)
       if (inviteData.signature && inviteData.publicKey) {
         try {
-          const { verifyInviteSignature } = await import('decent-protocol');
+          const { verifyInviteSignature } = await import('@decentchat/protocol');
           const valid = await verifyInviteSignature(inviteData.publicKey, inviteData);
           if (!valid) {
             const msg = 'This invite link has an invalid signature — it may have been tampered with';
@@ -6643,7 +6643,7 @@ export class ChatController {
 
     chatLog.info(`[PEX] Initializing server discovery with primary: ${primaryServer}`);
     this.getServerDiscovery(ws.id, primaryServer);
-    
+
     // Add fallback servers from invite
     if (inviteData?.fallbackServers && inviteData.fallbackServers.length > 0) {
       const discovery = this.serverDiscovery.get(ws.id)!;
@@ -7379,7 +7379,7 @@ export class ChatController {
     return { success: true };
   }
 
-  async updateWorkspacePermissions(permissions: Partial<import('decent-protocol').WorkspacePermissions>): Promise<{ success: boolean; error?: string }> {
+  async updateWorkspacePermissions(permissions: Partial<import('@decentchat/protocol').WorkspacePermissions>): Promise<{ success: boolean; error?: string }> {
     if (!this.state.activeWorkspaceId) return { success: false, error: 'No active workspace' };
 
     const wsId = this.state.activeWorkspaceId;

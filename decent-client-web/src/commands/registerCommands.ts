@@ -518,8 +518,8 @@ export function registerCommands(parser: CommandParser, ctrl: ChatController, st
       handled: true,
       output: [
         '⚡ DecentChat',
-        '  Protocol:  decent-protocol v0.1.0',
-        '  Transport: decent-transport-webrtc v0.1.0',
+        '  Protocol:  @decentchat/protocol v0.1.0',
+        '  Transport: @decentchat/transport-webrtc v0.1.0',
         '  Client:    decent-client-web v0.1.0',
         '  Crypto:    P-256 ECDH + AES-GCM-256 + ECDSA + Double Ratchet',
         '  Sync:      CRDT + Vector Clocks + Negentropy',

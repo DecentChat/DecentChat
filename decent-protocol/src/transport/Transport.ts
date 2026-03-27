@@ -1,12 +1,12 @@
 /**
  * Transport - Abstract transport interface for decent protocol
  *
- * The decent-protocol SDK is transport-agnostic. Any networking layer
+ * The @decentchat/protocol SDK is transport-agnostic. Any networking layer
  * (WebRTC, WebSocket, Bluetooth, localhost) can be plugged in by
  * implementing this interface.
  *
  * Implementations:
- *   - decent-transport-webrtc: PeerJS/WebRTC implementation
+ *   - @decentchat/transport-webrtc: PeerJS/WebRTC implementation
  *   - Future: mesh-transport-ws, mesh-transport-bt, etc.
  */
 

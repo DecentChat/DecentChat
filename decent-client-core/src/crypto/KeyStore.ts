@@ -4,8 +4,8 @@
  * Client-specific: depends on browser IndexedDB API.
  */
 
-import type { SerializedKeyPair, KeyPair } from 'decent-protocol';
-import { CryptoManager } from 'decent-protocol';
+import type { SerializedKeyPair, KeyPair } from '@decentchat/protocol';
+import { CryptoManager } from '@decentchat/protocol';
 
 const DEFAULT_DB_NAME = 'p2p-chat-keys';
 const DEFAULT_DB_VERSION = 1;

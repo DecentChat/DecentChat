@@ -1,5 +1,8 @@
 {
-  "name": "decent-protocol",
+  "name": "@decentchat/protocol",
+  "publishConfig": {
+    "access": "public"
+  },
   "version": "0.1.0",
   "description": "Transport-agnostic protocol SDK for serverless, E2E-encrypted, CRDT-based P2P messaging",
   "type": "module",

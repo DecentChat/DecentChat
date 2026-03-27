@@ -1,4 +1,4 @@
-import { SeedPhraseManager } from 'decent-protocol';
+import { SeedPhraseManager } from '@decentchat/protocol';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 

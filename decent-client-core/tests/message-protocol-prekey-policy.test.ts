@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { CryptoManager } from 'decent-protocol';
-import type { PersistedLocalPreKeyState, PreKeyBundle, SerializedRatchetState } from 'decent-protocol';
+import { CryptoManager } from '@decentchat/protocol';
+import type { PersistedLocalPreKeyState, PreKeyBundle, SerializedRatchetState } from '@decentchat/protocol';
 import { MessageProtocol } from '../src/messages/MessageProtocol';
 
 function createBasePersistence() {

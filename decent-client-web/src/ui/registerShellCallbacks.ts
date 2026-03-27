@@ -1,4 +1,4 @@
-import type { WorkspaceManager, MessageStore } from 'decent-protocol';
+import type { WorkspaceManager, MessageStore } from '@decentchat/protocol';
 import type { AppState } from '../main';
 import { shellData, setShellCallbacks } from '../lib/stores/shell.svelte';
 import { closeCompanySimPanel, openCompanySimPanel } from '../lib/company-sim/store.svelte';

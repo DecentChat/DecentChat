@@ -2,7 +2,7 @@ import { createHash, createHmac } from 'node:crypto';
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
-import { SeedPhraseManager } from 'decent-protocol';
+import { SeedPhraseManager } from '@decentchat/protocol';
 
 import {
   planCompanyAgentTopology,

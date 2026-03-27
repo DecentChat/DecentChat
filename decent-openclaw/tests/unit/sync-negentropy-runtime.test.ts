@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { MessageStore, SyncProtocol as LegacySyncProtocol, WorkspaceManager } from 'decent-protocol';
+import { MessageStore, SyncProtocol as LegacySyncProtocol, WorkspaceManager } from '@decentchat/protocol';
 import { SyncProtocol } from '../../src/peer/SyncProtocol.ts';
 import { DecentChatNodePeer } from '../../src/peer/DecentChatNodePeer.ts';
 import { mkdtempSync } from 'node:fs';

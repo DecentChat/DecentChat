@@ -1,4 +1,4 @@
-import { DEFAULT_WORKSPACE_PERMISSIONS, DirectoryShardPlanner } from 'decent-protocol';
+import { DEFAULT_WORKSPACE_PERMISSIONS, DirectoryShardPlanner } from '@decentchat/protocol';
 import type {
   MemberDirectoryPage,
   MemberSummary,
@@ -7,7 +7,7 @@ import type {
   WorkspaceManager,
   WorkspaceMember,
   WorkspaceShell,
-} from 'decent-protocol';
+} from '@decentchat/protocol';
 
 const ROOT_CURSOR = '__root__';
 

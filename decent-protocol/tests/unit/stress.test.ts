@@ -1,5 +1,5 @@
 /**
- * Stress & Edge Case Tests for decent-protocol
+ * Stress & Edge Case Tests for @decentchat/protocol
  *
  * Covers: hash chain integrity at scale, CRDT convergence proofs,
  * vector clock precision, offline queue isolation,

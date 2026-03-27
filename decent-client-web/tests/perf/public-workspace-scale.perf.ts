@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { performance } from 'node:perf_hooks';
-import { WorkspaceManager, type MemberDirectoryPage, type MemberSummary, type PersistentStore, type WorkspaceShell } from 'decent-protocol';
+import { WorkspaceManager, type MemberDirectoryPage, type MemberSummary, type PersistentStore, type WorkspaceShell } from '@decentchat/protocol';
 import { PublicWorkspaceController } from '../../src/app/workspace/PublicWorkspaceController';
 import { searchMemberPickerPeers } from '../../src/ui/memberPickerSearch';
 

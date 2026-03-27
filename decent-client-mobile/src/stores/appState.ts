@@ -1,5 +1,5 @@
 import { derived, writable } from 'svelte/store';
-import type { Channel, PlaintextMessage, Workspace } from 'decent-protocol';
+import type { Channel, PlaintextMessage, Workspace } from '@decentchat/protocol';
 
 export type ConnectionStatus = 'disconnected' | 'idle' | 'connecting' | 'connected';
 

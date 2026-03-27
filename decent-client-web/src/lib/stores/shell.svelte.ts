@@ -9,7 +9,7 @@
  * Split into data (changes often) and callbacks (set once at init).
  */
 
-import type { PlaintextMessage, Contact, DirectConversation } from 'decent-protocol';
+import type { PlaintextMessage, Contact, DirectConversation } from '@decentchat/protocol';
 import type { HuddleState, HuddleParticipant } from '../../huddle/HuddleManager';
 import type { ActivityItem } from '../../ui/types';
 import { MessageSearch } from '../../ui/MessageSearch';
@@ -300,4 +300,3 @@ export function setShellCallbacks(callbacks: ShellCallbacks): void {
 export function getShellCallbacks(): ShellCallbacks | null {
   return _callbacks;
 }
-

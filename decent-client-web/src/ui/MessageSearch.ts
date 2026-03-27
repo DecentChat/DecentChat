@@ -3,8 +3,8 @@
  * Client-side, no server. Searches local message store.
  */
 
-import type { MessageStore } from 'decent-protocol';
-import type { PlaintextMessage } from 'decent-protocol';
+import type { MessageStore } from '@decentchat/protocol';
+import type { PlaintextMessage } from '@decentchat/protocol';
 
 export interface SearchResult {
   message: PlaintextMessage;

@@ -2,7 +2,7 @@
  * UI type definitions — shared between UIRenderer and MountHelpers.
  */
 
-import type { Contact, ContactURIData, DirectConversation } from 'decent-protocol';
+import type { Contact, ContactURIData, DirectConversation } from '@decentchat/protocol';
 import type { TopologyDebugSnapshot } from '../app/topology/TopologyTelemetry';
 
 export interface ActivityItem {
@@ -379,24 +379,24 @@ export interface UICallbacks {
   sendAttachment: (file: File, text?: string, threadId?: string) => Promise<void>;
   resolveAttachmentImageUrl?: (attachmentId: string) => Promise<string | null>;
   connectPeer: (peerId: string) => void;
-  createWorkspace: (name: string, alias: string) => import('decent-protocol').Workspace;
+  createWorkspace: (name: string, alias: string) => import('@decentchat/protocol').Workspace;
   joinWorkspace: (
     code: string,
     alias: string,
     peerId: string,
-    inviteData?: import('decent-protocol').InviteData,
+    inviteData?: import('@decentchat/protocol').InviteData,
     options?: { allowWorkspaceDMs?: boolean },
   ) => Promise<void>;
-  createChannel: (name: string) => { success: boolean; channel?: import('decent-protocol').Channel; error?: string };
+  createChannel: (name: string) => { success: boolean; channel?: import('@decentchat/protocol').Channel; error?: string };
   removeWorkspaceMember?: (peerId: string) => Promise<{ success: boolean; error?: string }>;
   banWorkspaceMember?: (peerId: string, opts?: { durationMs?: number; reason?: string }) => Promise<{ success: boolean; error?: string }>;
   promoteMember?: (peerId: string, newRole: 'admin') => Promise<{ success: boolean; error?: string }>;
   demoteMember?: (peerId: string) => Promise<{ success: boolean; error?: string }>;
-  updateWorkspacePermissions?: (permissions: Partial<import('decent-protocol').WorkspacePermissions>) => Promise<{ success: boolean; error?: string }>;
+  updateWorkspacePermissions?: (permissions: Partial<import('@decentchat/protocol').WorkspacePermissions>) => Promise<{ success: boolean; error?: string }>;
   updateWorkspaceInfo?: (updates: { name?: string; description?: string }) => Promise<{ success: boolean; error?: string }>;
   deleteWorkspace?: (workspaceId: string) => Promise<boolean>;
   leaveWorkspace?: (workspaceId: string) => Promise<{ success: boolean; error?: string }>;
-  createDM: (peerId: string) => { success: boolean; channel?: import('decent-protocol').Channel };
+  createDM: (peerId: string) => { success: boolean; channel?: import('@decentchat/protocol').Channel };
   persistWorkspace: (wsId: string) => Promise<void>;
   persistSetting: (key: string, value: unknown) => Promise<void>;
   getCommandSuggestions?: (prefix: string) => Array<{ name: string; description: string }>;
@@ -423,7 +423,7 @@ export interface UICallbacks {
   getContacts?: () => Promise<Contact[]>;
   startDirectMessage?: (contactPeerId: string, options?: { sourceWorkspaceId?: string }) => Promise<DirectConversation>;
   getDirectConversations?: () => Promise<DirectConversation[]>;
-  getAllWorkspaces?: () => Array<import('decent-protocol').Workspace>;
+  getAllWorkspaces?: () => Array<import('@decentchat/protocol').Workspace>;
   getWorkspaceMemberDirectory?: (workspaceId: string) => WorkspaceMemberDirectoryView;
   prefetchWorkspaceMemberDirectory?: (workspaceId: string) => Promise<void>;
   loadMoreWorkspaceMemberDirectory?: (workspaceId: string) => Promise<WorkspaceMemberDirectoryView | null>;

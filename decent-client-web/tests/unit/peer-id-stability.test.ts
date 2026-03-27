@@ -5,12 +5,12 @@
  * to others on the signaling server. PeerId must be derived deterministically
  * from the seed phrase so that refreshing the page doesn't change identity.
  *
- * Uses the actual SeedPhraseManager from decent-protocol to exercise the
+ * Uses the actual SeedPhraseManager from @decentchat/protocol to exercise the
  * exact same code path as production.
  */
 
 import { describe, test, expect } from 'bun:test';
-import { SeedPhraseManager, WORDLIST } from 'decent-protocol';
+import { SeedPhraseManager, WORDLIST } from '@decentchat/protocol';
 
 const VALID_MNEMONIC = 'elbow excite access tunnel genre chase risk loan raise mesh chaos artwork';
 

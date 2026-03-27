@@ -1,5 +1,5 @@
 /**
- * decent-protocol — Public API
+ * @decentchat/protocol — Public API
  *
  * An embeddable, transport-agnostic protocol SDK for serverless,
  * E2E-encrypted, CRDT-based peer-to-peer messaging.

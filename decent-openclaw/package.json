@@ -1,6 +1,6 @@
 {
   "name": "@decentchat/decentclaw",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "OpenClaw channel plugin for DecentChat — P2P encrypted chat",
   "type": "module",
   "main": "index.ts",
@@ -31,9 +31,9 @@
     "access": "public"
   },
   "dependencies": {
-    "@decentchat/company-sim": "^0.1.0",
-    "decent-protocol": "^0.1.0",
-    "decent-transport-webrtc": "^0.1.0",
+    "@decentchat/company-sim": "^0.1.1",
+    "@decentchat/protocol": "^0.1.0",
+    "@decentchat/transport-webrtc": "^0.1.0",
     "node-datachannel": "^0.32.1",
     "opusscript": "^0.1.1",
     "yaml": "^2.8.2",

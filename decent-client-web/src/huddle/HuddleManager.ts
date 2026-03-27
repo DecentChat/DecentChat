@@ -1,4 +1,4 @@
-import { createLogger } from 'decent-protocol';
+import { createLogger } from '@decentchat/protocol';
 
 /**
  * HuddleManager — Slack-style voice huddles over WebRTC

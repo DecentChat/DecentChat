@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { MessageStore, WorkspaceManager } from 'decent-protocol';
+import { MessageStore, WorkspaceManager } from '@decentchat/protocol';
 import { SyncProtocol } from '../../src/peer/SyncProtocol.ts';
 
 function normalizeSyncPayload(raw: any): any {
