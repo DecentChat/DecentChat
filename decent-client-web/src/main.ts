@@ -250,7 +250,7 @@ async function clearLocalAppData(): Promise<void> {
   }
 
   // Fallback for browsers without indexedDB.databases() support.
-  dbNames.add('@decentchat/protocol');
+  dbNames.add('decent-protocol');
   dbNames.add('p2p-chat-keys');
 
   for (const dbName of dbNames) {
