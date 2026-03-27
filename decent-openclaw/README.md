@@ -1,88 +1,154 @@
-# decent-openclaw
+# @decentchat/decentclaw
 
-OpenClaw channel plugin for DecentChat.
+OpenClaw channel plugin for [DecentChat](https://github.com/Alino/DecentChat) -- peer-to-peer encrypted chat over WebRTC.
 
-## Setup
+Connects your OpenClaw agent to DecentChat workspaces so it can read and reply to messages in channels, groups, DMs, and threads.
 
-1. Add this plugin path to your OpenClaw config under `plugins.load.paths`.
-2. Configure channel settings under `channels.decentchat`:
-   - `enabled`
-   - `seedPhrase` (required; BIP39 mnemonic)
-   - `signalingServer` (optional; default `https://decentchat.app/peerjs`)
-   - `invites` (optional DecentChat invite URIs)
-3. Enable OpenClaw in the DecentChat settings panel.
-4. Use `/activation` in any channel if you want responses to all messages.
+## Install
 
-
-## Status
-
-- Thread-aware routing is supported (including `replyToId` fallback).
-- Per-chat-type reply mode overrides are supported via `replyToModeByChatType`.
-- Active implementation plan: `docs/plans/2026-02-28-decent-openclaw-parity-threading.md`.
-
-
-## Config migration (threading parity)
-
-If you are upgrading from pre-parity config, migrate from global-only reply mode to explicit chat-type/thread settings.
-
-Before:
-
-```yaml
-channels:
-  decentchat:
-    enabled: true
-    replyToMode: all
+```
+openclaw plugins install @decentchat/decentclaw
 ```
 
-After:
+## Configure
+
+Add a `channels.decentchat` block to your OpenClaw config (`~/.openclaw/openclaw.json` or per-project):
 
 ```yaml
 channels:
   decentchat:
     enabled: true
+    seedPhrase: "your twelve word BIP39 mnemonic goes here ..."
+```
+
+That's the minimum. The bot will join the DecentChat network using the default signaling server (`https://decentchat.app/peerjs`), respond to all messages, and call itself "DecentChat Bot".
+
+### Optional settings
+
+| Key | Default | What it does |
+|-----|---------|-------------|
+| `signalingServer` | `https://decentchat.app/peerjs` | PeerJS signaling endpoint |
+| `invites` | `[]` | DecentChat invite URIs to auto-join |
+| `alias` | `"DecentChat Bot"` | Display name for the bot |
+| `dataDir` | auto | Override the data directory |
+| `dmPolicy` | `"open"` | DM access: `open`, `pairing`, `allowlist`, or `disabled` |
+| `streamEnabled` | `true` | Stream responses token-by-token |
+| `replyToMode` | `"all"` | Reply behavior: `off`, `first`, or `all` |
+
+### Reply mode per chat type
+
+You can override `replyToMode` for specific chat types:
+
+```yaml
+channels:
+  decentchat:
+    enabled: true
+    seedPhrase: "..."
     replyToMode: all
     replyToModeByChatType:
-      direct: off
-      group: all
-      channel: all
-    thread:
-      historyScope: thread
-      inheritParent: false
-      initialHistoryLimit: 10
+      direct: "off"
+      group: "all"
+      channel: "all"
 ```
 
-## Feature flags and safe defaults
-
-Recommended safe defaults:
-
-- `replyToMode: all`
-- `replyToModeByChatType.direct: off`
-- `thread.historyScope: thread`
-- `thread.initialHistoryLimit: 10`
-
-Fast safety toggles if behavior is noisy:
-
-- Disable thread splitting entirely:
-  - `replyToMode: off`
-- Keep channel-wide session history (no per-thread split):
-  - `thread.historyScope: channel`
-- Disable bootstrap thread-context prefill:
-  - `thread.initialHistoryLimit: 0`
-
-## Rollback checklist
-
-1. Revert to previous known-good commit.
-2. Set conservative config:
+### Thread settings
 
 ```yaml
 channels:
   decentchat:
-    replyToMode: off
     thread:
-      historyScope: channel
-      initialHistoryLimit: 0
+      historyScope: "thread"     # "thread" or "channel"
+      inheritParent: false
+      initialHistoryLimit: 20
 ```
 
-3. Restart OpenClaw runtime.
-4. Validate route logs and one direct + one group reply path.
-5. Re-enable features gradually (`replyToMode`, then `historyScope`, then `initialHistoryLimit`).
+- `historyScope: thread` -- the bot only sees messages in the current thread (not the full channel history)
+- `inheritParent: false` -- don't prepend the parent message to thread context
+- `initialHistoryLimit` -- how many prior thread messages to load for context
+
+### Huddle (voice) settings
+
+```yaml
+channels:
+  decentchat:
+    huddle:
+      enabled: true
+      autoJoin: false
+      sttEngine: "whisper-cpp"    # whisper-cpp | whisper-python | openai | groq
+      whisperModel: "base.en"
+      sttLanguage: "en"
+      ttsVoice: "alloy"
+      vadSilenceMs: 800
+      vadThreshold: 0.5
+```
+
+### Company simulation
+
+The plugin includes a company simulation subsystem (`@decentchat/company-sim`) that lets you run multi-agent teams inside DecentChat workspaces. Configure it per-account:
+
+```yaml
+channels:
+  decentchat:
+    companySim:
+      enabled: true
+      manifestPath: "./company-manifest.yaml"
+      companyId: "acme"
+      employeeId: "bot-1"
+    companySimBootstrap:
+      enabled: true
+      mode: "runtime"
+```
+
+### Multiple accounts
+
+Run multiple bot identities from one OpenClaw instance:
+
+```yaml
+channels:
+  decentchat:
+    defaultAccount: "main"
+    accounts:
+      main:
+        seedPhrase: "first mnemonic ..."
+        alias: "Bot A"
+      secondary:
+        seedPhrase: "second mnemonic ..."
+        alias: "Bot B"
+        dmPolicy: "disabled"
+```
+
+Each account gets its own peer connection and data directory.
+
+## Quick safety toggles
+
+If the bot is too chatty:
+
+```yaml
+# Shut off all replies
+replyToMode: "off"
+
+# Keep replies but use full channel history (no per-thread split)
+thread:
+  historyScope: "channel"
+
+# Disable thread context prefill
+thread:
+  initialHistoryLimit: 0
+```
+
+## How it works
+
+The plugin creates a DecentChat peer (using `decent-protocol` and `decent-transport-webrtc`) that joins the P2P mesh. Incoming messages are routed through OpenClaw's agent pipeline. Responses are sent back to the originating chat, with thread-aware routing so replies land in the right thread.
+
+All traffic is end-to-end encrypted (ECDH + AES-GCM-256). The bot's identity is derived from the seed phrase, same as any other DecentChat client.
+
+## Dependencies
+
+- [decent-protocol](https://npmjs.com/package/decent-protocol) -- DecentChat SDK
+- [decent-transport-webrtc](https://npmjs.com/package/decent-transport-webrtc) -- WebRTC transport layer
+- [@decentchat/company-sim](https://npmjs.com/package/@decentchat/company-sim) -- company simulation subsystem
+- [openclaw](https://openclaw.ai) -- peer dependency (the host runtime)
+
+## License
+
+MIT

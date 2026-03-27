@@ -4,7 +4,7 @@ import { decentChatPlugin } from './src/channel.js';
 import { setDecentChatRuntime } from './src/runtime.js';
 
 const plugin = {
-  id: 'decentchat',
+  id: 'decentclaw',
   name: 'DecentChat',
   description: 'DecentChat P2P channel plugin',
   configSchema: emptyPluginConfigSchema(),
