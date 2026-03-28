@@ -3,7 +3,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "WebRTC/PeerJS transport implementation for @decentchat/protocol",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,6 +1,6 @@
 {
   "name": "@decentchat/company-sim",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Company simulation subsystem for the DecentChat OpenClaw plugin",
   "type": "module",
   "main": "./src/index.ts",

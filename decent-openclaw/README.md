@@ -138,14 +138,14 @@ thread:
 
 ## How it works
 
-The plugin creates a DecentChat peer (using `decent-protocol` and `decent-transport-webrtc`) that joins the P2P mesh. Incoming messages are routed through OpenClaw's agent pipeline. Responses are sent back to the originating chat, with thread-aware routing so replies land in the right thread.
+The plugin creates a DecentChat peer (using `@decentchat/protocol` and `@decentchat/transport-webrtc`) that joins the P2P mesh. Incoming messages are routed through OpenClaw's agent pipeline. Responses are sent back to the originating chat, with thread-aware routing so replies land in the right thread.
 
 All traffic is end-to-end encrypted (ECDH + AES-GCM-256). The bot's identity is derived from the seed phrase, same as any other DecentChat client.
 
 ## Dependencies
 
-- [decent-protocol](https://npmjs.com/package/decent-protocol) -- DecentChat SDK
-- [decent-transport-webrtc](https://npmjs.com/package/decent-transport-webrtc) -- WebRTC transport layer
+- [@decentchat/protocol](https://npmjs.com/package/@decentchat/protocol) -- DecentChat SDK
+- [@decentchat/transport-webrtc](https://npmjs.com/package/@decentchat/transport-webrtc) -- WebRTC transport layer
 - [@decentchat/company-sim](https://npmjs.com/package/@decentchat/company-sim) -- company simulation subsystem
 - [openclaw](https://openclaw.ai) -- peer dependency (the host runtime)
 
