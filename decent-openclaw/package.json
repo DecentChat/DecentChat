@@ -1,6 +1,6 @@
 {
   "name": "@decentchat/decentclaw",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "OpenClaw channel plugin for DecentChat — P2P encrypted chat",
   "type": "module",
   "main": "index.ts",
