@@ -8,17 +8,22 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "decentchat",
       "label": "DecentChat",
       "selectionLabel": "DecentChat (P2P)",
       "docsPath": "/channels/decentchat",
       "blurb": "P2P encrypted chat via DecentChat."
+    },
+    "install": {
+      "npmSpec": "@decentchat/decentclaw"
     }
   },
   "files": [
     "src",
     "index.ts",
+    "setup-entry.ts",
     "openclaw.plugin.json"
   ],
   "repository": {
