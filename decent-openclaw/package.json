@@ -35,6 +35,11 @@
   "publishConfig": {
     "access": "public"
   },
+  "scripts": {
+    "test": "bun test tests/unit/",
+    "test:integration": "bun test tests/integration/plugin-configure-join.test.ts",
+    "test:all": "bun test tests/unit/ && bun test tests/integration/plugin-configure-join.test.ts"
+  },
   "dependencies": {
     "@decentchat/company-sim": "workspace:^",
     "@decentchat/protocol": "workspace:^",

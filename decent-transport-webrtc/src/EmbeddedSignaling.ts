@@ -1,20 +1,20 @@
 /**
  * EmbeddedSignaling — Minimal signaling server that runs inside the app
- * 
+ *
  * Every DecentChat instance can BE a signaling server.
  * When Alice creates a workspace, her instance starts a tiny WebSocket
  * server that helps peers find each other. Once WebRTC is established,
  * the signaling server is no longer needed.
- * 
+ *
  * This eliminates dependency on external signaling infrastructure.
- * 
+ *
  * Usage:
  *   const server = new EmbeddedSignaling({ port: 9000 });
  *   await server.start();
  *   // Share: https://decentchat.app/join/INVITE_CODE?signal=YOUR_IP:9000
  *   // Other peers connect to your signaling server
  *   await server.stop();
- * 
+ *
  * Note: This runs in Node.js/Bun environments (server-side).
  * Browser clients connect TO this server, they don't run it.
  * For browser-only setups, use public signaling servers.
@@ -41,7 +41,7 @@ interface RegisteredPeer {
 
 /**
  * Minimal PeerJS-compatible signaling server.
- * 
+ *
  * Handles:
  * - Peer registration (OPEN message)
  * - Offer/answer/candidate relay between peers
@@ -127,11 +127,17 @@ export class EmbeddedSignaling {
 
       this.server.listen(this.config.port, this.config.host, () => {
         this.running = true;
-        const url = `ws://${this.config.host === '0.0.0.0' ? 'localhost' : this.config.host}:${this.config.port}${this.config.path}`;
+        // When port 0 is requested, the OS assigns a random available port.
+        // Read the actual port from the server's address so callers get the
+        // real value instead of 0.
+        const addr = this.server.address();
+        const actualPort = (typeof addr === 'object' && addr !== null) ? addr.port : this.config.port;
+        this.config.port = actualPort;
+        const url = `ws://${this.config.host === '0.0.0.0' ? 'localhost' : this.config.host}:${actualPort}${this.config.path}`;
         if (this.config.debug) {
           console.log(`[DecentChat Signaling] Running on ${url} (${this.peers.size} peers)`);
         }
-        resolve({ host: this.config.host, port: this.config.port, url });
+        resolve({ host: this.config.host, port: actualPort, url });
       });
 
       this.server.on('error', (err: Error) => {
