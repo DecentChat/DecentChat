@@ -539,10 +539,15 @@ export async function bootstrapDecentChatCompanySimForStartup(params: {
 // ---------------------------------------------------------------------------
 
 const CHANNEL = "decentchat";
-const seedPhraseManager = new SeedPhraseManager();
+
+let _seedPhraseManager: InstanceType<typeof SeedPhraseManager> | undefined;
+function getSeedPhraseManager() {
+  if (!_seedPhraseManager) _seedPhraseManager = new SeedPhraseManager();
+  return _seedPhraseManager;
+}
 
 function validateSeedPhrase(mnemonic: string): string | undefined {
-  const result = seedPhraseManager.validate(mnemonic);
+  const result = getSeedPhraseManager().validate(mnemonic);
   if (!result.valid) return result.error ?? "Invalid seed phrase";
   return undefined;
 }
@@ -593,7 +598,7 @@ const decentChatSetupWizard: ChannelSetupWizard = {
     });
 
     if (generateNew) {
-      const { mnemonic } = seedPhraseManager.generate();
+      const { mnemonic } = getSeedPhraseManager().generate();
       await prompter.note(
         [
           `Your new seed phrase:`,
