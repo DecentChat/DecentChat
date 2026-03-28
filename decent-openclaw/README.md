@@ -12,7 +12,23 @@ openclaw plugins install @decentchat/decentclaw
 
 ## Configure
 
-Add a `channels.decentchat` block to your OpenClaw config (`~/.openclaw/openclaw.json` or per-project):
+The quickest way to set up is with the interactive wizard:
+
+```
+openclaw configure
+```
+
+Select **DecentChat** when prompted. The wizard will:
+
+1. Offer to generate a new 12-word seed phrase (or let you paste an existing one)
+2. Ask for a display name
+3. Ask for an invite URL to join a workspace
+
+You can also set the seed phrase via the `DECENTCHAT_SEED_PHRASE` environment variable instead of storing it in the config file.
+
+### Manual configuration
+
+If you prefer to edit the config directly, add a `channels.decentchat` block to your OpenClaw config (`~/.openclaw/openclaw.json` or per-project):
 
 ```yaml
 channels:

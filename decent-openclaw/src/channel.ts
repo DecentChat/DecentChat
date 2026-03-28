@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ChannelPlugin } from "openclaw/plugin-sdk";
+import type { ChannelPlugin, ChannelSetupWizard, ChannelSetupInput, OpenClawConfig } from "openclaw/plugin-sdk";
+import { createStandardChannelSetupStatus, patchTopLevelChannelConfigSection, createTopLevelChannelDmPolicy } from "openclaw/plugin-sdk/setup";
 import { z } from "zod";
 
 import { assertCompanyBootstrapAgentInstallation, ensureCompanyBootstrapRuntime, resolveCompanyManifestPath } from "@decentchat/company-sim";
+import { SeedPhraseManager } from "@decentchat/protocol";
 import { startDecentChatPeer } from "./monitor.js";
 import { getActivePeer, listActivePeerAccountIds } from "./peer-registry.js";
 import { buildDecentChatRuntimeBootstrapKey, invalidateDecentChatBootstrapKey, runDecentChatBootstrapOnce } from "./runtime.js";
@@ -532,6 +534,266 @@ export async function bootstrapDecentChatCompanySimForStartup(params: {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Setup wizard (powers `openclaw configure`)
+// ---------------------------------------------------------------------------
+
+const CHANNEL = "decentchat";
+const seedPhraseManager = new SeedPhraseManager();
+
+function validateSeedPhrase(mnemonic: string): string | undefined {
+  const result = seedPhraseManager.validate(mnemonic);
+  if (!result.valid) return result.error ?? "Invalid seed phrase";
+  return undefined;
+}
+
+const decentChatSetupWizard: ChannelSetupWizard = {
+  channel: CHANNEL,
+
+  resolveAccountIdForConfigure: () => DEFAULT_ACCOUNT_ID,
+  resolveShouldPromptAccountIds: () => false,
+
+  status: createStandardChannelSetupStatus({
+    channelLabel: "DecentChat",
+    configuredLabel: "configured",
+    unconfiguredLabel: "needs seed phrase",
+    configuredHint: "configured",
+    unconfiguredHint: "needs seed phrase",
+    configuredScore: 1,
+    unconfiguredScore: 0,
+    includeStatusLine: true,
+    resolveConfigured: ({ cfg }) => resolveDecentChatAccount(cfg).configured,
+    resolveExtraStatusLines: ({ cfg }) => {
+      const account = resolveDecentChatAccount(cfg);
+      const lines: string[] = [];
+      if (account.alias) lines.push(`Alias: ${account.alias}`);
+      if (account.invites.length > 0) lines.push(`Invites: ${account.invites.length}`);
+      return lines;
+    },
+  }),
+
+  introNote: {
+    title: "DecentChat setup",
+    lines: [
+      "DecentChat is a P2P encrypted messaging network.",
+      "Your bot needs a 12-word BIP39 seed phrase to create its identity.",
+      "You can generate a new one here or paste an existing one.",
+    ],
+  },
+
+  stepOrder: "credentials-first",
+
+  prepare: async ({ cfg, accountId, prompter }) => {
+    const account = resolveDecentChatAccount(cfg, accountId);
+    if (account.configured) return;
+
+    const generateNew = await prompter.confirm({
+      message: "Generate a new DecentChat identity?",
+      initialValue: true,
+    });
+
+    if (generateNew) {
+      const { mnemonic } = seedPhraseManager.generate();
+      await prompter.note(
+        [
+          `Your new seed phrase:`,
+          ``,
+          `  ${mnemonic}`,
+          ``,
+          `Write this down and store it somewhere safe.`,
+          `This is the only way to recover your bot's identity.`,
+        ].join("\n"),
+        "New identity generated",
+      );
+      return {
+        credentialValues: { privateKey: mnemonic },
+      };
+    }
+
+    return;
+  },
+
+  credentials: [
+    {
+      inputKey: "privateKey" as keyof ChannelSetupInput,
+      providerHint: CHANNEL,
+      credentialLabel: "seed phrase",
+      helpTitle: "DecentChat seed phrase",
+      helpLines: [
+        "A 12-word BIP39 mnemonic that determines your bot's identity on the network.",
+        "All encryption keys are derived from this phrase.",
+      ],
+      envPrompt: "DECENTCHAT_SEED_PHRASE detected. Use env var?",
+      keepPrompt: "Seed phrase already configured. Keep it?",
+      inputPrompt: "DecentChat seed phrase (12 words)",
+      preferredEnvVar: "DECENTCHAT_SEED_PHRASE",
+
+      allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
+
+      inspect: ({ cfg, accountId }) => {
+        const account = resolveDecentChatAccount(cfg, accountId);
+        return {
+          accountConfigured: account.configured,
+          hasConfiguredValue: !!account.seedPhrase?.trim(),
+          resolvedValue: account.seedPhrase?.trim(),
+          envValue: process.env.DECENTCHAT_SEED_PHRASE?.trim(),
+        };
+      },
+
+      shouldPrompt: ({ credentialValues, state }) => {
+        // Skip the prompt if prepare() already generated a seed phrase
+        if (credentialValues.privateKey?.trim()) return false;
+        if (state.hasConfiguredValue) return false;
+        return true;
+      },
+
+      applyUseEnv: async ({ cfg }) =>
+        patchTopLevelChannelConfigSection({
+          cfg,
+          channel: CHANNEL,
+          enabled: true,
+          clearFields: ["seedPhrase"],
+          patch: {},
+        }),
+
+      applySet: async ({ cfg, resolvedValue }) =>
+        patchTopLevelChannelConfigSection({
+          cfg,
+          channel: CHANNEL,
+          enabled: true,
+          patch: { seedPhrase: resolvedValue },
+        }),
+    },
+  ],
+
+  textInputs: [
+    {
+      inputKey: "name" as keyof ChannelSetupInput,
+      message: "Bot display name",
+      placeholder: "DecentChat Bot",
+      required: false,
+      helpTitle: "Bot display name",
+      helpLines: ["The name other users see when your bot sends messages."],
+
+      currentValue: ({ cfg, accountId }) => {
+        const account = resolveDecentChatAccount(cfg, accountId);
+        return account.alias !== "DecentChat Bot" ? account.alias : undefined;
+      },
+
+      initialValue: () => "DecentChat Bot",
+
+      applySet: async ({ cfg, value }) =>
+        patchTopLevelChannelConfigSection({
+          cfg,
+          channel: CHANNEL,
+          enabled: true,
+          patch: { alias: value.trim() || "DecentChat Bot" },
+        }),
+    },
+    {
+      inputKey: "url" as keyof ChannelSetupInput,
+      message: "Invite URL to join a workspace (optional)",
+      placeholder: "decentchat://invite/...",
+      required: false,
+      applyEmptyValue: false,
+      helpTitle: "DecentChat invite URL",
+      helpLines: [
+        "Paste an invite link to automatically join a workspace on startup.",
+        "You can add more later in the config file.",
+        "Leave blank to skip.",
+      ],
+
+      currentValue: ({ cfg, accountId }) => {
+        const account = resolveDecentChatAccount(cfg, accountId);
+        return account.invites.length > 0 ? account.invites[0] : undefined;
+      },
+
+      keepPrompt: (value) => `Invite URL set (${value}). Keep it?`,
+
+      applySet: async ({ cfg, value }) => {
+        const trimmed = value.trim();
+        if (!trimmed) return cfg;
+        // Merge with existing invites, avoiding duplicates
+        const existing: string[] = (cfg as any)?.channels?.decentchat?.invites ?? [];
+        const merged = [...new Set([...existing, trimmed])];
+        return patchTopLevelChannelConfigSection({
+          cfg,
+          channel: CHANNEL,
+          enabled: true,
+          patch: { invites: merged },
+        });
+      },
+    },
+  ],
+
+  completionNote: {
+    title: "DecentChat ready",
+    lines: [
+      "Your bot will connect to the DecentChat P2P network on next startup.",
+      "Run `openclaw start` to bring it online.",
+    ],
+  },
+
+  dmPolicy: createTopLevelChannelDmPolicy({
+    label: "DecentChat",
+    channel: CHANNEL,
+    policyKey: `channels.${CHANNEL}.dmPolicy`,
+    allowFromKey: `channels.${CHANNEL}.allowFrom`,
+    getCurrent: (cfg) => (cfg as any)?.channels?.decentchat?.dmPolicy ?? "open",
+  }),
+
+  disable: (cfg) =>
+    patchTopLevelChannelConfigSection({
+      cfg,
+      channel: CHANNEL,
+      patch: { enabled: false },
+    }),
+};
+
+const decentChatSetupAdapter = {
+  resolveAccountId: () => DEFAULT_ACCOUNT_ID,
+
+  validateInput: ({ input }: { cfg: OpenClawConfig; accountId: string; input: ChannelSetupInput }) => {
+    const typedInput = input as ChannelSetupInput & { privateKey?: string };
+    if (!typedInput.useEnv) {
+      const seedPhrase = typedInput.privateKey?.trim();
+      if (!seedPhrase) return "DecentChat requires a seed phrase.";
+      const error = validateSeedPhrase(seedPhrase);
+      if (error) return error;
+    }
+    return null;
+  },
+
+  applyAccountConfig: ({ cfg, input }: { cfg: OpenClawConfig; accountId: string; input: ChannelSetupInput }) => {
+    const typedInput = input as ChannelSetupInput & { privateKey?: string };
+    const patch: Record<string, unknown> = {};
+
+    if (typedInput.useEnv) {
+      // Clear stored seed phrase, will read from env at runtime
+    } else if (typedInput.privateKey?.trim()) {
+      patch.seedPhrase = typedInput.privateKey.trim();
+    }
+
+    if ((typedInput as any).name?.trim()) {
+      patch.alias = (typedInput as any).name.trim();
+    }
+
+    if ((typedInput as any).url?.trim()) {
+      const existing: string[] = (cfg as any)?.channels?.decentchat?.invites ?? [];
+      const invite = (typedInput as any).url.trim();
+      patch.invites = [...new Set([...existing, invite])];
+    }
+
+    return patchTopLevelChannelConfigSection({
+      cfg,
+      channel: CHANNEL,
+      enabled: true,
+      clearFields: typedInput.useEnv ? ["seedPhrase"] : undefined,
+      patch,
+    });
+  },
+};
+
 export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
   id: "decentchat",
   meta: {
@@ -570,6 +832,9 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
       invites: { label: "Invite URLs", advanced: true, help: "DecentChat invite URIs for workspaces to join on startup" },
     },
   },
+
+  setup: decentChatSetupAdapter,
+  setupWizard: decentChatSetupWizard,
 
   config: {
     listAccountIds: (cfg) => listDecentChatAccountIds(cfg),
