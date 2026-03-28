@@ -93,7 +93,7 @@ Both compiled JS (`dist/`) and raw TypeScript (`src/`) are included in the npm p
 
 ## Repository
 
-This package lives in the `decent-transport-webrtc/` directory of the [DecentChat monorepo](https://github.com/Alino/DecentChat).
+This package lives in the `decent-transport-webrtc/` directory of the [DecentChat monorepo](https://github.com/DecentChat/DecentChat).
 
 ## License
 

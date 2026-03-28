@@ -1,6 +1,6 @@
 # @decentchat/protocol
 
-Transport-agnostic protocol SDK for serverless, E2E-encrypted, CRDT-based P2P messaging. This is the core library behind [DecentChat](https://github.com/Alino/DecentChat).
+Transport-agnostic protocol SDK for serverless, E2E-encrypted, CRDT-based P2P messaging. This is the core library behind [DecentChat](https://github.com/DecentChat/DecentChat).
 
 No servers required. Peers connect directly, encrypt everything end-to-end, and sync state using CRDTs and vector clocks. The protocol layer has no opinion about how peers find each other or how bytes move between them -- that's the transport's job.
 
@@ -48,7 +48,7 @@ Both compiled JS (`dist/`) and raw TypeScript (`src/`) are included in the npm p
 
 ## Repository
 
-This package lives in the `decent-protocol/` directory of the [DecentChat monorepo](https://github.com/Alino/DecentChat).
+This package lives in the `decent-protocol/` directory of the [DecentChat monorepo](https://github.com/DecentChat/DecentChat).
 
 ## License
 

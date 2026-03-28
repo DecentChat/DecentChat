@@ -1,6 +1,6 @@
 # @decentchat/company-sim
 
-Multi-agent company simulation subsystem for the [DecentChat](https://github.com/Alino/DecentChat) OpenClaw plugin. Lets you define a company of AI employees in a YAML manifest and run them as a coordinated team inside DecentChat workspaces.
+Multi-agent company simulation subsystem for the [DecentChat](https://github.com/DecentChat/DecentChat) OpenClaw plugin. Lets you define a company of AI employees in a YAML manifest and run them as a coordinated team inside DecentChat workspaces.
 
 ## What it does
 
@@ -45,7 +45,7 @@ This package ships raw TypeScript (no compiled JS). It's loaded via [jiti](https
 
 ## Repository
 
-This package lives in the `decent-company-sim/` directory of the [DecentChat monorepo](https://github.com/Alino/DecentChat).
+This package lives in the `decent-company-sim/` directory of the [DecentChat monorepo](https://github.com/DecentChat/DecentChat).
 
 ## License
 

@@ -1,6 +1,6 @@
 # @decentchat/decentclaw
 
-OpenClaw channel plugin for [DecentChat](https://github.com/Alino/DecentChat) -- peer-to-peer encrypted chat over WebRTC.
+OpenClaw channel plugin for [DecentChat](https://github.com/DecentChat/DecentChat) -- peer-to-peer encrypted chat over WebRTC.
 
 Connects your OpenClaw agent to DecentChat workspaces so it can read and reply to messages in channels, groups, DMs, and threads.
 
