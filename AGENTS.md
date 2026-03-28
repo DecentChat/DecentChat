@@ -9,7 +9,7 @@ Serverless, E2E-encrypted, CRDT-based P2P messaging system with an OpenClaw agen
 | `decent-protocol/` | `@decentchat/protocol` | compiled JS (`dist/`) + source (`src/`) |
 | `decent-transport-webrtc/` | `@decentchat/transport-webrtc` | compiled JS (`dist/`) + source (`src/`) |
 | `decent-company-sim/` | `@decentchat/company-sim` | raw TypeScript only |
-| `decent-openclaw/` | `@decentchat/decentclaw` | raw TypeScript only |
+| `decent-openclaw/` | `@decentchat/decentchat-plugin` | raw TypeScript only |
 | `decent-client-web/` | not published | web client (Vite + SvelteKit) |
 | `decent-client-core/` | not published | shared client logic |
 | `decent-client-mobile/` | not published | mobile client |
@@ -50,7 +50,7 @@ Tests use `bun:test` (not jest/vitest). Test files live alongside source or in `
 
 ## Key conventions
 
-- The OpenClaw plugin id is `"decentchat"` (the channel id), but the plugin package is `@decentchat/decentclaw`
+- The OpenClaw plugin id is `"decentchat"` (the channel id), and the npm package is `@decentchat/decentchat-plugin`
 - The IndexedDB database name is `"decent-protocol"` (not the npm package name) -- don't rename it during refactors
 - Crypto salt strings (`decent-protocol-seed-v1`, `decent-protocol-v1`) are not package names -- don't rename them either
 - Pre-existing LSP errors in `decent-openclaw` files (channel.ts, monitor.ts, DecentChatNodePeer.ts) and `decent-client-web` (ChatController.ts) are from being out of sync with the OpenClaw SDK -- not bugs in this repo

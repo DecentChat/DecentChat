@@ -28,7 +28,7 @@ Depends on `@decentchat/protocol`, `yaml`, and `zod`.
 
 ## Usage
 
-This package is consumed by [`@decentchat/decentclaw`](https://npmjs.com/package/@decentchat/decentclaw) (the OpenClaw plugin). You normally don't use it directly -- the plugin handles manifest loading, bootstrap, and routing for you. See the [decentclaw README](https://npmjs.com/package/@decentchat/decentclaw) for configuration.
+This package is consumed by [`@decentchat/decentchat-plugin`](https://npmjs.com/package/@decentchat/decentchat-plugin) (the OpenClaw plugin). You normally don't use it directly -- the plugin handles manifest loading, bootstrap, and routing for you. See the [plugin README](https://npmjs.com/package/@decentchat/decentchat-plugin) for configuration.
 
 If you want to use it programmatically:
 

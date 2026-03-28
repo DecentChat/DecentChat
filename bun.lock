@@ -80,9 +80,9 @@
     },
     "decent-company-sim": {
       "name": "@decentchat/company-sim",
-      "version": "0.1.0",
+      "version": "0.1.3",
       "dependencies": {
-        "@decentchat/protocol": "^0.1.0",
+        "@decentchat/protocol": "workspace:^",
         "yaml": "^2.8.2",
         "zod": "^3.24.1",
       },
@@ -91,12 +91,12 @@
       },
     },
     "decent-openclaw": {
-      "name": "@decentchat/decentclaw",
-      "version": "0.1.1",
+      "name": "@decentchat/decentchat-plugin",
+      "version": "0.1.9",
       "dependencies": {
-        "@decentchat/company-sim": "^0.1.0",
-        "@decentchat/protocol": "^0.1.0",
-        "@decentchat/transport-webrtc": "^0.1.0",
+        "@decentchat/company-sim": "workspace:^",
+        "@decentchat/protocol": "workspace:^",
+        "@decentchat/transport-webrtc": "workspace:^",
         "node-datachannel": "^0.32.1",
         "opusscript": "^0.1.1",
         "yaml": "^2.8.2",
@@ -111,7 +111,7 @@
     },
     "decent-protocol": {
       "name": "@decentchat/protocol",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
         "@noble/curves": "^2.0.1",
       },
@@ -124,9 +124,9 @@
     },
     "decent-transport-webrtc": {
       "name": "@decentchat/transport-webrtc",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
-        "@decentchat/protocol": "^0.1.0",
+        "@decentchat/protocol": "workspace:^",
         "peerjs": "^1.5.4",
       },
       "devDependencies": {
@@ -450,7 +450,7 @@
 
     "@decentchat/company-sim": ["@decentchat/company-sim@workspace:decent-company-sim"],
 
-    "@decentchat/decentclaw": ["@decentchat/decentclaw@workspace:decent-openclaw"],
+    "@decentchat/decentchat-plugin": ["@decentchat/decentchat-plugin@workspace:decent-openclaw"],
 
     "@decentchat/protocol": ["@decentchat/protocol@workspace:decent-protocol"],
 

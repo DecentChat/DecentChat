@@ -1,4 +1,4 @@
-# @decentchat/decentclaw
+# @decentchat/decentchat-plugin
 
 OpenClaw channel plugin for [DecentChat](https://github.com/DecentChat/DecentChat) -- peer-to-peer encrypted chat over WebRTC.
 
@@ -7,7 +7,7 @@ Connects your OpenClaw agent to DecentChat workspaces so it can read and reply t
 ## Install
 
 ```
-openclaw plugins install @decentchat/decentclaw
+openclaw plugins install @decentchat/decentchat-plugin
 ```
 
 ## Configure
