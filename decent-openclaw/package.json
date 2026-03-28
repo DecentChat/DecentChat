@@ -31,9 +31,9 @@
     "access": "public"
   },
   "dependencies": {
-    "@decentchat/company-sim": "^0.1.1",
-    "@decentchat/protocol": "^0.1.0",
-    "@decentchat/transport-webrtc": "^0.1.0",
+    "@decentchat/company-sim": "workspace:^",
+    "@decentchat/protocol": "workspace:^",
+    "@decentchat/transport-webrtc": "workspace:^",
     "node-datachannel": "^0.32.1",
     "opusscript": "^0.1.1",
     "yaml": "^2.8.2",

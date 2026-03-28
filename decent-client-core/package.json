@@ -13,8 +13,8 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@decentchat/protocol": "workspace:*",
-    "@decentchat/transport-webrtc": "workspace:*"
+    "@decentchat/protocol": "workspace:^",
+    "@decentchat/transport-webrtc": "workspace:^"
   },
   "devDependencies": {
     "typescript": "^5.6.0"

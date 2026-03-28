@@ -23,9 +23,9 @@
   "dependencies": {
     "@floating-ui/dom": "^1.7.5",
     "@sveltejs/vite-plugin-svelte": "4",
-    "decent-client-core": "workspace:*",
-    "@decentchat/protocol": "workspace:*",
-    "@decentchat/transport-webrtc": "workspace:*",
+    "decent-client-core": "workspace:^",
+    "@decentchat/protocol": "workspace:^",
+    "@decentchat/transport-webrtc": "workspace:^",
     "dompurify": "^3.3.1",
     "marked": "^17.0.3",
     "peerjs": "^1.5.4",

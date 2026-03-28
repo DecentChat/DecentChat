@@ -31,7 +31,7 @@
     "directory": "decent-transport-webrtc"
   },
   "dependencies": {
-    "@decentchat/protocol": "^0.1.0",
+    "@decentchat/protocol": "workspace:^",
     "peerjs": "^1.5.4"
   },
   "devDependencies": {
