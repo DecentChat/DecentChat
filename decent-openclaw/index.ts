@@ -3,7 +3,7 @@ import { decentChatPlugin } from './src/channel.js';
 import { setDecentChatRuntime } from './src/runtime.js';
 
 export default defineChannelPluginEntry({
-  id: 'decentclaw',
+  id: 'decentchat',
   name: 'DecentChat',
   description: 'DecentChat P2P channel plugin',
   plugin: decentChatPlugin,
