@@ -11259,34 +11259,14 @@ export class ChatController {
     return Array.from(recipientSet);
   }
 
-  private ensurePeerInActiveWorkspace(peerId: string, publicKey = ''): void {
-    // If peer already exists in any workspace, do nothing.
+  private ensurePeerInActiveWorkspace(peerId: string, _publicKey = ''): void {
+    // Handshake readiness is not authoritative proof of workspace membership.
+    // Peers can become connected through PEX / partial mesh even when they belong
+    // only to some other workspace. Auto-adding them here leaks members and
+    // presence across workspaces.
     for (const ws of this.workspaceManager.getAllWorkspaces()) {
       if (ws.members.some((m: any) => m.peerId === peerId)) return;
     }
-
-    // Safe fallback: auto-add only when there is exactly one workspace.
-    // In multi-workspace sessions, membership should come from workspace-state sync
-    // to avoid attaching peers to the wrong workspace.
-    const all = this.workspaceManager.getAllWorkspaces();
-    if (all.length !== 1) return;
-
-    const ws = all[0];
-    if (this.workspaceManager.isBanned(ws.id, peerId)) {
-      console.warn(`[Security] Not auto-adding banned peer ${peerId.slice(0, 8)} to workspace ${ws.id.slice(0, 8)}`);
-      return;
-    }
-
-    this.workspaceManager.addMember(ws.id, {
-      peerId,
-      alias: peerId.slice(0, 8),
-      publicKey,
-      joinedAt: Date.now(),
-      role: 'member',
-    });
-
-    this.persistWorkspace(ws.id).catch(() => {});
-    this.ui?.updateSidebar({ refreshContacts: false });
   }
 
   /** Resolve a peer's display name given a channel context (looks through workspace members) */
