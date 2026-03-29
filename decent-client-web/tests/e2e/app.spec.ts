@@ -13,15 +13,23 @@ test.describe('DecentChat E2E', () => {
   async function seedMessagesViaController(page: any, count: number) {
     await page.evaluate(async (total: number) => {
       const ctrl = (window as any).__ctrl;
-      if (!ctrl || typeof ctrl.sendMessage !== 'function') {
-        throw new Error('window.__ctrl.sendMessage not available');
+      const state = (window as any).__state;
+      if (!ctrl || !state?.activeChannelId) {
+        throw new Error('window.__ctrl or activeChannelId not available');
       }
+
+      const channelId = state.activeChannelId;
+      const peerId = state.myPeerId;
 
       for (let i = 0; i < total; i += 1) {
         const marker = i === 35 ? 'phase2_search_target_old' : `phase2_msg_${String(i).padStart(3, '0')}`;
         const payload = `${marker} ${'lorem ipsum '.repeat((i % 7) * 8)}`.trim();
-        await ctrl.sendMessage(payload);
+        const msg = await ctrl.messageStore.createMessage(channelId, peerId, payload, 'text');
+        ctrl.messageStore.forceAdd(msg);
       }
+
+      // Trigger UI refresh
+      ctrl.ui?.renderMessages?.();
     }, count);
   }
   async function seedDirectConversation(page: any, options?: { peerId?: string; displayName?: string; message?: string }) {
@@ -71,8 +79,11 @@ test.describe('DecentChat E2E', () => {
   });
 
   test('join workspace modal shows DM privacy checkbox checked by default', async ({ page }) => {
-    await page.click('#join-ws-btn');
-    await expect(page.locator('.modal')).toBeVisible();
+    // Navigate to /app so #join-ws-btn opens the modal directly (on / it navigates first)
+    await page.goto('/app');
+    await waitForApp(page);
+    await page.click('#join-ws-btn-nav');
+    await expect(page.locator('.modal')).toBeVisible({ timeout: 10000 });
     const checkbox = page.locator('input[name="allowWorkspaceDMs"]');
     await expect(checkbox).toBeVisible();
     await expect(checkbox).toBeChecked();
@@ -106,12 +117,27 @@ test.describe('DecentChat E2E', () => {
 
   test('cancel create workspace closes modal', async ({ page }) => {
     await page.click('#create-ws-btn');
+    await page.waitForURL('**/app', { timeout: 10000 });
+    await waitForApp(page);
+
+    // The sessionStorage pending action should auto-open the modal, but fall back to click
+    if (await page.locator('.modal').count() === 0) {
+      await page.click('#create-ws-btn-nav');
+    }
+    await expect(page.locator('.modal')).toBeVisible({ timeout: 10000 });
     await page.click('.modal .btn-secondary'); // Cancel button
     await expect(page.locator('.modal')).not.toBeVisible();
   });
 
   test('create workspace without name does nothing', async ({ page }) => {
     await page.click('#create-ws-btn');
+    await page.waitForURL('**/app', { timeout: 10000 });
+    await waitForApp(page);
+
+    if (await page.locator('.modal').count() === 0) {
+      await page.click('#create-ws-btn-nav');
+    }
+    await expect(page.locator('.modal')).toBeVisible({ timeout: 10000 });
     await page.click('.modal .btn-primary'); // Submit with empty fields
     // Modal should still be open (validation failed)
     await expect(page.locator('.modal')).toBeVisible();
@@ -295,10 +321,11 @@ test.describe('DecentChat E2E', () => {
 
     await page.click('#search-btn');
     await page.locator('#search-input').fill('target_message_for_scroll');
+    await expect(page.locator('.search-result').first()).toBeVisible({ timeout: 5000 });
     await page.locator('.search-result').first().click();
 
-    // Message should get highlight class
-    await expect(page.locator('.message.highlight')).toBeVisible({ timeout: 3000 });
+    // Message should get highlight class (applied via requestAnimationFrame)
+    await expect(page.locator('.message.highlight')).toBeVisible({ timeout: 5000 });
   });
 
   test('virtualized channel list stays bounded and search jump still works on large history', async ({ page }) => {

@@ -424,7 +424,7 @@
       const container = getContainer();
       if (!container) return;
 
-      const msgEl = container.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
+      const msgEl = container.querySelector(`.message[data-message-id="${messageId}"]`) as HTMLElement | null;
       if (!msgEl) {
         if (attempt < 8) scrollAndHighlightMessage(messageId, attempt + 1);
         return;

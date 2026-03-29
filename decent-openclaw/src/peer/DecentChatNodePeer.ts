@@ -1684,6 +1684,20 @@ export class DecentChatNodePeer {
     const result = await this.messageStore.addMessage(created);
     if (!result.success) {
       this.opts.log?.warn?.(`[decentchat-peer] rejected message ${created.id}: ${result.error}`);
+      // Still send ACK for duplicates — the sender is retrying because they
+      // never received our first ACK.  Without this, the sender loops forever.
+      const dupAckPayload = {
+        type: 'ack' as const,
+        messageId: created.id,
+        channelId,
+        ...(typeof msg.envelopeId === 'string' ? { envelopeId: msg.envelopeId } : {}),
+      };
+      try {
+        const accepted = this.transport.send(fromPeerId, dupAckPayload);
+        if (!accepted) {
+          await this.enqueueOffline(fromPeerId, dupAckPayload);
+        }
+      } catch (_) { /* best effort */ }
       return;
     }
     this._gossipSeen.set(created.id, Date.now());
@@ -1699,12 +1713,21 @@ export class DecentChatNodePeer {
       data: { messageId: created.id, senderId: actualSenderId },
     });
 
-    this.transport.send(fromPeerId, {
-      type: 'ack',
+    const ackPayload = {
+      type: 'ack' as const,
       messageId: created.id,
       channelId,
       ...(typeof msg.envelopeId === 'string' ? { envelopeId: msg.envelopeId } : {}),
-    });
+    };
+    try {
+      const ackAccepted = this.transport.send(fromPeerId, ackPayload);
+      if (!ackAccepted) {
+        await this.enqueueOffline(fromPeerId, ackPayload);
+      }
+    } catch (ackErr) {
+      this.opts.log?.warn?.(`[decentchat-peer] failed to send ack to ${fromPeerId}: ${String(ackErr)}`);
+      await this.enqueueOffline(fromPeerId, ackPayload);
+    }
 
     const senderName = this.resolveSenderName(workspaceId, actualSenderId, msg.senderName as string | undefined);
     const attachments = Array.isArray(msg.attachments)

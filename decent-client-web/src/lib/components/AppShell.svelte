@@ -38,6 +38,22 @@
     cleanupAppEvents();
   });
 
+  // Re-bind event listeners when the view changes (e.g. welcome -> app),
+  // because elements like #messages-list and .messages-area don't exist
+  // until the 'app' view renders.
+  $effect(() => {
+    // Read shellData.view to subscribe to view changes
+    const _view = shellData.view;
+    // Use tick() equivalent: wait for DOM to update before rebinding
+    if (_view === 'app') {
+      // Defer to next microtask so the DOM has rendered the app layout
+      queueMicrotask(() => {
+        cleanupAppEvents();
+        bindAppEvents();
+      });
+    }
+  });
+
   // ── App-level event handlers (from bindAppEvents in MountHelpers) ──
 
   let cleanupFns: Array<() => void> = [];

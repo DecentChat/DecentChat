@@ -88,7 +88,7 @@ export function createDomEffects(ctx: DomEffectsContext): DomEffects {
 
   function scrollToMessageAndHighlight(messageId: string, containerId?: string): void {
     requestAnimationFrame(() => {
-      const selector = `[data-message-id="${messageId}"]`;
+      const selector = `.message[data-message-id="${messageId}"]`;
       const container = containerId ? document.getElementById(containerId) : null;
       const msgEl = container?.querySelector(selector) ?? document.querySelector(selector);
       if (msgEl) {

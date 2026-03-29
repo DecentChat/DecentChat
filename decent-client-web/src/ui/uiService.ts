@@ -446,6 +446,19 @@ export function createUIService(
       return next;
     });
 
+    // If the message wasn't found in the shell store, it may not have been
+    // synced from the MessageStore yet (the rAF-based syncShellMessages is
+    // still queued).  Flush the sync synchronously and retry the patch so the
+    // status update isn't silently lost.
+    if (!messagesChanged && !shellData.messages.messages.some((m: any) => m?.id === messageId)) {
+      syncShellMessages();
+      shellData.messages.messages = shellData.messages.messages.map((msg: any) => {
+        const next = patch(msg);
+        if (next !== msg) messagesChanged = true;
+        return next;
+      });
+    }
+
     let threadParentChanged = false;
     if (shellData.thread.parentMessage?.id === messageId) {
       const parent = shellData.thread.parentMessage as any;

@@ -16,8 +16,20 @@ async function resetAndOpenApp(page: Page): Promise<void> {
 }
 
 async function createWorkspace(page: Page, wsName = 'Activity WS', alias = 'Alice'): Promise<void> {
-  await page.click('#create-ws-btn');
-  await page.waitForSelector('.modal');
+  // If not already on /app, clicking #create-ws-btn navigates there first.
+  // Navigate to /app explicitly so the modal opens immediately.
+  if (!page.url().includes('/app')) {
+    await page.goto('/app');
+    await page.waitForSelector('#create-ws-btn, #create-ws-btn-nav, .sidebar-header', { timeout: 15000 });
+  }
+  // Use the nav button which is always on /app and triggers the modal directly
+  const navBtn = page.locator('#create-ws-btn-nav');
+  if (await navBtn.count() > 0) {
+    await navBtn.click();
+  } else {
+    await page.click('#create-ws-btn');
+  }
+  await page.waitForSelector('.modal', { timeout: 10000 });
   await page.locator('.modal input[name="name"]').fill(wsName);
   await page.locator('.modal input[name="alias"]').fill(alias);
   await page.click('.modal .btn-primary');

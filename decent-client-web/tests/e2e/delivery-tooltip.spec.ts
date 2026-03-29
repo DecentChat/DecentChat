@@ -114,9 +114,22 @@ test.describe('delivery tooltip regression', () => {
       expect(apiInfo.hasUi).toBe(true);
       expect(apiInfo.updateType).toBe('function');
 
-      // Initial synthetic update to delivered
+      // Mimic ChatController: mutate the in-memory messageStore entry first
+      // (updateMessageStatus patches shellData, but the deferred syncShellMessages
+      // re-reads from messageStore via rAF and would revert the patch otherwise).
       await user.page.evaluate(({ id }) => {
         const ctrl = (window as any).__ctrl;
+        const channelId = ctrl.state?.activeChannelId;
+        if (channelId) {
+          const msgs = ctrl.messageStore.getMessages(channelId);
+          const msg = msgs.find((m: any) => m.id === id);
+          if (msg) {
+            (msg as any).status = 'delivered';
+            (msg as any).recipientPeerIds = ['peer-0'];
+            (msg as any).ackedBy = ['peer-0'];
+            (msg as any).readBy = [];
+          }
+        }
         ctrl.ui.updateMessageStatus(id, 'delivered', { acked: 1, total: 1, read: 0 });
       }, { id: messageId });
 
@@ -131,6 +144,15 @@ test.describe('delivery tooltip regression', () => {
       // Update to read while hovered; tooltip text should live-update.
       await user.page.evaluate(({ id }) => {
         const ctrl = (window as any).__ctrl;
+        const channelId = ctrl.state?.activeChannelId;
+        if (channelId) {
+          const msgs = ctrl.messageStore.getMessages(channelId);
+          const msg = msgs.find((m: any) => m.id === id);
+          if (msg) {
+            (msg as any).status = 'read';
+            (msg as any).readBy = ['peer-0'];
+          }
+        }
         ctrl?.ui?.updateMessageStatus?.(id, 'read', { acked: 1, total: 1, read: 1 });
       }, { id: messageId });
 

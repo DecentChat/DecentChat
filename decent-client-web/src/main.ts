@@ -672,8 +672,8 @@ async function init(): Promise<void> {
     renderApp: () => ui.renderApp(),
     updateThreadIndicator: (parentMessageId, channelId) =>
       ui.updateThreadIndicator(parentMessageId, channelId),
-    updateMessageStatus: (messageId, status) =>
-      ui.updateMessageStatus(messageId, status),
+    updateMessageStatus: (messageId, status, detail) =>
+      ui.updateMessageStatus(messageId, status, detail),
     updateStreamingMessage: (messageId, content) =>
       ui.updateStreamingMessage(messageId, content),
     finalizeStreamingMessage: (messageId) =>
