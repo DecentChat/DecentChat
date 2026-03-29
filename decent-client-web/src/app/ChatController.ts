@@ -2592,7 +2592,7 @@ export class ChatController {
     if (typeof window !== 'undefined' && !this.networkOnlineListenerBound) {
       this.networkOnlineListenerBound = true;
       window.addEventListener('online', () => {
-        const peers = this.transport.getConnectedPeers();
+        const peers = this.getTransportConnectedPeerIds();
         chatLog.info(`[Network] Reconnected. Re-probing ${peers.length} peers...`);
         this.runPeerMaintenanceNow('browser-online');
         void this.reinitializeTransportIfStuck('browser-online');
@@ -4599,9 +4599,17 @@ export class ChatController {
     return false;
   }
 
+  private getTransportConnectedPeerIds(): string[] {
+    if (typeof this.transport?.getConnectedPeers !== 'function') return [];
+    const peers = this.transport.getConnectedPeers();
+    return Array.isArray(peers)
+      ? peers.filter((peerId): peerId is string => typeof peerId === 'string' && peerId.length > 0)
+      : [];
+  }
+
   private getPeerConnectionSnapshot(): PeerConnectionSnapshot {
     return {
-      connected: new Set<string>(this.transport.getConnectedPeers() as string[]),
+      connected: new Set<string>(this.getTransportConnectedPeerIds()),
       connecting: new Set(this.state.connectingPeers),
       ready: new Set(this.state.readyPeers),
     };
@@ -4973,7 +4981,7 @@ export class ChatController {
       return { totalPeers: 0, likelyPeers: [], coldPeers: [], connectedPeers: [] };
     }
 
-    const connectedSet = new Set<string>(this.transport.getConnectedPeers() as string[]);
+    const connectedSet = new Set<string>(this.getTransportConnectedPeerIds());
     const likelyPeers: string[] = [];
     const coldPeers: string[] = [];
     const connectedPeers: string[] = [];
@@ -5130,7 +5138,7 @@ export class ChatController {
   /** Manual reconnect action for the sidebar Retry button. */
   async retryReconnectNow(): Promise<{ attempted: number; reinitialized: boolean }> {
     const firstAttempt = this.runPeerMaintenanceNow('user-retry');
-    const noPeersConnected = this.transport.getConnectedPeers().length === 0;
+    const noPeersConnected = this.getTransportConnectedPeerIds().length === 0;
     const reinitialized = (firstAttempt === 0 || noPeersConnected)
       ? await this.reinitializeTransportIfStuck('user-retry')
       : false;
@@ -5167,7 +5175,7 @@ export class ChatController {
     this.transportReinitInFlight = (async () => {
       this.lastTransportReinitAt = Date.now();
       try {
-        const connectedPeers = this.transport.getConnectedPeers().length;
+        const connectedPeers = this.getTransportConnectedPeerIds().length;
         if (connectedPeers > 0) return false;
 
         const signalingStatus = typeof this.transport.getSignalingStatus === 'function'
@@ -5390,7 +5398,7 @@ export class ChatController {
     const ws = workspaceId ? this.workspaceManager.getWorkspace(workspaceId) : null;
     if (!ws) return;
 
-    const connectedPeers = new Set<string>(this.transport.getConnectedPeers() as string[]);
+    const connectedPeers = new Set<string>(this.getTransportConnectedPeerIds());
 
     for (const member of ws.members) {
       const targetPeerId = member.peerId;
@@ -5577,7 +5585,7 @@ export class ChatController {
     if (!ws) return 0;
 
     const maintenanceStartedAt = Date.now();
-    const connectedPeers = new Set<string>(this.transport.getConnectedPeers() as string[]);
+    const connectedPeers = new Set<string>(this.getTransportConnectedPeerIds());
     const now = Date.now();
     const candidates = this.getWorkspacePeerCandidates(ws.id, now);
     let attempted = 0;
@@ -6680,16 +6688,18 @@ export class ChatController {
     }
 
     // Bootstrap inviter as owner so incoming workspace-state from inviter is trusted.
+    // Modern signed invites carry BOTH the inviter signing key (`publicKey`) and the
+    // transport handshake key (`transportPublicKey`), so the joiner can verify the invite
+    // and immediately encrypt to the inviter without waiting for later workspace sync.
     this.workspaceManager.addMember(ws.id, {
       peerId,
-      alias: peerId.slice(0, 8),
-      // Invite publicKey currently carries inviter's signature-verification key,
-      // not the transport handshake key. Storing it as member.publicKey causes
-      // false handshake mismatch rejections before authoritative workspace sync lands.
-      publicKey: '',
+      alias: inviteData?.inviterAlias || peerId.slice(0, 8),
+      publicKey: inviteData?.transportPublicKey || '',
       signingPublicKey: inviteData?.publicKey || undefined,
       joinedAt: Date.now(),
       role: 'owner',
+      ...(inviteData?.inviterIsBot ? { isBot: true } : {}),
+      allowWorkspaceDMs: inviteData?.inviterAllowWorkspaceDMs !== false,
     });
 
     // Set as active workspace
@@ -8097,7 +8107,7 @@ export class ChatController {
     const ws = this.workspaceManager.getWorkspace(workspaceId);
     if (!ws || maxPeers <= 0) return [];
 
-    const connectedSet = new Set<string>(this.transport.getConnectedPeers() as string[]);
+    const connectedSet = new Set<string>(this.getTransportConnectedPeerIds());
     const picked: string[] = [];
     const addPeer = (peerId: string): void => {
       if (!peerId || peerId === this.state.myPeerId) return;
@@ -8177,6 +8187,8 @@ export class ChatController {
       }
     }
 
+    const myWorkspaceMember = ws.members.find((m: any) => m.peerId === this.state.myPeerId);
+
     // Build InviteData with security fields
     const inviteData: InviteData = {
       host,
@@ -8189,6 +8201,10 @@ export class ChatController {
       peerId: this.state.myPeerId,
       peers: additionalPeers.length > 0 ? additionalPeers : undefined,
       publicKey: inviteVerificationPublicKey,
+      transportPublicKey: this.myPublicKey || undefined,
+      inviterAlias: this.getMyAliasForWorkspace(workspaceId),
+      inviterIsBot: myWorkspaceMember?.isBot || undefined,
+      inviterAllowWorkspaceDMs: myWorkspaceMember?.allowWorkspaceDMs !== false,
       workspaceName: ws.name || undefined,
       workspaceId: ws.id,
       // Invite security: 7-day expiration by default, unlimited uses, signed by inviter
@@ -8337,7 +8353,7 @@ export class ChatController {
           try { this.transport.send(peerId, data); } catch {}
         }
       },
-      getConnectedPeers: () => this.transport.getConnectedPeers(),
+      getConnectedPeers: () => this.getTransportConnectedPeerIds(),
       getDisplayName: (peerId) => this.getDisplayNameForPeer(peerId),
     });
   }
@@ -9440,11 +9456,7 @@ export class ChatController {
     ));
     if (recipients.length === 0) return;
 
-    const connectedViaTransport = new Set<string>(
-      typeof this.transport?.getConnectedPeers === 'function'
-        ? (this.transport.getConnectedPeers() as string[])
-        : [],
-    );
+    const connectedViaTransport = new Set<string>(this.getTransportConnectedPeerIds());
     const now = Date.now();
     let attemptedDirectConnect = 0;
 
@@ -9483,7 +9495,7 @@ export class ChatController {
     }
 
     const attemptedMaintenance = this.runPeerMaintenanceNow(reason);
-    if (attemptedDirectConnect === 0 && attemptedMaintenance === 0 && this.transport.getConnectedPeers().length === 0) {
+    if (attemptedDirectConnect === 0 && attemptedMaintenance === 0 && this.getTransportConnectedPeerIds().length === 0) {
       void this.reinitializeTransportIfStuck(reason);
     }
   }
@@ -11237,11 +11249,7 @@ export class ChatController {
     if (uniqueKnownRecipients.length === 0) return [];
     const knownRecipientSet = new Set(uniqueKnownRecipients);
 
-    const connectedPeers = new Set<string>(
-      typeof this.transport?.getConnectedPeers === 'function'
-        ? (this.transport.getConnectedPeers() as string[])
-        : [],
-    );
+    const connectedPeers = new Set<string>(this.getTransportConnectedPeerIds());
 
     const selected: string[] = [];
     const selectedSet = new Set<string>();
@@ -11739,14 +11747,12 @@ export class ChatController {
 
   private getOnlineRecipientPeerIds(recipientPeerIds: string[]): string[] {
     if (!Array.isArray(recipientPeerIds) || recipientPeerIds.length === 0) return [];
-    const connectedViaTransport = new Set<string>(
-      typeof this.transport?.getConnectedPeers === 'function'
-        ? (this.transport.getConnectedPeers() as string[])
-        : [],
-    );
+    const readyPeers = this.state.readyPeers instanceof Set ? this.state.readyPeers : new Set<string>();
+    const connectedPeers = this.state.connectedPeers instanceof Set ? this.state.connectedPeers : new Set<string>();
+    const connectedViaTransport = new Set<string>(this.getTransportConnectedPeerIds());
     const online = new Set<string>([
-      ...Array.from(this.state.readyPeers ?? []),
-      ...Array.from(this.state.connectedPeers ?? []),
+      ...Array.from(readyPeers),
+      ...Array.from(connectedPeers),
       ...Array.from(connectedViaTransport),
     ]);
     return Array.from(new Set(
