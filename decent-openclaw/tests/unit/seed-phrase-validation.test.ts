@@ -11,7 +11,7 @@ function makeAccount(overrides: Partial<any> = {}): any {
     dmPolicy: 'allow',
     configured: true,
     seedPhrase: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
-    signalingServer: 'https://decentchat.app/peerjs',
+    signalingServer: 'https://0.peerjs.com/',
     invites: [],
     alias: 'DecentChat Bot',
     dataDir: mkdtempSync(join(tmpdir(), 'openclaw-seed-validation-test-')),

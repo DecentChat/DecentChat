@@ -2,7 +2,7 @@
   "id": "decentchat",
   "kind": "channel",
   "name": "DecentChat",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "channels": ["decentchat"],
   "description": "DecentChat P2P channel plugin for OpenClaw — P2P encrypted chat",
   "configSchema": {
@@ -11,7 +11,7 @@
     "properties": {
       "enabled": { "type": "boolean", "default": true },
       "seedPhrase": { "type": "string" },
-      "signalingServer": { "type": "string", "default": "https://decentchat.app/peerjs" },
+      "signalingServer": { "type": "string", "default": "https://0.peerjs.com/" },
       "invites": { "type": "array", "items": { "type": "string" } },
       "alias": { "type": "string", "default": "DecentChat Bot" },
       "dataDir": { "type": "string" },
@@ -22,7 +22,7 @@
   "uiHints": {
     "enabled": { "label": "Enabled" },
     "seedPhrase": { "label": "Seed Phrase (12 words)", "sensitive": true },
-    "signalingServer": { "label": "Signaling Server", "placeholder": "https://decentchat.app/peerjs" },
+    "signalingServer": { "label": "Signaling Server", "placeholder": "https://0.peerjs.com/" },
     "invites": { "label": "Invite URLs" },
     "alias": { "label": "Bot Display Name", "placeholder": "DecentChat Bot" },
     "dataDir": { "label": "Data Directory" },

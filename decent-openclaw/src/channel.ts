@@ -446,7 +446,7 @@ export function resolveDecentChatAccount(cfg: any, accountId?: string | null): R
     dmPolicy: ch.dmPolicy ?? "open",
     configured: !!seedPhrase?.trim(),
     seedPhrase,
-    signalingServer: ch.signalingServer ?? "https://decentchat.app/peerjs",
+    signalingServer: ch.signalingServer ?? "https://0.peerjs.com/",
     invites: ch.invites ?? [],
     alias: ch.alias ?? "DecentChat Bot",
     dataDir: resolveDecentChatDataDir(cfg, resolvedAccountId, ch.dataDir),
@@ -826,7 +826,7 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
     uiHints: {
       enabled: { label: "Enabled" },
       seedPhrase: { label: "Seed Phrase (12 words)", sensitive: true, help: "BIP39 seed phrase — determines your bot's identity on the network" },
-      signalingServer: { label: "Signaling Server", placeholder: "https://decentchat.app/peerjs", advanced: true },
+      signalingServer: { label: "Signaling Server", placeholder: "https://0.peerjs.com/", advanced: true },
       alias: { label: "Bot Display Name", placeholder: "DecentChat Bot" },
       dataDir: { label: "Data Directory", advanced: true, help: "Path for persistent peer storage" },
       streamEnabled: { label: "Enable streaming", help: "Stream token deltas to peers in real time" },

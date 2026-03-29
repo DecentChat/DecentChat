@@ -32,7 +32,10 @@ export class FileStore {
   set<T>(key: string, value: T): void {
     this.cache.set(key, value);
     const filePath = join(this.dir, `${key}.json`);
-    writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf-8');
+    // Use compact JSON (no indentation) to reduce file size and parse time.
+    // The manifest-state file was 54 MB pretty-printed (~1.5 M lines) which
+    // caused ~2-minute startup delays per account on every restart.
+    writeFileSync(filePath, JSON.stringify(value), 'utf-8');
   }
 
   delete(key: string): void {

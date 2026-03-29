@@ -317,6 +317,16 @@ function sanitizeWorkspaceState(rawWorkspace: unknown): { workspaceId: string; s
 }
 
 export class ManifestStore {
+  /**
+   * Maximum number of deltas retained per domain key when exporting state.
+   * Older deltas are dropped to prevent unbounded growth of the persisted
+   * manifest-state file (which grew to 54 MB / 1.5 M lines in production,
+   * causing ~2-minute startup delays).  Only the most recent deltas are
+   * needed for incremental sync — peers that are further behind will
+   * fall back to a full snapshot.
+   */
+  static readonly MAX_DELTAS_PER_DOMAIN = 500;
+
   private readonly workspaces = new Map<string, WorkspaceManifestState>();
   private changeListener: (() => void) | null = null;
   private saveWorkspaceState: SaveWorkspaceStateFn | null = null;
@@ -378,8 +388,15 @@ export class ManifestStore {
       })
       .map((entry) => ({ ...entry }));
 
-    const deltas = [...ws.deltas.values()]
-      .flat()
+    const deltas = [...ws.deltas.entries()]
+      .flatMap(([, domainDeltas]) => {
+        const sorted = [...domainDeltas].sort((a, b) =>
+          a.version - b.version || a.timestamp - b.timestamp || a.opId.localeCompare(b.opId),
+        );
+        return sorted.length > ManifestStore.MAX_DELTAS_PER_DOMAIN
+          ? sorted.slice(sorted.length - ManifestStore.MAX_DELTAS_PER_DOMAIN)
+          : sorted;
+      })
       .sort((a, b) => {
         const domainCmp = a.domain.localeCompare(b.domain);
         if (domainCmp !== 0) return domainCmp;
@@ -427,8 +444,16 @@ export class ManifestStore {
           })
           .map((entry) => ({ ...entry }));
 
-        const deltas = [...ws.deltas.values()]
-          .flat()
+        const deltas = [...ws.deltas.entries()]
+          .flatMap(([, domainDeltas]) => {
+            // Keep only the most recent deltas per domain to cap state size.
+            const sorted = [...domainDeltas].sort((a, b) =>
+              a.version - b.version || a.timestamp - b.timestamp || a.opId.localeCompare(b.opId),
+            );
+            return sorted.length > ManifestStore.MAX_DELTAS_PER_DOMAIN
+              ? sorted.slice(sorted.length - ManifestStore.MAX_DELTAS_PER_DOMAIN)
+              : sorted;
+          })
           .sort((a, b) => {
             const domainCmp = a.domain.localeCompare(b.domain);
             if (domainCmp !== 0) return domainCmp;

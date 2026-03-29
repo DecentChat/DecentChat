@@ -24,7 +24,7 @@ Primary schema source: `decent-openclaw/src/channel.ts` (`DecentChatConfigSchema
 
 Whether account is active.
 
-### `signalingServer` (string, default: `https://decentchat.app/peerjs`)
+### `signalingServer` (string, default: `https://0.peerjs.com/`)
 
 Base PeerJS signaling URL. Additional signaling servers can be discovered from invite URIs and merged/deduplicated at startup (`NodeXenaPeer.start`).
 
@@ -118,7 +118,7 @@ channels:
   decentchat:
     enabled: true
     seedPhrase: "word1 word2 ... word12"
-    signalingServer: "https://decentchat.app/peerjs"
+    signalingServer: "https://0.peerjs.com/"
     invites:
       - "decent://host:443/INVITECODE?secure=1&path=%2F&peer=peer-abc"
     alias: "Xena AI"

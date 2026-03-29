@@ -143,7 +143,7 @@ describe("account resolution", () => {
     const account = resolveDecentChatAccount({});
     expect(account.enabled).toBe(true);
     expect(account.alias).toBe("DecentChat Bot");
-    expect(account.signalingServer).toBe("https://decentchat.app/peerjs");
+    expect(account.signalingServer).toBe("https://0.peerjs.com/");
     expect(account.invites).toEqual([]);
     expect(account.dmPolicy).toBe("open");
     expect(account.streamEnabled).toBe(true);

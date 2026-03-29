@@ -22,7 +22,7 @@ Depends on `@decentchat/protocol` and `peerjs`.
 import { PeerTransport } from '@decentchat/transport-webrtc';
 
 const transport = new PeerTransport({
-  signalingServers: ['https://decentchat.app/peerjs'],
+  signalingServers: ['https://0.peerjs.com/'],
 });
 
 transport.onConnect = (peerId) => console.log('connected:', peerId);

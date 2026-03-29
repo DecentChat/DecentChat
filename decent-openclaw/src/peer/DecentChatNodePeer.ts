@@ -53,27 +53,29 @@ import type { CompanyTemplateQuestionValue } from '@decentchat/company-sim';
 
 const COMPANY_TEMPLATE_CONTROL_CAPABILITY = 'company-template-control-v1';
 
-let decentChatNodePeerStartupLock: Promise<void> = Promise.resolve();
+/**
+ * Startup lock removed — accounts now start concurrently.
+ *
+ * The old implementation serialised every `DecentChatNodePeer.start()` through
+ * a single promise chain (concurrency = 1). With 4 accounts each taking ~2 min
+ * to restore state & register on the signaling server, total startup was 8+ min
+ * — long enough for the health-monitor to kill later accounts.
+ *
+ * Each account already has its own FileStore directory, CryptoManager, and
+ * PeerTransport, so there is no shared mutable state that requires
+ * serialisation. The per-account stagger delay (DECENTCHAT_STARTUP_STAGGER_MS)
+ * in channel.ts still spaces out signaling-server registrations.
+ *
+ * `runDecentChatNodePeerStartupLocked` is kept as a pass-through so call-sites
+ * and tests that reference it continue to compile.
+ */
 
 export function resetDecentChatNodePeerStartupLockForTests(): void {
-  decentChatNodePeerStartupLock = Promise.resolve();
+  // No-op: lock removed.
 }
 
 export async function runDecentChatNodePeerStartupLocked<T>(task: () => Promise<T>): Promise<T> {
-  const waitForPrevious = decentChatNodePeerStartupLock;
-  let releaseCurrent: (() => void) | null = null;
-
-  decentChatNodePeerStartupLock = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-
-  await waitForPrevious;
-
-  try {
-    return await task();
-  } finally {
-    releaseCurrent?.();
-  }
+  return task();
 }
 
 export interface DecentChatNodePeerOptions {
@@ -287,7 +289,9 @@ export class DecentChatNodePeer {
   private static readonly CONNECT_HANDSHAKE_COOLDOWN_MS = 5_000;
   private static readonly INBOUND_HANDSHAKE_COOLDOWN_MS = 5_000;
   private static readonly PEER_MAINTENANCE_RETRY_BASE_MS = 30_000;
-  private static readonly PEER_MAINTENANCE_RETRY_MAX_MS = 10 * 60_000;
+  private static readonly PEER_MAINTENANCE_RETRY_MAX_MS = 60 * 60_000; // 1 hour (was 10 min)
+  /** Stop retrying a peer entirely after this many consecutive failures. */
+  private static readonly PEER_MAINTENANCE_MAX_CONSECUTIVE_FAILURES = 20;
   private static readonly TRANSPORT_ERROR_LOG_WINDOW_MS = 30_000;
   private static readonly GOSSIP_TTL = 2;
 
@@ -447,7 +451,7 @@ export class DecentChatNodePeer {
       this.restoreManifestState();
       this.restoreCustodianInbox();
 
-      const configServer = this.opts.account.signalingServer ?? 'https://decentchat.app/peerjs';
+      const configServer = this.opts.account.signalingServer ?? 'https://0.peerjs.com/';
       const allServers: string[] = [configServer];
 
       // Normalize a signaling URL for deduplication: strip default ports so
@@ -1134,6 +1138,13 @@ export class DecentChatNodePeer {
         seen.add(peerId);
         if (connectedPeers.has(peerId)) {
           this.clearPeerMaintenanceFailure(peerId);
+          continue;
+        }
+        // Skip peers that have failed too many times consecutively.
+        // A successful inbound connection will clear the counter via
+        // clearPeerMaintenanceFailure(), re-enabling maintenance.
+        const attempts = this.peerMaintenanceAttemptsByPeer.get(peerId) ?? 0;
+        if (attempts >= DecentChatNodePeer.PEER_MAINTENANCE_MAX_CONSECUTIVE_FAILURES) {
           continue;
         }
         const retryAt = this.peerMaintenanceRetryAtByPeer.get(peerId) ?? 0;

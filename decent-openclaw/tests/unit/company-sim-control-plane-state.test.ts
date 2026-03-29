@@ -153,7 +153,7 @@ function makeAccount(overrides: Partial<any> = {}): any {
     dmPolicy: 'allow',
     configured: true,
     seedPhrase: VALID_SEED,
-    signalingServer: 'https://decentchat.app/peerjs',
+    signalingServer: 'https://0.peerjs.com/',
     invites: [],
     alias: 'Host',
     dataDir: mkdtempSync(join(tmpdir(), 'openclaw-company-control-account-')),

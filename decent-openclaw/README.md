@@ -37,13 +37,13 @@ channels:
     seedPhrase: "your twelve word BIP39 mnemonic goes here ..."
 ```
 
-That's the minimum. The bot will join the DecentChat network using the default signaling server (`https://decentchat.app/peerjs`), respond to all messages, and call itself "DecentChat Bot".
+That's the minimum. The bot will join the DecentChat network using the default signaling server (`https://0.peerjs.com/`), respond to all messages, and call itself "DecentChat Bot".
 
 ### Optional settings
 
 | Key | Default | What it does |
 |-----|---------|-------------|
-| `signalingServer` | `https://decentchat.app/peerjs` | PeerJS signaling endpoint |
+| `signalingServer` | `https://0.peerjs.com/` | PeerJS signaling endpoint |
 | `invites` | `[]` | DecentChat invite URIs to auto-join |
 | `alias` | `"DecentChat Bot"` | Display name for the bot |
 | `dataDir` | auto | Override the data directory |
