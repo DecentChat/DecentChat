@@ -14,6 +14,7 @@ import { showPeerSelectModal } from '../lib/components/modals/PeerSelectModal.sv
 import { showAddContactModal as svelteShowAddContactModal } from '../lib/components/modals/AddContactModal.svelte';
 import { showSettingsModal } from '../lib/components/modals/SettingsModal.svelte';
 import { showInstallTeamTemplateModal as svelteShowInstallTeamTemplateModal } from '../lib/components/modals/installTeamTemplateModal';
+import { canGenerateSeed, resolveSeedPhraseForSettings } from '../lib/identity/seedSettings';
 import { filterMemberPickerPeers, searchMemberPickerPeers } from './memberPickerSearch';
 
 interface QRFlowLike {
@@ -784,13 +785,20 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
   function showSettings(): void {
     const wsId = state.activeWorkspaceId;
     void showSettingsModal({
-      getSettings: async () => ({
-        ...await (callbacks.getSettings?.() || {}),
-        myPeerId: state.myPeerId,
-        myAlias: state.myAlias,
-        activeWorkspaceId: wsId,
-        workspaceAlias: wsId ? (state.workspaceAliases?.[wsId] || '') : '',
-      }),
+      getSettings: async () => {
+        const settings = {
+          ...await (callbacks.getSettings?.() || {}),
+        } as Record<string, unknown>;
+        const currentSeed = await callbacks.getCurrentSeed?.();
+        return {
+          ...settings,
+          seedPhrase: resolveSeedPhraseForSettings(settings.seedPhrase as string | null | undefined, currentSeed),
+          myPeerId: state.myPeerId,
+          myAlias: state.myAlias,
+          activeWorkspaceId: wsId,
+          workspaceAlias: wsId ? (state.workspaceAliases?.[wsId] || '') : '',
+        };
+      },
       saveSetting: async (key: string, value: unknown) => {
         if (key === 'workspaceAlias' && wsId) { callbacks.setWorkspaceAlias?.(wsId, value as string); return; }
         if (key === 'myAlias' && typeof value === 'string' && value.trim()) { state.myAlias = value.trim(); }
@@ -799,13 +807,18 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
       },
       onAction: async (action: string) => {
         if (action === 'generateSeed') {
+          const currentSeed = await callbacks.getCurrentSeed?.();
+          if (!canGenerateSeed(currentSeed)) {
+            showToast('Seed phrase already exists for this device. Use Transfer instead.', 'info');
+            return;
+          }
           await callbacks.onSettingsAction?.(action);
         } else if (action === 'seed-transfer') {
           const seed = await callbacks.getCurrentSeed?.();
           if (seed) {
             await qrFlow.showSeedQR(seed, { sourcePeerId: state.myPeerId || undefined });
           } else {
-            showToast('No seed phrase found — generate one in Settings first', 'error');
+            showToast('No seed phrase found for this device', 'error');
           }
         }
       },

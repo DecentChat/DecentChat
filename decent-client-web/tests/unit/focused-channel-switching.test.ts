@@ -67,4 +67,74 @@ describe('focused channel switching', () => {
     expect(state.activeChannelId).toBeNull();
     expect(callbacks.setFocusedChannel).toHaveBeenCalledWith(null);
   });
+
+
+  test('switching to the DMs list closes any open thread state', async () => {
+    const { registerShellCallbacks } = await import('../../src/ui/registerShellCallbacks');
+    const { getShellCallbacks } = await import('../../src/lib/stores/shell.svelte');
+
+    const state = {
+      myPeerId: 'me',
+      myAlias: 'Me',
+      workspaceAliases: {},
+      connectedPeers: new Set<string>(),
+      connectingPeers: new Set<string>(),
+      readyPeers: new Set<string>(),
+      activeWorkspaceId: 'ws-1',
+      activeChannelId: 'ch-1',
+      activeDirectConversationId: null,
+      activeThreadId: 'thread-1',
+      threadOpen: true,
+      sidebarOpen: true,
+    } as any;
+
+    const closeThread = mock(() => {
+      state.activeThreadId = null;
+      state.threadOpen = false;
+    });
+
+    registerShellCallbacks({
+      state,
+      workspaceManager: { getWorkspace: mock(() => null) } as any,
+      messageStore: {} as any,
+      callbacks: {
+        setFocusedChannel: mock(() => {}),
+      } as any,
+      modalActions: {} as any,
+      toggleActivityPanel: mock(() => {}),
+      persistViewState: mock(() => {}),
+      refreshContactsCache: mock(async () => {}),
+      syncShellSidebar: mock(() => {}),
+      syncShellRail: mock(() => {}),
+      syncShellHeader: mock(() => {}),
+      syncShellMessages: mock(() => {}),
+      refreshActivityPanel: mock(() => {}),
+      switchWorkspace: mock(() => {}),
+      switchChannel: mock(() => {}),
+      switchToDirectConversation: mock(() => {}),
+      startMemberDM: mock(() => {}),
+      openThread: mock(() => {}),
+      closeThread,
+      rememberReaction: mock(() => {}),
+      showMessageInfo: mock(() => {}),
+      openLightbox: mock(() => {}),
+      scrollToMessageAndHighlight: mock(() => {}),
+      getPeerAlias: mock((peerId: string) => peerId),
+      peerStatusClass: mock(() => ''),
+      peerStatusTitle: mock(() => 'Offline'),
+      showToast: mock(() => {}),
+      toggleMobileSidebar: mock(() => {}),
+      closeMobileSidebar: mock(() => {}),
+      closeLightbox: mock(() => {}),
+      syncShellHuddle: mock(() => {}),
+    });
+
+    const shellCallbacks = getShellCallbacks();
+    shellCallbacks!.onSwitchToDMs();
+
+    expect(closeThread).toHaveBeenCalledTimes(1);
+    expect(state.threadOpen).toBe(false);
+    expect(state.activeThreadId).toBeNull();
+  });
+
 });

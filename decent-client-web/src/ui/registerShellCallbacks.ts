@@ -163,6 +163,7 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     onSwitchToDMs: () => {
       state.activeWorkspaceId = null;
       if (!state.activeDirectConversationId) state.activeChannelId = null;
+      closeThread();
       callbacks.setFocusedChannel?.(state.activeDirectConversationId || null);
       persistViewState();
       refreshContactsCache().catch(() => {});

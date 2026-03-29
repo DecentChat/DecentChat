@@ -12,6 +12,7 @@ import {
   TITLE_TOOLTIP_ATTRIBUTE_FILTER,
   shouldHydrateTitleTooltipAttribute,
 } from './ui/titleTooltipObserver';
+import { canGenerateSeed } from './lib/identity/seedSettings';
 
 // ─── Single-Tab Lock ─────────────────────────────────────────────────────────
 // Prevent multiple tabs from running simultaneously (shared IndexedDB,
@@ -534,6 +535,9 @@ async function init(): Promise<void> {
     getDirectConversations: () => ctrl.getDirectConversations(),
     onSettingsAction: async (action) => {
       if (action === 'generateSeed') {
+        const existingSeed = await ctrl.persistentStore.getSetting('seedPhrase');
+        if (!canGenerateSeed(existingSeed)) return;
+
         const { SeedPhraseManager } = await import('@decentchat/protocol');
         const seedPhrase = new SeedPhraseManager();
         const { mnemonic } = seedPhrase.generate();
