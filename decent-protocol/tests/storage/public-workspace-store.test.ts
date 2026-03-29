@@ -136,6 +136,8 @@ describe('PersistentStore — public workspace normalized stores', () => {
       workspaceId: 'ws-1',
       channelId: 'ch-1',
       pageId: 'page-2',
+      pageSize: 100,
+      direction: 'older',
       messages: [],
       generatedAt: 1234,
       tier: 'recent',

@@ -13,6 +13,7 @@ docs/.vitepress/dist/
 test-results/
 playwright-report/
 blob-report/
+decent-client-web/profile-output/
 
 # Environment
 .env
