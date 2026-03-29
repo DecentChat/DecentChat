@@ -425,8 +425,11 @@ export class DecentChatNodePeer {
     }
 
     await runDecentChatNodePeerStartupLocked(async () => {
-      const { ecdhKeyPair, ecdsaKeyPair } = await seedMgr.deriveKeys(seedPhrase);
-      this.myPeerId = await seedMgr.derivePeerId(seedPhrase);
+      // Use deriveAll() to get both peer ID and key material in a single
+      // PBKDF2 pass (100 000 iterations). Previously deriveKeys() +
+      // derivePeerId() ran PBKDF2 twice, wasting ~2 s of CPU per account.
+      const { peerId, keys: { ecdhKeyPair, ecdsaKeyPair } } = await seedMgr.deriveAll(seedPhrase);
+      this.myPeerId = peerId;
 
       this.cryptoManager.setKeyPair(ecdhKeyPair);
       this.myPublicKey = await this.cryptoManager.exportPublicKey(ecdhKeyPair.publicKey);
@@ -1032,6 +1035,7 @@ export class DecentChatNodePeer {
     this.botHuddle = null;
     this.signingKeyPair = null;
     this.transport?.destroy();
+    this.store.close();
     this.opts.log?.info('[decentchat-peer] stopped');
   }
 

@@ -46,6 +46,7 @@
     "@decentchat/company-sim": "workspace:^",
     "@decentchat/protocol": "workspace:^",
     "@decentchat/transport-webrtc": "workspace:^",
+    "better-sqlite3": "^12.8.0",
     "node-datachannel": "^0.32.1",
     "opusscript": "^0.1.1",
     "yaml": "^2.8.2",
@@ -55,6 +56,7 @@
     "openclaw": ">=0.1.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "playwright": "^1.58.2"
   }
 }

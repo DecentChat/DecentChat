@@ -62,7 +62,7 @@ describe('DecentChatNodePeer signaling URL normalization', () => {
     MockPeerTransport.instances = [];
   });
 
-  test('serializes overlapping peer startup work', async () => {
+  test('startup lock is a pass-through — tasks run concurrently', async () => {
     resetDecentChatNodePeerStartupLockForTests();
 
     const events: string[] = [];
@@ -82,15 +82,13 @@ describe('DecentChatNodePeer signaling URL normalization', () => {
     const second = run('second');
 
     await Promise.resolve();
-    expect(events).toEqual(['first:start']);
+    // With the startup lock removed (pass-through), both tasks start immediately.
+    expect(events).toEqual(['first:start', 'second:start']);
 
     releases.shift()?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(events).toEqual(['first:start', 'first:done', 'second:start']);
-
     releases.shift()?.();
     await Promise.all([first, second]);
-    expect(events).toEqual(['first:start', 'first:done', 'second:start', 'second:done']);
+    expect(events).toEqual(['first:start', 'second:start', 'first:done', 'second:done']);
   });
 
   test('deduplicates https://0.peerjs.com/ and https://0.peerjs.com:443/', async () => {

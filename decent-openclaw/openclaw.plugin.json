@@ -2,7 +2,7 @@
   "id": "decentchat",
   "kind": "channel",
   "name": "DecentChat",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "channels": ["decentchat"],
   "description": "DecentChat P2P channel plugin for OpenClaw — P2P encrypted chat",
   "configSchema": {
