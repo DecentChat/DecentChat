@@ -159,6 +159,31 @@ describe('InviteURI - Roundtrip', () => {
     const decoded = InviteURI.decode(original);
     expect(decoded.fallbackServers).toHaveLength(3);
   });
+
+  test('roundtrip preserves inviter transport bootstrap metadata', () => {
+    const original = InviteURI.encode({
+      host: '192.168.1.1',
+      port: 9000,
+      inviteCode: 'META0001',
+      secure: false,
+      path: '/peerjs',
+      fallbackServers: [],
+      turnServers: [],
+      peerId: 'inviter-peer',
+      publicKey: 'signing-pk',
+      transportPublicKey: 'transport-pk',
+      inviterAlias: 'Mira PM',
+      inviterIsBot: true,
+      inviterAllowWorkspaceDMs: false,
+    });
+
+    const decoded = InviteURI.decode(original);
+    expect(decoded.publicKey).toBe('signing-pk');
+    expect(decoded.transportPublicKey).toBe('transport-pk');
+    expect(decoded.inviterAlias).toBe('Mira PM');
+    expect(decoded.inviterIsBot).toBe(true);
+    expect(decoded.inviterAllowWorkspaceDMs).toBe(false);
+  });
 });
 
 describe('InviteURI - Validation', () => {

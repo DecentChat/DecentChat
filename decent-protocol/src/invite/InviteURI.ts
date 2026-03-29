@@ -1,17 +1,17 @@
 /**
  * InviteURI — Self-contained connection tickets
- * 
+ *
  * Like BitTorrent magnet links: everything needed to join is in the URI.
  * No external infrastructure required.
- * 
+ *
  * Format:
  *   decent://HOST:PORT/INVITE_CODE?fallback=wss://public.server&turn=turn:relay.com&pk=PUBLIC_KEY
- * 
+ *
  * Examples (web URL format - recommended):
  *   https://decentchat.app/join/ABCD1234?signal=192.168.1.50:9000                   (LAN)
  *   https://decentchat.app/join/ABCD1234?signal=signal.alice.com:443&secure=1       (domain)
  *   https://decentchat.app/join/ABCD1234?signal=localhost:9000                      (local dev)
- * 
+ *
  * Legacy decent:// protocol (still supported for decode):
  *   decent://192.168.1.50:9000/ABCD1234                          (LAN)
  *   decent://signal.alice.com:443/ABCD1234                       (domain)
@@ -36,8 +36,16 @@ export interface InviteData {
   peerId?: string;
   /** Additional workspace member peer IDs for multi-peer join resilience */
   peers?: string[];
-  /** Inviter's public key (for verification before connecting) */
+  /** Inviter's signing public key (for invite verification before connecting) */
   publicKey?: string;
+  /** Inviter's transport public key (lets joiners encrypt to inviter immediately) */
+  transportPublicKey?: string;
+  /** Inviter display name for better provisional join UX */
+  inviterAlias?: string;
+  /** Whether inviter is a bot account */
+  inviterIsBot?: boolean;
+  /** Whether inviter accepts workspace DMs */
+  inviterAllowWorkspaceDMs?: boolean;
   /** Canonical workspace ID (recommended; avoids provisional-ID join races) */
   workspaceId?: string;
   /** Workspace name (display only) */
@@ -62,7 +70,7 @@ export const DEFAULT_PUBLIC_SERVERS = [
 export class InviteURI {
   /**
    * Create an invite URI from invite data
-   * 
+   *
    * Generates a web URL format (https://...) for easier sharing.
    * Use encodeNative() for the decent:// protocol format.
    */
@@ -74,6 +82,10 @@ export class InviteURI {
       secure,
       peerId,
       publicKey,
+      transportPublicKey,
+      inviterAlias,
+      inviterIsBot,
+      inviterAllowWorkspaceDMs,
       workspaceName,
       workspaceId,
       path,
@@ -87,9 +99,13 @@ export class InviteURI {
     // Build web URL: https://decentchat.app/join/CODE?signal=host:port&...
     const params = new URLSearchParams();
     params.set('signal', `${host}:${port}`);
-    
+
     if (peerId) params.set('peer', peerId);
     if (publicKey) params.set('pk', publicKey);
+    if (transportPublicKey) params.set('tpk', transportPublicKey);
+    if (inviterAlias) params.set('alias', inviterAlias);
+    if (inviterIsBot) params.set('bot', '1');
+    if (inviterAllowWorkspaceDMs === false) params.set('wdm', '0');
     if (workspaceName) params.set('name', workspaceName);
     if (workspaceId) params.set('ws', workspaceId);
     if (secure) params.set('secure', '1');
@@ -150,6 +166,10 @@ export class InviteURI {
 
     if (data.peerId) params.set('peer', data.peerId);
     if (data.publicKey) params.set('pk', data.publicKey);
+    if (data.transportPublicKey) params.set('tpk', data.transportPublicKey);
+    if (data.inviterAlias) params.set('alias', data.inviterAlias);
+    if (data.inviterIsBot) params.set('bot', '1');
+    if (data.inviterAllowWorkspaceDMs === false) params.set('wdm', '0');
     if (data.workspaceName) params.set('name', data.workspaceName);
     if (data.workspaceId) params.set('ws', data.workspaceId);
     if (secure) params.set('secure', '1');
@@ -234,6 +254,10 @@ export class InviteURI {
       peerId: primaryPeer,
       peers: additionalPeers,
       publicKey: params.get('pk') || undefined,
+      transportPublicKey: params.get('tpk') || undefined,
+      inviterAlias: params.get('alias') || undefined,
+      inviterIsBot: params.get('bot') === '1' ? true : undefined,
+      inviterAllowWorkspaceDMs: params.get('wdm') === '0' ? false : undefined,
       workspaceName: params.get('name') || undefined,
       workspaceId: params.get('ws') || undefined,
       expiresAt: Number.isFinite(expiresAt) ? expiresAt : undefined,
@@ -293,6 +317,10 @@ export class InviteURI {
       peerId: primaryPeer,
       peers: additionalPeers,
       publicKey: parsed.searchParams.get('pk') || undefined,
+      transportPublicKey: parsed.searchParams.get('tpk') || undefined,
+      inviterAlias: parsed.searchParams.get('alias') || undefined,
+      inviterIsBot: parsed.searchParams.get('bot') === '1' ? true : undefined,
+      inviterAllowWorkspaceDMs: parsed.searchParams.get('wdm') === '0' ? false : undefined,
       workspaceName: parsed.searchParams.get('name') || undefined,
       workspaceId: parsed.searchParams.get('ws') || undefined,
       expiresAt: Number.isFinite(expiresAt) ? expiresAt : undefined,
@@ -384,6 +412,10 @@ export class InviteURI {
     inviteCode: string;
     peerId?: string;
     publicKey?: string;
+    transportPublicKey?: string;
+    inviterAlias?: string;
+    inviterIsBot?: boolean;
+    inviterAllowWorkspaceDMs?: boolean;
     workspaceName?: string;
     workspaceId?: string;
     secure?: boolean;
@@ -398,6 +430,10 @@ export class InviteURI {
       turnServers: [],
       peerId: opts.peerId,
       publicKey: opts.publicKey,
+      transportPublicKey: opts.transportPublicKey,
+      inviterAlias: opts.inviterAlias,
+      inviterIsBot: opts.inviterIsBot,
+      inviterAllowWorkspaceDMs: opts.inviterAllowWorkspaceDMs,
       workspaceName: opts.workspaceName,
       workspaceId: opts.workspaceId,
     });

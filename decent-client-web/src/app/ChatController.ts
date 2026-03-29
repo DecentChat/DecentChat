@@ -499,6 +499,8 @@ export class ChatController {
   private static readonly HANDSHAKE_BURST_STAGGER_MS = 800;
   /** Peers currently mid-handshake processing — prevents duplicate concurrent handshakes. */
   private readonly handshakeInFlight = new Set<string>();
+  private readonly handshakeReplyAtByPeer = new Map<string, number>();
+  private static readonly HANDSHAKE_REPLY_COOLDOWN_MS = 5_000;
   private topologyTelemetry?: TopologyTelemetry;
   private topologyAnomalyDetector?: TopologyAnomalyDetector;
   private topologyDesiredSetByWorkspace?: Map<string, string[]>;
@@ -1804,6 +1806,23 @@ export class ChatController {
 
           // Let the newly-ready peer know which presence slice we're currently viewing.
           this.sendCurrentPresenceSubscription(peerId);
+
+          // Reply with our own handshake (cooldown-limited) so a peer that lost
+          // our original connect-time handshake can rebuild its ratchet state too.
+          const lastHandshakeReplyAt = this.handshakeReplyAtByPeer.get(peerId) ?? 0;
+          if (Date.now() - lastHandshakeReplyAt >= ChatController.HANDSHAKE_REPLY_COOLDOWN_MS) {
+            this.handshakeReplyAtByPeer.set(peerId, Date.now());
+            try {
+              const replyHandshake = await this.messageProtocol!.createHandshake();
+              this.sendControlWithRetry(peerId, {
+                type: 'handshake',
+                ...replyHandshake,
+                capabilities: this.getAdvertisedControlCapabilities(this.state.activeWorkspaceId ?? undefined),
+              }, { label: 'handshake-reply' });
+            } catch (replyErr) {
+              console.warn('[Handshake] Failed to reply to inbound handshake', replyErr);
+            }
+          }
 
           // Start clock sync with new peer
           const syncReq = this.clockSync.startSync(peerId);
