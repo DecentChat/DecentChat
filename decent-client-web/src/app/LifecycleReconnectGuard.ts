@@ -56,6 +56,10 @@ export class LifecycleReconnectGuard {
     this.scheduleCheck('online');
   };
 
+  private readonly onFocus = () => {
+    this.scheduleCheck('focus');
+  };
+
   private readonly onOffline = () => {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -78,6 +82,7 @@ export class LifecycleReconnectGuard {
     this.started = true;
 
     this.deps.windowTarget.addEventListener('pageshow', this.onPageshow);
+    this.deps.windowTarget.addEventListener('focus', this.onFocus);
     this.deps.documentTarget.addEventListener('visibilitychange', this.onVisibilityChange);
     this.deps.windowTarget.addEventListener('online', this.onOnline);
     this.deps.windowTarget.addEventListener('offline', this.onOffline);
@@ -95,6 +100,7 @@ export class LifecycleReconnectGuard {
     this.started = false;
 
     this.deps.windowTarget.removeEventListener('pageshow', this.onPageshow);
+    this.deps.windowTarget.removeEventListener('focus', this.onFocus);
     this.deps.documentTarget.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.deps.windowTarget.removeEventListener('online', this.onOnline);
     this.deps.windowTarget.removeEventListener('offline', this.onOffline);

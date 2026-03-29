@@ -48,7 +48,6 @@
     id: string;
     name: string;
   }
-  }
 
   interface PresenceSummary {
     onlineCount: number | null;

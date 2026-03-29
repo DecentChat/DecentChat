@@ -74,6 +74,7 @@ describe('LifecycleReconnectGuard', () => {
     const pageShow = new Event('pageshow');
     Object.assign(pageShow, { persisted: true });
     windowTarget.dispatchEvent(pageShow);
+    windowTarget.dispatchEvent(new Event('focus'));
     documentTarget.setVisible();
 
     await wait(30);

@@ -294,6 +294,64 @@ describe('ChatController outbound receipt field initialization', () => {
     expect(ctrl.scheduleOfflineQueueFlush).toHaveBeenCalledWith('alice');
   });
 
+
+  test('sendMessage kicks immediate recovery for queued offline workspace peers', async () => {
+    const ctrl = Object.create(ChatController.prototype) as any;
+    ctrl.state = {
+      myPeerId: 'me',
+      readyPeers: new Set<string>(),
+      connectedPeers: new Set<string>(),
+      connectingPeers: new Set<string>(),
+      activeChannelId: 'ch-1',
+      activeWorkspaceId: 'ws-1',
+      threadOpen: false,
+    };
+    const msg = { id: 'm-recover-1', channelId: 'ch-1', senderId: 'me', timestamp: Date.now(), status: 'pending' } as any;
+
+    ctrl.messageStore = {
+      createMessage: mock(async () => msg),
+      addMessage: mock(async () => ({ success: true })),
+      getThreadRoot: mock(() => null),
+    };
+    ctrl.getOrCreateCRDT = mock(() => ({ createMessage: mock(() => ({ vectorClock: {} })) }));
+    ctrl.persistMessage = mock(async () => {});
+    ctrl.recordManifestDomain = mock(() => {});
+    ctrl.getChannelMessageCount = mock(() => 1);
+    ctrl.persistentStore = { saveMessage: mock(async () => {}) };
+    ctrl.ui = {
+      showToast: mock(() => {}),
+      appendMessageToDOM: mock(() => {}),
+      renderThreadMessages: mock(() => {}),
+      updateThreadIndicator: mock(() => {}),
+      updateMessageStatus: mock(() => {}),
+      updateSidebar: mock(() => {}),
+    };
+    ctrl.getChannelDeliveryPeerIds = mock(() => ['alice']);
+    ctrl.getOnlineRecipientPeerIds = ChatController.prototype['getOnlineRecipientPeerIds'];
+    ctrl.messageProtocol = { hasRatchetState: mock(() => true), restoreRatchetState: mock(async () => {}) };
+    ctrl.encryptMessageWithPreKeyBootstrap = mock(async () => ({}));
+    ctrl.transport = {
+      send: mock(() => false),
+      connect: mock(async () => {}),
+      getConnectedPeers: mock(() => []),
+      isConnectingToPeer: mock(() => false),
+    };
+    ctrl.getDisplayNameForPeer = mock(() => 'Me');
+    ctrl.offlineQueue = { enqueue: mock(async () => {}) };
+    ctrl.queueCustodyEnvelope = mock(async () => {});
+    ctrl.replicateToCustodians = mock(async () => {});
+    ctrl.scheduleOfflineQueueFlush = mock(() => {});
+    ctrl.runPeerMaintenanceNow = mock(() => 0);
+    ctrl.reinitializeTransportIfStuck = mock(async () => false);
+    ctrl.outgoingDeliveryRecoveryConnectAt = new Map();
+
+    await ChatController.prototype.sendMessage.call(ctrl, 'hello workspace');
+
+    expect(ctrl.transport.connect).toHaveBeenCalledWith('alice');
+    expect(ctrl.runPeerMaintenanceNow).toHaveBeenCalledWith('outgoing-workspace-send');
+    expect(ctrl.reinitializeTransportIfStuck).not.toHaveBeenCalled();
+  });
+
   test('sendAttachment initializes receipt fields and advances to sent', async () => {
     const ctrl = Object.create(ChatController.prototype) as any;
     ctrl.state = { myPeerId: 'me', activeChannelId: 'ch-1', activeWorkspaceId: 'ws-1', readyPeers: new Set<string>(['alice']), threadOpen: false };

@@ -117,6 +117,7 @@ const DEFERRED_GOSSIP_INTENT_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFERRED_GOSSIP_INTENT_OFFER_COOLDOWN_MS = 60 * 1000;
 const PENDING_DELIVERY_WATCHDOG_MS = 4_000;
 const PENDING_DELIVERY_RECOVERY_COOLDOWN_MS = 20_000;
+const OUTGOING_DELIVERY_RECOVERY_CONNECT_COOLDOWN_MS = 5_000;
 const NEGENTROPY_QUERY_TIMEOUT_MS = 8000;
 const PRESENCE_PAGE_REQUEST_TIMEOUT_MS = 5000;
 const PRESENCE_AUTO_ADVANCE_PAGE_TARGET = 150;
@@ -313,6 +314,7 @@ export class ChatController {
   private readonly scheduledOfflineQueueFlushes = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pendingDeliveryWatchTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pendingDeliveryRecoveryCooldowns = new Map<string, number>();
+  private readonly outgoingDeliveryRecoveryConnectAt = new Map<string, number>();
   readonly messageCRDTs: Map<string, MessageCRDT> = new Map();
   readonly mediaStore: MediaStore;
   private readonly blobStorage: IndexedDBBlobStorage;
@@ -6513,6 +6515,12 @@ export class ChatController {
       this.ui?.updateMessageStatus?.(msg.id, 'sent', { acked: 0, total: statusRecipientPeerIds.length });
     }
 
+    const onlineRecipientsAfterDispatch = new Set(this.getOnlineRecipientPeerIds(recipientPeerIds));
+    const recoveryRecipients = recipientPeerIds.filter((peerId) => !onlineRecipientsAfterDispatch.has(peerId));
+    if (recoveryRecipients.length > 0) {
+      this.kickOutgoingDeliveryRecovery(recoveryRecipients, 'outgoing-workspace-send');
+    }
+
   }
 
   // =========================================================================
@@ -7770,6 +7778,12 @@ export class ChatController {
       this.ui?.updateMessageStatus?.(msg.id, 'sent', { acked: 0, total: 1, read: 0 });
     }
 
+    const onlineRecipientsAfterDispatch = new Set(this.getOnlineRecipientPeerIds([peerId]));
+    const recoveryRecipients = [peerId].filter((candidate) => !onlineRecipientsAfterDispatch.has(candidate));
+    if (recoveryRecipients.length > 0) {
+      this.kickOutgoingDeliveryRecovery(recoveryRecipients, 'outgoing-direct-send');
+    }
+
   }
 
   async restoreContacts(): Promise<void> {
@@ -8666,6 +8680,12 @@ export class ChatController {
       });
       this.ui?.updateMessageStatus?.(msg.id, 'sent', { acked: 0, total: statusRecipientPeerIds.length, read: 0 });
     }
+
+    const onlineRecipientsAfterDispatch = new Set(this.getOnlineRecipientPeerIds(recipientPeerIds));
+    const recoveryRecipients = recipientPeerIds.filter((peerId) => !onlineRecipientsAfterDispatch.has(peerId));
+    if (recoveryRecipients.length > 0) {
+      this.kickOutgoingDeliveryRecovery(recoveryRecipients, 'outgoing-attachment-send');
+    }
   }
 
   /**
@@ -9412,6 +9432,60 @@ export class ChatController {
     }, delayMs);
 
     flushMap.set(peerId, timer);
+  }
+
+  private kickOutgoingDeliveryRecovery(recipientPeerIds: string[], reason: string): void {
+    const recipients = Array.from(new Set(
+      recipientPeerIds.filter((peerId): peerId is string => typeof peerId === 'string' && peerId.length > 0 && peerId !== this.state.myPeerId),
+    ));
+    if (recipients.length === 0) return;
+
+    const connectedViaTransport = new Set<string>(
+      typeof this.transport?.getConnectedPeers === 'function'
+        ? (this.transport.getConnectedPeers() as string[])
+        : [],
+    );
+    const now = Date.now();
+    let attemptedDirectConnect = 0;
+
+    for (const peerId of recipients) {
+      if (this.state.readyPeers.has(peerId) || this.state.connectedPeers.has(peerId) || connectedViaTransport.has(peerId)) continue;
+      if (this.state.connectingPeers.has(peerId)) continue;
+      if (typeof this.transport?.isConnectingToPeer === 'function' && this.transport.isConnectingToPeer(peerId)) {
+        this.state.connectingPeers.add(peerId);
+        continue;
+      }
+
+      const lastAttemptAt = this.outgoingDeliveryRecoveryConnectAt.get(peerId) ?? 0;
+      if (now - lastAttemptAt < OUTGOING_DELIVERY_RECOVERY_CONNECT_COOLDOWN_MS) continue;
+      this.outgoingDeliveryRecoveryConnectAt.set(peerId, now);
+
+      if (typeof this.transport?.connect !== 'function') continue;
+
+      attemptedDirectConnect += 1;
+      this.state.connectingPeers.add(peerId);
+
+      try {
+        const connectPromise = this.transport.connect(peerId);
+        if (connectPromise && typeof (connectPromise as Promise<unknown>).catch === 'function') {
+          (connectPromise as Promise<unknown>).catch(() => {
+            this.state.connectingPeers.delete(peerId);
+            this.ui?.updateSidebar({ refreshContacts: false });
+          });
+        }
+      } catch {
+        this.state.connectingPeers.delete(peerId);
+      }
+    }
+
+    if (attemptedDirectConnect > 0) {
+      this.ui?.updateSidebar({ refreshContacts: false });
+    }
+
+    const attemptedMaintenance = this.runPeerMaintenanceNow(reason);
+    if (attemptedDirectConnect === 0 && attemptedMaintenance === 0 && this.transport.getConnectedPeers().length === 0) {
+      void this.reinitializeTransportIfStuck(reason);
+    }
   }
 
   private pendingDeliveryWatchKey(peerId: string, messageId: string): string {
@@ -11665,10 +11739,14 @@ export class ChatController {
 
   private getOnlineRecipientPeerIds(recipientPeerIds: string[]): string[] {
     if (!Array.isArray(recipientPeerIds) || recipientPeerIds.length === 0) return [];
-    const connectedViaTransport = new Set<string>(this.transport.getConnectedPeers() as string[]);
+    const connectedViaTransport = new Set<string>(
+      typeof this.transport?.getConnectedPeers === 'function'
+        ? (this.transport.getConnectedPeers() as string[])
+        : [],
+    );
     const online = new Set<string>([
-      ...Array.from(this.state.readyPeers),
-      ...Array.from(this.state.connectedPeers),
+      ...Array.from(this.state.readyPeers ?? []),
+      ...Array.from(this.state.connectedPeers ?? []),
       ...Array.from(connectedViaTransport),
     ]);
     return Array.from(new Set(
