@@ -1106,6 +1106,49 @@ export class PeerTransport implements Transport {
     this._signalingReconnectAttempts.delete(instance.url);
   }
 
+  /**
+   * PeerJS may still run async negotiation/error callbacks after a connection
+   * has already been closed. Its built-in close() nulls `provider`, so those
+   * late callbacks can crash with `Cannot read properties of null (reading 'emitError')`.
+   *
+   * We wrap close() once per connection and restore a dormant no-op provider
+   * after shutdown so late PeerJS callbacks become harmless instead of killing
+   * the whole runtime.
+   */
+  private _installSafePeerJsClose(conn: DataConnection): void {
+    const patched = conn as DataConnection & {
+      __decentchatSafeClosePatched?: boolean;
+      close: (...args: any[]) => unknown;
+      provider?: any;
+    };
+    if (patched.__decentchatSafeClosePatched) return;
+    patched.__decentchatSafeClosePatched = true;
+
+    const originalClose = conn.close.bind(conn);
+    patched.close = ((...args: any[]) => {
+      const dormantProvider = {
+        options: patched.provider?.options ?? { config: {} },
+        socket: { send: () => {} },
+        emitError: () => {},
+        getConnection: () => ({
+          _initializeDataChannel: () => {},
+          type: 'data',
+          addStream: () => {},
+        }),
+        _removeConnection: () => {},
+        _getMessages: () => [],
+      };
+
+      try {
+        return originalClose(...args);
+      } finally {
+        if (patched.provider == null) {
+          patched.provider = dormantProvider;
+        }
+      }
+    }) as typeof conn.close;
+  }
+
   // ── Internal: peer connection management ──────────────────────────────────
 
   private _attemptConnect(instance: SignalingInstance, peerId: string): Promise<void> {
@@ -1118,6 +1161,8 @@ export class PeerTransport implements Transport {
         reject(new Error(`Failed to create DataConnection to ${peerId} via ${instance.label} (peer.connect returned ${conn})`));
         return;
       }
+
+      this._installSafePeerJsClose(conn);
 
       const timeout = setTimeout(() => {
         // Timed out handshaking this DataConnection — close to avoid stale half-open state.
@@ -1146,6 +1191,7 @@ export class PeerTransport implements Transport {
    * @param inbound true if this connection was initiated by the remote peer.
    */
   private _setupConnection(conn: DataConnection, signalingServer: string, inbound: boolean): void {
+    this._installSafePeerJsClose(conn);
     const { peer: peerId } = conn;
 
     // ── DEDUPLICATION ──
