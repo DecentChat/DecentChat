@@ -656,7 +656,7 @@ async function init(): Promise<void> {
 
   // Give the controller a handle to the UI for push updates
   ctrl.setUI({
-    updateSidebar: () => ui.updateSidebar(),
+    updateSidebar: (opts) => ui.updateSidebar(opts),
     updateWorkspaceRail: () => ui.updateWorkspaceRail(),
     updateChannelHeader: () => ui.updateChannelHeader(),
     appendMessageToDOM: (msg, animate) => ui.appendMessageToDOM(msg, undefined, animate),

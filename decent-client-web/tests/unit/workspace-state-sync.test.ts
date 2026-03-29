@@ -240,6 +240,229 @@ describe('Workspace state sync — receive side', () => {
   });
 });
 
+// ─── Extended workspace simulation for owner guard tests ────────────────────
+
+interface ExtendedMember extends Member {
+  isBot?: boolean;
+  allowWorkspaceDMs?: boolean;
+  signingPublicKey?: string;
+}
+
+interface ExtendedWorkspace {
+  id: string;
+  name: string;
+  channels: Channel[];
+  members: ExtendedMember[];
+  inviteCode?: string;
+  bannedPeerIds?: string[];
+}
+
+/**
+ * Simulates the workspace-state guard in handleWorkspaceStateSync()
+ * including the member-addition passthrough for non-owner senders.
+ *
+ * Returns { accepted: boolean; membersAdded: string[] }
+ */
+function simulateWorkspaceStateGuard(
+  localWs: ExtendedWorkspace,
+  senderPeerId: string,
+  myPeerId: string,
+  connectedPeerIds: Set<string>,
+  sync: { members?: ExtendedMember[]; name?: string; channels?: any[]; permissions?: any },
+  options?: { joinValidationPending?: boolean },
+): { accepted: boolean; membersAdded: string[] } {
+  const senderIsOwner = localWs.members.some(
+    m => m.peerId === senderPeerId && m.role === 'owner',
+  );
+  if (!senderIsOwner) {
+    const localIsOwner = localWs.members.some(
+      m => m.peerId === myPeerId && m.role === 'owner',
+    );
+    const connectedOwnerExists = localWs.members.some(
+      m => m.role === 'owner' && connectedPeerIds.has(m.peerId),
+    );
+    const joinValidationPending = options?.joinValidationPending ?? false;
+    if ((localIsOwner || connectedOwnerExists) && !joinValidationPending) {
+      // Guard fires: reject full workspace-state but allow new member additions
+      const membersAdded: string[] = [];
+      if (sync.members && Array.isArray(sync.members)) {
+        for (const remoteMember of sync.members) {
+          if (!remoteMember?.peerId || typeof remoteMember.peerId !== 'string') continue;
+          if (localWs.bannedPeerIds?.includes(remoteMember.peerId)) continue;
+          const alreadyExists = localWs.members.some(m => m.peerId === remoteMember.peerId);
+          if (alreadyExists) continue;
+          localWs.members.push({
+            peerId: remoteMember.peerId,
+            alias: remoteMember.alias || remoteMember.peerId.slice(0, 8),
+            publicKey: remoteMember.publicKey || '',
+            signingPublicKey: remoteMember.signingPublicKey || undefined,
+            role: 'member', // SECURITY: never accept elevated roles from non-owner
+            isBot: remoteMember.isBot || undefined,
+            allowWorkspaceDMs: remoteMember.allowWorkspaceDMs !== false,
+          });
+          membersAdded.push(remoteMember.peerId);
+        }
+      }
+      return { accepted: false, membersAdded };
+    }
+  }
+  // Full workspace-state accepted (sender is owner, or join pending, etc.)
+  return { accepted: true, membersAdded: [] };
+}
+
+describe('Workspace state guard — owner member-addition passthrough', () => {
+  let localWs: ExtendedWorkspace;
+  const ownerPeerId = 'owner-peer';
+  const botPeerId = 'bot-peer';
+  const humanBPeerId = 'human-b-peer';
+
+  beforeEach(() => {
+    localWs = {
+      id: 'ws-1',
+      name: 'XenaLand',
+      channels: [{ id: 'ch-1', name: 'general', type: 'channel' }],
+      members: [
+        { peerId: ownerPeerId, alias: 'Owner', publicKey: 'pk-owner', role: 'owner' },
+        { peerId: humanBPeerId, alias: 'Human B', publicKey: 'pk-b', role: 'member' },
+      ],
+    };
+  });
+
+  test('owner receives workspace-state from non-owner: new member is added', () => {
+    const result = simulateWorkspaceStateGuard(
+      localWs,
+      humanBPeerId,           // sender is non-owner
+      ownerPeerId,            // local is owner
+      new Set([humanBPeerId]),
+      {
+        members: [
+          { peerId: ownerPeerId, alias: 'Owner', publicKey: 'pk-owner', role: 'owner' },
+          { peerId: humanBPeerId, alias: 'Human B', publicKey: 'pk-b', role: 'member' },
+          { peerId: botPeerId, alias: 'Xena', publicKey: 'pk-bot', role: 'member', isBot: true },
+        ],
+      },
+    );
+
+    expect(result.accepted).toBe(false);  // full state rejected
+    expect(result.membersAdded).toEqual([botPeerId]);  // but bot was added
+    expect(localWs.members.length).toBe(3);
+    const botMember = localWs.members.find(m => m.peerId === botPeerId);
+    expect(botMember).toBeTruthy();
+    expect(botMember!.alias).toBe('Xena');
+    expect(botMember!.isBot).toBe(true);
+    expect(botMember!.role).toBe('member');  // never elevated
+  });
+
+  test('owner receives workspace-state from non-owner: elevated roles are downgraded to member', () => {
+    const result = simulateWorkspaceStateGuard(
+      localWs,
+      humanBPeerId,
+      ownerPeerId,
+      new Set([humanBPeerId]),
+      {
+        members: [
+          { peerId: 'rogue-peer', alias: 'Rogue', publicKey: 'pk-rogue', role: 'admin' },
+        ],
+      },
+    );
+
+    expect(result.membersAdded).toEqual(['rogue-peer']);
+    const rogue = localWs.members.find(m => m.peerId === 'rogue-peer');
+    expect(rogue!.role).toBe('member');  // downgraded from admin
+  });
+
+  test('owner receives workspace-state from non-owner: banned peers are not added', () => {
+    localWs.bannedPeerIds = [botPeerId];
+
+    const result = simulateWorkspaceStateGuard(
+      localWs,
+      humanBPeerId,
+      ownerPeerId,
+      new Set([humanBPeerId]),
+      {
+        members: [
+          { peerId: botPeerId, alias: 'Xena', publicKey: 'pk-bot', role: 'member', isBot: true },
+        ],
+      },
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.membersAdded).toEqual([]);  // banned peer rejected
+    expect(localWs.members.length).toBe(2);  // unchanged
+  });
+
+  test('owner receives workspace-state from non-owner: existing members are not duplicated', () => {
+    const result = simulateWorkspaceStateGuard(
+      localWs,
+      humanBPeerId,
+      ownerPeerId,
+      new Set([humanBPeerId]),
+      {
+        members: [
+          { peerId: ownerPeerId, alias: 'Owner', publicKey: 'pk-owner', role: 'owner' },
+          { peerId: humanBPeerId, alias: 'Human B', publicKey: 'pk-b', role: 'member' },
+        ],
+      },
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.membersAdded).toEqual([]);  // no new members
+    expect(localWs.members.length).toBe(2);  // unchanged
+  });
+
+  test('workspace-state from owner bypasses the guard entirely', () => {
+    const result = simulateWorkspaceStateGuard(
+      localWs,
+      ownerPeerId,            // sender IS the owner
+      humanBPeerId,           // local is non-owner
+      new Set([ownerPeerId]),
+      {
+        members: [
+          { peerId: botPeerId, alias: 'Xena', publicKey: 'pk-bot', role: 'member', isBot: true },
+        ],
+      },
+    );
+
+    expect(result.accepted).toBe(true);  // full state accepted
+    expect(result.membersAdded).toEqual([]);  // handled by main merge logic, not the guard
+  });
+
+  test('non-owner receives from non-owner when owner is connected: new member still added', () => {
+    // humanB is NOT owner but owner is connected -- guard fires
+    const result = simulateWorkspaceStateGuard(
+      localWs,
+      'some-other-peer',      // sender is non-owner
+      humanBPeerId,           // local is non-owner
+      new Set([ownerPeerId]), // but owner IS connected
+      {
+        members: [
+          { peerId: botPeerId, alias: 'Xena', publicKey: 'pk-bot', role: 'member', isBot: true },
+        ],
+      },
+    );
+
+    expect(result.accepted).toBe(false);  // guard fires because connected owner exists
+    expect(result.membersAdded).toEqual([botPeerId]);  // but bot was still added
+  });
+
+  test('join validation pending: full state accepted (guard disabled)', () => {
+    const result = simulateWorkspaceStateGuard(
+      localWs,
+      humanBPeerId,
+      ownerPeerId,
+      new Set([humanBPeerId]),
+      {
+        members: [
+          { peerId: botPeerId, alias: 'Xena', publicKey: 'pk-bot', role: 'member', isBot: true },
+        ],
+      },
+      { joinValidationPending: true },
+    );
+
+    expect(result.accepted).toBe(true);  // guard disabled during join validation
+  });
+});
+
 describe('Workspace state sync — reconnect behavior', () => {
   test('workspace-state sync is triggered on EVERY peer connect', () => {
     const sendWorkspaceState = mock((_peerId: string) => {});

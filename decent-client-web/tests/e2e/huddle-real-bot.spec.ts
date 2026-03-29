@@ -12,7 +12,9 @@ import { test, expect, chromium } from '@playwright/test';
 
 test.setTimeout(60000);
 
-test('Real browser joins huddle and captures bot audio diagnostics', async () => {
+test.skip('Real browser joins huddle and captures bot audio diagnostics', async () => {
+  // This test requires --headed mode and a live decentchat.app server.
+  // Run manually: npx playwright test tests/e2e/huddle-real-bot.spec.ts --headed --reporter=line
   const browser = await chromium.launch({
     headless: false,
     args: [

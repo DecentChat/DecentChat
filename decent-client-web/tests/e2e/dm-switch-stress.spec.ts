@@ -75,6 +75,10 @@ test.describe('Direct message switching under load', () => {
   });
 
   test('switching between DMs does not re-fetch contacts from storage', async ({ page }) => {
+    // Wait for any deferred sidebar syncs (rAF) from seedHeavyDirectMessages
+    // to flush before installing counting proxies.
+    await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+
     await page.evaluate(() => {
       const ctrl = (window as any).__ctrl;
       if (!ctrl) throw new Error('Controller not available');

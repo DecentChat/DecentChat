@@ -4021,6 +4021,35 @@ export class ChatController {
       );
       const joinValidationPending = this.pendingJoinValidationTimers.has(localWs.id);
       if ((localIsOwner || connectedOwnerExists) && !joinValidationPending) {
+        // Even though we reject the full workspace-state from non-owners,
+        // we still accept NEW member additions.  Without this, the owner
+        // can never discover peers that joined through a non-owner peer
+        // (the owner's guard drops the workspace-state, so the new member
+        // is invisible until they connect directly and send name-announce).
+        if (sync.members && Array.isArray(sync.members)) {
+          let membersAdded = false;
+          for (const remoteMember of sync.members) {
+            if (!remoteMember?.peerId || typeof remoteMember.peerId !== 'string') continue;
+            if (this.workspaceManager.isBanned(localWs.id, remoteMember.peerId)) continue;
+            const alreadyExists = localWs.members.some((m: any) => m.peerId === remoteMember.peerId);
+            if (alreadyExists) continue;
+            localWs.members.push({
+              peerId: remoteMember.peerId,
+              alias: remoteMember.alias || remoteMember.peerId.slice(0, 8),
+              publicKey: remoteMember.publicKey || '',
+              signingPublicKey: remoteMember.signingPublicKey || undefined,
+              joinedAt: Date.now(),
+              role: 'member', // SECURITY: never accept elevated roles from non-owner
+              isBot: remoteMember.isBot || undefined,
+              allowWorkspaceDMs: remoteMember.allowWorkspaceDMs !== false,
+            });
+            membersAdded = true;
+          }
+          if (membersAdded) {
+            this.persistWorkspace(localWs.id).catch(() => {});
+            this.ui?.updateSidebar({ refreshContacts: false });
+          }
+        }
         return;
       }
     }

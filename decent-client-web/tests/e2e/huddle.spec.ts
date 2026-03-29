@@ -11,7 +11,7 @@ import { test, expect, BrowserContext, Page } from '@playwright/test';
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 async function clearStorage(page: Page) {
-  await page.goto('/');
+  await page.goto('/app');
   await page.evaluate(async () => {
     if (indexedDB.databases) {
       const dbs = await indexedDB.databases();
@@ -30,7 +30,7 @@ async function waitForApp(page: Page) {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 15000 });
-  await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
+  await page.waitForSelector('#create-ws-btn-nav, #create-ws-btn, .sidebar-header', { timeout: 15000 });
 }
 
 /** Mock getUserMedia so huddles work in headless Chromium (no real mic) */
@@ -50,7 +50,7 @@ async function createWorkspaceAndGetInvite(
   name: string,
   alias: string,
 ): Promise<string> {
-  await page.click('#create-ws-btn');
+  await page.click('#create-ws-btn-nav');
   await page.waitForSelector('.modal');
   const inputs = page.locator('.modal input');
   await inputs.nth(0).fill(name);
@@ -83,7 +83,7 @@ async function joinViaInvite(page: Page, inviteUrl: string, alias: string) {
 }
 
 async function createWorkspace(page: Page, name: string, alias: string) {
-  await page.click('#create-ws-btn');
+  await page.click('#create-ws-btn-nav');
   await page.waitForSelector('.modal');
   const inputs = page.locator('.modal input');
   await inputs.nth(0).fill(name);
