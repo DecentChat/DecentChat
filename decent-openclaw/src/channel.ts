@@ -610,7 +610,17 @@ const decentChatSetupWizard: ChannelSetupWizard = {
         ].join("\n"),
         "New identity generated",
       );
+      // Write seedPhrase directly into cfg so it's persisted immediately.
+      // The OpenClaw wizard framework skips applySet when shouldPrompt
+      // returns false, so credentialValues alone won't reach the config file.
+      const updatedCfg = patchTopLevelChannelConfigSection({
+        cfg,
+        channel: CHANNEL,
+        enabled: true,
+        patch: { seedPhrase: mnemonic },
+      });
       return {
+        cfg: updatedCfg,
         credentialValues: { privateKey: mnemonic },
       };
     }

@@ -266,6 +266,14 @@ describe("setup wizard prepare()", () => {
     // The generated seed phrase should be 12 words
     const words = result!.credentialValues!.privateKey!.trim().split(/\s+/);
     expect(words.length).toBe(12);
+
+    // prepare() must return cfg with the seedPhrase already patched in,
+    // because the OpenClaw wizard framework skips applySet when shouldPrompt
+    // returns false — credentialValues alone won't persist to the config file.
+    const mnemonic = result!.credentialValues!.privateKey!;
+    expect(result!.cfg).toBeDefined();
+    expect((result!.cfg as any).channels.decentchat.seedPhrase).toBe(mnemonic);
+    expect((result!.cfg as any).channels.decentchat.enabled).toBe(true);
   });
 
   test("shows seed phrase note when generating new identity", async () => {
