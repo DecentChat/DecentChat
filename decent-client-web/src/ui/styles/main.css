@@ -2375,8 +2375,8 @@ body.debug-mode .msg-delivery-detail {
 }
 
 .reaction-pill:hover { background: var(--bg-hover); border-color: var(--border); }
-.reaction-pill.mine { 
-  background: rgba(108, 92, 231, 0.12); 
+.reaction-pill.mine {
+  background: rgba(108, 92, 231, 0.12);
   border-color: var(--primary);
   color: var(--text); /* Ensure count is visible even when highlighted */
 }
@@ -2502,6 +2502,22 @@ body.debug-mode .msg-delivery-detail {
   overflow-y: auto;
   flex: 1;
   padding-right: 12px;
+}
+
+.workspace-settings-modal {
+  max-width: 520px;
+  max-height: 90vh;
+  max-height: 90dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workspace-settings-form {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
 }
 
 .settings-section {

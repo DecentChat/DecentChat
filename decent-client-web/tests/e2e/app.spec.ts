@@ -392,6 +392,54 @@ test.describe('DecentChat E2E', () => {
 
   // ─── Invite Link ──────────────────────────────────────────────────────
 
+  test('workspace settings modal fits small viewport and is scrollable', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 600 });
+    await createWorkspace(page);
+
+    await page.evaluate(async () => {
+      const ctrl = (window as any).__ctrl;
+      for (let i = 0; i < 12; i += 1) {
+        await ctrl.generateInviteURL(ctrl.state.activeWorkspaceId, { permanent: i % 2 === 0 });
+      }
+    });
+
+    await page.evaluate(() => {
+      (document.getElementById('workspace-menu-trigger') as HTMLButtonElement | null)?.click();
+    });
+    await page.evaluate(() => {
+      (document.getElementById('workspace-menu-settings') as HTMLButtonElement | null)?.click();
+    });
+
+    const modal = page.locator('.modal').filter({ has: page.getByRole('heading', { name: 'Workspace Settings' }) });
+    await expect(modal).toBeVisible();
+
+    const metrics = await modal.evaluate((node) => {
+      const el = node as HTMLElement;
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      const form = el.querySelector('form') as HTMLElement | null;
+      const formStyle = form ? window.getComputedStyle(form) : null;
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        viewportHeight: window.innerHeight,
+        modalOverflowY: style.overflowY,
+        modalScrollHeight: el.scrollHeight,
+        modalClientHeight: el.clientHeight,
+        formOverflowY: formStyle?.overflowY ?? null,
+        formScrollHeight: form?.scrollHeight ?? null,
+        formClientHeight: form?.clientHeight ?? null,
+      };
+    });
+
+    expect(metrics.top).toBeGreaterThanOrEqual(0);
+    expect(metrics.bottom).toBeLessThanOrEqual(metrics.viewportHeight);
+    expect(
+      (metrics.modalOverflowY === 'auto' || metrics.modalOverflowY === 'scroll') && metrics.modalScrollHeight > metrics.modalClientHeight ||
+      (metrics.formOverflowY === 'auto' || metrics.formOverflowY === 'scroll') && (metrics.formScrollHeight ?? 0) > (metrics.formClientHeight ?? 0)
+    ).toBe(true);
+  });
+
   test('copy invite link button exists in sidebar', async ({ page }) => {
     await createWorkspace(page);
     await expect(page.locator('#copy-invite')).toBeVisible();

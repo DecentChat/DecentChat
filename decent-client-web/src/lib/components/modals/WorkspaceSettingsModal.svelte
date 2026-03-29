@@ -239,9 +239,12 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="modal-overlay" onclick={handleOverlayClick}>
-  <div class="modal">
-    <h2>Workspace Settings</h2>
-    <form onsubmit={handleSubmit}>
+  <div class="modal workspace-settings-modal">
+    <div class="settings-header">
+      <h2>Workspace Settings</h2>
+      <button type="button" class="thread-close" id="workspace-settings-close" onclick={onClose}>✕</button>
+    </div>
+    <form class="workspace-settings-form" onsubmit={handleSubmit}>
       <div class="form-group">
         <label for="ws-name">Workspace Name</label>
         <input type="text" id="ws-name" bind:value={wsName} required />
