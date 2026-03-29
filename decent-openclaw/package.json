@@ -1,6 +1,6 @@
 {
   "name": "@decentchat/decentchat-plugin",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "OpenClaw channel plugin for DecentChat — P2P encrypted chat",
   "type": "module",
   "main": "index.ts",
@@ -24,7 +24,8 @@
     "src",
     "index.ts",
     "setup-entry.ts",
-    "openclaw.plugin.json"
+    "openclaw.plugin.json",
+    "postinstall.cjs"
   ],
   "repository": {
     "type": "git",
@@ -36,6 +37,7 @@
     "access": "public"
   },
   "scripts": {
+    "postinstall": "node postinstall.cjs",
     "test": "bun test tests/unit/",
     "test:integration": "bun test tests/integration/plugin-configure-join.test.ts",
     "test:all": "bun test tests/unit/ && bun test tests/integration/plugin-configure-join.test.ts"
