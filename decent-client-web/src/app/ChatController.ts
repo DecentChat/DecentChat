@@ -2185,6 +2185,14 @@ export class ChatController {
           // Keep the sender's canonical message ID so delivery/read receipts for DMs
           // refer to the same message on both sides.
           if (data.messageId) msg.id = data.messageId;
+
+          // If the message already exists locally (e.g. restored from persistence),
+          // ack it so the sender stops retrying.
+          if (this.messageStore.getMessages(channelId).some(m => m.id === msg.id)) {
+            this.sendInboundReceipt(peerId, data, channelId, msg.id, 'ack');
+            return;
+          }
+
           (msg as any).vectorClock = data.vectorClock;
           // Carry attachment metadata from the envelope so the receiver renders thumbnails
           if ((data as any).attachments?.length) {

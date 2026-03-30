@@ -1,6 +1,6 @@
 /**
  * MessageStore - Manages messages with hash chain integrity
- * 
+ *
  * Messages are IMMUTABLE - no editing, no deleting.
  * Each message links to the previous via prevHash.
  */
@@ -66,6 +66,11 @@ export class MessageStore {
    */
   async addMessage(message: PlaintextMessage): Promise<{ success: boolean; error?: string }> {
     const channelMessages = this.channels.get(message.channelId) || [];
+
+    // Reject duplicate IDs early to keep insertions replay-safe.
+    if (channelMessages.some(m => m.id === message.id)) {
+      return { success: false, error: `Duplicate message ID: ${message.id}` };
+    }
 
     try {
       validateMessageContentLength(message.content);
