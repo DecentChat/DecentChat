@@ -3901,15 +3901,21 @@ export class ChatController {
     };
   }
 
-  private shouldPushWorkspaceStateOnConnect(_peerId: string, workspaceId?: string): boolean {
+  private shouldPushWorkspaceStateOnConnect(peerId: string, workspaceId?: string): boolean {
     if (!workspaceId) return false;
     const workspace = this.workspaceManager.getWorkspace(workspaceId);
     if (!workspace) return false;
     if (this.pendingJoinValidationTimers.has(workspaceId)) return true;
     if (this.workspaceManager.isOwner(workspaceId, this.state.myPeerId)) return true;
 
-    // Non-owners skip eager full-state pushes on connect to avoid O(n^2)
-    // workspace-state storms in larger meshes.
+    // Non-owners push workspace-state to the owner so the owner can learn
+    // about members that joined through this non-owner peer.  Without this,
+    // the owner's member-addition passthrough (in handleWorkspaceStateSync)
+    // never fires because non-owners never send workspace-state.
+    if (this.workspaceManager.isOwner(workspaceId, peerId)) return true;
+
+    // Non-owners skip eager full-state pushes to other non-owners to avoid
+    // O(n^2) workspace-state storms in larger meshes.
     return false;
   }
 

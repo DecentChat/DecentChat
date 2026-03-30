@@ -463,6 +463,76 @@ describe('Workspace state guard — owner member-addition passthrough', () => {
   });
 });
 
+// ─── shouldPushWorkspaceStateOnConnect simulation ───────────────────────────
+
+/**
+ * Simulates shouldPushWorkspaceStateOnConnect() from ChatController.
+ * Non-owners should push workspace-state to the owner so the owner can
+ * learn about members that joined through the non-owner peer.
+ */
+function shouldPushWorkspaceStateOnConnect(
+  peerId: string,
+  workspaceId: string | undefined,
+  ws: ExtendedWorkspace | undefined,
+  myPeerId: string,
+  pendingJoinValidation: boolean,
+): boolean {
+  if (!workspaceId) return false;
+  if (!ws) return false;
+  if (pendingJoinValidation) return true;
+  const localIsOwner = ws.members.some(m => m.peerId === myPeerId && m.role === 'owner');
+  if (localIsOwner) return true;
+  // Non-owners push to the owner so the owner learns about new members
+  const peerIsOwner = ws.members.some(m => m.peerId === peerId && m.role === 'owner');
+  if (peerIsOwner) return true;
+  // Non-owners skip pushes to other non-owners
+  return false;
+}
+
+describe('shouldPushWorkspaceStateOnConnect — non-owner to owner', () => {
+  const ownerPeerId = 'owner-peer';
+  const humanBPeerId = 'human-b-peer';
+  const humanCPeerId = 'human-c-peer';
+
+  const ws: ExtendedWorkspace = {
+    id: 'ws-1',
+    name: 'XenaLand',
+    channels: [],
+    members: [
+      { peerId: ownerPeerId, alias: 'Owner', publicKey: 'pk-owner', role: 'owner' },
+      { peerId: humanBPeerId, alias: 'Human B', publicKey: 'pk-b', role: 'member' },
+      { peerId: humanCPeerId, alias: 'Human C', publicKey: 'pk-c', role: 'member' },
+    ],
+  };
+
+  test('owner always pushes workspace-state to any peer', () => {
+    expect(shouldPushWorkspaceStateOnConnect(humanBPeerId, 'ws-1', ws, ownerPeerId, false)).toBe(true);
+    expect(shouldPushWorkspaceStateOnConnect(humanCPeerId, 'ws-1', ws, ownerPeerId, false)).toBe(true);
+  });
+
+  test('non-owner pushes workspace-state to the owner', () => {
+    // Human B connecting to the owner — should push so owner learns about new members
+    expect(shouldPushWorkspaceStateOnConnect(ownerPeerId, 'ws-1', ws, humanBPeerId, false)).toBe(true);
+  });
+
+  test('non-owner does NOT push workspace-state to another non-owner', () => {
+    // Human B connecting to Human C — skip to avoid O(n^2) storms
+    expect(shouldPushWorkspaceStateOnConnect(humanCPeerId, 'ws-1', ws, humanBPeerId, false)).toBe(false);
+  });
+
+  test('returns false when workspaceId is undefined', () => {
+    expect(shouldPushWorkspaceStateOnConnect(ownerPeerId, undefined, ws, humanBPeerId, false)).toBe(false);
+  });
+
+  test('returns false when workspace not found', () => {
+    expect(shouldPushWorkspaceStateOnConnect(ownerPeerId, 'ws-1', undefined, humanBPeerId, false)).toBe(false);
+  });
+
+  test('returns true when join validation is pending regardless of roles', () => {
+    expect(shouldPushWorkspaceStateOnConnect(humanCPeerId, 'ws-1', ws, humanBPeerId, true)).toBe(true);
+  });
+});
+
 describe('Workspace state sync — reconnect behavior', () => {
   test('workspace-state sync is triggered on EVERY peer connect', () => {
     const sendWorkspaceState = mock((_peerId: string) => {});
