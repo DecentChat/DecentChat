@@ -161,6 +161,7 @@
 <div class="modal-overlay" bind:this={overlayEl} onclick={handleOverlayClick}>
   <div class="modal">
     <h2>Join Workspace</h2>
+    <p class="modal-intro">Paste the invite you received to join an existing workspace. You can update your display name later.</p>
     <form onsubmit={handleSubmit}>
       <div class="form-group">
         <label for="join-invite">Invite Link or Code</label>
@@ -169,13 +170,13 @@
           id="join-invite"
           name="invite"
           class="invite-input{autofilled ? ' invite-autofilled' : ''}"
-          placeholder="https://decentchat.app/join/... or paste invite link"
+          placeholder="ABCD-1234 or paste the full invite link"
           required
           bind:value={invite}
           oninput={handleInviteInput}
         />
         <small style="color: var(--text-muted); margin-top: 4px; display: block;">
-          Paste the full invite link you received
+          Paste the short code or full invite link you received
         </small>
         {#if autofillHint}
           <small class="invite-autofill-hint invite-autofill-hint-visible">
@@ -190,7 +191,7 @@
         </div>
       {/if}
       <div class="form-group">
-        <label for="join-alias">Your Display Name</label>
+        <label for="join-alias">Display name in this workspace</label>
         <input
           type="text"
           id="join-alias"

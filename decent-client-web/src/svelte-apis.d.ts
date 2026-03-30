@@ -9,6 +9,10 @@ declare module '*.svelte' {
     title: string,
     bodyHTML: string,
     onSubmit: (form: HTMLFormElement) => boolean | void | Promise<boolean | void>,
+    options?: {
+      submitLabel?: string;
+      cancelLabel?: string;
+    },
   ) => HTMLDivElement;
 
   export const showMessageInfoModal: (info: any) => void;

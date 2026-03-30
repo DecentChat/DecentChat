@@ -16,6 +16,10 @@
     title: string,
     bodyHTML: string,
     onSubmit: (form: HTMLFormElement) => boolean | void | Promise<boolean | void>,
+    options?: {
+      submitLabel?: string;
+      cancelLabel?: string;
+    },
   ): HTMLDivElement {
     const target = document.createElement('div');
     document.body.appendChild(target);
@@ -36,6 +40,8 @@
       props: {
         title,
         bodyHTML,
+        submitLabel: options?.submitLabel,
+        cancelLabel: options?.cancelLabel,
         onsubmit: onSubmit,
         onclose: cleanup,
         bindOverlay: (el: HTMLDivElement) => { overlayEl = el; },

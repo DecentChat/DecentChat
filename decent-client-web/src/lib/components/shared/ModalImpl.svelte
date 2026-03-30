@@ -6,13 +6,24 @@
   interface Props {
     title: string;
     bodyHTML?: string;
+    submitLabel?: string;
+    cancelLabel?: string;
     onsubmit?: (form: HTMLFormElement) => boolean | void | Promise<boolean | void>;
     onclose?: () => void;
     bindOverlay?: (el: HTMLDivElement) => void;
     children?: import('svelte').Snippet;
   }
 
-  let { title, bodyHTML = '', onsubmit, onclose, bindOverlay, children }: Props = $props();
+  let {
+    title,
+    bodyHTML = '',
+    submitLabel = 'Confirm',
+    cancelLabel = 'Cancel',
+    onsubmit,
+    onclose,
+    bindOverlay,
+    children,
+  }: Props = $props();
 
   let overlayEl: HTMLDivElement | undefined = $state();
 
@@ -74,16 +85,16 @@
       <form id="modal-form" onsubmit={handleSubmit}>
         {@render children()}
         <div class="modal-actions">
-          <button type="button" class="btn-secondary" onclick={close}>Cancel</button>
-          <button type="submit" class="btn-primary">Confirm</button>
+          <button type="button" class="btn-secondary" onclick={close}>{cancelLabel}</button>
+          <button type="submit" class="btn-primary">{submitLabel}</button>
         </div>
       </form>
     {:else}
       <form id="modal-form" onsubmit={handleSubmit}>
         {@html bodyHTML}
         <div class="modal-actions">
-          <button type="button" class="btn-secondary" onclick={close}>Cancel</button>
-          <button type="submit" class="btn-primary">Confirm</button>
+          <button type="button" class="btn-secondary" onclick={close}>{cancelLabel}</button>
+          <button type="submit" class="btn-primary">{submitLabel}</button>
         </div>
       </form>
     {/if}

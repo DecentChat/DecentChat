@@ -170,15 +170,20 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     title: string,
     bodyHTML: string,
     onSubmit: (form: HTMLFormElement) => boolean | void | Promise<boolean | void>,
+    options?: {
+      submitLabel?: string;
+      cancelLabel?: string;
+    },
   ): HTMLDivElement {
-    return svelteShowModal(title, bodyHTML, onSubmit);
+    return svelteShowModal(title, bodyHTML, onSubmit, options);
   }
 
   function showCreateWorkspaceModal(): void {
     showModal(
       'Create Workspace',
-      `<div class="form-group"><label>Workspace Name</label><input type="text" name="name" placeholder="My Team" required /></div>
-       <div class="form-group"><label>Your Display Name</label><input type="text" name="alias" placeholder="Your name" required /></div>`,
+      `<p class="modal-intro">Start with a workspace for your team, group, or personal chat. You can rename it later.</p>
+       <div class="form-group"><label>Workspace Name</label><input type="text" name="name" placeholder="My Team" required /></div>
+       <div class="form-group"><label>Display name in this workspace</label><input type="text" name="alias" placeholder="Your name" required /><small style="color: var(--text-muted); margin-top: 4px; display: block;">Shown to the people you invite. You can change it later.</small></div>`,
       (form) => {
         const name = (form.elements.namedItem('name') as HTMLInputElement).value.trim();
         const alias = (form.elements.namedItem('alias') as HTMLInputElement).value.trim();
@@ -192,8 +197,9 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
           callbacks.persistSetting('myAlias', alias),
         ]).catch(err => console.error('[DecentChat] Failed to persist workspace:', err));
         renderApp();
-        showToast(`Workspace "${name}" created! Click 🔗 to copy invite link.`, 'success');
+        showToast(`Workspace "${name}" created. Use Copy invite link or QR Code to invite others.`, 'success');
       },
+      { submitLabel: 'Create workspace' },
     );
   }
 
@@ -202,7 +208,7 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
       `Join ${workspaceName || 'Workspace'}`,
       `<input type="hidden" name="peerId" value="${peerId}" />
        ${workspaceName ? `<p style="color: var(--text-muted); margin-bottom: 16px; font-size: 15px;">You've been invited to <strong>${escapeHtml(workspaceName)}</strong></p>` : ''}
-       <div class="form-group"><label>Your Display Name</label><input type="text" name="alias" placeholder="Enter your name" required autofocus /></div>
+       <div class="form-group"><label>Your name in this workspace</label><input type="text" name="alias" placeholder="Enter your name" required autofocus /></div>
        <div class="form-group"><label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" name="allowWorkspaceDMs" checked /> <span>Allow direct messages from workspace members</span></label></div>`,
       (form) => {
         const alias = (form.elements.namedItem('alias') as HTMLInputElement).value.trim();

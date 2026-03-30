@@ -121,14 +121,14 @@
         {#if hasWorkspace}
           <button class="btn-primary btn-lg" id="open-app-btn" onclick={handleOpenApp}>Open App →</button>
         {:else}
-          <button class="btn-primary btn-lg" id="create-ws-btn" onclick={handleCreate}>Start Chatting Free →</button>
+          <button class="btn-primary btn-lg" id="create-ws-btn" onclick={handleCreate}>Create workspace →</button>
         {/if}
-        <button class="btn-secondary btn-lg" id="join-ws-btn" onclick={handleJoin}>Join with Invite Code</button>
+        <button class="btn-secondary btn-lg" id="join-ws-btn" onclick={handleJoin}>Join with invite code</button>
         {#if hasWorkspace && isAppLikeRoute && onInstallAiTeam}
           <button class="btn-secondary btn-lg" id="welcome-add-ai-team-btn" onclick={onInstallAiTeam}>Add AI Team</button>
         {/if}
       </div>
-      <p class="lp-hero-note">No signup · No phone number · Works in your browser</p>
+      <p class="lp-hero-note">No signup · No phone number · Create your workspace in your browser</p>
     </div>
     <div class="lp-hero-mascot">
       <img src="/icons/logo-v2-light.png" alt="Deci the DecentChat mascot" class="hero-deci" />
@@ -343,9 +343,9 @@
         {#if hasWorkspace}
           <button class="btn-primary btn-lg" id="open-app-btn-2" onclick={handleOpenApp}>Open App →</button>
         {:else}
-          <button class="btn-primary btn-lg" id="create-ws-btn-2" onclick={handleCreate}>Start Chatting Free →</button>
+          <button class="btn-primary btn-lg" id="create-ws-btn-2" onclick={handleCreate}>Create workspace →</button>
         {/if}
-        <button class="btn-secondary btn-lg" id="join-ws-btn-2" onclick={handleJoin}>Join with Invite Code</button>
+        <button class="btn-secondary btn-lg" id="join-ws-btn-2" onclick={handleJoin}>Join with invite code</button>
       </div>
       <p class="lp-restore-hint">
         Already have an account?

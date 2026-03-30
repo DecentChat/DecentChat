@@ -3,6 +3,7 @@
   Keeps full message data in store while bounding DOM rows.
 -->
 <script lang="ts">
+  import { onMount } from 'svelte';
   import type { PlaintextMessage } from 'decent-protocol';
   import MessageItem from './MessageItem.svelte';
   import {
@@ -76,6 +77,7 @@
 
   let mounted = $state(false);
   let isNearBottom = $state(true);
+  let isCompactViewport = $state(false);
 
   // Virtualized window [windowStart, windowEnd)
   let windowStart = $state(0);
@@ -448,6 +450,19 @@
     offsetsDirty = true;
   }
 
+  onMount(() => {
+    const mediaQuery = window.matchMedia('(max-width: 768px)');
+    const updateCompactViewport = () => {
+      isCompactViewport = mediaQuery.matches;
+    };
+    updateCompactViewport();
+    mediaQuery.addEventListener?.('change', updateCompactViewport);
+
+    return () => {
+      mediaQuery.removeEventListener?.('change', updateCompactViewport);
+    };
+  });
+
   $effect(() => {
     mounted = true;
 
@@ -723,8 +738,12 @@
     <div class="empty-state">
       <div class="emoji">✨</div>
       <h3>Welcome to {channelName}!</h3>
-      <p>This is the very beginning of the conversation.<br>Messages are end-to-end encrypted and stored locally.</p>
-      <p style="margin-top:8px; font-size:12px; color:var(--text-light)">Type <code>/help</code> for commands · <code>Ctrl+K</code> for quick commands</p>
+      <p>Send your first message below, or invite more people from the sidebar.<br>Messages are end-to-end encrypted and stored locally.</p>
+      {#if isCompactViewport}
+        <p style="margin-top:8px; font-size:12px; color:var(--text-light)">Say hello below or type <code>/help</code> for commands</p>
+      {:else}
+        <p style="margin-top:8px; font-size:12px; color:var(--text-light)">Say hello below, invite people from the sidebar, or type <code>/help</code> · <code>Ctrl+K</code> for quick commands</p>
+      {/if}
     </div>
   {:else}
     {#if threadRoot}

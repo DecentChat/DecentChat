@@ -1543,8 +1543,8 @@ body.debug-mode .msg-delivery-detail {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1577,6 +1577,13 @@ body.debug-mode .msg-delivery-detail {
   margin-bottom: 20px;
   font-weight: 700;
   letter-spacing: -0.2px;
+}
+
+.modal-intro {
+  margin: -8px 0 18px;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .modal .form-group { margin-bottom: 16px; }
@@ -3292,9 +3299,9 @@ body.compact .messages-list { gap: 0; }
   justify-content: space-between;
   max-width: 1100px;
   margin: 0 auto;
-  padding: 80px 24px 60px;
+  padding: 56px 24px 60px;
   gap: 48px;
-  min-height: 85vh;
+  min-height: 72vh;
 }
 .lp-hero-inner {
   flex: 1;
