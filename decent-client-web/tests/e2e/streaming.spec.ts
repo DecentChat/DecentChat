@@ -342,6 +342,9 @@ test.describe('Streaming Message Persistence on Refresh', () => {
     });
     await finalizeStreamMessage(page, { peerId, messageId });
 
+    // Wait for the streamed message to appear in the DOM before sending ciphertext
+    await page.waitForSelector(`.message[data-message-id="${messageId}"]`, { timeout: 5000 });
+
     // Simulate a normal ciphertext message arriving with the same messageId
     // (as if bot sent final message for sync)
     await page.evaluate(async ({ peerId, messageId }) => {
@@ -364,6 +367,9 @@ test.describe('Streaming Message Persistence on Refresh', () => {
         ctrl.messageProtocol.decryptMessage = originalDecrypt;
       }
     }, { peerId, messageId });
+
+    // Wait for any pending rAF renders to complete
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(undefined)))));
 
     // Count messages with this ID — should be exactly 1
     const count = await page.evaluate(({ id }) => {

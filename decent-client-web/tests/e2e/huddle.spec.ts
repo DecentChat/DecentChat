@@ -111,6 +111,8 @@ async function waitForPeerConnection(page: Page, expectedOnline = 2, timeoutMs =
 // ─── Single-User Tests ──────────────────────────────────────────────────────
 
 test.describe('Huddle — Single User', () => {
+  test.skip(({ browserName }) => browserName === 'firefox', 'Huddle mic permissions are not supported in Playwright Firefox');
+
   let context: BrowserContext;
   let page: Page;
 
@@ -211,6 +213,8 @@ test.describe('Huddle — Single User', () => {
 // ─── Multi-User Tests ───────────────────────────────────────────────────────
 
 test.describe('Huddle — Multi User', () => {
+  test.skip(({ browserName }) => browserName === 'firefox', 'Huddle mic permissions are not supported in Playwright Firefox');
+
   let aliceContext: BrowserContext;
   let bobContext: BrowserContext;
   let alice: Page;
@@ -377,6 +381,8 @@ test.describe('Huddle — Multi User', () => {
 // to catch audio playback bugs that don't surface in UI-only tests.
 
 test.describe('Huddle — Audio & WebRTC Diagnostics', () => {
+  test.skip(({ browserName }) => browserName === 'firefox', 'Huddle mic permissions are not supported in Playwright Firefox');
+
   let aliceContext: BrowserContext;
   let bobContext: BrowserContext;
   let alice: Page;

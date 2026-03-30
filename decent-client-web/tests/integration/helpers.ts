@@ -41,7 +41,7 @@ export async function createUser(browser: Browser, name: string): Promise<TestUs
     };
   });
 
-  await page.goto('/');
+  await page.goto('/app');
   await page.evaluate(async () => {
     if (indexedDB.databases) {
       const dbs = await indexedDB.databases();
@@ -50,19 +50,14 @@ export async function createUser(browser: Browser, name: string): Promise<TestUs
     localStorage.clear();
     sessionStorage.clear();
   });
-  await page.reload();
+  await page.goto('/app');
 
   await page.waitForFunction(() => {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 15000 });
 
-  const openAppBtn = page.getByRole('button', { name: /open app/i });
-  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await openAppBtn.click();
-  }
-
-  await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
+  await page.waitForSelector('#create-ws-btn-nav, #create-ws-btn, .sidebar-header', { timeout: 15000 });
 
   return { name, context, page };
 }
@@ -72,7 +67,7 @@ export async function closeUser(user: TestUser): Promise<void> {
 }
 
 export async function createWorkspace(page: Page, name: string, alias: string): Promise<void> {
-  await page.click('#create-ws-btn');
+  await page.locator('#create-ws-btn-nav, #create-ws-btn').first().click();
   await page.waitForSelector('.modal');
   const inputs = page.locator('.modal input');
   await inputs.nth(0).fill(name);
@@ -82,16 +77,12 @@ export async function createWorkspace(page: Page, name: string, alias: string): 
 }
 
 export async function getInviteUrl(page: Page): Promise<string> {
-  return page.evaluate(() => new Promise<string>((resolve) => {
-    const original = navigator.clipboard.writeText.bind(navigator.clipboard);
-    (navigator.clipboard as any).writeText = (text: string) => {
-      (navigator.clipboard as any).writeText = original;
-      resolve(text);
-      return Promise.resolve();
-    };
-    document.getElementById('copy-invite')?.click();
-    setTimeout(() => resolve(''), 5000);
-  }));
+  return page.evaluate(() => {
+    const state = (window as any).__state;
+    const ctrl = (window as any).__ctrl;
+    if (!state?.activeWorkspaceId || !ctrl?.generateInviteURL) return '';
+    return ctrl.generateInviteURL(state.activeWorkspaceId);
+  });
 }
 
 export async function sendMessage(page: Page, text: string): Promise<void> {

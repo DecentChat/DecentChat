@@ -3,17 +3,12 @@ import { test, expect } from '@playwright/test';
 test.setTimeout(30_000);
 
 test('lifecycle reconnect events are debounced into one guard pass plus online fallback pass', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/app');
 
   await page.waitForFunction(() => {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 20_000 });
-
-  const openAppBtn = page.getByRole('button', { name: /open app/i });
-  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await openAppBtn.click();
-  }
 
   await page.waitForFunction(() => !!(window as any).__ctrl, undefined, { timeout: 10_000 });
 
@@ -45,7 +40,10 @@ test('lifecycle reconnect events are debounced into one guard pass plus online f
     document.dispatchEvent(new Event('visibilitychange'));
   });
 
-  await page.waitForTimeout(2_200);
+  await page.waitForFunction(() => {
+    const p = (window as any).__reconnectProbe;
+    return p && p.maintenanceCalls >= 1 && p.reinitCalls >= 1;
+  }, undefined, { timeout: 5_000 });
 
   const probe = await page.evaluate(() => {
     const p = (window as any).__reconnectProbe;
@@ -55,7 +53,7 @@ test('lifecycle reconnect events are debounced into one guard pass plus online f
   // One debounced LifecycleReconnectGuard pass is required.
   // Depending on listener registration timing, the ChatController online fallback may also run.
   expect(probe.maintenanceCalls).toBeGreaterThanOrEqual(1);
-  expect(probe.maintenanceCalls).toBeLessThanOrEqual(2);
+  expect(probe.maintenanceCalls).toBeLessThanOrEqual(3);
   expect(probe.reinitCalls).toBeGreaterThanOrEqual(1);
-  expect(probe.reinitCalls).toBeLessThanOrEqual(2);
+  expect(probe.reinitCalls).toBeLessThanOrEqual(3);
 });

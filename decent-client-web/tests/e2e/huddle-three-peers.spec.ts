@@ -174,6 +174,8 @@ async function getAudioDiagnostics(page: Page): Promise<AudioDiagnostics> {
 // ─── Test Suite ─────────────────────────────────────────────────────────────
 
 test.describe('Huddle — 3 Peers Full Mesh Audio', () => {
+  test.skip(({ browserName }) => browserName === 'firefox', 'Clipboard and mic permissions are not supported in Playwright Firefox');
+
   test.setTimeout(120000);
 
   let aliceCtx: BrowserContext;

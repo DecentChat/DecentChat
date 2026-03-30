@@ -65,7 +65,7 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
     };
   });
 
-  await page.goto('/');
+  await page.goto('/app');
   await page.evaluate(async () => {
     if (indexedDB.databases) {
       for (const db of await indexedDB.databases()) {
@@ -75,19 +75,14 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
     localStorage.clear();
     sessionStorage.clear();
   });
-  await page.reload();
+  await page.goto('/app');
 
   await page.waitForFunction(() => {
     const l = document.getElementById('loading');
     return !l || l.style.opacity === '0';
   }, { timeout: 15000 });
 
-  const openAppBtn = page.getByRole('button', { name: /open app/i });
-  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await openAppBtn.click();
-  }
-
-  await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
+  await page.waitForSelector('#create-ws-btn-nav, #create-ws-btn, .sidebar-header', { timeout: 15000 });
   await page.waitForFunction(() => {
     const t = (window as any).__transport;
     return t?.getMyPeerId?.();
@@ -101,7 +96,7 @@ async function closeUser(u: TestUser) { try { await u.context.close(); } catch {
 // ─── Workspace / connection helpers ──────────────────────────────────────────
 
 async function createWorkspace(page: Page, name: string, alias: string) {
-  await page.click('#create-ws-btn');
+  await page.locator('#create-ws-btn-nav, #create-ws-btn').first().click();
   await page.waitForSelector('.modal');
   const inputs = page.locator('.modal input');
   await inputs.nth(0).fill(name);
@@ -111,24 +106,19 @@ async function createWorkspace(page: Page, name: string, alias: string) {
 }
 
 async function getInviteUrl(page: Page): Promise<string> {
-  return page.evaluate(() =>
-    new Promise<string>(resolve => {
-      const orig = navigator.clipboard.writeText.bind(navigator.clipboard);
-      (navigator.clipboard as any).writeText = (text: string) => {
-        (navigator.clipboard as any).writeText = orig;
-        resolve(text);
-        return Promise.resolve();
-      };
-      document.getElementById('copy-invite')?.click();
-      setTimeout(() => resolve(''), 5000);
-    }),
-  );
+  const invite = await page.evaluate(() => {
+    const state = (window as any).__state;
+    const ctrl = (window as any).__ctrl;
+    if (!state?.activeWorkspaceId || !ctrl?.generateInviteURL) return '';
+    return ctrl.generateInviteURL(state.activeWorkspaceId);
+  });
+  if (!invite) throw new Error('Failed to generate invite URL');
+  return invite;
 }
 
 async function joinViaInvite(page: Page, inviteUrl: string, alias: string) {
-  await page.click('#join-ws-btn');
-  await page.waitForSelector('.modal');
-  await page.locator('input[name="invite"]').fill(inviteUrl);
+  await page.goto(inviteUrl);
+  await page.waitForSelector('.modal', { timeout: 10000 });
   await page.locator('input[name="alias"]').fill(alias);
   await page.click('.modal .btn-primary');
   await page.waitForSelector('.sidebar-header', { timeout: 15000 });

@@ -44,7 +44,7 @@ async function freshPage(context: BrowserContext): Promise<Page> {
 
   await page.addInitScript(getMockTransportScript(`ws://localhost:${relay.port}`));
 
-  await page.goto('/');
+  await page.goto('/app');
 
   // Wipe all storage for a clean test state
   await page.evaluate(async () => {
@@ -56,7 +56,7 @@ async function freshPage(context: BrowserContext): Promise<Page> {
     sessionStorage.clear();
   });
 
-  await page.reload();
+  await page.goto('/app');
   await waitForReady(page);
   return page;
 }
@@ -70,17 +70,14 @@ async function waitForReady(page: Page): Promise<void> {
     },
     { timeout: 15000 },
   );
-  const openAppBtn = page.getByRole('button', { name: /open app/i });
-  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await openAppBtn.click();
-  }
 
-  await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
+  await page.waitForSelector('#create-ws-btn-nav, #create-ws-btn, .sidebar-header', { timeout: 15000 });
 }
 
 /** Create a workspace so we can reach the main app (needed for Settings) */
 async function createWorkspace(page: Page, wsName = 'Test WS', alias = 'Tester'): Promise<void> {
-  await page.click('#create-ws-btn');
+  const btn = page.locator('#create-ws-btn-nav, #create-ws-btn').first();
+  await btn.click();
   await page.waitForSelector('.modal', { timeout: 5000 });
   const inputs = page.locator('.modal input');
   await inputs.nth(0).fill(wsName);
@@ -526,7 +523,7 @@ test.describe('Seed Phrase — Import (Restore)', () => {
 });
 
 test.describe('Seed Phrase — Transfer (Settings)', () => {
-  test('Transfer button appears only when seed phrase exists', async ({ browser }) => {
+  test('Transfer button appears when seed phrase exists (auto-generated)', async ({ browser }) => {
     test.setTimeout(60000);
     const ctx = await browser.newContext();
     const page = await freshPage(ctx);
@@ -534,18 +531,8 @@ test.describe('Seed Phrase — Transfer (Settings)', () => {
     await createWorkspace(page);
     await openSettings(page);
 
-    // Before generating: no Transfer button
-    await expect(page.locator('#seed-transfer-btn')).toHaveCount(0);
-
-    // Generate seed
-    await page.click('#seed-phrase-btn');
-    await page.locator('#seed-phrase-display').waitFor({ state: 'visible', timeout: 5000 });
-
-    await closeSettings(page);
-    await openSettings(page);
-
-    // After generating: Transfer button should appear
-    await expect(page.locator('#seed-transfer-btn')).toBeVisible();
+    // Seed is auto-generated on first launch, so Transfer button should already be visible
+    await expect(page.locator('#seed-transfer-btn')).toBeVisible({ timeout: 5000 });
 
     await ctx.close();
   });

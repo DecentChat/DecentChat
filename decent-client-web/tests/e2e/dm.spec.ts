@@ -34,6 +34,14 @@ async function addContactViaURI(page: Page, name: string, peerId: string): Promi
       addedAt: Date.now(),
       lastSeen: 0,
     });
+
+    // Trigger sidebar refresh with contacts cache update
+    ctrl.ui.updateSidebar();
+
+    // Wait for rAF + async refreshContactsCache to complete
+    await new Promise<void>(resolve => {
+      requestAnimationFrame(() => setTimeout(resolve, 200));
+    });
   }, { name, peerId, uriText: uri });
 
   // Open DM picker and verify the contact is selectable there.
@@ -97,6 +105,13 @@ test.describe('Direct Messages', () => {
 
     await startDM(page, 'Bob Contact', 'bob-peer-id');
     await sendMessage(page, 'newer dm');
+
+    // Force contacts/DM cache refresh so sidebar reflects updated sort order
+    await page.evaluate(async () => {
+      const ctrl = (window as any).__ctrl;
+      ctrl.ui.updateSidebar();
+      await new Promise<void>(r => requestAnimationFrame(() => setTimeout(r, 300)));
+    });
 
     await expect(page.locator('[data-testid="direct-conversation-item"]')).toHaveCount(2);
     await expect(page.locator('[data-testid="direct-conversation-item"]').first()).toContainText('Bob Contact');

@@ -75,6 +75,8 @@ async function setupUser(browser: any, name: string): Promise<{ ctx: BrowserCont
 }
 
 test.describe('Huddle Audio Debug', () => {
+  test.skip(({ browserName }) => browserName === 'firefox', 'Clipboard and mic permissions are not supported in Playwright Firefox');
+
   test.setTimeout(120000);
 
   test('two-browser huddle: WebRTC states and audio element diagnostics', async ({ browser }) => {

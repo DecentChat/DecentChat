@@ -18,13 +18,14 @@ const SIGNAL_URL = 'ws://localhost:9000';
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 async function loadApp(page: Page, label: string): Promise<void> {
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
-  await page.waitForSelector('#create-ws-btn, button:has-text("Create Workspace")', { timeout: 15000 });
+  // Navigate to /app directly — fresh browser context guarantees clean storage
+  await page.goto(`${BASE_URL}/app`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await page.waitForSelector('#create-ws-btn-nav, #create-ws-btn, button:has-text("Create Workspace"), .sidebar-header', { timeout: 30000 });
   console.log(`[${label}] app loaded ✅`);
 }
 
 async function createWorkspace(page: Page, wsName: string, displayName: string): Promise<void> {
-  await page.locator('#create-ws-btn, button:has-text("Create Workspace")').first().click();
+  await page.locator('#create-ws-btn-nav, #create-ws-btn, button:has-text("Create Workspace")').first().click();
   await page.waitForSelector('.modal', { timeout: 5000 });
   await page.locator('.modal input:not([type="hidden"])').nth(0).fill(wsName);
   await page.locator('.modal input:not([type="hidden"])').nth(1).fill(displayName);
@@ -91,8 +92,10 @@ test.describe('Real WebRTC P2P (localhost, same browser, no MockTransport)', () 
   test('two users can exchange messages via real WebRTC', async ({ browser }) => {
     test.setTimeout(120000);
 
-    const alice = await browser.newPage();
-    const bob   = await browser.newPage();
+    const aliceCtx = await browser.newContext();
+    const bobCtx   = await browser.newContext();
+    const alice = await aliceCtx.newPage();
+    const bob   = await bobCtx.newPage();
 
     alice.on('console', msg => { if (msg.type() === 'error' || msg.text().includes('PeerJS') || msg.text().includes('ICE')) console.log(`  [Alice] ${msg.text()}`); });
     bob.on('console',   msg => { if (msg.type() === 'error' || msg.text().includes('PeerJS') || msg.text().includes('ICE')) console.log(`  [Bob]   ${msg.text()}`); });
@@ -119,13 +122,17 @@ test.describe('Real WebRTC P2P (localhost, same browser, no MockTransport)', () 
 
     await alice.close();
     await bob.close();
+    await aliceCtx.close();
+    await bobCtx.close();
   });
 
   test('typing indicator works over real WebRTC', async ({ browser }) => {
     test.setTimeout(90000);
 
-    const alice = await browser.newPage();
-    const bob   = await browser.newPage();
+    const aliceCtx = await browser.newContext();
+    const bobCtx   = await browser.newContext();
+    const alice = await aliceCtx.newPage();
+    const bob   = await bobCtx.newPage();
 
     await loadApp(alice, 'Alice');
     await createWorkspace(alice, 'TypingTest', 'Alice');
@@ -147,6 +154,8 @@ test.describe('Real WebRTC P2P (localhost, same browser, no MockTransport)', () 
 
     await alice.close();
     await bob.close();
+    await aliceCtx.close();
+    await bobCtx.close();
   });
 
 });

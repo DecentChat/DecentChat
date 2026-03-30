@@ -59,10 +59,22 @@ test.describe('DecentChat E2E', () => {
       await ctrl.directConversationStore.updateLastMessage(conv.id, msg.timestamp);
       const updatedConv = await ctrl.directConversationStore.get(conv.id);
       await ctrl.persistentStore.saveDirectConversation(updatedConv || conv);
-      ctrl.ui?.updateSidebar?.({ refreshContacts: false });
+
+      // Trigger sidebar refresh with contacts+DM cache update, then wait for rAF + async
+      ctrl.ui?.updateSidebar?.();
+      await new Promise<void>(resolve => {
+        requestAnimationFrame(() => setTimeout(resolve, 200));
+      });
 
       return { conversationId: conv.id, peerId, displayName, message };
     }, options || {});
+  }
+
+  async function flushPersistence(page: any) {
+    await page.evaluate(async () => {
+      const ctrl = (window as any).__ctrl;
+      await ctrl?.persistentStore?.saveSetting?.('__e2e:flush', Date.now());
+    });
   }
 
 
@@ -214,7 +226,6 @@ test.describe('DecentChat E2E', () => {
 
   test('/version shows version info', async ({ page }) => {
     await createWorkspace(page);
-    await page.waitForTimeout(500); // Let workspace fully initialize
     const input = page.locator('#compose-input');
     await input.fill('/version');
     await input.press('Escape'); // dismiss command autocomplete
@@ -225,7 +236,6 @@ test.describe('DecentChat E2E', () => {
 
   test('/whoami shows identity', async ({ page }) => {
     await createWorkspace(page);
-    await page.waitForTimeout(500); // Let workspace fully initialize
     const input = page.locator('#compose-input');
     await input.fill('/whoami');
     await input.press('Escape'); // dismiss command autocomplete
@@ -531,8 +541,7 @@ test.describe('DecentChat E2E', () => {
   test('workspace persists after refresh', async ({ page }) => {
     await createWorkspace(page, 'Persistent WS', 'User');
 
-    // Wait for IndexedDB writes to complete
-    await page.waitForTimeout(1000);
+    await flushPersistence(page);
 
     // Refresh the page
     await page.reload();
@@ -546,16 +555,16 @@ test.describe('DecentChat E2E', () => {
     await createWorkspace(page);
     await sendMessage(page, 'This should persist');
 
-    // Wait for IndexedDB writes to flush
-    await page.waitForTimeout(2000);
+    await flushPersistence(page);
 
     await page.reload();
     await waitForApp(page);
 
-    // Wait for messages to load from IndexedDB
-    await page.waitForTimeout(2000);
-    const messages = await getMessages(page);
-    expect(messages).toContain('This should persist');
+    await page.waitForFunction(
+      (text) => Array.from(document.querySelectorAll('.message-content')).some(el => el.textContent?.includes(text)),
+      'This should persist',
+      { timeout: 8000 },
+    );
   });
 
   test('active direct conversation persists after refresh', async ({ page }) => {
@@ -572,7 +581,14 @@ test.describe('DecentChat E2E', () => {
     await directConversationItem.click();
     await expect(page.locator('.channel-header h2')).toContainText('Bob DM');
 
-    await page.waitForTimeout(1000);
+    await page.evaluate(async (conversationId) => {
+      const ctrl = (window as any).__ctrl;
+      for (let i = 0; i < 20; i++) {
+        const saved = await ctrl?.persistentStore?.getSetting?.('ui:lastView');
+        if (saved?.directConversationId === conversationId) return;
+        await new Promise(r => setTimeout(r, 100));
+      }
+    }, seeded.conversationId);
     await page.reload();
     await waitForApp(page);
 

@@ -92,8 +92,14 @@ export async function createWorkspace(page: Page, name = 'Test Workspace', alias
   }
 
   // Open create modal from app nav for deterministic behavior.
-  await page.locator('#create-ws-btn-nav').click();
-  await page.getByRole('heading', { name: 'Create Workspace' }).waitFor({ state: 'visible', timeout: 10000 });
+  const createBtn = page.locator('#create-ws-btn-nav, #create-ws-btn').first();
+  await createBtn.click();
+  const createHeading = page.getByRole('heading', { name: 'Create Workspace' });
+  const headingVisible = await createHeading.isVisible({ timeout: 3000 }).catch(() => false);
+  if (!headingVisible) {
+    await createBtn.click({ force: true });
+  }
+  await page.waitForSelector('.modal', { timeout: 10000 });
 
   const inputs = page.locator('.modal input');
   await inputs.nth(0).fill(name);
@@ -224,7 +230,15 @@ export async function waitForPeerCount(page: Page, count: number, timeoutMs = 30
 /** Click on a channel in the sidebar */
 export async function switchChannel(page: Page, channelName: string): Promise<void> {
   await page.click(`.sidebar-channel:has-text("${channelName}")`);
-  await page.waitForTimeout(300); // Small delay for channel switch
+  await page.waitForFunction(
+    (name) => {
+      const headerText = document.querySelector('.channel-header')?.textContent || '';
+      const activeSidebarText = document.querySelector('.sidebar-item.active, .sidebar-channel.active')?.textContent || '';
+      return headerText.toLowerCase().includes(name.toLowerCase()) || activeSidebarText.toLowerCase().includes(name.toLowerCase());
+    },
+    channelName,
+    { timeout: 3000 },
+  ).catch(() => {});
 }
 
 // ─── Typing Indicator ─────────────────────────────────────────────────────────
@@ -238,7 +252,8 @@ export async function isTypingIndicatorVisible(page: Page): Promise<boolean> {
 
 /** Get typing indicator text */
 export async function getTypingIndicatorText(page: Page): Promise<string> {
-  return page.locator('#typing-indicator').textContent() || '';
+  const text = await page.locator('#typing-indicator').textContent();
+  return text ?? '';
 }
 
 // ─── Reactions ────────────────────────────────────────────────────────────────
@@ -249,7 +264,17 @@ export async function addReaction(page: Page, messageIndex: number, emoji: strin
   await message.hover();
   // Click the quick reaction button
   await message.locator(`.reaction-btn[data-emoji="${emoji}"], .quick-reaction`).first().click();
-  await page.waitForTimeout(300);
+  await page.waitForFunction(
+    ({ idx, emj }) => {
+      const messages = document.querySelectorAll('.message');
+      const target = messages[idx];
+      if (!target) return false;
+      const pills = Array.from(target.querySelectorAll('.reaction-pill'));
+      return pills.some(p => (p.textContent || '').includes(emj));
+    },
+    { idx: messageIndex, emj: emoji },
+    { timeout: 2000 },
+  ).catch(() => {});
 }
 
 /** Get reaction pills for a message */

@@ -213,6 +213,25 @@ test.describe('Remove member from workspace', () => {
         if (me) me.role = 'admin';
       }, bobPeerId);
 
+      // Ensure Bob's local workspace view includes Carol before attempting remove.
+      const carolMember = await alice.page.evaluate((cId: string) => {
+        const s = (window as any).__state;
+        const c = (window as any).__ctrl;
+        const ws = c.workspaceManager.getWorkspace(s.activeWorkspaceId);
+        return ws?.members?.find((m: any) => m.peerId === cId) || null;
+      }, carolPeerId);
+      if (carolMember) {
+        await bob.page.evaluate((member: any) => {
+          const s = (window as any).__state;
+          const c = (window as any).__ctrl;
+          const ws = c.workspaceManager.getWorkspace(s.activeWorkspaceId);
+          if (!ws?.members) return;
+          if (!ws.members.some((m: any) => m.peerId === member.peerId)) {
+            ws.members.push(member);
+          }
+        }, carolMember);
+      }
+
       // Bob (admin) removes Carol
       const result = await bob.page.evaluate(async (cId: string) => {
         return (window as any).__ctrl.removeWorkspaceMember(cId);

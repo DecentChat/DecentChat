@@ -271,18 +271,21 @@ test.describe('File Attachments', () => {
 
   // ─── Paste ──────────────────────────────────────────────────────────────
 
-  test('pasting an image file sends attachment', async ({ page }) => {
+  test('pasting an image file sends attachment', async ({ page, browserName }) => {
+    test.skip(browserName === 'firefox', 'Clipboard paste simulation is flaky in Firefox headless');
     await pasteImageFile(page);
     await expect(page.locator('.attachment')).toBeVisible();
   });
 
-  test('pasted image shows as image attachment', async ({ page }) => {
+  test('pasted image shows as image attachment', async ({ page, browserName }) => {
+    test.skip(browserName === 'firefox', 'Clipboard paste simulation is flaky in Firefox headless');
     await pasteImageFile(page);
     // Should have a thumbnail since it's an image
     await expect(page.locator('.attachment-thumbnail')).toBeVisible({ timeout: 6000 });
   });
 
-  test('pasting image with thread input focused sends attachment into thread (not main channel)', async ({ page }) => {
+  test('pasting image with thread input focused sends attachment into thread (not main channel)', async ({ page, browserName }) => {
+    test.skip(browserName === 'firefox', 'Clipboard paste simulation is flaky in Firefox headless');
     // Create parent message in main channel
     await page.locator('#compose-input').fill('parent message for paste-thread test');
     await page.locator('#compose-input').press('Enter');
@@ -309,8 +312,11 @@ test.describe('File Attachments', () => {
     await sendFileViaInput(page, [{ name: 'persist-test.png', mimeType: 'image/png', buffer: TINY_PNG }]);
     await expect(page.locator('.attachment-name')).toContainText('persist-test.png');
 
-    // Allow IndexedDB to flush.
-    await page.waitForTimeout(2000);
+    // Force a deterministic IndexedDB round-trip instead of fixed sleep.
+    await page.evaluate(async () => {
+      const ctrl = (window as any).__ctrl;
+      await ctrl?.persistentStore?.saveSetting?.('__e2e:flush', Date.now());
+    });
 
     // Refresh can occasionally land in startup limbo in headless chromium.
     // Recover with explicit /app navigation if needed.
@@ -322,7 +328,6 @@ test.describe('File Attachments', () => {
       await waitForApp(page);
     }
 
-    await page.waitForTimeout(1500);
     await expect(page.locator('.attachment-name')).toContainText('persist-test.png', { timeout: 8000 });
   });
 });

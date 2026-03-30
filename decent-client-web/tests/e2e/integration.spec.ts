@@ -37,6 +37,13 @@ import {
   waitForSignalingServer,
 } from './signaling-fixture';
 
+async function flushPersistence(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const ctrl = (window as any).__ctrl;
+    await ctrl?.persistentStore?.saveSetting?.('__e2e:flush', Date.now());
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Global setup / teardown for signaling server
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -137,7 +144,6 @@ test.describe('Two-User Messaging', () => {
     const input = alice.page.locator('#compose-input');
     await input.fill('');
     await input.press('Enter');
-    await alice.page.waitForTimeout(500);
 
     // Only system messages should exist, no user messages
     const userMessages = await alice.page.locator('.message-content').count();
@@ -245,7 +251,7 @@ test.describe('Offline & Reconnection', () => {
     await createWorkspace(alice.page, 'Persist WS', 'Alice');
     await sendMessage(alice.page, 'Before reload');
 
-    await alice.page.waitForTimeout(1000); // Wait for IndexedDB writes
+    await flushPersistence(alice.page);
     await alice.page.reload();
     await waitForApp(alice.page);
 
@@ -256,14 +262,11 @@ test.describe('Offline & Reconnection', () => {
     await createWorkspace(alice.page, 'Msg Persist', 'Alice');
     await sendMessage(alice.page, 'Persistent message');
 
-    await alice.page.waitForTimeout(1000);
+    await flushPersistence(alice.page);
     await alice.page.reload();
     await waitForApp(alice.page);
 
-    // Wait for messages to reload from IndexedDB
-    await alice.page.waitForTimeout(1000);
-    const messages = await getMessages(alice.page);
-    expect(messages).toContain('Persistent message');
+    await waitForMessage(alice.page, 'Persistent message', 8000);
   });
 
   test('user can send messages after going offline and coming back online', async () => {
@@ -275,8 +278,8 @@ test.describe('Offline & Reconnection', () => {
     await alice.page.goto('/');
     await waitForApp(alice.page);
 
-    // The workspace should be restored
-    await alice.page.waitForTimeout(1000);
+    // Wait for either restored app shell or welcome fallback.
+    await alice.page.waitForSelector('.sidebar-header, #create-ws-btn, #join-ws-btn', { timeout: 8000 });
     // Send new message after reconnect
     const composeSel = await alice.page.locator('#compose-input').count();
     if (composeSel > 0) {
@@ -291,7 +294,6 @@ test.describe('Offline & Reconnection', () => {
     await sendMessage(alice.page, 'Message 1');
 
     for (let i = 0; i < 3; i++) {
-      await alice.page.waitForTimeout(500);
       await alice.page.reload();
       await waitForApp(alice.page);
     }
@@ -421,8 +423,15 @@ test.describe('Channel Operations', () => {
     await input.fill('/channel random');
     await input.press('Enter');
 
-    // System message should confirm channel creation
-    await alice.page.waitForTimeout(1000);
+    // System message / sidebar should eventually reflect channel creation
+    await alice.page.waitForFunction(
+      () => {
+        const sidebarText = document.querySelector('.sidebar')?.textContent || '';
+        const messageText = Array.from(document.querySelectorAll('.message')).map(el => el.textContent || '').join(' ');
+        return sidebarText.includes('random') || messageText.includes('random');
+      },
+      { timeout: 5000 },
+    ).catch(() => {});
     const sidebar = alice.page.locator('.sidebar');
     // The channel may appear in sidebar or a system message may confirm it
     const sidebarText = await sidebar.textContent();
@@ -515,13 +524,11 @@ test.describe('Reactions', () => {
     // Try to add a reaction via the UI
     const message = alice.page.locator('.message').last();
     await message.hover();
-    await alice.page.waitForTimeout(300);
 
     // Look for a reaction button
     const reactionBtns = await alice.page.locator('.reaction-btn, .quick-reaction, .msg-actions button').count();
     if (reactionBtns > 0) {
       await alice.page.locator('.reaction-btn, .quick-reaction, .msg-actions button').first().click();
-      await alice.page.waitForTimeout(500);
 
       // Check for reaction pill
       const pills = await alice.page.locator('.reaction-pill').count();
@@ -658,9 +665,9 @@ test.describe('Invite URL Flow', () => {
       // Should have alias input
       await expect(bob.page.locator('.modal input[name="alias"]')).toBeVisible();
 
-      // Should have only one visible input (alias) — peer ID is hidden
+      // Should have alias input + allowWorkspaceDMs checkbox (peer ID is hidden)
       const visibleInputs = await bob.page.locator('.modal input:not([type="hidden"])').count();
-      expect(visibleInputs).toBe(1);
+      expect(visibleInputs).toBe(2);
     }
   });
 
@@ -675,7 +682,7 @@ test.describe('Invite URL Flow', () => {
       await bob.page.click('.modal .btn-primary');
 
       // After joining, the modal should close and the app should be functional
-      await bob.page.waitForTimeout(2000);
+      await waitForApp(bob.page);
     }
   });
 
@@ -731,7 +738,6 @@ test.describe('Edge Cases', () => {
     // Rapid reload 5 times
     for (let i = 0; i < 5; i++) {
       await alice.page.reload();
-      await alice.page.waitForTimeout(200);
     }
 
     await waitForApp(alice.page);
@@ -743,11 +749,12 @@ test.describe('Edge Cases', () => {
 
     // 5000 character message
     const largeText = 'A'.repeat(5000);
+    const beforeCount = await alice.page.locator('.message-content').count();
     const input = alice.page.locator('#compose-input');
     await input.fill(largeText);
     await input.press('Enter');
 
-    await alice.page.waitForTimeout(1000);
+    await waitForMessageCount(alice.page, beforeCount + 1, 8000);
 
     const messages = await getMessages(alice.page);
     // Should either contain the full message or be truncated — but not crash
@@ -944,7 +951,7 @@ test.describe('Search', () => {
     await alice.page.waitForSelector('#search-input', { timeout: 3000 });
     await alice.page.locator('#search-input').fill('xyz123');
 
-    await alice.page.waitForTimeout(500);
+    await alice.page.waitForSelector('.search-result, .search-match', { timeout: 2000 }).catch(() => {});
 
     // Search results should show the matching message
     const results = await alice.page.locator('.search-result, .search-match').count();
@@ -956,7 +963,7 @@ test.describe('Search', () => {
 
     // Ctrl+F should open search (app captures this)
     await alice.page.keyboard.press('Control+f');
-    await alice.page.waitForTimeout(500);
+    await alice.page.waitForSelector('#search-input', { timeout: 1000 }).catch(() => {});
 
     const searchInput = alice.page.locator('#search-input');
     const isVisible = await searchInput.isVisible().catch(() => false);
@@ -983,11 +990,12 @@ test.describe('Slash Commands', () => {
   test('/help shows system message', async () => {
     await createWorkspace(alice.page, 'Cmd Test', 'Alice');
 
+    const beforeCount = await alice.page.locator('.message').count();
     const input = alice.page.locator('#compose-input');
     await input.fill('/help');
     await input.press('Enter');
 
-    await alice.page.waitForTimeout(1000);
+    await waitForMessageCount(alice.page, beforeCount + 1, 5000).catch(() => {});
 
     // Should show a system message with help text
     const systemMsgs = await alice.page.locator('.message.system, .system-message').count();
@@ -997,11 +1005,12 @@ test.describe('Slash Commands', () => {
   test('/version shows version info', async () => {
     await createWorkspace(alice.page, 'Version Test', 'Alice');
 
+    const beforeCount = await alice.page.locator('.message').count();
     const input = alice.page.locator('#compose-input');
     await input.fill('/version');
     await input.press('Enter');
 
-    await alice.page.waitForTimeout(1000);
+    await waitForMessageCount(alice.page, beforeCount + 1, 5000).catch(() => {});
 
     // Should show version system message
     const messages = await alice.page.locator('.message').allTextContents();
@@ -1013,12 +1022,13 @@ test.describe('Slash Commands', () => {
   test('/whoami shows identity info', async () => {
     await createWorkspace(alice.page, 'Whoami Test', 'Alice');
 
+    const beforeCount = await alice.page.locator('.message').count();
     const input = alice.page.locator('#compose-input');
     await input.fill('/whoami');
     await input.press('Escape'); // dismiss command autocomplete
     await input.press('Enter');
 
-    await alice.page.waitForTimeout(1000);
+    await waitForMessageCount(alice.page, beforeCount + 1, 5000).catch(() => {});
 
     // Should show peer ID or identity info
     const messages = await alice.page.locator('.message').allTextContents();
@@ -1033,7 +1043,7 @@ test.describe('Slash Commands', () => {
     const input = alice.page.locator('#compose-input');
     await input.fill('/');
 
-    await alice.page.waitForTimeout(500);
+    await alice.page.waitForSelector('.autocomplete, .command-suggestions, .slash-menu', { timeout: 1000 }).catch(() => {});
 
     // Autocomplete popup may appear
     const autocomplete = await alice.page.locator('.autocomplete, .command-suggestions, .slash-menu').count();
@@ -1062,7 +1072,10 @@ test.describe('Signaling Server', () => {
 
     // The app should have initialized transport — check for peer ID
     // The peer ID is generated during init and stored in state
-    await alice.page.waitForTimeout(2000);
+    await alice.page.waitForFunction(
+      () => Boolean((window as any).__state?.myPeerId),
+      { timeout: 6000 },
+    ).catch(() => {});
 
     // Check that the app is not showing connection errors
     const errorToasts = await alice.page.locator('.toast.error').count();
@@ -1111,7 +1124,7 @@ test.describe('Data Integrity', () => {
   test('workspace name survives full page reload', async () => {
     await createWorkspace(alice.page, 'Survive Reload', 'Alice');
 
-    await alice.page.waitForTimeout(1000);
+    await flushPersistence(alice.page);
     await alice.page.reload();
     await waitForApp(alice.page);
 
@@ -1123,11 +1136,11 @@ test.describe('Data Integrity', () => {
     await sendMessage(alice.page, 'Persistent msg 1');
     await sendMessage(alice.page, 'Persistent msg 2');
 
-    await alice.page.waitForTimeout(1000);
+    await flushPersistence(alice.page);
     await alice.page.reload();
     await waitForApp(alice.page);
 
-    await alice.page.waitForTimeout(1000);
+    await waitForMessage(alice.page, 'Persistent msg 1', 8000);
     const messages = await getMessages(alice.page);
     expect(messages).toContain('Persistent msg 1');
     expect(messages).toContain('Persistent msg 2');
@@ -1167,7 +1180,6 @@ test.describe('Emoji Picker', () => {
     await createWorkspace(alice.page, 'Emoji Test', 'Alice');
 
     await alice.page.click('#emoji-btn');
-    await alice.page.waitForTimeout(500);
 
     const picker = alice.page.locator('.emoji-picker');
     await expect(picker).toBeVisible();
@@ -1177,13 +1189,19 @@ test.describe('Emoji Picker', () => {
     await createWorkspace(alice.page, 'Emoji Insert', 'Alice');
 
     await alice.page.click('#emoji-btn');
-    await alice.page.waitForTimeout(300);
+    await expect(alice.page.locator('.emoji-picker')).toBeVisible();
 
     // Click first emoji in picker
     const firstEmoji = alice.page.locator('.emoji-picker .emoji, .emoji-picker button').first();
     if (await firstEmoji.count() > 0) {
       await firstEmoji.click();
-      await alice.page.waitForTimeout(300);
+      await alice.page.waitForFunction(
+        () => {
+          const input = document.getElementById('compose-input') as HTMLInputElement | HTMLTextAreaElement | null;
+          return Boolean(input?.value && input.value.length > 0);
+        },
+        { timeout: 3000 },
+      );
 
       const input = alice.page.locator('#compose-input');
       const value = await input.inputValue();
@@ -1195,11 +1213,10 @@ test.describe('Emoji Picker', () => {
     await createWorkspace(alice.page, 'Emoji Close', 'Alice');
 
     await alice.page.click('#emoji-btn');
-    await alice.page.waitForTimeout(300);
     await expect(alice.page.locator('.emoji-picker')).toBeVisible();
 
     await alice.page.keyboard.press('Escape');
-    await alice.page.waitForTimeout(300);
+    await expect(alice.page.locator('.emoji-picker')).not.toBeVisible({ timeout: 3000 });
 
     // Picker should be hidden/detached
     const pickerVisible = await alice.page.locator('.emoji-picker').isVisible().catch(() => false);
@@ -1228,24 +1245,33 @@ test.describe('Welcome Screen', () => {
   });
 
   test('create workspace button opens modal', async () => {
-    await alice.page.click('#create-ws-btn');
-    await alice.page.waitForSelector('.modal');
+    // Navigate to /app so clicking create opens the modal directly (no navigation)
+    await alice.page.goto('/app');
+    await waitForApp(alice.page);
+    await alice.page.locator('#create-ws-btn').click();
+    await alice.page.waitForSelector('.modal', { timeout: 10000 });
 
     await expect(alice.page.locator('.modal')).toBeVisible();
     await expect(alice.page.locator('.modal h2')).toContainText('Create');
   });
 
   test('join workspace button opens modal', async () => {
-    await alice.page.click('#join-ws-btn');
-    await alice.page.waitForSelector('.modal');
+    // Navigate to /app so clicking join opens the modal directly (no navigation)
+    await alice.page.goto('/app');
+    await waitForApp(alice.page);
+    await alice.page.locator('#join-ws-btn').click();
+    await alice.page.waitForSelector('.modal', { timeout: 10000 });
 
     await expect(alice.page.locator('.modal')).toBeVisible();
     await expect(alice.page.locator('.modal')).toContainText('Invite Link or Code');
   });
 
   test('create workspace modal has name and alias inputs', async () => {
-    await alice.page.click('#create-ws-btn');
-    await alice.page.waitForSelector('.modal');
+    // Navigate to /app so clicking create opens the modal directly (no navigation)
+    await alice.page.goto('/app');
+    await waitForApp(alice.page);
+    await alice.page.locator('#create-ws-btn').click();
+    await alice.page.waitForSelector('.modal', { timeout: 10000 });
 
     const inputs = alice.page.locator('.modal input');
     const count = await inputs.count();
@@ -1253,8 +1279,11 @@ test.describe('Welcome Screen', () => {
   });
 
   test('workspace creation requires non-empty name', async () => {
-    await alice.page.click('#create-ws-btn');
-    await alice.page.waitForSelector('.modal');
+    // Navigate to /app so clicking create opens the modal directly (no navigation)
+    await alice.page.goto('/app');
+    await waitForApp(alice.page);
+    await alice.page.locator('#create-ws-btn').click();
+    await alice.page.waitForSelector('.modal', { timeout: 10000 });
 
     // Try creating with empty name
     const inputs = alice.page.locator('.modal input');
@@ -1263,8 +1292,7 @@ test.describe('Welcome Screen', () => {
     await alice.page.click('.modal .btn-primary');
 
     // Should still show modal (creation should fail)
-    await alice.page.waitForTimeout(500);
-    const modalVisible = await alice.page.locator('.modal').isVisible();
+    await expect(alice.page.locator('.modal')).toBeVisible();
     // Either modal stays open or workspace is created with default name
     expect(true).toBe(true);
   });

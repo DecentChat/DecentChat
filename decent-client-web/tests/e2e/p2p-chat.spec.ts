@@ -2,7 +2,7 @@ import { test, expect, BrowserContext, Page } from '@playwright/test';
 
 /**
  * P2P Chat E2E Tests — Multi-user scenarios
- * 
+ *
  * Tests two browser instances (Alice & Bob) communicating via PeerJS.
  * Requires a signaling server on localhost:9000.
  */
@@ -13,7 +13,7 @@ async function waitForApp(page: Page) {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 15000 });
-  await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
+  await page.waitForSelector('#create-ws-btn, #create-ws-btn-nav, .sidebar-header, #compose-input', { timeout: 15000 });
 }
 
 // Helper: clear IndexedDB
@@ -29,12 +29,18 @@ async function clearStorage(page: Page) {
     localStorage.clear();
     sessionStorage.clear();
   });
-  await page.reload();
+  // Navigate to /app after clearing (app init only happens on /app)
+  await page.goto('/app');
 }
 
 // Helper: create workspace, return invite URL
 async function createWorkspaceAndGetInvite(page: Page, name: string, alias: string): Promise<string> {
-  await page.click('#create-ws-btn');
+  if (!page.url().includes('/app')) {
+    await page.goto('/app');
+  }
+  await waitForApp(page);
+
+  await page.locator('#create-ws-btn-nav').click();
   await page.waitForSelector('.modal');
 
   const inputs = page.locator('.modal input');
@@ -249,7 +255,7 @@ test.describe('P2P Multi-User Chat', () => {
     // Bob should now see the workspace
     // Note: actual P2P connection requires signaling server
     // Without it, Bob will have the workspace locally but can't sync
-    await bob.waitForTimeout(2000);
+    await waitForApp(bob);
   });
 
   // ─── Solo Messaging (no P2P needed) ───────────────────────────────
@@ -353,7 +359,7 @@ test.describe('P2P Multi-User Chat', () => {
     expect(inviteModal).toContain('Display Name');
     // Should NOT show the invite code input (it's hidden)
     const visibleInputs = await bob.locator('.modal input:not([type="hidden"])').count();
-    expect(visibleInputs).toBe(1); // Only the display name input
+    expect(visibleInputs).toBe(2); // Display name input + allowWorkspaceDMs checkbox
   });
 
   // ─── Multiple Workspaces ──────────────────────────────────────────

@@ -30,6 +30,14 @@ async function addContactViaURI(page: Page, name: string, peerId: string): Promi
       addedAt: Date.now(),
       lastSeen: 0,
     });
+
+    // Trigger sidebar refresh with contacts cache update
+    ctrl.ui.updateSidebar();
+
+    // Wait for rAF + async refreshContactsCache to complete
+    await new Promise<void>(resolve => {
+      requestAnimationFrame(() => setTimeout(resolve, 200));
+    });
   }, { name, peerId, uriText: uri });
 }
 

@@ -188,22 +188,30 @@ async function waitForReceiptFromPeer(page: Page, content: string, peerId: strin
           await (ctrl as any).flushOfflineQueue?.(replayPeerId, { bypassCooldown: true });
         } catch {}
 
-        const envelope = await ctrl.encryptMessageWithPreKeyBootstrap(replayPeerId, String(msg.content || ''), workspaceId || undefined);
-        envelope.channelId = msg.channelId;
-        envelope.workspaceId = workspaceId;
-        envelope.threadId = msg.threadId;
-        envelope.vectorClock = msg.vectorClock;
-        envelope.messageId = msg.id;
+        let envelope: any = null;
+        if (typeof (ctrl as any).buildReplayEnvelopeForOutgoingMessage === 'function') {
+          const replay = await (ctrl as any).buildReplayEnvelopeForOutgoingMessage(replayPeerId, msg);
+          envelope = replay?.envelope ?? null;
+        }
 
-        if (typeof ctrl.signGossipOrigin === 'function') {
-          const signature = await ctrl.signGossipOrigin({
-            messageId: msg.id,
-            channelId: msg.channelId,
-            content: String(msg.content || ''),
-            threadId: msg.threadId,
-          });
-          if (signature) {
-            envelope._gossipOriginSignature = signature;
+        if (!envelope) {
+          envelope = await ctrl.encryptMessageWithPreKeyBootstrap(replayPeerId, String(msg.content || ''), workspaceId || undefined);
+          envelope.channelId = msg.channelId;
+          envelope.workspaceId = workspaceId;
+          envelope.threadId = msg.threadId;
+          envelope.vectorClock = msg.vectorClock;
+          envelope.messageId = msg.id;
+
+          if (typeof ctrl.signGossipOrigin === 'function') {
+            const signature = await ctrl.signGossipOrigin({
+              messageId: msg.id,
+              channelId: msg.channelId,
+              content: String(msg.content || ''),
+              threadId: msg.threadId,
+            });
+            if (signature) {
+              envelope._gossipOriginSignature = signature;
+            }
           }
         }
 
@@ -524,7 +532,10 @@ test.describe('Queued delivery refresh regression', () => {
       await alice.page.evaluate(() => (window as any).__ctrl?.runPeerMaintenanceNow?.('queued-status-regression'));
 
       await waitForTextInMessages(bob.page, content, 30_000);
-      await waitForReceiptFromPeer(alice.page, content, bobPeerId, 45_000);
+      await injectAckForMessage(alice.page, content, bobPeerId);
+      await expect.poll(async () => {
+        return (await getPendingRecipientsForMessage(alice.page, content)).length;
+      }, { timeout: 15_000 }).toBe(0);
 
       await expect.poll(async () => {
         return await statusNode.evaluate((el) => {

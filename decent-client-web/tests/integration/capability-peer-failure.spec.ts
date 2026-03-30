@@ -77,6 +77,10 @@ function makeSendController(params: {
   ctrl.getOrCreateCRDT = mock(() => ({ createMessage: mock(() => ({ vectorClock: { me: 1 } })) }));
   ctrl.persistMessage = mock(async () => {});
   ctrl.ensureThreadRoot = mock(async () => {});
+  ctrl.queueCustodyEnvelope = mock(async () => {});
+  ctrl.replicateToCustodians = mock(async () => {});
+  ctrl.runPeerMaintenanceNow = mock(() => 0);
+  ctrl.reinitializeTransportIfStuck = mock(async () => {});
 
   ctrl.workspaceManager = {
     getWorkspace: mock((workspaceId: string) => (workspaceId === 'ws-1' ? workspace : null)),
@@ -94,6 +98,13 @@ function makeSendController(params: {
     hasRatchetState: mock(() => true),
     restoreRatchetState: mock(async () => {}),
   };
+
+  ctrl.contactStore = {
+    getSync: mock(() => null),
+  };
+  ctrl.outgoingDeliveryRecoveryConnectAt = new Map<string, number>();
+  ctrl.peerConnectedAt = new Map<string, number>();
+  ctrl.peerLastSeenAt = new Map<string, number>();
 
   ctrl.offlineQueue = { enqueue: mock(async () => {}) };
   ctrl.persistentStore = { saveMessage: mock(async () => {}) };

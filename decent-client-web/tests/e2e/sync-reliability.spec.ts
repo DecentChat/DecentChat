@@ -98,8 +98,18 @@ async function closeUser(user: TestUser) {
 // ─── Workspace helpers ────────────────────────────────────────────────────────
 
 async function createWorkspace(page: Page, name: string, alias: string) {
+  // Navigate to /app first so #create-ws-btn opens the modal directly
+  // (on '/' it navigates to /app via sessionStorage, which is slow/fragile).
+  if (!page.url().includes('/app')) {
+    await page.goto('/app');
+    await page.waitForFunction(() => {
+      const el = document.getElementById('loading');
+      return !el || el.style.opacity === '0';
+    }, { timeout: 15_000 });
+    await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15_000 });
+  }
   await page.click('#create-ws-btn');
-  await page.waitForSelector('.modal');
+  await page.waitForSelector('.modal', { timeout: 10_000 });
   const inputs = page.locator('.modal input');
   await inputs.nth(0).fill(name);
   await inputs.nth(1).fill(alias);
