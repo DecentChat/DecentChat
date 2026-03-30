@@ -16,6 +16,7 @@ import {
   CustodyStore,
   ManifestStore,
   MessageCRDT,
+  applyMessageReceipt,
 
   MediaStore,
   ChunkedSender,
@@ -61,6 +62,7 @@ import type {
   SyncManifestSnapshot,
   ManifestStoreState,
   CustodyEnvelope,
+  RoutedMessageReceiptPayload,
 } from '@decentchat/protocol';
 import {
   buildWorkspaceInviteLists,
@@ -1409,26 +1411,20 @@ export class ChatController {
               data: { kind: 'acknowledged', peerId: logicalPeerId },
             });
 
-            const ackedBy = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
-            ackedBy.add(logicalPeerId);
-            (msg as any).ackedBy = Array.from(ackedBy);
-            const ackedAt: Record<string, number> = { ...((msg as any).ackedAt || {}) };
-            ackedAt[logicalPeerId] = Date.now();
-            (msg as any).ackedAt = ackedAt;
-
             const statusRecipients = this.getStatusMessageRecipients(msg, recipients);
-            const expected = statusRecipients.length;
-            const ackedCount = statusRecipients.filter((id) => ackedBy.has(id)).length;
-            const readBy = new Set<string>(Array.isArray((msg as any).readBy) ? (msg as any).readBy : []);
-            const readCount = statusRecipients.filter((id) => readBy.has(id)).length;
-            const deliveredToAll = expected > 0 && statusRecipients.every((id) => ackedBy.has(id));
-            const readByAll = expected > 0 && statusRecipients.every((id) => readBy.has(id));
-            const nextStatus: 'pending' | 'sent' | 'delivered' | 'read' = readByAll ? 'read' : (deliveredToAll ? 'delivered' : 'sent');
+            const applied = applyMessageReceipt(msg, {
+              peerId: logicalPeerId,
+              type: 'ack',
+              at: Date.now(),
+              allowedRecipients: recipients,
+              statusRecipients,
+            });
+            if (!applied.accepted) return;
 
-            (msg as any).status = nextStatus;
-            this.ui?.updateMessageStatus?.(messageId, nextStatus, { acked: ackedCount, total: expected, read: readCount });
+            Object.assign(msg, applied.message);
+            this.ui?.updateMessageStatus?.(messageId, applied.status, applied.counts);
 
-            await this.persistentStore.saveMessage({ ...msg, status: nextStatus, recipientPeerIds: recipients, ackedBy: Array.from(ackedBy), ackedAt });
+            await this.persistentStore.saveMessage({ ...applied.message, recipientPeerIds: recipients });
           }
           return;
         }
@@ -1470,37 +1466,21 @@ export class ChatController {
               data: { kind: 'read', peerId: logicalPeerId },
             });
 
-            const readBy = new Set<string>(Array.isArray((msg as any).readBy) ? (msg as any).readBy : []);
-            readBy.add(logicalPeerId);
-            (msg as any).readBy = Array.from(readBy);
-            const readAt: Record<string, number> = { ...((msg as any).readAt || {}) };
-            readAt[logicalPeerId] = Date.now();
-            (msg as any).readAt = readAt;
-
-            // Read implies delivered for this peer.
-            const ackedBy = new Set<string>(Array.isArray((msg as any).ackedBy) ? (msg as any).ackedBy : []);
-            if (!ackedBy.has(logicalPeerId)) {
-              ackedBy.add(logicalPeerId);
-              (msg as any).ackedBy = Array.from(ackedBy);
-            }
-            const ackedAt: Record<string, number> = { ...((msg as any).ackedAt || {}) };
-            if (!ackedAt[logicalPeerId]) ackedAt[logicalPeerId] = Date.now();
-            (msg as any).ackedAt = ackedAt;
-
             const statusRecipients = this.getStatusMessageRecipients(msg, recipients);
-            const expected = statusRecipients.length;
-            const readByAll = expected > 0 && statusRecipients.every((id) => readBy.has(id));
-            const deliveredToAll = expected > 0 && statusRecipients.every((id) => ackedBy.has(id));
-            const nextStatus: 'pending' | 'sent' | 'delivered' | 'read' = readByAll ? 'read' : (deliveredToAll ? 'delivered' : 'sent');
-            (msg as any).status = nextStatus;
-
-            this.ui?.updateMessageStatus?.(messageId, nextStatus, {
-              acked: statusRecipients.filter((id) => ackedBy.has(id)).length,
-              total: expected,
-              read: statusRecipients.filter((id) => readBy.has(id)).length,
+            const applied = applyMessageReceipt(msg, {
+              peerId: logicalPeerId,
+              type: 'read',
+              at: Date.now(),
+              allowedRecipients: recipients,
+              statusRecipients,
             });
+            if (!applied.accepted) return;
 
-            await this.persistentStore.saveMessage({ ...msg, status: nextStatus, recipientPeerIds: recipients, ackedBy: Array.from(ackedBy), ackedAt, readBy: Array.from(readBy), readAt });
+            Object.assign(msg, applied.message);
+
+            this.ui?.updateMessageStatus?.(messageId, applied.status, applied.counts);
+
+            await this.persistentStore.saveMessage({ ...applied.message, recipientPeerIds: recipients });
           }
           return;
         }
@@ -1563,6 +1543,21 @@ export class ChatController {
                 (msg as any).metadata = { assistant: pending.modelMeta };
               }
               await this.messageStore.addMessage(msg);
+              // Register in CRDT so sync-repair dedup recognises this message
+              // and routes it through the repair path rather than silently dropping it.
+              try {
+                const crdt = this.getOrCreateCRDT(pending.channelId);
+                crdt.addMessage({
+                  id: msg.id,
+                  channelId: msg.channelId,
+                  senderId: msg.senderId,
+                  content: msg.content,
+                  type: (msg.type || 'text') as any,
+                  vectorClock: (msg as any).vectorClock || {},
+                  wallTime: msg.timestamp,
+                  prevHash: msg.prevHash || '',
+                });
+              } catch { /* CRDT dup safe to ignore */ }
               existing = msg;
 
               if (pending.threadId) {
@@ -2446,6 +2441,7 @@ export class ChatController {
         // of the same sender, skip duplicates. Uses messageId for dedup.
         if (msg.id && this.multiDeviceDedup?.isDuplicate(msg.id)) {
           chatLog.info(`[MultiDevice] Dedup: skipping duplicate message ${msg.id.slice(0, 8)} from ${peerId.slice(0, 8)}`);
+          this.sendInboundReceipt(peerId, receiptEnvelope, channelId, msg.id, 'ack');
           return;
         }
         if (msg.id) this.multiDeviceDedup?.markSeen(msg.id);
@@ -11865,13 +11861,14 @@ export class ChatController {
       return;
     }
 
-    this.transport.send(route.upstreamPeerId, {
+    const payload: RoutedMessageReceiptPayload = {
       type,
       messageId,
       channelId,
       _receiptFromPeerId: logicalPeerId,
       _receiptTargetPeerId: route.originalSenderId,
-    });
+    };
+    this.transport.send(route.upstreamPeerId, payload);
   }
 
   private sendInboundReceipt(peerId: string, envelope: any, channelId: string, messageId: string, type: 'ack' | 'read'): void {
@@ -11880,17 +11877,19 @@ export class ChatController {
       : undefined;
 
     if (originalSenderId && originalSenderId !== peerId) {
-      this.transport.send(peerId, {
+      const payload: RoutedMessageReceiptPayload = {
         type,
         messageId,
         channelId,
         _receiptFromPeerId: this.state.myPeerId,
         _receiptTargetPeerId: originalSenderId,
-      });
+      };
+      this.transport.send(peerId, payload);
       return;
     }
 
-    this.transport.send(peerId, { type, messageId, channelId });
+    const payload: RoutedMessageReceiptPayload = { type, messageId, channelId };
+    this.transport.send(peerId, payload);
   }
 
   private isValidInboundReceipt(peerId: string, channelId: string, messageId: string, type: 'ack' | 'read'): { valid: true; msg: PlaintextMessage; recipients: string[] } | { valid: false } {

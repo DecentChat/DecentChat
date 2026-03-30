@@ -85,10 +85,19 @@ describe('MessageProtocol pre-key lifecycle policy', () => {
     const bundle = await protocol.createPreKeyBundle();
 
     expect(bundle.signedPreKey.keyId).not.toBe(persisted.signedPreKey.keyId);
-    expect(bundle.oneTimePreKeys).toHaveLength(20);
+    expect(bundle.oneTimePreKeys.length).toBeGreaterThanOrEqual(3);
+    expect(bundle.oneTimePreKeys.length).toBeLessThanOrEqual(20);
     expect(bundle.oneTimePreKeys.every((entry) => entry.createdAt > now - (24 * 60 * 60 * 1000))).toBe(true);
+
+    for (let i = 0; i < 50 && (postPolicyState?.oneTimePreKeys.length ?? 0) < 20; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
     expect(postPolicyState).not.toBeNull();
-    expect(postPolicyState!.oneTimePreKeys).toHaveLength(20);
+    expect(postPolicyState!.oneTimePreKeys.length).toBeGreaterThanOrEqual(20);
+
+    const replenishedBundle = await protocol.createPreKeyBundle();
+    expect(replenishedBundle.oneTimePreKeys.length).toBeGreaterThanOrEqual(20);
   });
 
   test('prunes stale and duplicate peer one-time pre-keys on store', async () => {

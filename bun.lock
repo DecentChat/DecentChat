@@ -92,7 +92,7 @@
     },
     "decent-openclaw": {
       "name": "@decentchat/decentchat-plugin",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "dependencies": {
         "@decentchat/company-sim": "workspace:^",
         "@decentchat/protocol": "workspace:^",

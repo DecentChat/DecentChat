@@ -21,99 +21,26 @@ import {
 import type {
   KeyPair,
   RatchetState,
-  RatchetMessage,
-  SerializedRatchetState,
   PreKeyBundle,
   PersistedLocalPreKeyState,
-  PreKeySessionInitPayload,
   PreKeyType,
+  EnvelopeMetadata,
+  RatchetEnvelope,
+  PreKeySessionEnvelope,
+  LegacyEnvelope,
+  MessageEnvelope,
+  HandshakeData,
+  RatchetPersistence,
 } from '@decentchat/protocol';
-
-interface EnvelopeMetadata {
-  fileName?: string;
-  fileSize?: number;
-  mimeType?: string;
-  assistant?: {
-    modelId?: string;
-    modelName?: string;
-    modelAlias?: string;
-    modelLabel?: string;
-  };
-}
-
-/** Wire format for ratchet-encrypted messages */
-export interface RatchetEnvelope {
-  id: string;
-  timestamp: number;
-  sender: string;
-  type: 'text' | 'file' | 'system' | 'handshake';
-  /** Ratchet-encrypted payload */
-  ratchet: RatchetMessage;
-  /** ECDSA signature over plaintext */
-  signature: string;
-  /** Protocol version: 2 = DoubleRatchet */
-  protocolVersion: 2;
-  metadata?: EnvelopeMetadata;
-}
-
-/** Wire format for pre-key session-init messages */
-export interface PreKeySessionEnvelope {
-  id: string;
-  timestamp: number;
-  sender: string;
-  type: 'text' | 'file' | 'system' | 'handshake';
-  /** First ratchet-encrypted payload after pre-key bootstrap */
-  ratchet: RatchetMessage;
-  /** ECDSA signature over plaintext */
-  signature: string;
-  /** Protocol version: 3 = pre-key bootstrap + DoubleRatchet */
-  protocolVersion: 3;
-  sessionInit: PreKeySessionInitPayload;
-  metadata?: EnvelopeMetadata;
-}
-
-/** Legacy wire format (v1: static shared secret) */
-export interface LegacyEnvelope {
-  id: string;
-  timestamp: number;
-  sender: string;
-  type: 'text' | 'file' | 'system' | 'handshake';
-  encrypted: {
-    ciphertext: string;
-    iv: string;
-    tag: string;
-  };
-  signature: string;
-  protocolVersion?: 1 | undefined;
-  metadata?: EnvelopeMetadata;
-}
-
-export type MessageEnvelope = RatchetEnvelope | PreKeySessionEnvelope | LegacyEnvelope;
-
-export interface HandshakeData {
-  publicKey: string;  // Base64 ECDH public key (identity key, for ratchet key exchange)
-  peerId: string;
-  /** Bob's ratchet DH public key (raw, base64) for initializing Alice's ratchet */
-  ratchetDHPublicKey?: string;
-  protocolVersion?: number;
-  /** Base64 ECDSA signing public key (for message signature verification) */
-  signingPublicKey?: string;
-  /** Advertise support for pre-key bundle based bootstrap */
-  preKeySupport?: boolean;
-}
-
-/** Persistence interface for ratchet state */
-export interface RatchetPersistence {
-  save(peerId: string, state: SerializedRatchetState): Promise<void>;
-  load(peerId: string): Promise<SerializedRatchetState | null>;
-  delete(peerId: string): Promise<void>;
-  savePreKeyBundle?(peerId: string, bundle: PreKeyBundle): Promise<void>;
-  loadPreKeyBundle?(peerId: string): Promise<PreKeyBundle | null>;
-  deletePreKeyBundle?(peerId: string): Promise<void>;
-  saveLocalPreKeyState?(ownerPeerId: string, state: PersistedLocalPreKeyState): Promise<void>;
-  loadLocalPreKeyState?(ownerPeerId: string): Promise<PersistedLocalPreKeyState | null>;
-  deleteLocalPreKeyState?(ownerPeerId: string): Promise<void>;
-}
+export type {
+  EnvelopeMetadata,
+  RatchetEnvelope,
+  PreKeySessionEnvelope,
+  LegacyEnvelope,
+  MessageEnvelope,
+  HandshakeData,
+  RatchetPersistence,
+};
 
 interface LocalPreKeyRuntimeRecord {
   keyId: number;

@@ -6,6 +6,7 @@ type AddMessageResult = { success: boolean; error?: string };
 function makeWorkspaceInboundController(options?: {
   existingMessage?: any;
   addMessageResult?: AddMessageResult;
+  multiDeviceDuplicate?: boolean;
 }): any {
   const ctrl = Object.create(ChatController.prototype) as any;
 
@@ -37,6 +38,10 @@ function makeWorkspaceInboundController(options?: {
   ctrl._gossipSeen = new Map<string, number>();
   ctrl._gossipReceiptRoutes = new Map<string, any>();
   ctrl.deferredGossipIntents = new Map<string, any>();
+  ctrl.multiDeviceDedup = {
+    isDuplicate: mock((messageId: string) => !!options?.multiDeviceDuplicate && messageId === 'msg-dup-3'),
+    markSeen: mock(() => {}),
+  };
 
   ctrl.workspaceManager = {
     getAllWorkspaces: mock(() => [{
@@ -150,6 +155,26 @@ describe('Workspace inbound duplicate ACK behavior', () => {
     expect(ctrl.transport.send).toHaveBeenCalledWith('alice', {
       type: 'ack',
       messageId: 'msg-dup-2',
+      channelId: 'ch-1',
+    });
+  });
+
+  test('sends ACK when multi-device dedup filters duplicate replay before addMessage', async () => {
+    const ctrl = makeWorkspaceInboundController({
+      multiDeviceDuplicate: true,
+    });
+
+    await ctrl.transport.onMessage('alice', {
+      workspaceId: 'ws-1',
+      channelId: 'ch-1',
+      messageId: 'msg-dup-3',
+      vectorClock: { alice: 3 },
+      timestamp: Date.now(),
+    });
+
+    expect(ctrl.transport.send).toHaveBeenCalledWith('alice', {
+      type: 'ack',
+      messageId: 'msg-dup-3',
       channelId: 'ch-1',
     });
   });

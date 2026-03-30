@@ -5,6 +5,7 @@ import {
   ContactURI,
   createAttachmentMeta,
   CryptoManager,
+  applyMessageReceipt,
   hashBlob,
   InviteURI,
   MemoryContactStore,
@@ -22,6 +23,7 @@ import {
   type NegentropyQuery,
   type NegentropyResponse,
   type PlaintextMessage,
+  type MessageReceiptPayload,
   type Workspace,
   type WorkspaceMember,
 } from '@decentchat/protocol';
@@ -132,12 +134,6 @@ interface MessageSyncNegentropyResponsePayload {
   workspaceId: string;
   channelId: string;
   response: NegentropyResponse;
-}
-
-interface MessageReceiptPayload {
-  type: 'ack' | 'read';
-  channelId: string;
-  messageId: string;
 }
 
 interface TypingPayload {
@@ -2991,33 +2987,19 @@ export class MobileController {
     const myPeerId = get(appState.myPeerId);
     if (!myPeerId || target.senderId !== myPeerId) return;
 
-    const allowedRecipients = new Set(target.recipientPeerIds ?? []);
-    if (allowedRecipients.size > 0 && !allowedRecipients.has(peerId)) return;
-
     const recipients = (target.recipientPeerIds ?? []).filter((candidate) => candidate && candidate !== myPeerId);
-    const ackedBy = new Set(target.ackedBy ?? []);
-    const readBy = new Set(target.readBy ?? []);
+    const applied = applyMessageReceipt(target, {
+      peerId,
+      type: payload.type,
+      at: Date.now(),
+      allowedRecipients: recipients,
+      statusRecipients: recipients,
+    });
+    if (!applied.accepted) return;
 
-    ackedBy.add(peerId);
-    if (payload.type === 'read') {
-      readBy.add(peerId);
-    }
+    Object.assign(target, applied.message);
 
-    target.ackedBy = Array.from(ackedBy);
-    target.readBy = Array.from(readBy);
-
-    const deliveredToAll = recipients.length > 0 && recipients.every((recipientPeerId) => ackedBy.has(recipientPeerId));
-    const readByAll = recipients.length > 0 && recipients.every((recipientPeerId) => readBy.has(recipientPeerId));
-
-    if (readByAll) {
-      target.status = 'read';
-    } else if (deliveredToAll) {
-      target.status = 'delivered';
-    } else {
-      target.status = 'sent';
-    }
-
-    await this.persistentStore.saveMessage(target);
+    await this.persistentStore.saveMessage(applied.message);
     this.syncChannelMessages(payload.channelId);
   }
 

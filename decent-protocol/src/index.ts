@@ -11,6 +11,7 @@
 export { HashChain, GENESIS_HASH } from './crypto/HashChain';
 export { CryptoManager } from './crypto/CryptoManager';
 export { MessageCipher } from './crypto/MessageCipher';
+export { KeyStore } from './crypto/KeyStore';
 
 // ─── CRDT ───────────────────────────────────────────────────────────────────
 export { VectorClock } from './crdt/VectorClock';
@@ -41,6 +42,7 @@ export {
   hasPeerPreKeyBundleChanged,
 } from './messages/PreKeyLifecyclePolicy';
 export { ManifestStore, MANIFEST_STORE_STATE_SCHEMA_VERSION } from './sync/ManifestStore';
+export { applyMessageReceipt } from './messages/ReceiptProtocol';
 
 // ─── Storage ────────────────────────────────────────────────────────────────
 export { PersistentStore } from './storage/PersistentStore';
@@ -112,6 +114,7 @@ export type {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 export type { KeyPair, SerializedKeyPair, EncryptedData, SignedMessage } from './crypto/types';
+export type { KeyStoreConfig } from './crypto/KeyStore';
 export type { HashableMessage, ChainVerificationResult } from './crypto/HashChain';
 export type { CRDTMessage } from './crdt/MessageCRDT';
 export type {
@@ -176,6 +179,16 @@ export type {
 } from './workspace/PresenceProtocol';
 export type { SyncEvent, SendFn, OnEvent } from './workspace/SyncProtocol';
 export type { ChatMessage, PlaintextMessage, MessageMetadata, AssistantMessageMetadata } from './messages/types';
+export type { MessageReceiptType, MessageReceiptPayload, RoutedMessageReceiptPayload, ApplyMessageReceiptOptions, ApplyMessageReceiptResult } from './messages/ReceiptProtocol';
+export type {
+  EnvelopeMetadata,
+  RatchetEnvelope,
+  PreKeySessionEnvelope,
+  LegacyEnvelope,
+  MessageEnvelope,
+  HandshakeData,
+  RatchetPersistence,
+} from './messages/MessageProtocolTypes';
 export type {
   PreKeyType,
   SignedPreKeyBundleEntry,
