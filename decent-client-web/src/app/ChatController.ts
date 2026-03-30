@@ -2392,6 +2392,7 @@ export class ChatController {
           : (_gossipOrigId ?? '');
         const senderResolution = await this.resolveInboundSenderId(peerId, data, channelId, envelopeMessageId, content);
         const actualSenderId = senderResolution.senderId;
+        const receiptEnvelope = senderResolution.verifiedGossipOrigin ? data : { ...data, _gossipOriginalSender: undefined };
         const msg = await this.messageStore.createMessage(channelId, actualSenderId, content, 'text', normalizedThreadId);
         // Use sender's timestamp but guarantee it's strictly after our last stored message.
         // Without this guard the hash-chain timestamp check rejects messages that arrive
@@ -2429,13 +2430,17 @@ export class ChatController {
           (existingStreamMsg as any).streaming = false;
           await this.persistMessage(existingStreamMsg);
           this.ui?.updateStreamingMessage?.(msg.id, content);
+          this.sendInboundReceipt(peerId, receiptEnvelope, channelId, msg.id, 'ack');
           return;
         }
         // T3.2 Gossip dedup (post-decryption): if we already processed this exact message
         // ID via any path (direct or gossip), skip it now.  This covers the gossip-first
         // ordering where _originalMessageId was added to _gossipSeen before the direct
         // copy arrived (which has no _originalMessageId to check at the top of the handler).
-        if (this._gossipSeen.has(msg.id)) return;
+        if (this._gossipSeen.has(msg.id)) {
+          this.sendInboundReceipt(peerId, receiptEnvelope, channelId, msg.id, 'ack');
+          return;
+        }
 
         // Multi-device dedup: if same message arrives from multiple device connections
         // of the same sender, skip duplicates. Uses messageId for dedup.
@@ -2446,6 +2451,13 @@ export class ChatController {
         if (msg.id) this.multiDeviceDedup?.markSeen(msg.id);
 
         const result = await this.messageStore.addMessage(msg);
+
+        if (!result.success) {
+          if (typeof result.error === 'string' && result.error.startsWith('Duplicate message ID:')) {
+            this.sendInboundReceipt(peerId, receiptEnvelope, channelId, msg.id, 'ack');
+          }
+          return;
+        }
 
         if (result.success) {
           const crdt = this.getOrCreateCRDT(channelId);
@@ -2471,7 +2483,6 @@ export class ChatController {
           });
 
           // DEP-005: Send delivery ACK back to sender (reverse-path for gossip-relayed messages)
-          const receiptEnvelope = senderResolution.verifiedGossipOrigin ? data : { ...data, _gossipOriginalSender: undefined };
           this.sendInboundReceipt(peerId, receiptEnvelope, channelId, msg.id, 'ack');
 
           // Ensure thread root snapshot for thread replies
