@@ -90,10 +90,14 @@ channels:
     huddle:
       enabled: true
       autoJoin: false
-      sttEngine: "whisper-cpp"    # whisper-cpp | whisper-python | openai | groq
-      whisperModel: "base.en"
+      sttEngine: "gemini"         # whisper-cpp | whisper-python | openai | groq | gemini
+      whisperModel: "gemini-2.0-flash"
       sttLanguage: "en"
-      ttsVoice: "alloy"
+      sttApiKey: "${GEMINI_API_KEY}" # used by cloud STT engines (openai/groq/gemini)
+      ttsEngine: "gemini"         # elevenlabs | gemini
+      ttsModel: "gemini-2.5-flash-preview-tts"
+      ttsApiKey: "${GEMINI_API_KEY}" # optional; falls back to sttApiKey or env
+      ttsVoice: "Kore"            # Gemini voice name (or ElevenLabs voice id when ttsEngine=elevenlabs)
       vadSilenceMs: 800
       vadThreshold: 0.5
 ```

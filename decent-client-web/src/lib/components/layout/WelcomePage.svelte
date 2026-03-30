@@ -24,6 +24,8 @@
   }: Props = $props();
 
   const isAppLikeRoute = typeof window !== 'undefined' && (window.location.pathname === '/app' || window.location.pathname.startsWith('/app/'));
+  const createWorkspaceNavLabel = 'Create workspace';
+  const createWorkspaceHeroLabel = 'Start workspace →';
   const donationAddresses = [
     {
       ticker: 'BTC',
@@ -99,10 +101,11 @@
         <span class="landing-nav-name">DecentChat</span>
       </div>
       <div class="landing-nav-actions">
-        <button class="btn-secondary btn-sm" id="join-ws-btn-nav" onclick={handleJoin}>Join workspace</button>
-        <button class="btn-primary btn-sm" id="open-app-btn-nav" onclick={handleOpenApp}>Open App</button>
-        {#if !hasWorkspace}
-          <button class="btn-secondary btn-sm" id="create-ws-btn-nav" onclick={handleCreate}>Create workspace</button>
+        <button class="landing-nav-join-link" id="join-ws-btn-nav" onclick={handleJoin}>Have an invite?</button>
+        {#if hasWorkspace}
+          <button class="btn-primary btn-sm" id="open-app-btn-nav" onclick={handleOpenApp}>Open App</button>
+        {:else}
+          <button class="btn-primary btn-sm" id="create-ws-btn-nav" onclick={handleCreate}>{createWorkspaceNavLabel}</button>
         {/if}
       </div>
     </div>
@@ -111,23 +114,26 @@
   <!-- ── Hero ── -->
   <section class="lp-hero">
     <div class="lp-hero-inner">
-      <div class="lp-hero-badge">🔒 100% private · No servers · No accounts</div>
-      <h1 class="lp-hero-title">Chat that belongs<br>to <em>you</em>.</h1>
+      <div class="lp-hero-badge">🔒 Private group chat · No signup required</div>
+      <h1 class="lp-hero-title">Start private chat<br>without giving up control.</h1>
       <p class="lp-hero-sub">
-        WhatsApp stores your data. Telegram stores your data. Slack stores your data.
-        <strong>DecentChat stores nothing.</strong> Messages go directly between people — encrypted, peer-to-peer, serverless.
+        Create your own workspace in seconds. Invite people with a link.
+        <strong>Messages stay encrypted between members, not on DecentChat servers.</strong>
       </p>
       <div class="lp-hero-actions">
         {#if hasWorkspace}
           <button class="btn-primary btn-lg" id="open-app-btn" onclick={handleOpenApp}>Open App →</button>
         {:else}
-          <button class="btn-primary btn-lg" id="create-ws-btn" onclick={handleCreate}>Create workspace →</button>
+          <button class="btn-primary btn-lg" id="create-ws-btn" onclick={handleCreate}>{createWorkspaceHeroLabel}</button>
         {/if}
-        <button class="btn-secondary btn-lg" id="join-ws-btn" onclick={handleJoin}>Join with invite code</button>
         {#if hasWorkspace && isAppLikeRoute && onInstallAiTeam}
           <button class="btn-secondary btn-lg" id="welcome-add-ai-team-btn" onclick={onInstallAiTeam}>Add AI Team</button>
         {/if}
       </div>
+      <p class="lp-hero-path-note">
+        Have an invite?
+        <button class="lp-inline-link" id="join-ws-btn" onclick={handleJoin}>Join existing workspace →</button>
+      </p>
       <p class="lp-hero-note">No signup · No phone number · Create your workspace in your browser</p>
     </div>
     <div class="lp-hero-mascot">
@@ -164,8 +170,8 @@
         <div class="lp-step">
           <div class="lp-step-num">1</div>
           <div class="lp-step-content">
-            <h3>Create your workspace or join one</h3>
-            <p>Start your own workspace in one click, or paste an invite to join an existing one. Your secure seed identity is generated automatically in your browser.</p>
+            <h3>Start your workspace in one click</h3>
+            <p>If someone invited you, paste the invite code to join instead. Your secure seed identity is generated automatically in your browser.</p>
           </div>
         </div>
         <div class="lp-step-arrow">→</div>
@@ -343,12 +349,15 @@
         {#if hasWorkspace}
           <button class="btn-primary btn-lg" id="open-app-btn-2" onclick={handleOpenApp}>Open App →</button>
         {:else}
-          <button class="btn-primary btn-lg" id="create-ws-btn-2" onclick={handleCreate}>Create workspace →</button>
+          <button class="btn-primary btn-lg" id="create-ws-btn-2" onclick={handleCreate}>{createWorkspaceHeroLabel}</button>
         {/if}
-        <button class="btn-secondary btn-lg" id="join-ws-btn-2" onclick={handleJoin}>Join with invite code</button>
       </div>
+      <p class="lp-final-join-note">
+        Have an invite?
+        <button class="lp-inline-link" id="join-ws-btn-2" onclick={handleJoin}>Join existing workspace →</button>
+      </p>
       <p class="lp-restore-hint">
-        Already have an account?
+        Already have a seed phrase?
         <button class="restore-link-btn" id="restore-identity-btn" onclick={onRestoreSeed}>Restore from seed phrase →</button>
       </p>
     </div>

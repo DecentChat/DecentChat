@@ -113,7 +113,23 @@ test.describe('DecentChat E2E', () => {
     }
 
     await expect(page.getByRole('heading', { name: 'Create Workspace' })).toBeVisible();
-    await expect(page.getByRole('textbox', { name: 'My Team' })).toBeVisible();
+    await expect(page.locator('.modal input[name="name"]')).toBeVisible();
+  });
+
+  test('create workspace modal explains next steps and action priority', async ({ page }) => {
+    await page.click('#create-ws-btn');
+    await page.waitForURL('**/app', { timeout: 10000 });
+    await waitForApp(page);
+
+    if (await page.locator('.modal').count() === 0) {
+      await page.click('#create-ws-btn-nav');
+    }
+
+    await expect(page.locator('.workspace-create-next-steps')).toBeVisible();
+    await expect(page.locator('.workspace-create-next-steps')).toContainText('What happens next');
+    await expect(page.getByText('Your display name helps people recognize you in member lists, messages, and invites.')).toBeVisible();
+    await expect(page.locator('.modal .btn-primary')).toHaveClass(/create-workspace-submit/);
+    await expect(page.locator('.modal .btn-secondary')).toHaveClass(/create-workspace-cancel/);
   });
 
   test('create workspace and see sidebar', async ({ page }) => {

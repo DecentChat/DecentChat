@@ -8,6 +8,8 @@
     bodyHTML?: string;
     submitLabel?: string;
     cancelLabel?: string;
+    submitClassName?: string;
+    cancelClassName?: string;
     onsubmit?: (form: HTMLFormElement) => boolean | void | Promise<boolean | void>;
     onclose?: () => void;
     bindOverlay?: (el: HTMLDivElement) => void;
@@ -19,6 +21,8 @@
     bodyHTML = '',
     submitLabel = 'Confirm',
     cancelLabel = 'Cancel',
+    submitClassName = '',
+    cancelClassName = '',
     onsubmit,
     onclose,
     bindOverlay,
@@ -85,16 +89,16 @@
       <form id="modal-form" onsubmit={handleSubmit}>
         {@render children()}
         <div class="modal-actions">
-          <button type="button" class="btn-secondary" onclick={close}>{cancelLabel}</button>
-          <button type="submit" class="btn-primary">{submitLabel}</button>
+          <button type="button" class={`btn-secondary ${cancelClassName}`.trim()} onclick={close}>{cancelLabel}</button>
+          <button type="submit" class={`btn-primary ${submitClassName}`.trim()}>{submitLabel}</button>
         </div>
       </form>
     {:else}
       <form id="modal-form" onsubmit={handleSubmit}>
         {@html bodyHTML}
         <div class="modal-actions">
-          <button type="button" class="btn-secondary" onclick={close}>{cancelLabel}</button>
-          <button type="submit" class="btn-primary">{submitLabel}</button>
+          <button type="button" class={`btn-secondary ${cancelClassName}`.trim()} onclick={close}>{cancelLabel}</button>
+          <button type="submit" class={`btn-primary ${submitClassName}`.trim()}>{submitLabel}</button>
         </div>
       </form>
     {/if}

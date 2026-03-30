@@ -19,6 +19,8 @@
     options?: {
       submitLabel?: string;
       cancelLabel?: string;
+      submitClassName?: string;
+      cancelClassName?: string;
     },
   ): HTMLDivElement {
     const target = document.createElement('div');
@@ -42,6 +44,8 @@
         bodyHTML,
         submitLabel: options?.submitLabel,
         cancelLabel: options?.cancelLabel,
+        submitClassName: options?.submitClassName,
+        cancelClassName: options?.cancelClassName,
         onsubmit: onSubmit,
         onclose: cleanup,
         bindOverlay: (el: HTMLDivElement) => { overlayEl = el; },

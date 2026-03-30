@@ -29,10 +29,13 @@ export interface BotHuddleCallbacks {
 
 export interface BotHuddleConfig {
   autoJoin?: boolean;
-  sttEngine?: 'whisper-cpp' | 'whisper-python' | 'openai' | 'groq';
+  sttEngine?: 'whisper-cpp' | 'whisper-python' | 'openai' | 'groq' | 'gemini';
   whisperModel?: string;
   sttLanguage?: string;
   sttApiKey?: string;
+  ttsEngine?: 'elevenlabs' | 'gemini';
+  ttsModel?: string;
+  ttsApiKey?: string;
   ttsVoice?: string;
   vadSilenceMs?: number;
   vadThreshold?: number;
@@ -69,6 +72,7 @@ export class BotHuddleManager {
   private audioPipeline: AudioPipeline;
   private stt: SpeechToText;
   private tts: TextToSpeech | null = null;
+  private ttsFallback: TextToSpeech | null = null;
 
   // Track which peer is currently speaking (for attribution)
   private currentSpeakerPeerId: string | null = null;
@@ -111,17 +115,47 @@ export class BotHuddleManager {
       log: callbacks.log,
     });
 
-    // Initialize TTS (needs API key from env)
+    // Initialize TTS with explicit selection and fallback.
+    // If STT is Gemini and TTS engine isn't set, prefer Gemini for lower turn latency.
+    const preferredTtsEngine = opts?.ttsEngine ?? (opts?.sttEngine === 'gemini' ? 'gemini' : 'elevenlabs');
+    const geminiKey = opts?.ttsApiKey
+      ?? opts?.sttApiKey
+      ?? process.env.GEMINI_API_KEY
+      ?? process.env.GOOGLE_API_KEY;
     const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
-    if (elevenLabsKey) {
-      this.tts = new TextToSpeech({
-        apiKey: elevenLabsKey,
-        voiceId: this.resolveVoiceId(opts?.ttsVoice),
-        language: opts?.sttLanguage,  // same language for TTS pronunciation
-        log: callbacks.log,
-      });
+
+    if (preferredTtsEngine === 'gemini') {
+      if (geminiKey) {
+        this.tts = this.createGeminiTts(geminiKey, opts);
+      } else {
+        this.log('warn', '[bot-huddle] Gemini TTS selected but no GEMINI_API_KEY/GOOGLE_API_KEY/sttApiKey/ttsApiKey configured');
+      }
+
+      if (elevenLabsKey) {
+        if (this.tts) {
+          this.ttsFallback = this.createElevenLabsTts(elevenLabsKey, opts);
+        } else {
+          this.tts = this.createElevenLabsTts(elevenLabsKey, opts);
+        }
+      }
     } else {
-      this.log('warn', '[bot-huddle] ELEVENLABS_API_KEY not set — TTS disabled');
+      if (elevenLabsKey) {
+        this.tts = this.createElevenLabsTts(elevenLabsKey, opts);
+      } else {
+        this.log('warn', '[bot-huddle] ELEVENLABS_API_KEY not set — ElevenLabs TTS unavailable');
+      }
+
+      if (geminiKey) {
+        if (this.tts) {
+          this.ttsFallback = this.createGeminiTts(geminiKey, opts);
+        } else {
+          this.tts = this.createGeminiTts(geminiKey, opts);
+        }
+      }
+    }
+
+    if (!this.tts) {
+      this.log('warn', '[bot-huddle] TTS disabled (no usable engine/key found)');
     }
   }
 
@@ -713,7 +747,7 @@ export class BotHuddleManager {
           this.log('info', `[bot-huddle] barge-in: stopped after ${totalFrames} frames`);
           break;
         }
-        const frames = await this.tts.speakRaw(sentence);
+        const frames = await this.speakWithFallback(sentence);
         totalFrames += frames.length;
         if (this.abortSending) {
           this.log('info', `[bot-huddle] barge-in: skipping send after TTS`);
@@ -824,9 +858,43 @@ export class BotHuddleManager {
     this.leave();
     this.audioPipeline.destroy();
     this.tts?.destroy();
+    this.ttsFallback?.destroy();
   }
 
   // ── Helpers ────────────────────────────────────────────────────────
+
+  private createElevenLabsTts(apiKey: string, opts?: BotHuddleConfig): TextToSpeech {
+    return new TextToSpeech({
+      provider: 'elevenlabs',
+      apiKey,
+      voiceId: this.resolveVoiceId(opts?.ttsVoice),
+      model: opts?.ttsModel,
+      language: opts?.sttLanguage,
+      log: this.callbacks.log,
+    });
+  }
+
+  private createGeminiTts(apiKey: string, opts?: BotHuddleConfig): TextToSpeech {
+    return new TextToSpeech({
+      provider: 'gemini',
+      apiKey,
+      voiceId: opts?.ttsVoice,
+      model: opts?.ttsModel,
+      language: opts?.sttLanguage,
+      log: this.callbacks.log,
+    });
+  }
+
+  private async speakWithFallback(text: string): Promise<Buffer[]> {
+    if (!this.tts) return [];
+    try {
+      return await this.tts.speakRaw(text);
+    } catch (primaryErr) {
+      if (!this.ttsFallback) throw primaryErr;
+      this.log('warn', `[bot-huddle] primary TTS failed; trying fallback (${String(primaryErr)})`);
+      return this.ttsFallback.speakRaw(text);
+    }
+  }
 
   private resolveVoiceId(voiceName?: string): string | undefined {
     if (!voiceName) return undefined;

@@ -173,6 +173,8 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     options?: {
       submitLabel?: string;
       cancelLabel?: string;
+      submitClassName?: string;
+      cancelClassName?: string;
     },
   ): HTMLDivElement {
     return svelteShowModal(title, bodyHTML, onSubmit, options);
@@ -181,9 +183,16 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
   function showCreateWorkspaceModal(): void {
     showModal(
       'Create Workspace',
-      `<p class="modal-intro">Start with a workspace for your team, group, or personal chat. You can rename it later.</p>
-       <div class="form-group"><label>Workspace Name</label><input type="text" name="name" placeholder="My Team" required /></div>
-       <div class="form-group"><label>Display name in this workspace</label><input type="text" name="alias" placeholder="Your name" required /><small style="color: var(--text-muted); margin-top: 4px; display: block;">Shown to the people you invite. You can change it later.</small></div>`,
+      `<p class="modal-intro">Create a private workspace for your team, group, or personal chat. You can invite people right after setup with an invite link or QR code.</p>
+       <div class="workspace-create-next-steps" aria-live="polite">
+         <strong>What happens next</strong>
+         <ul>
+           <li>We open your new workspace immediately.</li>
+           <li>You land in <code>#general</code> and can start inviting people.</li>
+         </ul>
+       </div>
+       <div class="form-group"><label>Workspace name <span class="modal-label-meta">(required)</span></label><input type="text" name="name" placeholder="e.g. Family chat or Design team" required /><small class="modal-help">This is the shared name everyone in the workspace will see.</small></div>
+       <div class="form-group"><label>Your display name <span class="modal-label-meta">(required)</span></label><input type="text" name="alias" placeholder="Your name" required autocapitalize="words" /><small class="modal-help">Your display name helps people recognize you in member lists, messages, and invites. You can change it later.</small></div>`,
       (form) => {
         const name = (form.elements.namedItem('name') as HTMLInputElement).value.trim();
         const alias = (form.elements.namedItem('alias') as HTMLInputElement).value.trim();
@@ -197,9 +206,14 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
           callbacks.persistSetting('myAlias', alias),
         ]).catch(err => console.error('[DecentChat] Failed to persist workspace:', err));
         renderApp();
-        showToast(`Workspace "${name}" created. Use Copy invite link or QR Code to invite others.`, 'success');
+        showToast(`Workspace "${name}" is ready. Share the invite link or QR code to invite someone.`, 'success');
       },
-      { submitLabel: 'Create workspace' },
+      {
+        submitLabel: 'Create workspace',
+        cancelLabel: 'Cancel',
+        submitClassName: 'create-workspace-submit',
+        cancelClassName: 'create-workspace-cancel',
+      },
     );
   }
 

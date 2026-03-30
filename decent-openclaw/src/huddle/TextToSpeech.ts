@@ -1,16 +1,21 @@
 import OpusScript from 'opusscript';
 
+export type TTSProvider = 'elevenlabs' | 'gemini';
+
 export interface TTSOptions {
+  provider?: TTSProvider; // Default: elevenlabs
   apiKey: string;
-  voiceId?: string;       // Default: 'EXAVITQu4vr4xnSDxMaL' (Rachel)
-  model?: string;         // Default: 'eleven_turbo_v2_5' (multilingual)
+  voiceId?: string;       // ElevenLabs voice ID or Gemini voice name
+  model?: string;         // Provider-specific model
   language?: string;      // Language code for multilingual models (e.g. 'sk', 'en')
   sampleRate?: number;    // Output sample rate for Opus: 48000
   log?: { info: (s: string) => void };
 }
 
+const DEFAULT_PROVIDER: TTSProvider = 'elevenlabs';
 const DEFAULT_VOICE_ID = 'EXAVITQu4vr4xnSDxMaL';
 const DEFAULT_MODEL = 'eleven_turbo_v2_5';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-preview-tts';
 const DEFAULT_SAMPLE_RATE = 48000;
 const ELEVENLABS_PCM_RATE = 24000;
 const FRAME_DURATION_MS = 20;
@@ -18,6 +23,7 @@ const OPUS_PT = 111;
 const DEFAULT_SSRC = 1234;
 
 export class TextToSpeech {
+  private provider: TTSProvider;
   private apiKey: string;
   private voiceId: string;
   private model: string;
@@ -27,9 +33,10 @@ export class TextToSpeech {
   private encoder: OpusScript;
 
   constructor(opts: TTSOptions) {
+    this.provider = opts.provider ?? DEFAULT_PROVIDER;
     this.apiKey = opts.apiKey;
-    this.voiceId = opts.voiceId ?? DEFAULT_VOICE_ID;
-    this.model = opts.model ?? DEFAULT_MODEL;
+    this.voiceId = opts.voiceId ?? (this.provider === 'gemini' ? 'Kore' : DEFAULT_VOICE_ID);
+    this.model = opts.model ?? (this.provider === 'gemini' ? DEFAULT_GEMINI_MODEL : DEFAULT_MODEL);
     this.language = opts.language;
     this.sampleRate = opts.sampleRate ?? DEFAULT_SAMPLE_RATE;
     this.log = opts.log;
@@ -43,15 +50,15 @@ export class TextToSpeech {
   async speak(text: string): Promise<Buffer[]> {
     this.log?.info(`TTS: synthesizing "${text.slice(0, 60)}${text.length > 60 ? '...' : ''}"`);
 
-    // 1. Fetch PCM audio from ElevenLabs
-    const pcm24k = await this.fetchPcmFromElevenLabs(text);
-    this.log?.info(`TTS: received ${pcm24k.length} bytes of PCM @ ${ELEVENLABS_PCM_RATE}Hz`);
+    // 1. Fetch provider PCM
+    const { pcm, sampleRate } = await this.fetchPcmFromProvider(text);
+    this.log?.info(`TTS: received ${pcm.length} bytes of PCM @ ${sampleRate}Hz (${this.provider})`);
 
-    // 2. Resample 24kHz → 48kHz
-    //    ElevenLabs occasionally returns odd byte counts; truncate to even
+    // 2. Resample provider sample rate -> output sample rate
+    //    Providers occasionally return odd byte counts; truncate to even
     //    since PCM 16-bit requires 2 bytes per sample.
-    const pcmEven = pcm24k.length % 2 !== 0 ? pcm24k.subarray(0, pcm24k.length - 1) : pcm24k;
-    const pcm48k = this.resample(pcmEven, ELEVENLABS_PCM_RATE, this.sampleRate);
+    const pcmEven = pcm.length % 2 !== 0 ? pcm.subarray(0, pcm.length - 1) : pcm;
+    const pcm48k = this.resample(pcmEven, sampleRate, this.sampleRate);
     this.log?.info(`TTS: resampled to ${pcm48k.length} bytes @ ${this.sampleRate}Hz`);
 
     // 3. Chunk into 20ms frames and Opus encode
@@ -96,16 +103,16 @@ export class TextToSpeech {
    * For use with node-datachannel's media handler which adds RTP headers itself.
    */
   async speakRaw(text: string): Promise<Buffer[]> {
-    // 1. Get PCM from ElevenLabs
+    // 1. Get PCM from provider
     this.log?.info(`TTS: synthesizing (raw) "${text.slice(0, 60)}${text.length > 60 ? "..." : ""}"`);
-    const pcm = await this.fetchPcmFromElevenLabs(text);
-    this.log?.info(`TTS: received ${pcm.length} bytes of PCM @ 24000Hz`);
+    const { pcm, sampleRate } = await this.fetchPcmFromProvider(text);
+    this.log?.info(`TTS: received ${pcm.length} bytes of PCM @ ${sampleRate}Hz (${this.provider})`);
     if (!pcm || pcm.length === 0) return [];
 
-    // 2. Resample to 48kHz
+    // 2. Resample to output sample rate
     const pcmEven = pcm.length % 2 !== 0 ? pcm.subarray(0, pcm.length - 1) : pcm;
-    const pcm48k = this.resample(pcmEven, 24000 as number, this.sampleRate);
-    this.log?.info(`TTS: resampled to ${pcm48k.length} bytes @ 48000Hz (raw mode)`);
+    const pcm48k = this.resample(pcmEven, sampleRate, this.sampleRate);
+    this.log?.info(`TTS: resampled to ${pcm48k.length} bytes @ ${this.sampleRate}Hz (raw mode)`);
 
     // 3. Chunk into 20ms frames and Opus encode (no RTP wrapping)
     const samplesPerFrame = (this.sampleRate * FRAME_DURATION_MS) / 1000;
@@ -142,6 +149,148 @@ export class TextToSpeech {
     } catch {}
 
     return frames;
+  }
+
+  /**
+   * Fetch provider PCM (16-bit mono).
+   */
+  private async fetchPcmFromProvider(text: string): Promise<{ pcm: Buffer; sampleRate: number }> {
+    if (this.provider === 'gemini') {
+      return this.fetchPcmFromGemini(text);
+    }
+    const pcm = await this.fetchPcmFromElevenLabs(text);
+    return { pcm, sampleRate: ELEVENLABS_PCM_RATE };
+  }
+
+  /**
+   * Fetch PCM from Gemini TTS generateContent API.
+   * Response may contain audio/wav (preferred) or raw PCM inline data.
+   */
+  private async fetchPcmFromGemini(text: string): Promise<{ pcm: Buffer; sampleRate: number }> {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [{
+          role: 'user',
+          parts: [{ text }],
+        }],
+        generationConfig: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: this.voiceId || 'Kore',
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'unknown error');
+      throw new Error(`Gemini TTS API error ${response.status}: ${errorText}`);
+    }
+
+    const payload = await response.json().catch(() => ({}));
+    const audioPart = this.extractGeminiAudioPart(payload);
+    if (!audioPart?.data) {
+      throw new Error('Gemini TTS response did not include inline audio data');
+    }
+
+    const rawAudio = Buffer.from(audioPart.data, 'base64');
+    const mimeType = (audioPart.mimeType ?? '').toLowerCase();
+    if (mimeType.includes('wav')) {
+      return this.extractWavPcm(rawAudio);
+    }
+
+    // Fallback: treat as raw PCM 16-bit mono at 24kHz.
+    return {
+      pcm: rawAudio,
+      sampleRate: ELEVENLABS_PCM_RATE,
+    };
+  }
+
+  private extractGeminiAudioPart(payload: any): { data?: string; mimeType?: string } | undefined {
+    const candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
+    for (const candidate of candidates) {
+      const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+      for (const part of parts) {
+        const inline = part?.inlineData ?? part?.inline_data;
+        const data = typeof inline?.data === 'string' ? inline.data : undefined;
+        const mimeType = typeof inline?.mimeType === 'string'
+          ? inline.mimeType
+          : (typeof inline?.mime_type === 'string' ? inline.mime_type : undefined);
+        if (data) return { data, mimeType };
+      }
+    }
+    return undefined;
+  }
+
+  private extractWavPcm(wav: Buffer): { pcm: Buffer; sampleRate: number } {
+    if (wav.length < 44 || wav.toString('ascii', 0, 4) !== 'RIFF' || wav.toString('ascii', 8, 12) !== 'WAVE') {
+      return { pcm: wav, sampleRate: ELEVENLABS_PCM_RATE };
+    }
+
+    let offset = 12;
+    let sampleRate = ELEVENLABS_PCM_RATE;
+    let channels = 1;
+    let bitsPerSample = 16;
+    let dataChunkStart = -1;
+    let dataChunkLength = 0;
+
+    while (offset + 8 <= wav.length) {
+      const chunkId = wav.toString('ascii', offset, offset + 4);
+      const chunkSize = wav.readUInt32LE(offset + 4);
+      const chunkDataStart = offset + 8;
+      const nextChunk = chunkDataStart + chunkSize + (chunkSize % 2);
+      if (nextChunk > wav.length) break;
+
+      if (chunkId === 'fmt ' && chunkSize >= 16) {
+        channels = wav.readUInt16LE(chunkDataStart + 2);
+        sampleRate = wav.readUInt32LE(chunkDataStart + 4);
+        bitsPerSample = wav.readUInt16LE(chunkDataStart + 14);
+      } else if (chunkId === 'data') {
+        dataChunkStart = chunkDataStart;
+        dataChunkLength = chunkSize;
+        break;
+      }
+
+      offset = nextChunk;
+    }
+
+    if (dataChunkStart < 0 || bitsPerSample !== 16) {
+      return { pcm: wav, sampleRate: ELEVENLABS_PCM_RATE };
+    }
+
+    const pcm = wav.subarray(dataChunkStart, Math.min(dataChunkStart + dataChunkLength, wav.length));
+    if (channels <= 1) {
+      return { pcm, sampleRate };
+    }
+    return {
+      pcm: this.downmixPcm16ToMono(pcm, channels),
+      sampleRate,
+    };
+  }
+
+  private downmixPcm16ToMono(interleavedPcm: Buffer, channels: number): Buffer {
+    if (channels <= 1) return interleavedPcm;
+    const frameBytes = channels * 2;
+    const frameCount = Math.floor(interleavedPcm.length / frameBytes);
+    const mono = Buffer.alloc(frameCount * 2);
+    for (let i = 0; i < frameCount; i++) {
+      let sum = 0;
+      for (let ch = 0; ch < channels; ch++) {
+        sum += interleavedPcm.readInt16LE(i * frameBytes + ch * 2);
+      }
+      const averaged = Math.round(sum / channels);
+      mono.writeInt16LE(Math.max(-32768, Math.min(32767, averaged)), i * 2);
+    }
+    return mono;
   }
 
   /**

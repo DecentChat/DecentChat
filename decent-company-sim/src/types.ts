@@ -83,10 +83,13 @@ export type ResolvedDecentChatAccount = {
   huddle?: {
     enabled?: boolean;
     autoJoin?: boolean;
-    sttEngine?: 'whisper-cpp' | 'whisper-python' | 'openai' | 'groq';
+    sttEngine?: 'whisper-cpp' | 'whisper-python' | 'openai' | 'groq' | 'gemini';
     whisperModel?: string;
     sttLanguage?: string;
     sttApiKey?: string;
+    ttsEngine?: 'elevenlabs' | 'gemini';
+    ttsModel?: string;
+    ttsApiKey?: string;
     ttsVoice?: string;
     vadSilenceMs?: number;
     vadThreshold?: number;

@@ -1088,6 +1088,8 @@ async function init(): Promise<void> {
       }
     }
 
+    let shouldRenderApp = false;
+
     if (pendingInvite) {
       // Clear stored invite
       sessionStorage.removeItem('pendingInvite');
@@ -1117,6 +1119,7 @@ async function init(): Promise<void> {
         state.activeWorkspaceId = null;
         state.activeDirectConversationId = restoredDirectConversation.id;
         state.activeChannelId = restoredDirectConversation.id;
+        shouldRenderApp = true;
       } else if (allWorkspaces.length > 0) {
         const restoredWorkspace = lastView?.workspaceId
           ? ctrl.workspaceManager.getWorkspace(lastView.workspaceId)
@@ -1132,34 +1135,37 @@ async function init(): Promise<void> {
 
         state.activeDirectConversationId = null;
         state.activeChannelId = restoredChannel?.id || ws.channels[0]?.id || null;
+        shouldRenderApp = true;
       } else if (fallbackDirectConversation) {
         state.activeWorkspaceId = null;
         state.activeDirectConversationId = fallbackDirectConversation.id;
         state.activeChannelId = fallbackDirectConversation.id;
+        shouldRenderApp = true;
       } else {
         ui.renderWelcome();
-        return;
       }
 
       // Messages are already loaded into messageStore by restoreFromStorage().
       // No need to reload from IndexedDB here.
 
-      ui.renderApp();
+      if (shouldRenderApp) {
+        ui.renderApp();
 
-      // Restore open thread if it still exists in the restored channel.
-      if (lastView?.threadOpen && lastView.threadId && state.activeChannelId) {
-        const threadExists = ctrl.messageStore
-          .getMessages(state.activeChannelId)
-          .some((m: any) => m.id === lastView.threadId);
-        if (threadExists) {
-          ui.openThread(lastView.threadId);
+        // Restore open thread if it still exists in the restored channel.
+        if (lastView?.threadOpen && lastView.threadId && state.activeChannelId) {
+          const threadExists = ctrl.messageStore
+            .getMessages(state.activeChannelId)
+            .some((m: any) => m.id === lastView.threadId);
+          if (threadExists) {
+            ui.openThread(lastView.threadId);
+          }
         }
-      }
 
-      // Tell NotificationManager which channel is currently focused on startup
-      if (state.activeChannelId) {
-        ctrl.notifications.setFocusedChannel(state.activeChannelId);
-        void ctrl.onChannelViewed(state.activeChannelId);
+        // Tell NotificationManager which channel is currently focused on startup
+        if (state.activeChannelId) {
+          ctrl.notifications.setFocusedChannel(state.activeChannelId);
+          void ctrl.onChannelViewed(state.activeChannelId);
+        }
       }
     }
 

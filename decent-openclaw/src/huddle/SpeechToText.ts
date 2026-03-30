@@ -8,14 +8,15 @@ import { tmpdir } from 'os';
 const execFileAsync = promisify(execFile);
 
 export interface STTOptions {
-  engine?: 'whisper-cpp' | 'whisper-python' | 'openai' | 'groq';
+  engine?: 'whisper-cpp' | 'whisper-python' | 'openai' | 'groq' | 'gemini';
   model?: string;
   language?: string;
-  apiKey?: string;        // For openai/groq engines
+  apiKey?: string;        // For openai/groq/gemini engines
   log?: { info: (s: string) => void; warn?: (s: string) => void };
 }
 
 const DEFAULT_MODEL = 'base.en';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
 const MODEL_DIR = '/opt/homebrew/share/whisper-cpp/models';
 const WHISPER_BIN = 'whisper-cli';
 const EXEC_TIMEOUT = 30_000;
@@ -34,7 +35,7 @@ export class SpeechToText {
 
   constructor(opts?: STTOptions) {
     this.engine = opts?.engine ?? 'whisper-cpp';
-    this.model = opts?.model ?? DEFAULT_MODEL;
+    this.model = opts?.model ?? (this.engine === 'gemini' ? DEFAULT_GEMINI_MODEL : DEFAULT_MODEL);
     this.modelPath = join(MODEL_DIR, `ggml-${this.model}.bin`);
     this.language = opts?.language;
     this.apiKey = opts?.apiKey;
@@ -45,10 +46,71 @@ export class SpeechToText {
    * Convert PCM buffer (16-bit signed LE, mono) to text.
    */
   async transcribe(pcmBuffer: Buffer, sampleRate = 48000): Promise<string> {
+    if (this.engine === 'gemini') {
+      return this.transcribeGemini(pcmBuffer, sampleRate);
+    }
     if (this.engine === 'openai' || this.engine === 'groq') {
       return this.transcribeCloud(pcmBuffer, sampleRate);
     }
     return this.transcribeLocal(pcmBuffer, sampleRate);
+  }
+
+  /**
+   * Cloud transcription via Gemini generateContent multimodal API.
+   */
+  private async transcribeGemini(pcmBuffer: Buffer, sampleRate: number): Promise<string> {
+    const key = this.apiKey ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? '';
+    if (!key) {
+      this.log?.warn?.('[STT] No API key for gemini — set GEMINI_API_KEY or GOOGLE_API_KEY');
+      return '';
+    }
+
+    const model = this.model || DEFAULT_GEMINI_MODEL;
+    const wavBuffer = this.createWavBuffer(pcmBuffer, sampleRate);
+    const audioB64 = wavBuffer.toString('base64');
+    const duration = (pcmBuffer.length / 2 / sampleRate).toFixed(1);
+    this.log?.info(`[STT] gemini transcribe: ${duration}s audio, model=${model}${this.language ? ', lang=' + this.language : ''}`);
+
+    const start = Date.now();
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [{
+          role: 'user',
+          parts: [
+            {
+              text: this.language
+                ? `Transcribe this audio to plain text only. Language: ${this.language}. Do not add commentary.`
+                : 'Transcribe this audio to plain text only. Do not add commentary.',
+            },
+            {
+              inlineData: {
+                mimeType: 'audio/wav',
+                data: audioB64,
+              },
+            },
+          ],
+        }],
+        generationConfig: {
+          temperature: 0,
+        },
+      }),
+    });
+
+    const elapsed = Date.now() - start;
+    if (!response.ok) {
+      const err = await response.text().catch(() => 'unknown');
+      this.log?.warn?.(`[STT] gemini error ${response.status}: ${err}`);
+      return '';
+    }
+
+    const payload = await response.json().catch(() => ({}));
+    const text = this.extractGeminiText(payload).trim();
+    this.log?.info(`[STT] gemini transcribed in ${elapsed}ms: "${text.slice(0, 60)}${text.length > 60 ? '...' : ''}"`);
+    return text;
   }
 
   /**
@@ -132,6 +194,17 @@ export class SpeechToText {
     const text = (await response.text()).trim();
     this.log?.info(`[STT] ${this.engine} transcribed in ${elapsed}ms: "${text.slice(0, 60)}${text.length > 60 ? '...' : ''}"`);
     return text;
+  }
+
+  private extractGeminiText(payload: any): string {
+    const candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
+    const parts = candidates
+      .flatMap((candidate: any) => Array.isArray(candidate?.content?.parts) ? candidate.content.parts : []);
+    return parts
+      .map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
   }
 
   /**

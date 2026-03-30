@@ -52,19 +52,29 @@ async function waitForApp(page, maxTimeout = 18000) {
 }
 
 async function createWorkspace(page, name = 'QA Workspace', alias = 'Tester') {
-  if (!page.url().includes('/app')) await page.goto('/app');
+  await page.goto('/');
   await waitForApp(page);
+
   const staleModalClose = page.locator('.modal .btn-secondary').first();
   if (await staleModalClose.count()) {
     await staleModalClose.click().catch(() => {});
   }
-  await page.locator('#create-ws-btn-nav').click();
+
+  if (await page.locator('#create-ws-btn').count()) {
+    await page.locator('#create-ws-btn').click();
+  } else {
+    await page.evaluate(() => sessionStorage.setItem('decent:welcomeAction', 'create'));
+    await page.goto('/app');
+  }
+
   await page.getByRole('heading', { name: 'Create Workspace' }).waitFor({ state: 'visible', timeout: 10000 });
-  const inputs = page.locator('.modal input');
-  await inputs.nth(0).fill(name);
-  await inputs.nth(1).fill(alias);
+
+  const nameInput = page.locator('.modal input[name="name"]');
+  const aliasInput = page.locator('.modal input[name="alias"]');
+  await nameInput.fill(name);
+  await aliasInput.fill(alias);
   await page.click('.modal .btn-primary');
-  await page.waitForSelector('.sidebar-header', { timeout: 10000 });
+  await waitForApp(page, 10000);
 }
 
 async function seedDirectConversation(page, options = {}) {
@@ -216,7 +226,7 @@ test.describe('QA DM refresh signoff smoke', () => {
     expect(messages).toContain('fallback dm visible');
   });
 
-  test('missing saved DM falls back to welcome when nothing else exists', async ({ page }) => {
+  test('missing saved DM falls back to landing welcome when nothing else exists', async ({ page }) => {
     await page.goto('/app');
     await waitForApp(page);
     await page.evaluate(async () => {
@@ -234,6 +244,7 @@ test.describe('QA DM refresh signoff smoke', () => {
     await page.reload();
     await waitForApp(page);
 
+    await expect(page.getByRole('heading', { name: 'Start private chat without giving up control.' })).toBeVisible();
     await expect(page.locator('#create-ws-btn')).toBeVisible();
     await expect(page.locator('#join-ws-btn')).toBeVisible();
   });

@@ -149,6 +149,34 @@ describe("account resolution", () => {
     expect(account.streamEnabled).toBe(true);
     expect(account.replyToMode).toBe("all");
   });
+
+  test("huddle config preserves explicit Gemini selection with fallback knobs", () => {
+    const account = resolveDecentChatAccount({
+      channels: {
+        decentchat: {
+          huddle: {
+            enabled: true,
+            autoJoin: true,
+            sttEngine: "gemini",
+            whisperModel: "gemini-2.0-flash",
+            sttApiKey: "gemini-key", // pragma: allowlist secret
+            ttsEngine: "gemini",
+            ttsModel: "gemini-2.5-flash-preview-tts",
+            ttsApiKey: "gemini-key", // pragma: allowlist secret
+            ttsVoice: "Kore",
+          },
+        },
+      },
+    });
+
+    expect(account.huddle?.sttEngine).toBe("gemini");
+    expect(account.huddle?.whisperModel).toBe("gemini-2.0-flash");
+    expect(account.huddle?.sttApiKey).toBe("gemini-key"); // pragma: allowlist secret
+    expect(account.huddle?.ttsEngine).toBe("gemini");
+    expect(account.huddle?.ttsModel).toBe("gemini-2.5-flash-preview-tts");
+    expect(account.huddle?.ttsApiKey).toBe("gemini-key"); // pragma: allowlist secret
+    expect(account.huddle?.ttsVoice).toBe("Kore");
+  });
 });
 
 // ---------------------------------------------------------------------------

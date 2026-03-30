@@ -239,13 +239,14 @@
         <h3>Identity</h3>
 
         <div class="setting-row">
-          <label>Peer ID</label>
+          <span class="setting-label">Peer ID</span>
           <code style="font-size:12px; color:var(--text-muted); user-select:all">{settings.myPeerId || 'N/A'}</code>
         </div>
 
         <div class="setting-row">
-          <label>Global display name</label>
+          <label for="settings-my-alias">Global display name</label>
           <input
+            id="settings-my-alias"
             type="text"
             data-key="myAlias"
             value={settings.myAlias || ''}
@@ -261,8 +262,9 @@
 
         {#if settings.activeWorkspaceId}
           <div class="setting-row">
-            <label>Name in this workspace</label>
+            <label for="settings-workspace-alias">Name in this workspace</label>
             <input
+              id="settings-workspace-alias"
               type="text"
               data-key="workspaceAlias"
               value={settings.workspaceAlias || ''}
@@ -278,7 +280,7 @@
         {/if}
 
         <div class="setting-row">
-          <label>Seed Phrase</label>
+          <span class="setting-label">Seed phrase</span>
           <div style="display:flex; gap:6px; flex-wrap:wrap;">
             <button class="btn-secondary" id="seed-phrase-btn" style="font-size:12px; padding:4px 12px;" onclick={handleSeedPrimary}>
               {#if generatingSeed}Generating...{:else if settings.seedPhrase}{seedVisible ? '🙈 Hide' : '👁️ Show'}{:else}🔑 Generate{/if}
@@ -297,7 +299,7 @@
         </div>
 
         <div class="setting-row">
-          <label>Device index</label>
+          <span class="setting-label">Device index</span>
           <div style="display:flex; align-items:center; gap:8px;">
             <code style="font-size:12px; color:var(--text-muted);">{settings.deviceIndex ?? 0}</code>
             <span style="font-size:11px; color:var(--text-muted);">({(settings.deviceIndex ?? 0) === 0 ? 'primary device' : `device ${settings.deviceIndex ?? 0}`})</span>
@@ -309,8 +311,8 @@
         <h3>Appearance</h3>
 
         <div class="setting-row">
-          <label>Theme</label>
-          <select data-key="theme" onchange={(e) => {
+          <label for="settings-theme">Theme</label>
+          <select id="settings-theme" data-key="theme" onchange={(e) => {
             const value = (e.currentTarget as HTMLSelectElement).value as AppSettings['theme'];
             settings = { ...settings, theme: value };
             void persistSetting('theme', value);
@@ -322,8 +324,8 @@
         </div>
 
         <div class="setting-row">
-          <label>Font size</label>
-          <select data-key="fontSize" onchange={(e) => {
+          <label for="settings-font-size">Font size</label>
+          <select id="settings-font-size" data-key="fontSize" onchange={(e) => {
             const value = (e.currentTarget as HTMLSelectElement).value as AppSettings['fontSize'];
             settings = { ...settings, fontSize: value };
             void persistSetting('fontSize', value);
@@ -335,8 +337,8 @@
         </div>
 
         <div class="setting-row">
-          <label>Compact mode</label>
-          <input type="checkbox" data-key="compactMode" checked={!!settings.compactMode} onchange={(e) => {
+          <label for="settings-compact-mode">Compact mode</label>
+          <input id="settings-compact-mode" type="checkbox" data-key="compactMode" checked={!!settings.compactMode} onchange={(e) => {
             const value = (e.currentTarget as HTMLInputElement).checked;
             settings = { ...settings, compactMode: value };
             void persistSetting('compactMode', value);
@@ -344,8 +346,8 @@
         </div>
 
         <div class="setting-row">
-          <label>Show timestamps</label>
-          <input type="checkbox" data-key="showTimestamps" checked={!!settings.showTimestamps} onchange={(e) => {
+          <label for="settings-show-timestamps">Show timestamps</label>
+          <input id="settings-show-timestamps" type="checkbox" data-key="showTimestamps" checked={!!settings.showTimestamps} onchange={(e) => {
             const value = (e.currentTarget as HTMLInputElement).checked;
             settings = { ...settings, showTimestamps: value };
             void persistSetting('showTimestamps', value);
@@ -353,8 +355,8 @@
         </div>
 
         <div class="setting-row">
-          <label>24-hour time</label>
-          <input type="checkbox" data-key="use24HourTime" checked={!!settings.use24HourTime} onchange={(e) => {
+          <label for="settings-24-hour-time">24-hour time</label>
+          <input id="settings-24-hour-time" type="checkbox" data-key="use24HourTime" checked={!!settings.use24HourTime} onchange={(e) => {
             const value = (e.currentTarget as HTMLInputElement).checked;
             settings = { ...settings, use24HourTime: value };
             void persistSetting('use24HourTime', value);
@@ -365,16 +367,16 @@
       <div class="settings-section">
         <h3>Notifications</h3>
         <div class="setting-row">
-          <label>Desktop notifications</label>
-          <input type="checkbox" data-key="notifications" checked={!!settings.notifications} onchange={(e) => {
+          <label for="settings-notifications">Desktop notifications</label>
+          <input id="settings-notifications" type="checkbox" data-key="notifications" checked={!!settings.notifications} onchange={(e) => {
             const value = (e.currentTarget as HTMLInputElement).checked;
             settings = { ...settings, notifications: value };
             void persistSetting('notifications', value);
           }} />
         </div>
         <div class="setting-row">
-          <label>Notification sounds</label>
-          <input type="checkbox" data-key="notificationSound" checked={!!settings.notificationSound} onchange={(e) => {
+          <label for="settings-notification-sound">Notification sounds</label>
+          <input id="settings-notification-sound" type="checkbox" data-key="notificationSound" checked={!!settings.notificationSound} onchange={(e) => {
             const value = (e.currentTarget as HTMLInputElement).checked;
             settings = { ...settings, notificationSound: value };
             void persistSetting('notificationSound', value);
@@ -385,16 +387,16 @@
       <div class="settings-section">
         <h3>Privacy</h3>
         <div class="setting-row">
-          <label>Show typing indicators</label>
-          <input type="checkbox" data-key="showTypingIndicators" checked={!!settings.showTypingIndicators} onchange={(e) => {
+          <label for="settings-show-typing-indicators">Show typing indicators</label>
+          <input id="settings-show-typing-indicators" type="checkbox" data-key="showTypingIndicators" checked={!!settings.showTypingIndicators} onchange={(e) => {
             const value = (e.currentTarget as HTMLInputElement).checked;
             settings = { ...settings, showTypingIndicators: value };
             void persistSetting('showTypingIndicators', value);
           }} />
         </div>
         <div class="setting-row">
-          <label>Send read receipts</label>
-          <input type="checkbox" data-key="showReadReceipts" checked={!!settings.showReadReceipts} onchange={(e) => {
+          <label for="settings-show-read-receipts">Send read receipts</label>
+          <input id="settings-show-read-receipts" type="checkbox" data-key="showReadReceipts" checked={!!settings.showReadReceipts} onchange={(e) => {
             const value = (e.currentTarget as HTMLInputElement).checked;
             settings = { ...settings, showReadReceipts: value };
             void persistSetting('showReadReceipts', value);
@@ -405,32 +407,33 @@
       <div class="settings-section">
         <h3>Media &amp; Storage</h3>
         <div class="setting-row">
-          <label>Auto-download images</label>
-          <input type="checkbox" data-key="autoDownloadImages" checked={!!settings.autoDownloadImages} onchange={(e) => {
+          <label for="settings-auto-download-images">Auto-download images</label>
+          <input id="settings-auto-download-images" type="checkbox" data-key="autoDownloadImages" checked={!!settings.autoDownloadImages} onchange={(e) => {
             const value = (e.currentTarget as HTMLInputElement).checked;
             settings = { ...settings, autoDownloadImages: value };
             void persistSetting('autoDownloadImages', value);
           }} />
         </div>
         <div class="setting-row">
-          <label>Auto-download voice</label>
-          <input type="checkbox" data-key="autoDownloadVoice" checked={!!settings.autoDownloadVoice} onchange={(e) => {
+          <label for="settings-auto-download-voice">Auto-download voice</label>
+          <input id="settings-auto-download-voice" type="checkbox" data-key="autoDownloadVoice" checked={!!settings.autoDownloadVoice} onchange={(e) => {
             const value = (e.currentTarget as HTMLInputElement).checked;
             settings = { ...settings, autoDownloadVoice: value };
             void persistSetting('autoDownloadVoice', value);
           }} />
         </div>
         <div class="setting-row">
-          <label>Auto-download video</label>
-          <input type="checkbox" data-key="autoDownloadVideo" checked={!!settings.autoDownloadVideo} onchange={(e) => {
+          <label for="settings-auto-download-video">Auto-download video</label>
+          <input id="settings-auto-download-video" type="checkbox" data-key="autoDownloadVideo" checked={!!settings.autoDownloadVideo} onchange={(e) => {
             const value = (e.currentTarget as HTMLInputElement).checked;
             settings = { ...settings, autoDownloadVideo: value };
             void persistSetting('autoDownloadVideo', value);
           }} />
         </div>
         <div class="setting-row">
-          <label>Keep media for (days)</label>
+          <label for="settings-media-retention-days">Keep media for (days)</label>
           <input
+            id="settings-media-retention-days"
             type="number"
             data-key="mediaRetentionDays"
             value={settings.mediaRetentionDays ?? 30}
@@ -449,16 +452,16 @@
       <div class="settings-section">
         <h3>Advanced</h3>
         <div class="setting-row">
-          <label>Show live reconnect activity</label>
-          <input type="checkbox" data-key="showLiveReconnectActivity" checked={!!settings.showLiveReconnectActivity} onchange={(e) => {
+          <label for="settings-show-live-reconnect-activity">Show live reconnect activity</label>
+          <input id="settings-show-live-reconnect-activity" type="checkbox" data-key="showLiveReconnectActivity" checked={!!settings.showLiveReconnectActivity} onchange={(e) => {
             const value = (e.currentTarget as HTMLInputElement).checked;
             settings = { ...settings, showLiveReconnectActivity: value };
             void persistSetting('showLiveReconnectActivity', value);
           }} />
         </div>
         <div class="setting-row">
-          <label>Debug mode</label>
-          <input type="checkbox" data-key="debug" checked={!!settings.debug} onchange={(e) => {
+          <label for="settings-debug-mode">Debug mode</label>
+          <input id="settings-debug-mode" type="checkbox" data-key="debug" checked={!!settings.debug} onchange={(e) => {
             const value = (e.currentTarget as HTMLInputElement).checked;
             settings = { ...settings, debug: value };
             void persistSetting('debug', value);
@@ -493,7 +496,7 @@
       </ul>
       <p style="font-size:13px; color:var(--text-muted); margin:0 0 16px 0;">You will need to create a new identity to use DecentChat again.</p>
       <div style="margin-bottom:16px;">
-        <label style="font-size:13px; font-weight:600; display:block; margin-bottom:6px;">
+        <label for="danger-confirm-input" style="font-size:13px; font-weight:600; display:block; margin-bottom:6px;">
           Type <code style="background:var(--bg-secondary); padding:2px 6px; border-radius:3px;">DELETE</code> to confirm:
         </label>
         <input

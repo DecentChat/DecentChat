@@ -738,11 +738,12 @@
     <div class="empty-state">
       <div class="emoji">✨</div>
       <h3>Welcome to {channelName}!</h3>
-      <p>Send your first message below, or invite more people from the sidebar.<br>Messages are end-to-end encrypted and stored locally.</p>
       {#if isCompactViewport}
-        <p style="margin-top:8px; font-size:12px; color:var(--text-light)">Say hello below or type <code>/help</code> for commands</p>
+        <p>Start by sending a message below, or open the menu for <strong>Invite link</strong> or <strong>QR Code</strong>.<br>Your messages stay end-to-end encrypted and stored on your devices.</p>
+        <p style="margin-top:8px; font-size:12px; color:var(--text-light)">Need help? Open the menu to invite someone, or type <code>/help</code>.</p>
       {:else}
-        <p style="margin-top:8px; font-size:12px; color:var(--text-light)">Say hello below, invite people from the sidebar, or type <code>/help</code> · <code>Ctrl+K</code> for quick commands</p>
+        <p>Start by sending a message below, or invite someone with <strong>Copy invite link</strong> or <strong>QR Code</strong> in the sidebar.<br>Your messages stay end-to-end encrypted and stored on your devices.</p>
+        <p style="margin-top:8px; font-size:12px; color:var(--text-light)">You can also open quick commands with <code>Ctrl+K</code>.</p>
       {/if}
     </div>
   {:else}
