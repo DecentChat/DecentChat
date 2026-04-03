@@ -1666,9 +1666,27 @@ export class ChatController {
             return;
           }
 
-          const _ht1 = performance.now();
-          await this.messageProtocol?.clearRatchetState(peerId);
-          this.messageProtocol?.clearSharedSecret(peerId);
+           const _ht1 = performance.now();
+          // Only clear ratchet state if the peer is NOT already ready.
+          // When both peers connect simultaneously, each sends a handshake AND
+          // a handshake-reply.  The reply arrives after the initial handshake
+          // has already established a valid ratchet.  Clearing + re-creating
+          // the ratchet here would desync the two sides and cause decryption
+          // failures for any messages encrypted between the first handshake
+          // and the reply (race window ≈ network RTT).
+          //
+          // processHandshake() already has a guard that returns immediately
+          // when a ratchet state exists, so skipping the clear is safe — the
+          // existing ratchet is kept intact and both peers remain in sync.
+          //
+          // For genuine reconnects the onDisconnect handler (line 1278) already
+          // calls clearSharedSecret, and readyPeers is removed (line 1261), so
+          // the next handshake WILL go through the full clear + init path.
+          const alreadyReady = this.state.readyPeers.has(peerId) && this.messageProtocol!.hasRatchetState(peerId);
+          if (!alreadyReady) {
+            await this.messageProtocol?.clearRatchetState(peerId);
+            this.messageProtocol?.clearSharedSecret(peerId);
+          }
           await this.messageProtocol!.processHandshake(peerId, data);
           const _ht2 = performance.now();
 
