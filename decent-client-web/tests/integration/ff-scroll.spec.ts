@@ -96,5 +96,7 @@ test('many messages: scrollbar and messages visible with thread open', async ({ 
   expect(after.hasScrollbar, 'messages-list should have scrollbar').toBe(true);
   expect(after.anyMsgVisible, 'at least one message should be visible').toBe(true);
 
-  await context.close();
+  try {
+    await context.close();
+  } catch {}
 });

@@ -70,28 +70,12 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
     };
   });
 
-  await page.goto('/');
-  // Clear storage for clean state
-  await page.evaluate(async () => {
-    if (indexedDB.databases) {
-      const dbs = await indexedDB.databases();
-      for (const db of dbs) { if (db.name) indexedDB.deleteDatabase(db.name); }
-    }
-    localStorage.clear();
-    sessionStorage.clear();
-  });
-  await page.reload();
-
+  await page.goto('/app');
   // Wait for app to load
   await page.waitForFunction(() => {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 15000 });
-
-  const openAppBtn = page.getByRole('button', { name: /open app/i });
-  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await openAppBtn.click();
-  }
 
   await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
 
@@ -105,7 +89,9 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
 }
 
 async function closeUser(user: TestUser): Promise<void> {
-  await user.context.close();
+  try {
+    await user.context.close();
+  } catch {}
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

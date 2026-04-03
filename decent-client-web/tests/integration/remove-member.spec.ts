@@ -68,6 +68,13 @@ test.describe('Remove member from workspace', () => {
 
       expect(result.success, `should succeed, got: ${result.error}`).toBe(true);
 
+      await alice.page.waitForFunction(() => {
+        const s = (window as any).__state;
+        const c = (window as any).__ctrl;
+        const ws = c.workspaceManager.getWorkspace(s.activeWorkspaceId);
+        return ws?.members?.length === 1;
+      }, { timeout: 10000 });
+
       const post = await alice.page.evaluate(() => {
         const s = (window as any).__state;
         const c = (window as any).__ctrl;

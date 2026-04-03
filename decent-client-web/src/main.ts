@@ -795,10 +795,10 @@ async function init(): Promise<void> {
       return;
     }
 
-    setLoadingHint('Opening key storage...');
+    setLoadingHint('Preparing your secure keys...');
     await initIndexedDbWithRetry('key storage', () => ctrl.keyStore.init(), () => ctrl.keyStore.close(), 1);
 
-    setLoadingHint('Opening message storage...');
+    setLoadingHint('Opening your secure message history...');
     await initIndexedDbWithRetry('message storage', () => ctrl.persistentStore.init(), () => ctrl.persistentStore.close(), 1);
 
     // Wire offline queue → persistent storage

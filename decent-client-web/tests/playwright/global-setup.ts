@@ -8,8 +8,11 @@ import { fileURLToPath } from 'node:url';
 
 const SIGNAL_PORT = Number(process.env.PW_SIGNAL_PORT || '9000');
 const ENABLE_SIGNALING = process.env.PW_ENABLE_SIGNALING !== '0';
-const SIGNAL_SHUTDOWN_TOKEN = process.env.PW_SIGNAL_SHUTDOWN_TOKEN || `decentchat-playwright-${SIGNAL_PORT}`;
-const STATE_FILE = path.join(os.tmpdir(), `decentchat-playwright-signal-${SIGNAL_PORT}.json`);
+const SIGNAL_RUN_KEY = process.env.PW_SIGNAL_RUN_KEY || 'default';
+const SIGNAL_RUN_KEY_SAFE = SIGNAL_RUN_KEY.replace(/[^a-zA-Z0-9_-]/g, '_');
+const SIGNAL_SHUTDOWN_TOKEN = process.env.PW_SIGNAL_SHUTDOWN_TOKEN
+  || `decentchat-playwright-${SIGNAL_PORT}-${SIGNAL_RUN_KEY_SAFE}`;
+const STATE_FILE = path.join(os.tmpdir(), `decentchat-playwright-signal-${SIGNAL_PORT}-${SIGNAL_RUN_KEY_SAFE}.json`);
 const _dirname = typeof __dirname !== 'undefined'
   ? __dirname
   : path.dirname(fileURLToPath(import.meta.url));
@@ -162,11 +165,13 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
 
   const existing = await detectExistingService(SIGNAL_PORT);
   if (existing === 'decentchat') {
-    console.log(`[Playwright setup] Found stale DecentChat signaling server on :${SIGNAL_PORT}; shutting it down.`);
+    console.log(`[Playwright setup] Found DecentChat signaling server on :${SIGNAL_PORT}; attempting ownership-safe restart.`);
     const stopped = await requestSignalShutdown(SIGNAL_PORT, SIGNAL_SHUTDOWN_TOKEN);
     if (!stopped) {
       throw new Error(
-        `[Playwright setup] Existing signaling server on :${SIGNAL_PORT} refused shutdown; check SIGNAL_SHUTDOWN_TOKEN.`,
+        `[Playwright setup] Existing signaling server on :${SIGNAL_PORT} refused shutdown for this run key (${SIGNAL_RUN_KEY_SAFE}). ` +
+        'Another Playwright run is likely active on the same signaling port. ' +
+        'Set PW_SIGNAL_PORT to a unique port (or wait for the other run to finish) and retry.',
       );
     }
     await waitForPortClosed(SIGNAL_PORT, 5000);

@@ -11,6 +11,7 @@ docs/.vitepress/dist/
 
 # Test artifacts
 test-results/
+decent-client-web/test-results*/
 playwright-report/
 blob-report/
 decent-client-web/profile-output/
@@ -42,3 +43,5 @@ review-output/
 # Local git worktrees
 .worktrees/
 worktrees/
+.gstack/
+tmp

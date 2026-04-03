@@ -91,7 +91,7 @@ channels:
       enabled: true
       autoJoin: false
       sttEngine: "gemini"         # whisper-cpp | whisper-python | openai | groq | gemini
-      whisperModel: "gemini-2.0-flash"
+      whisperModel: "gemini-2.5-flash"
       sttLanguage: "en"
       sttApiKey: "${GEMINI_API_KEY}" # used by cloud STT engines (openai/groq/gemini)
       ttsEngine: "gemini"         # elevenlabs | gemini

@@ -64,7 +64,7 @@ test('two PeerJS peers can connect via signaling server', async ({ browser }) =>
   // Now try connecting page2 to page1 using the app's transport
   // The app already initializes PeerTransport on load
   // Let's check if the app's peer is actually connected to the signaling server
-  
+
   const p1Status = await page1.evaluate(() => {
     // Check the global app state for transport info
     return JSON.stringify({
@@ -96,9 +96,13 @@ test('two PeerJS peers can connect via signaling server', async ({ browser }) =>
       return JSON.stringify({ error: (e as Error).message });
     }
   }, { targetPeerId: peer1Id, signalPort: SIGNAL_PORT });
-  
+
   console.log(`[TEST] Connected peers on signaling server: ${connectionResult}`);
 
-  await ctx1.close();
-  await ctx2.close();
+  try {
+    await ctx1.close();
+  } catch {}
+  try {
+    await ctx2.close();
+  } catch {}
 });

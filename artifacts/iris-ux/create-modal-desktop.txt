@@ -1,0 +1,185 @@
+DecentChat
+Have an invite?
+Create workspace
+🔒 Private group chat · No signup required
+Start private chat
+without giving up control.
+
+Create your own private group in seconds. Invite people with a link. Messages stay encrypted between members and are never stored on DecentChat servers.
+
+Create workspace →
+
+Have an invite? Join with invite →
+
+No signup · No phone number · A workspace is your private group chat, created in your browser.
+
+📡
+WhatsApp
+— owned by Meta, messages on their servers
+🕵️
+Telegram
+— not E2E by default, cloud stored
+✅
+DecentChat
+— no message storage, zero data collected
+How it works
+
+Two steps. No signup required.
+
+1
+Start your private group in one click
+
+If someone invited you, paste the invite code to join instead. Your secure seed identity is generated automatically in your browser.
+
+→
+2
+Chat with total privacy
+
+Messages are encrypted before leaving your device using Signal's Double Ratchet. A lightweight signaling server helps peers connect, but it never sees or stores your messages.
+
+Everything you need.
+Nothing you don't.
+🔒
+Double Ratchet E2E
+
+Same encryption protocol as Signal. Keys rotate with every single message — past messages stay private forever, even if keys are compromised.
+
+🌐
+True P2P — No Server
+
+WebRTC peer-to-peer data channels. A tiny signaling server helps peers find each other, then disappears. Like BitTorrent, but for private chat.
+
+🔑
+Seed Phrase Identity
+
+12 words = your permanent identity. Works on any device. Back it up on paper. No company, no cloud, no way to lock you out of your own account.
+
+💬
+Full-Featured Chat
+
+Workspaces, channels, DMs, threads, reactions, file sharing, search, slash commands — everything Slack has, with none of the surveillance.
+
+📱
+Install Anywhere
+
+Progressive Web App — install from any browser on any device. iOS, Android, desktop. No app store, no permissions you didn't ask for.
+
+⚡
+Offline-First Sync
+
+Messages queue when offline and sync when peers reconnect using CRDTs and Negentropy set reconciliation. No message ever gets lost.
+
+🪪
+No ID. No Face Scan. Ever.
+
+While Discord now requires a government ID or face scan to access their platform, DecentChat requires nothing. No email, no phone, no identity checks — just 12 words that only you control.
+
+The honest comparison
+FEATURE
+DISCORD / WHATSAPP / TELEGRAM
+DECENTCHAT 🐙
+Messages stored on servers
+✓ Yes
+✗ Never
+Requires phone / email
+✓ Required
+✗ None needed
+ID or face scan to access
+✓ Discord requires it now
+✗ Never
+End-to-end encrypted by default
+⚠️ Partial
+✓ Always
+Can be legally subpoenaed
+✓ Yes
+Nothing to hand over
+Survives company going bust
+✗ App dies too
+✓ Protocol lives forever
+Forward secrecy
+⚠️ Sometimes
+✓ Every message
+Built on proven technology
+Signal's Double Ratchet
+WebRTC P2P
+BIP39 Seed Phrases
+AES-GCM-256
+ECDH P-256
+CRDTs + Vector Clocks
+Negentropy Set Sync
+IndexedDB Persistence
+Service Worker PWA
+⚡ Community funded
+Sponsor DecentChat
+
+If DecentChat is useful to you and you want to help fund development, protocol work, and infrastructure, donations are welcome.
+
+BTC
+Bitcoin
+
+Native address
+
+Copy address
+bc1qj7rf9vc0nvk8maux6gc6dwzpelj2d3ck0krlm7
+LTC
+Litecoin
+
+Native address
+
+Copy address
+ltc1qjhsl7eztls8l557vrtmhlm4g86hlql2qq4x5jz
+ETH
+Ethereum
+
+Native address
+
+Copy address
+0x33e98006401fE7298a255f5890380403e57cdf67
+XMR
+Monero
+
+Native address
+
+Copy address
+42uEmNUt3Jp5qNpP8sg2rQf45eNEthvMadZutxT6z2eR3opSZepkN93cQ5wxdstyA2MfkyRjB93tgis6a5DBhqgh3u8PnZh
+ZEC
+Zcash
+
+Native address
+
+Copy address
+u1deqeprze5jdwz2ywmr3q9kmgdf4vel5shr8jeamm9upvrjlc08yqx55a0w2zq2kggaa4e7ctymw3nthqdv329l6vygypqd9228r9628y70anfk78mj9tld4hrjsh9zrlq7ekth6q23zhjlw7tsdrvsvcx53ggsclmuk6q7wl3cht9m5p
+
+Direct crypto donations only for now. No token, no ICO, no VC gatekeepers.
+
+Your conversations.
+Your keys. Your rules.
+
+Start in 10 seconds. No signup. No credit card. No catch.
+
+Create workspace →
+
+Have an invite? Join with invite →
+
+Already have a seed phrase? Restore from seed phrase →
+
+DecentChat
+
+Open protocol · No tracking · No ads · Built with ❤️ and WebRTC
+
+Your anonymous ID: d6af83bdcb5e919561…
+
+×
+Create workspace
+
+Create a private group. We’ll open #general first so you can start chatting and invite people right away.
+
+WHAT HAPPENS NEXT
+Your workspace opens in #general.
+Your invite link and QR code are ready right away.
+Workspace name (required)
+Visible to everyone you invite to this workspace.
+Display name (required)
+Shown on your messages. You can change it later.
+Cancel
+Create workspace

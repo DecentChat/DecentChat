@@ -24,8 +24,9 @@
   }: Props = $props();
 
   const isAppLikeRoute = typeof window !== 'undefined' && (window.location.pathname === '/app' || window.location.pathname.startsWith('/app/'));
-  const createWorkspaceNavLabel = 'Create workspace';
-  const createWorkspaceHeroLabel = 'Start workspace →';
+  const createWorkspaceNavLabel = 'Create private group';
+  const createWorkspaceHeroLabel = 'Create private group →';
+  const createWorkspaceClarifier = 'Your private group is created in your browser.';
   const donationAddresses = [
     {
       ticker: 'BTC',
@@ -101,7 +102,7 @@
         <span class="landing-nav-name">DecentChat</span>
       </div>
       <div class="landing-nav-actions">
-        <button class="landing-nav-join-link" id="join-ws-btn-nav" onclick={handleJoin}>Have an invite?</button>
+        <button class="landing-nav-join-link" id="join-ws-btn-nav" onclick={handleJoin}>Join with invite</button>
         {#if hasWorkspace}
           <button class="btn-primary btn-sm" id="open-app-btn-nav" onclick={handleOpenApp}>Open App</button>
         {:else}
@@ -117,8 +118,8 @@
       <div class="lp-hero-badge">🔒 Private group chat · No signup required</div>
       <h1 class="lp-hero-title">Start private chat<br>without giving up control.</h1>
       <p class="lp-hero-sub">
-        Create your own workspace in seconds. Invite people with a link.
-        <strong>Messages stay encrypted between members, not on DecentChat servers.</strong>
+        Create your own private group in seconds. Invite people with a link.
+        <strong>Messages stay encrypted between members and are never stored on DecentChat servers.</strong>
       </p>
       <div class="lp-hero-actions">
         {#if hasWorkspace}
@@ -132,9 +133,9 @@
       </div>
       <p class="lp-hero-path-note">
         Have an invite?
-        <button class="lp-inline-link" id="join-ws-btn" onclick={handleJoin}>Join existing workspace →</button>
+        <button class="lp-inline-link" id="join-ws-btn" onclick={handleJoin}>Join with invite →</button>
       </p>
-      <p class="lp-hero-note">No signup · No phone number · Create your workspace in your browser</p>
+      <p class="lp-hero-note">No signup · No phone number · {createWorkspaceClarifier}</p>
     </div>
     <div class="lp-hero-mascot">
       <img src="/icons/logo-v2-light.png" alt="Deci the DecentChat mascot" class="hero-deci" />
@@ -155,7 +156,7 @@
         </div>
         <div class="lp-problem-item">
           <span class="lp-problem-item-highlight">✅</span>
-          <strong>DecentChat</strong> — zero servers, zero data collected
+          <strong>DecentChat</strong> — no message storage, zero data collected
         </div>
       </div>
     </div>
@@ -165,12 +166,12 @@
   <section class="lp-how">
     <div class="lp-container">
       <h2 class="lp-section-title">How it works</h2>
-      <p class="lp-section-sub">Two steps. No servers involved.</p>
+      <p class="lp-section-sub">Two steps. No signup required.</p>
       <div class="lp-steps">
         <div class="lp-step">
           <div class="lp-step-num">1</div>
           <div class="lp-step-content">
-            <h3>Start your workspace in one click</h3>
+            <h3>Start your private group in one click</h3>
             <p>If someone invited you, paste the invite code to join instead. Your secure seed identity is generated automatically in your browser.</p>
           </div>
         </div>
@@ -179,7 +180,7 @@
           <div class="lp-step-num">2</div>
           <div class="lp-step-content">
             <h3>Chat with total privacy</h3>
-            <p>Messages are encrypted before leaving your device using Signal's Double Ratchet. Even the signaling server — the only server that exists — never sees your content.</p>
+            <p>Messages are encrypted before leaving your device using Signal's Double Ratchet. A lightweight signaling server helps peers connect, but it never sees or stores your messages.</p>
           </div>
         </div>
       </div>
@@ -354,7 +355,7 @@
       </div>
       <p class="lp-final-join-note">
         Have an invite?
-        <button class="lp-inline-link" id="join-ws-btn-2" onclick={handleJoin}>Join existing workspace →</button>
+        <button class="lp-inline-link" id="join-ws-btn-2" onclick={handleJoin}>Join with invite →</button>
       </p>
       <p class="lp-restore-hint">
         Already have a seed phrase?

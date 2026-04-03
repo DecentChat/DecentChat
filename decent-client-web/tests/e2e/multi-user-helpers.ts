@@ -5,7 +5,7 @@
  * interact via a real PeerJS signaling server.
  */
 
-import { Page, BrowserContext, Browser, expect } from '@playwright/test';
+import { Page, BrowserContext, Browser, Locator, expect } from '@playwright/test';
 
 // ─── Storage & App State ──────────────────────────────────────────────────────
 
@@ -72,8 +72,24 @@ export async function createUser(browser: Browser, name: string): Promise<TestUs
 }
 
 /** Close and clean up a test user */
-export async function closeUser(user: TestUser): Promise<void> {
-  await user.context.close();
+export async function closeUser(user?: TestUser | null): Promise<void> {
+  if (!user?.context) {
+    return;
+  }
+
+  try {
+    await user.context.close();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      (message.includes('ENOENT') && message.includes('.playwright-artifacts'))
+      || message.includes('Failed to find context with id')
+      || message.includes('Target page, context or browser has been closed')
+    ) {
+      return;
+    }
+    throw error;
+  }
 }
 
 // ─── Workspace Operations ─────────────────────────────────────────────────────
@@ -94,17 +110,43 @@ export async function createWorkspace(page: Page, name = 'Test Workspace', alias
   // Open create modal from app nav for deterministic behavior.
   const createBtn = page.locator('#create-ws-btn-nav, #create-ws-btn').first();
   await createBtn.click();
-  const createHeading = page.getByRole('heading', { name: 'Create Workspace' });
+  const createHeading = page.getByRole('heading', { name: /Create private group/i });
   const headingVisible = await createHeading.isVisible({ timeout: 3000 }).catch(() => false);
   if (!headingVisible) {
     await createBtn.click({ force: true });
   }
   await page.waitForSelector('.modal', { timeout: 10000 });
 
-  const inputs = page.locator('.modal input');
-  await inputs.nth(0).fill(name);
-  await inputs.nth(1).fill(alias);
-  await page.click('.modal .btn-primary');
+  const modal = page.locator('.modal').last();
+  const inputs = modal.locator('input');
+  const nameInput = inputs.nth(0);
+  const aliasInput = inputs.nth(1);
+
+  const fillAndVerify = async (input: Locator, value: string): Promise<void> => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await input.click();
+      await input.fill(value);
+      if ((await input.inputValue()) === value) {
+        return;
+      }
+
+      await input.fill('');
+      await input.pressSequentially(value, { delay: 10 });
+      if ((await input.inputValue()) === value) {
+        return;
+      }
+    }
+
+    await expect(input).toHaveValue(value, { timeout: 3000 });
+  };
+
+  await fillAndVerify(nameInput, name);
+  await fillAndVerify(aliasInput, alias);
+
+  const submitButton = modal.locator('.btn-primary.create-workspace-submit, .btn-primary').first();
+  await expect(submitButton).toBeVisible({ timeout: 5000 });
+  await submitButton.click();
+
   await page.waitForSelector('.sidebar-header', { timeout: 10000 });
 }
 
@@ -465,8 +507,11 @@ export async function postFixtureMessage(
 export async function openThreadForMessage(page: Page, messageId: string): Promise<void> {
   const root = page.locator(`[data-testid="message"][data-message-id="${messageId}"]`);
   await expect(root, `message ${messageId} should exist before opening thread`).toHaveCount(1);
+  await root.scrollIntoViewIfNeeded();
 
   const threadIndicator = root.locator(`.message-thread-indicator[data-thread-id="${messageId}"]`);
+  await expect(threadIndicator).toBeVisible();
+  await threadIndicator.scrollIntoViewIfNeeded();
   await threadIndicator.click({ force: true });
 
   const panel = page.getByTestId('thread-panel');

@@ -17,8 +17,12 @@
     computeSmoothedAverageHeight,
     shouldKeepBottomAnchored,
     shouldApplyTopSpacerCompensation,
+    estimateMessageHeightFromContent,
     type VirtualizationConfig,
   } from './virtualizationHeuristics';
+
+  type PretextPrepare = (text: string, font: string, options?: { whiteSpace?: 'normal' | 'pre-wrap' }) => unknown;
+  type PretextLayout = (prepared: unknown, maxWidth: number, lineHeight: number) => { height: number; lineCount: number };
 
   interface Props {
     messages: PlaintextMessage[];
@@ -46,6 +50,8 @@
     onShowMessageInfo: (messageId: string) => void;
     onImageClick?: (name: string, src: string) => void;
     resolveAttachmentImageUrl?: (attachmentId: string) => Promise<string | null>;
+    onInvite?: () => void;
+    onShowQR?: () => void;
   }
 
   let {
@@ -73,6 +79,8 @@
     onShowMessageInfo,
     onImageClick,
     resolveAttachmentImageUrl,
+    onInvite,
+    onShowQR,
   }: Props = $props();
 
   let mounted = $state(false);
@@ -104,6 +112,17 @@
   let rowResizeObserver: ResizeObserver | null = null;
   let suppressScrollVirtualizationUntil = 0;
   let keepBottomAnchoredUntil = 0;
+  let pretextPrepare: PretextPrepare | null = null;
+  let pretextLayout: PretextLayout | null = null;
+  let pretextLoadPromise: Promise<void> | null = null;
+
+  const estimatedHeights = new Map<string, { cacheKey: string; height: number }>();
+  const pretextPreparedContent = new Map<string, unknown>();
+
+  const MESSAGE_FONT = '400 15px "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif';
+  const MESSAGE_FONT_COMPACT = '400 14px "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif';
+  const MESSAGE_LINE_HEIGHT = 22.5;
+  const MESSAGE_LINE_HEIGHT_COMPACT = 21;
 
   const renderedMessages = $derived(messages.slice(windowStart, windowEnd));
 
@@ -155,8 +174,78 @@
     return Math.max(MIN_ESTIMATED_HEIGHT, Math.min(MAX_ESTIMATED_HEIGHT, height));
   }
 
-  function estimateMessageHeight(msg: PlaintextMessage): number {
-    return measuredHeights.get(msg.id) ?? averageMessageHeight;
+  function ensurePretextLoaded(): void {
+    if (pretextPrepare || pretextLayout || pretextLoadPromise || typeof window === 'undefined') return;
+
+    pretextLoadPromise = import('@chenglou/pretext')
+      .then((mod) => {
+        pretextPrepare = mod.prepare as PretextPrepare;
+        pretextLayout = mod.layout as PretextLayout;
+        markOffsetsDirty();
+        scheduleSpacerRefresh(true);
+      })
+      .catch(() => {
+        // Keep virtualization on baseline heuristics if pretext cannot load.
+      })
+      .finally(() => {
+        pretextLoadPromise = null;
+      });
+  }
+
+  function getEstimatedContentWidth(container?: HTMLElement | null): number {
+    if (!container) return isCompactViewport ? 320 : 460;
+    const avatarWidth = isCompactViewport ? 28 : 36;
+    const horizontalPadding = 16;
+    const rowGap = 10;
+    const bodyInsets = 6;
+    return Math.max(180, container.clientWidth - avatarWidth - horizontalPadding - rowGap - bodyInsets);
+  }
+
+  function estimateContentHeightWithPretext(msg: PlaintextMessage, maxWidth: number): number | null {
+    if (!pretextPrepare || !pretextLayout || maxWidth <= 0) return null;
+
+    const content = msg.content ?? '';
+    if (content.length === 0) return 0;
+
+    const font = isCompactViewport ? MESSAGE_FONT_COMPACT : MESSAGE_FONT;
+    const lineHeight = isCompactViewport ? MESSAGE_LINE_HEIGHT_COMPACT : MESSAGE_LINE_HEIGHT;
+    const preparedCacheKey = `${font}\n${content}`;
+
+    let prepared = pretextPreparedContent.get(preparedCacheKey);
+    if (!prepared) {
+      prepared = pretextPrepare(content, font, { whiteSpace: 'pre-wrap' });
+      pretextPreparedContent.set(preparedCacheKey, prepared);
+    }
+
+    const result = pretextLayout(prepared, maxWidth, lineHeight);
+    return Number.isFinite(result.height) ? Math.max(lineHeight, result.height) : null;
+  }
+
+  function estimateMessageHeight(msg: PlaintextMessage, index: number, contentWidth: number): number {
+    const measured = measuredHeights.get(msg.id);
+    if (measured !== undefined) return measured;
+
+    const attachmentCount = (((msg as any).attachments as unknown[] | undefined)?.length ?? 0);
+    const grouped = isGrouped(msg, index, messages);
+    const widthBucket = Math.max(180, Math.round(contentWidth / 8) * 8);
+    const fontMode = isCompactViewport ? 'compact' : 'regular';
+    const cacheKey = `${msg.id}:${widthBucket}:${grouped ? 1 : 0}:${attachmentCount}:${fontMode}`;
+
+    const cached = estimatedHeights.get(msg.id);
+    if (cached?.cacheKey === cacheKey) {
+      return cached.height;
+    }
+
+    const contentHeight = estimateContentHeightWithPretext(msg, widthBucket);
+    const estimated = estimateMessageHeightFromContent({
+      type: msg.type,
+      contentHeightPx: contentHeight,
+      isGrouped: grouped,
+      attachmentCount,
+    });
+
+    estimatedHeights.set(msg.id, { cacheKey, height: estimated });
+    return estimated;
   }
 
   function markOffsetsDirty(): void {
@@ -165,6 +254,7 @@
 
   function rebuildEstimatedOffsets(): void {
     const total = messages.length;
+    const contentWidth = getEstimatedContentWidth(getContainer());
     estimatedOffsets = new Array(total + 1);
     estimatedOffsets[0] = 0;
     messageIndexById.clear();
@@ -172,7 +262,7 @@
     for (let i = 0; i < total; i += 1) {
       const msg = messages[i];
       messageIndexById.set(msg.id, i);
-      estimatedOffsets[i + 1] = estimatedOffsets[i] + estimateMessageHeight(msg);
+      estimatedOffsets[i + 1] = estimatedOffsets[i] + estimateMessageHeight(msg, i, contentWidth);
     }
 
     offsetsDirty = false;
@@ -442,6 +532,7 @@
 
   function resetHeightEstimates(): void {
     measuredHeights.clear();
+    estimatedHeights.clear();
     averageMessageHeight = DEFAULT_MESSAGE_HEIGHT;
     topSpacerHeight = 0;
     bottomSpacerHeight = 0;
@@ -454,9 +545,11 @@
     const mediaQuery = window.matchMedia('(max-width: 768px)');
     const updateCompactViewport = () => {
       isCompactViewport = mediaQuery.matches;
+      markOffsetsDirty();
     };
     updateCompactViewport();
     mediaQuery.addEventListener?.('change', updateCompactViewport);
+    ensurePretextLoaded();
 
     return () => {
       mediaQuery.removeEventListener?.('change', updateCompactViewport);
@@ -685,6 +778,7 @@
     if (!container) return;
 
     const ro = new ResizeObserver(() => {
+      markOffsetsDirty();
       if (shouldAutoStickToBottomNow()) {
         scrollToEnd(container);
         updateNearBottom(container);
@@ -738,12 +832,23 @@
     <div class="empty-state">
       <div class="emoji">✨</div>
       <h3>Welcome to {channelName}!</h3>
+      <p class="empty-state-status">You’re the first member here right now.</p>
+      <p class="empty-state-lead"><strong>Next step:</strong> send your first message, or invite someone with a link or QR code.</p>
+      {#if onInvite || onShowQR}
+        <div class="empty-state-actions">
+          {#if onInvite}
+            <button class="btn-primary" type="button" onclick={onInvite}>Invite people via link</button>
+          {/if}
+          {#if onShowQR}
+            <button class="btn-secondary" type="button" onclick={onShowQR}>Show invite QR code</button>
+          {/if}
+        </div>
+      {/if}
+      <p class="empty-state-support">Messages stay end-to-end encrypted and are only stored on members’ devices.</p>
       {#if isCompactViewport}
-        <p>Start by sending a message below, or open the menu for <strong>Invite link</strong> or <strong>QR Code</strong>.<br>Your messages stay end-to-end encrypted and stored on your devices.</p>
-        <p style="margin-top:8px; font-size:12px; color:var(--text-light)">Need help? Open the menu to invite someone, or type <code>/help</code>.</p>
+        <p class="empty-state-tip">Need help? Type <code>/help</code>.</p>
       {:else}
-        <p>Start by sending a message below, or invite someone with <strong>Copy invite link</strong> or <strong>QR Code</strong> in the sidebar.<br>Your messages stay end-to-end encrypted and stored on your devices.</p>
-        <p style="margin-top:8px; font-size:12px; color:var(--text-light)">You can also open quick commands with <code>Ctrl+K</code>.</p>
+        <p class="empty-state-tip">Need help? Press <code>Ctrl+K</code> or type <code>/help</code>.</p>
       {/if}
     </div>
   {:else}

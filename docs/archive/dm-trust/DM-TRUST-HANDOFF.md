@@ -13,11 +13,11 @@ These must stay explicit in **all three** DM trust docs:
 - **QA DM trust E2E is the release gate**
 
 ## Document split
-- `planning/DM-TRUST-BACKEND.md`
+- `docs/archive/dm-trust/DM-TRUST-BACKEND.md`
   - source of truth for implementation order and backend exit criteria
-- `planning/DM-TRUST-QA.md`
+- `docs/archive/dm-trust/DM-TRUST-QA.md`
   - source of truth for validation scope and release gating
-- `planning/DM-TRUST-HANDOFF.md`
+- `docs/archive/dm-trust/DM-TRUST-HANDOFF.md`
   - source of truth for ownership split, dependency order, and final sequencing
 
 ## Dependency order

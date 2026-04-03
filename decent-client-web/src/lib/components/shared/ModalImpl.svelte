@@ -84,6 +84,7 @@
   onclick={handleOverlayClick}
 >
   <div class="modal" data-testid="modal">
+    <button type="button" class="modal-close-button" aria-label={`Close ${title} dialog`} onclick={close}>×</button>
     <h2>{title}</h2>
     {#if children}
       <form id="modal-form" onsubmit={handleSubmit}>

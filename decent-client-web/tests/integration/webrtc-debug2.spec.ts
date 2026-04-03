@@ -32,5 +32,7 @@ test('check transport signaling connection state', async ({ browser }) => {
   // The app doesn't expose the transport globally, so let's check what logs were printed
   console.log('[TEST] Check logs above for "Connected to" or "Signaling server unavailable"');
 
-  await ctx1.close();
+  try {
+    await ctx1.close();
+  } catch {}
 });

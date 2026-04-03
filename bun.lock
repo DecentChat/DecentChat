@@ -15,8 +15,8 @@
       "name": "decent-client-core",
       "version": "0.1.0",
       "dependencies": {
-        "@decentchat/protocol": "workspace:*",
-        "@decentchat/transport-webrtc": "workspace:*",
+        "@decentchat/protocol": "workspace:^",
+        "@decentchat/transport-webrtc": "workspace:^",
       },
       "devDependencies": {
         "typescript": "^5.6.0",
@@ -51,11 +51,12 @@
       "name": "decent-client-web",
       "version": "0.1.0",
       "dependencies": {
-        "@decentchat/protocol": "workspace:*",
-        "@decentchat/transport-webrtc": "workspace:*",
+        "@chenglou/pretext": "^0.0.4",
+        "@decentchat/protocol": "workspace:^",
+        "@decentchat/transport-webrtc": "workspace:^",
         "@floating-ui/dom": "^1.7.5",
         "@sveltejs/vite-plugin-svelte": "4",
-        "decent-client-core": "workspace:*",
+        "decent-client-core": "workspace:^",
         "dompurify": "^3.3.1",
         "marked": "^17.0.3",
         "peerjs": "^1.5.4",
@@ -445,6 +446,8 @@
     "@capacitor/keyboard": ["@capacitor/keyboard@7.0.5", "", { "peerDependencies": { "@capacitor/core": ">=7.0.0" } }, "sha512-XGqTXvoZLx4gm5TZnH9uDKg9doy8NFhabytyjDOlXDqxNitz9IPWAANUoOyu2W4Ng9a/YaY5csCnAsoUPZesTA=="],
 
     "@capacitor/status-bar": ["@capacitor/status-bar@7.0.5", "", { "peerDependencies": { "@capacitor/core": ">=7.0.0" } }, "sha512-d0DI/Usy4RrNiV5xfnypXNRLmWYMixC2yAUAwe6sCQQ0HF7oskDf4RpCxcZqbxnpc4H4A0qqiOSltfJLFAYshg=="],
+
+    "@chenglou/pretext": ["@chenglou/pretext@0.0.4", "", {}, "sha512-FnPAFMid1/p1j2V2gRPUVBarGUIb2PhkkC9YNnTOfPtTDgHKh8siO8PP9pCxpFfYlcodWPJpE1UbSHGQqt8pQQ=="],
 
     "@clack/core": ["@clack/core@1.1.0", "", { "dependencies": { "sisteransi": "^1.0.5" } }, "sha512-SVcm4Dqm2ukn64/8Gub2wnlA5nS2iWJyCkdNHcvNHPIeBTGojpdJ+9cZKwLfmqy7irD4N5qLteSilJlE0WLAtA=="],
 

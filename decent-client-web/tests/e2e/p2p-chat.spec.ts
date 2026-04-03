@@ -348,7 +348,7 @@ test.describe('P2P Multi-User Chat', () => {
     await alice.click('#join-ws-btn');
     await alice.waitForSelector('.modal');
     const manualModal = await alice.locator('.modal').textContent();
-    expect(manualModal).toContain('Invite Link or Code');
+    expect(manualModal).toContain('Invite link or code');
     await alice.keyboard.press('Escape');
 
     // Join via URL — should show cleaner modal
@@ -356,10 +356,10 @@ test.describe('P2P Multi-User Chat', () => {
     await bob.waitForSelector('.modal', { timeout: 10000 });
     const inviteModal = await bob.locator('.modal').textContent();
     expect(inviteModal).toContain('Cool Team');
-    expect(inviteModal).toContain('Display Name');
+    expect(inviteModal).toMatch(/Display Name|Your name in this workspace/);
     // Should NOT show the invite code input (it's hidden)
     const visibleInputs = await bob.locator('.modal input:not([type="hidden"])').count();
-    expect(visibleInputs).toBe(2); // Display name input + allowWorkspaceDMs checkbox
+    expect(visibleInputs).toBe(2); // Name input + allowWorkspaceDMs checkbox
   });
 
   // ─── Multiple Workspaces ──────────────────────────────────────────

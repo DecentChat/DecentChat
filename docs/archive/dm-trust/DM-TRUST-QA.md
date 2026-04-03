@@ -4,7 +4,7 @@
 Make DM trust a release-gated behavior, not an inferred property.
 
 ## Dependency rule
-This plan stays **blocked** until backend phases `P0` through `P4` in `planning/DM-TRUST-BACKEND.md` are implemented and exposed in a testable way.
+This plan stays **blocked** until backend phases `P0` through `P4` in `docs/archive/dm-trust/DM-TRUST-BACKEND.md` are implemented and exposed in a testable way.
 
 ## Non-negotiable assertions
 - **“sent” must not mean only locally accepted.**

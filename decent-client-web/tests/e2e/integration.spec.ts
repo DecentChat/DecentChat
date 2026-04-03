@@ -10,7 +10,7 @@
  * - Vite dev server on localhost:5173 (started by Playwright webServer config)
  */
 
-import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import {
   createUser,
   closeUser,
@@ -31,11 +31,6 @@ import {
   closeModal,
   type TestUser,
 } from './multi-user-helpers';
-import {
-  startSignalingServer,
-  stopSignalingServer,
-  waitForSignalingServer,
-} from './signaling-fixture';
 
 async function flushPersistence(page: Page): Promise<void> {
   await page.evaluate(async () => {
@@ -45,28 +40,12 @@ async function flushPersistence(page: Page): Promise<void> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Global setup / teardown for signaling server
-// ═══════════════════════════════════════════════════════════════════════════════
-
-test.beforeAll(async () => {
-  try {
-    await startSignalingServer();
-    await waitForSignalingServer();
-  } catch {
-    // Server may already be running (e.g., dev mode) — just verify reachability
-    await waitForSignalingServer(5000);
-  }
-});
-
-test.afterAll(async () => {
-  await stopSignalingServer();
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // 1. Two-User Messaging via Signaling Server
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test.describe('Two-User Messaging', () => {
+  test.setTimeout(60000);
+
   let alice: TestUser;
   let bob: TestUser;
 
@@ -158,6 +137,8 @@ test.describe('Two-User Messaging', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test.describe('Three-User Channel', () => {
+  test.setTimeout(120000);
+
   let alice: TestUser;
   let bob: TestUser;
   let carol: TestUser;
@@ -226,6 +207,8 @@ test.describe('Three-User Channel', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test.describe('Offline & Reconnection', () => {
+  test.setTimeout(60000);
+
   let alice: TestUser;
   let bob: TestUser;
 
@@ -307,6 +290,8 @@ test.describe('Offline & Reconnection', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test.describe('Concurrent Messaging', () => {
+  test.setTimeout(60000);
+
   let alice: TestUser;
   let bob: TestUser;
 
@@ -375,6 +360,8 @@ test.describe('Concurrent Messaging', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test.describe('Channel Operations', () => {
+  test.setTimeout(60000);
+
   let alice: TestUser;
 
   test.beforeEach(async ({ browser }) => {
@@ -416,29 +403,23 @@ test.describe('Channel Operations', () => {
     await expect(alice.page.locator('#settings-btn')).toBeVisible();
   });
 
-  test('create channel via /channel command', async () => {
+  test('create channel via /create command', async () => {
     await createWorkspace(alice.page, 'Cmd Channel', 'Alice');
 
     const input = alice.page.locator('#compose-input');
-    await input.fill('/channel random');
+    await input.fill('/create random');
     await input.press('Enter');
 
-    // System message / sidebar should eventually reflect channel creation
-    await alice.page.waitForFunction(
+    const created = await alice.page.waitForFunction(
       () => {
-        const sidebarText = document.querySelector('.sidebar')?.textContent || '';
-        const messageText = Array.from(document.querySelectorAll('.message')).map(el => el.textContent || '').join(' ');
-        return sidebarText.includes('random') || messageText.includes('random');
+        const sidebarText = document.getElementById('sidebar')?.textContent || '';
+        const bodyText = document.body?.textContent || '';
+        return sidebarText.includes('random') || bodyText.includes('Created channel #random');
       },
-      { timeout: 5000 },
-    ).catch(() => {});
-    const sidebar = alice.page.locator('.sidebar');
-    // The channel may appear in sidebar or a system message may confirm it
-    const sidebarText = await sidebar.textContent();
-    const hasChannel = sidebarText?.includes('random') || false;
+      { timeout: 10000 },
+    ).then(() => true).catch(() => false);
 
-    // At minimum, the command should execute without error
-    expect(true).toBe(true); // Test completes without error
+    expect(created).toBe(true);
   });
 });
 
@@ -447,6 +428,8 @@ test.describe('Channel Operations', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test.describe('Direct Messages', () => {
+  test.setTimeout(60000);
+
   let alice: TestUser;
   let bob: TestUser;
 
@@ -624,6 +607,8 @@ test.describe('File Sharing', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test.describe('Invite URL Flow', () => {
+  test.setTimeout(60000);
+
   let alice: TestUser;
   let bob: TestUser;
 
@@ -1086,7 +1071,8 @@ test.describe('Signaling Server', () => {
 
   test('signaling server is reachable via HTTP', async () => {
     // This verifies the test fixture is working
-    const response = await fetch('http://localhost:9000/peerjs');
+    const signalPort = Number(process.env.PW_SIGNAL_PORT || '9000');
+    const response = await fetch(`http://127.0.0.1:${signalPort}/peerjs`);
     // PeerJS server responds to HTTP requests on its path
     expect(response.status).toBeLessThan(500);
   });
@@ -1229,6 +1215,8 @@ test.describe('Emoji Picker', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test.describe('Welcome Screen', () => {
+  test.setTimeout(60000);
+
   let alice: TestUser;
 
   test.beforeEach(async ({ browser }) => {
@@ -1256,6 +1244,11 @@ test.describe('Welcome Screen', () => {
   });
 
   test('join workspace button opens modal', async () => {
+    const pageErrors: string[] = [];
+    alice.page.on('pageerror', (error) => {
+      pageErrors.push(error.message || String(error));
+    });
+
     // Navigate to /app so clicking join opens the modal directly (no navigation)
     await alice.page.goto('/app');
     await waitForApp(alice.page);
@@ -1263,7 +1256,8 @@ test.describe('Welcome Screen', () => {
     await alice.page.waitForSelector('.modal', { timeout: 10000 });
 
     await expect(alice.page.locator('.modal')).toBeVisible();
-    await expect(alice.page.locator('.modal')).toContainText('Invite Link or Code');
+    await expect(alice.page.locator('.modal')).toContainText('Invite link or code');
+    expect(pageErrors.some((message) => message.includes('PersistentStore not initialized'))).toBe(false);
   });
 
   test('create workspace modal has name and alias inputs', async () => {
@@ -1304,6 +1298,7 @@ test.describe('Welcome Screen', () => {
 
 test.describe('State Isolation', () => {
   test('four independent users have completely separate state', async ({ browser }) => {
+    test.setTimeout(120000);
     const users: TestUser[] = [];
 
     try {

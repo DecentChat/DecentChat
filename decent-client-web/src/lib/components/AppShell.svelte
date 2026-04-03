@@ -306,6 +306,8 @@
                     onShowMessageInfo={cb.onShowMessageInfo}
                     onImageClick={cb.onImageClick}
                     resolveAttachmentImageUrl={cb.resolveAttachmentImageUrl}
+                    onInvite={cb.onInvite}
+                    onShowQR={cb.onShowQR}
                   />
                 {/key}
               {/if}

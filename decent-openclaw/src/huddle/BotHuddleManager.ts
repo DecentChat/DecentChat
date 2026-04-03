@@ -107,9 +107,10 @@ export class BotHuddleManager {
     });
 
     // Initialize STT
+    const sttEngine = opts?.sttEngine ?? 'whisper-cpp';
     this.stt = new SpeechToText({
-      engine: opts?.sttEngine ?? 'whisper-cpp',
-      model: opts?.whisperModel ?? 'medium',
+      engine: sttEngine,
+      model: opts?.whisperModel ?? (sttEngine === 'gemini' ? undefined : 'medium'),
       language: opts?.sttLanguage,
       apiKey: opts?.sttApiKey,
       log: callbacks.log,

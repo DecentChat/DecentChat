@@ -1,4 +1,4 @@
-import { Page, expect } from '@playwright/test';
+import { Page, Locator, expect } from '@playwright/test';
 
 /**
  * Clear IndexedDB to start fresh — must be called after page.goto()
@@ -80,13 +80,41 @@ export async function createWorkspace(page: Page, name = 'Test Workspace', alias
     await staleModalClose.click().catch(() => {});
   }
 
-  await page.locator('#create-ws-btn-nav').click();
-  await page.getByRole('heading', { name: 'Create Workspace' }).waitFor({ state: 'visible', timeout: 10000 });
+  const createBtn = page.locator('#create-ws-btn-nav, #create-ws-btn').first();
+  await createBtn.click();
+  const createHeading = page.getByRole('heading', { name: /Create private group/i });
+  const headingVisible = await createHeading.isVisible({ timeout: 3000 }).catch(() => false);
+  if (!headingVisible) {
+    await createBtn.click({ force: true });
+  }
+  await createHeading.waitFor({ state: 'visible', timeout: 10000 });
 
-  const inputs = page.locator('.modal input');
-  await inputs.nth(0).fill(name);
-  await inputs.nth(1).fill(alias);
-  await page.click('.modal .btn-primary');
+  const modal = page.locator('.modal').last();
+  const nameInput = modal.locator('input[name="name"], input[placeholder="e.g. Design team"]').first();
+  const aliasInput = modal.locator('input[name="alias"], input[placeholder="Your name"]').first();
+  await expect(nameInput).toBeVisible({ timeout: 5000 });
+  await expect(aliasInput).toBeVisible({ timeout: 5000 });
+
+  const fillAndVerify = async (input: Locator, value: string): Promise<void> => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await input.click();
+      await input.fill(value);
+      if ((await input.inputValue()) === value) return;
+
+      await input.fill('');
+      await input.pressSequentially(value, { delay: 10 });
+      if ((await input.inputValue()) === value) return;
+    }
+
+    await expect(input).toHaveValue(value, { timeout: 3000 });
+  };
+
+  await fillAndVerify(nameInput, name);
+  await fillAndVerify(aliasInput, alias);
+
+  const submitButton = modal.locator('.btn-primary.create-workspace-submit, .btn-primary').first();
+  await expect(submitButton).toBeVisible({ timeout: 5000 });
+  await submitButton.click();
 
   // Wait for workspace to load (sidebar should show workspace name)
   await page.waitForSelector('.sidebar-header', { timeout: 10000 });

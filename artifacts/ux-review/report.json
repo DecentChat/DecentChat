@@ -1,0 +1,28 @@
+[
+  {
+    "scenario": "desktop",
+    "url": "http://127.0.0.1:5173/app",
+    "title": "DecentChat",
+    "consoleMessages": [
+      "[debug] [vite] connecting...",
+      "[debug] [vite] connected.",
+      "[debug] [vite] connecting...",
+      "[debug] [vite] connected.",
+      "[log] [DecentChat] HD device key derivation: device=0, peerId=6e84a08c…, identityId=c2fb38ea…",
+      "[info] Autofocus processing was blocked because a document already has a focused element."
+    ]
+  },
+  {
+    "scenario": "mobile",
+    "url": "http://127.0.0.1:5173/app",
+    "title": "DecentChat",
+    "consoleMessages": [
+      "[debug] [vite] connecting...",
+      "[debug] [vite] connected.",
+      "[debug] [vite] connecting...",
+      "[debug] [vite] connected.",
+      "[log] [DecentChat] HD device key derivation: device=0, peerId=c6f6de15…, identityId=4ef37e41…",
+      "[info] Autofocus processing was blocked because a document already has a focused element."
+    ]
+  }
+]

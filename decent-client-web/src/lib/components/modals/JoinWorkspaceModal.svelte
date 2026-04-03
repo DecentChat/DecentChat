@@ -160,11 +160,12 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="modal-overlay" bind:this={overlayEl} onclick={handleOverlayClick}>
   <div class="modal">
-    <h2>Join Workspace</h2>
-    <p class="modal-intro">Paste the invite you received to join an existing workspace. You can update your display name later.</p>
+    <button type="button" class="modal-close-button" aria-label="Close join workspace dialog" onclick={onClose}>×</button>
+    <h2>Join workspace</h2>
+    <p class="modal-intro">Paste the invite you received to join a workspace. You can change your display name later.</p>
     <form onsubmit={handleSubmit}>
       <div class="form-group">
-        <label for="join-invite">Invite Link or Code</label>
+        <label for="join-invite">Invite link or code</label>
         <input
           type="text"
           id="join-invite"
@@ -186,12 +187,12 @@
       </div>
       {#if showPreview}
         <div class="form-group">
-          <label>Workspace</label>
-          <input type="text" value={workspacePreview} readonly class="workspace-preview-pop" />
+          <label for="join-workspace-preview">Workspace</label>
+          <input id="join-workspace-preview" type="text" value={workspacePreview} readonly class="workspace-preview-pop" />
         </div>
       {/if}
       <div class="form-group">
-        <label for="join-alias">Display name in this workspace</label>
+        <label for="join-alias">Your display name</label>
         <input
           type="text"
           id="join-alias"
@@ -202,6 +203,7 @@
           bind:this={aliasInput}
           bind:value={alias}
         />
+        <small class="modal-help">This is how people in the workspace will see you. You can change it later.</small>
       </div>
       <div class="form-group">
         <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">

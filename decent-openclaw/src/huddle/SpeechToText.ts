@@ -16,7 +16,10 @@ export interface STTOptions {
 }
 
 const DEFAULT_MODEL = 'base.en';
-const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+const UNSUPPORTED_GEMINI_MODELS = new Set([
+  'gemini-2.0-flash',
+]);
 const MODEL_DIR = '/opt/homebrew/share/whisper-cpp/models';
 const WHISPER_BIN = 'whisper-cli';
 const EXEC_TIMEOUT = 30_000;
@@ -36,6 +39,9 @@ export class SpeechToText {
   constructor(opts?: STTOptions) {
     this.engine = opts?.engine ?? 'whisper-cpp';
     this.model = opts?.model ?? (this.engine === 'gemini' ? DEFAULT_GEMINI_MODEL : DEFAULT_MODEL);
+    if (this.engine === 'gemini') {
+      this.assertSupportedGeminiModel(this.model);
+    }
     this.modelPath = join(MODEL_DIR, `ggml-${this.model}.bin`);
     this.language = opts?.language;
     this.apiKey = opts?.apiKey;
@@ -66,6 +72,7 @@ export class SpeechToText {
     }
 
     const model = this.model || DEFAULT_GEMINI_MODEL;
+    this.assertSupportedGeminiModel(model);
     const wavBuffer = this.createWavBuffer(pcmBuffer, sampleRate);
     const audioB64 = wavBuffer.toString('base64');
     const duration = (pcmBuffer.length / 2 / sampleRate).toFixed(1);
@@ -205,6 +212,14 @@ export class SpeechToText {
       .filter(Boolean)
       .join('\n')
       .trim();
+  }
+
+  private assertSupportedGeminiModel(model: string): void {
+    const normalizedModel = model.trim().toLowerCase();
+    if (!UNSUPPORTED_GEMINI_MODELS.has(normalizedModel)) return;
+    throw new Error(
+      `[STT] Gemini model "${model}" is no longer supported for new users. Use "${DEFAULT_GEMINI_MODEL}" or another currently supported Gemini STT model.`,
+    );
   }
 
   /**

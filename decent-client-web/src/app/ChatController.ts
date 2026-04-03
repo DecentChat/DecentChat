@@ -2372,8 +2372,18 @@ export class ChatController {
           if (data.channelId && targetWs.channels.some((ch: any) => ch.id === data.channelId)) {
             channelId = data.channelId;
           } else if (data.workspaceId) {
-            console.warn(`[Security] Dropping message from ${peerId.slice(0, 8)}: unknown channel ${data.channelId || 'missing'} in workspace ${targetWs.id}`);
-            return;
+            // Compatibility guard: some legacy/mock join paths can transiently disagree on
+            // the generated default channel ID while still referring to the same single-channel
+            // workspace. In that narrow case, route to the sole channel instead of dropping.
+            if (targetWs.channels.length === 1 && targetWs.channels[0]?.id) {
+              channelId = targetWs.channels[0].id;
+              console.warn(
+                `[Compat] Remapped unknown channel ${data.channelId || 'missing'} to sole channel ${channelId} in workspace ${targetWs.id}`,
+              );
+            } else {
+              console.warn(`[Security] Dropping message from ${peerId.slice(0, 8)}: unknown channel ${data.channelId || 'missing'} in workspace ${targetWs.id}`);
+              return;
+            }
           } else {
             // Legacy envelopes without workspaceId may still rely on implicit first-channel routing.
             channelId = targetWs.channels[0]?.id || data.channelId || 'default';

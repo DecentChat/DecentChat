@@ -38,7 +38,12 @@ interface TestUser {
   page: Page;
 }
 
-async function createUser(browser: Browser, name: string): Promise<TestUser> {
+async function createUser(
+  browser: Browser,
+  name: string,
+  options: { bootstrapApp?: boolean } = {},
+): Promise<TestUser> {
+  const bootstrapApp = options.bootstrapApp !== false;
   const context = await createBrowserContext(browser);
   const page = await context.newPage();
 
@@ -46,7 +51,7 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
     const t = msg.text();
     if (
       msg.type() === 'error' ||
-      t.includes('[TRACE') || t.includes('[DecentChat]') ||
+      msg.type() === 'warning' ||
       t.includes('reaction') || t.includes('Reaction') ||
       t.includes('messageId') || t.includes('[Guard]')
     ) {
@@ -65,28 +70,19 @@ async function createUser(browser: Browser, name: string): Promise<TestUser> {
     };
   });
 
-  await page.goto('/app');
-  await page.evaluate(async () => {
-    if (indexedDB.databases) {
-      for (const db of await indexedDB.databases()) {
-        if (db.name) indexedDB.deleteDatabase(db.name);
-      }
-    }
-    localStorage.clear();
-    sessionStorage.clear();
-  });
-  await page.goto('/app');
+  if (bootstrapApp) {
+    await page.goto('/app');
+    await page.waitForFunction(() => {
+      const l = document.getElementById('loading');
+      return !l || l.style.opacity === '0';
+    }, { timeout: 15000 });
 
-  await page.waitForFunction(() => {
-    const l = document.getElementById('loading');
-    return !l || l.style.opacity === '0';
-  }, { timeout: 15000 });
-
-  await page.waitForSelector('#create-ws-btn-nav, #create-ws-btn, .sidebar-header', { timeout: 15000 });
-  await page.waitForFunction(() => {
-    const t = (window as any).__transport;
-    return t?.getMyPeerId?.();
-  }, { timeout: 10000 });
+    await page.waitForSelector('#create-ws-btn-nav, #create-ws-btn, .sidebar-header', { timeout: 15000 });
+    await page.waitForFunction(() => {
+      const t = (window as any).__transport;
+      return t?.getMyPeerId?.();
+    }, { timeout: 10000 });
+  }
 
   return { name, context, page };
 }
@@ -122,13 +118,57 @@ async function joinViaInvite(page: Page, inviteUrl: string, alias: string) {
   await page.locator('input[name="alias"]').fill(alias);
   await page.click('.modal .btn-primary');
   await page.waitForSelector('.sidebar-header', { timeout: 15000 });
+  await page.waitForFunction(() => {
+    const t = (window as any).__transport;
+    return t?.getMyPeerId?.();
+  }, { timeout: 10000 });
 }
 
 async function waitForPeersReady(p1: Page, p2: Page, ms = 15000) {
   const id1 = await p1.evaluate(() => (window as any).__state?.myPeerId);
   const id2 = await p2.evaluate(() => (window as any).__state?.myPeerId);
-  await p1.waitForFunction((id: string) => (window as any).__state?.readyPeers?.has(id), id2, { timeout: ms });
-  await p2.waitForFunction((id: string) => (window as any).__state?.readyPeers?.has(id), id1, { timeout: ms });
+  await p1.waitForFunction(
+    (id: string) => {
+      const s = (window as any).__state;
+      return !!s?.readyPeers?.has?.(id) && !!s?.connectedPeers?.has?.(id);
+    },
+    id2,
+    { timeout: ms },
+  );
+  await p2.waitForFunction(
+    (id: string) => {
+      const s = (window as any).__state;
+      return !!s?.readyPeers?.has?.(id) && !!s?.connectedPeers?.has?.(id);
+    },
+    id1,
+    { timeout: ms },
+  );
+}
+
+async function requestReconnect(page: Page) {
+  await page.evaluate(async () => {
+    const ctrl = (window as any).__ctrl;
+    try {
+      if (typeof ctrl?.retryReconnectNow === 'function') {
+        await ctrl.retryReconnectNow();
+      }
+    } catch {}
+    try {
+      if (typeof ctrl?.runPeerMaintenanceNow === 'function') {
+        ctrl.runPeerMaintenanceNow('reaction-test-recover');
+      }
+    } catch {}
+  });
+}
+
+async function ensurePeersReadyWithRecovery(p1: Page, p2: Page, ms = 15000) {
+  try {
+    await waitForPeersReady(p1, p2, ms);
+    return;
+  } catch {
+    await Promise.allSettled([requestReconnect(p1), requestReconnect(p2)]);
+    await waitForPeersReady(p1, p2, ms);
+  }
 }
 
 async function syncWorkspaceState(p1: Page, p2: Page) {
@@ -195,17 +235,56 @@ async function waitForWorkspaceSync(p1: Page, p2: Page, ms = 10000) {
   );
 }
 
+async function ensureWorkspaceDeliveryReady(sender: Page, receiver: Page, ms = 10000) {
+  const senderPeerId = await sender.evaluate(() => (window as any).__state?.myPeerId || '');
+  const receiverPeerId = await receiver.evaluate(() => (window as any).__state?.myPeerId || '');
+
+  await sender.waitForFunction(
+    (peerId: string) => {
+      const s = (window as any).__state;
+      const ctrl = (window as any).__ctrl;
+      if (!s?.activeWorkspaceId || !s?.activeChannelId) return false;
+      const ws = ctrl?.workspaceManager?.getWorkspace?.(s.activeWorkspaceId);
+      return !!ws?.members?.some((m: any) => m.peerId === peerId);
+    },
+    receiverPeerId,
+    { timeout: ms },
+  );
+
+  await receiver.waitForFunction(
+    (peerId: string) => {
+      const s = (window as any).__state;
+      const ctrl = (window as any).__ctrl;
+      if (!s?.activeWorkspaceId) return false;
+      const ws = ctrl?.workspaceManager?.getWorkspace?.(s.activeWorkspaceId);
+      return !!ws?.members?.some((m: any) => m.peerId === peerId);
+    },
+    senderPeerId,
+    { timeout: ms },
+  );
+
+  const senderChannelId = await sender.evaluate(() => (window as any).__state?.activeChannelId || '');
+  const receiverChannelId = await receiver.evaluate(() => (window as any).__state?.activeChannelId || '');
+
+  if (senderChannelId && receiverChannelId && senderChannelId !== receiverChannelId) {
+    await syncWorkspaceState(sender, receiver);
+    await waitForWorkspaceSync(sender, receiver, ms);
+    await ensurePeersReadyWithRecovery(sender, receiver, ms);
+  }
+}
+
 async function setupConnectedPair(browser: Browser, wsName: string): Promise<[TestUser, TestUser]> {
   const alice = await createUser(browser, 'Alice');
-  const bob = await createUser(browser, 'Bob');
+  const bob = await createUser(browser, 'Bob', { bootstrapApp: false });
 
   await createWorkspace(alice.page, wsName, 'Alice');
   const invite = await getInviteUrl(alice.page);
   await joinViaInvite(bob.page, invite, 'Bob');
 
-  await waitForPeersReady(alice.page, bob.page);
+  await ensurePeersReadyWithRecovery(alice.page, bob.page);
   await syncWorkspaceState(alice.page, bob.page);
   await waitForWorkspaceSync(alice.page, bob.page);
+  await ensurePeersReadyWithRecovery(alice.page, bob.page);
 
   return [alice, bob];
 }
@@ -213,31 +292,91 @@ async function setupConnectedPair(browser: Browser, wsName: string): Promise<[Te
 // ─── Reaction-specific helpers ────────────────────────────────────────────────
 
 /** Send a message and wait for it to appear in sender's DOM */
-async function sendMessage(page: Page, text: string) {
-  const input = page.locator('#compose-input');
-  await input.fill(text);
-  await input.press('Enter');
-  await page.waitForFunction(
-    (t: string) => Array.from(document.querySelectorAll('.message-content')).some(m => m.textContent?.includes(t)),
-    text,
-    { timeout: 5000 },
-  );
+async function sendMessage(page: Page, text: string, peerPage?: Page) {
+  const dispatch = async () => {
+    const input = page.locator('#compose-input');
+    await input.fill(text);
+    await input.press('Enter');
+    await page.waitForFunction(
+      (t: string) => Array.from(document.querySelectorAll('.message-content')).some(m => m.textContent?.includes(t)),
+      text,
+      { timeout: 5000 },
+    );
+  };
+
+  if (peerPage) {
+    await ensurePeersReadyWithRecovery(page, peerPage);
+    await ensureWorkspaceDeliveryReady(page, peerPage);
+  }
+
+  await dispatch();
+
+  if (!peerPage) return;
+
+  try {
+    await waitForMessage(peerPage, text, 8000, page);
+  } catch {
+    await Promise.allSettled([requestReconnect(page), requestReconnect(peerPage)]);
+    await ensurePeersReadyWithRecovery(page, peerPage, 20000);
+    await ensureWorkspaceDeliveryReady(page, peerPage, 20000);
+    await dispatch();
+    await waitForMessage(peerPage, text, 20000, page);
+  }
 }
 
 /** Wait for message to appear in receiver's DOM */
-async function waitForMessage(page: Page, text: string, ms = 15000) {
-  await page.waitForFunction(
-    (t: string) => Array.from(document.querySelectorAll('.message-content')).some(m => m.textContent?.includes(t)),
-    text,
-    { timeout: ms },
-  );
+async function waitForMessage(page: Page, text: string, ms = 15000, peerPage?: Page) {
+  const waitForCopy = async (timeout: number) => {
+    await page.waitForFunction(
+      (t: string) => Array.from(document.querySelectorAll('.message-content')).some(m => m.textContent?.includes(t)),
+      text,
+      { timeout },
+    );
+  };
+  try {
+    await waitForCopy(ms);
+  } catch (error) {
+    if (!peerPage) throw error;
+    await Promise.allSettled([requestReconnect(page), requestReconnect(peerPage)]);
+    await ensurePeersReadyWithRecovery(peerPage, page, ms);
+    await waitForCopy(Math.max(ms, 20_000));
+  }
+}
+
+async function stabilizeBidirectionalMessaging(alice: Page, bob: Page) {
+  const tryProbe = async (from: Page, to: Page, label: string) => {
+    const probe = `probe-${label}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    await sendMessage(from, probe, to);
+    await waitForMessage(to, probe, 10_000, from);
+  };
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await ensurePeersReadyWithRecovery(alice, bob, 12_000);
+      await tryProbe(alice, bob, `a2b-${attempt}`);
+      await tryProbe(bob, alice, `b2a-${attempt}`);
+      return;
+    } catch (error) {
+      lastError = error;
+      await Promise.allSettled([requestReconnect(alice), requestReconnect(bob)]);
+      await alice.waitForTimeout(250);
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Failed to stabilize bidirectional messaging for reactions test setup');
 }
 
 /**
  * Find the message element containing `text`, hover it, and click the
  * quick-react button for `emoji`.
  */
-async function reactToMessage(page: Page, messageText: string, emoji: string) {
+async function reactToMessage(page: Page, messageText: string, emoji: string, peerPage?: Page) {
+  if (peerPage) {
+    await ensurePeersReadyWithRecovery(page, peerPage);
+    await ensureWorkspaceDeliveryReady(page, peerPage);
+  }
   // Quick-react buttons sit inside .message-actions-bar which has display:none until
   // .message:hover. Playwright's click({force}) cannot dispatch events on children of
   // display:none parents. Instead, find the target message ID and invoke the toggleReaction
@@ -322,12 +461,12 @@ test.describe('Reaction Sync (cross-peer)', () => {
     const [alice, bob] = await setupConnectedPair(browser, 'React Sync 1');
     try {
       // Alice sends a message
-      await sendMessage(alice.page, 'Hello Bob, react to this!');
+      await sendMessage(alice.page, 'Hello Bob, react to this!', bob.page);
       // Bob receives it
-      await waitForMessage(bob.page, 'Hello Bob, react to this!');
+      await waitForMessage(bob.page, 'Hello Bob, react to this!', 15000, alice.page);
 
       // Bob reacts with 👍
-      await reactToMessage(bob.page, 'Hello Bob, react to this!', '👍');
+      await reactToMessage(bob.page, 'Hello Bob, react to this!', '👍', alice.page);
 
       // Alice should see the 👍 reaction pill with count 1 on her message
       await waitForReactionPill(alice.page, 'Hello Bob, react to this!', '👍', 1);
@@ -342,10 +481,10 @@ test.describe('Reaction Sync (cross-peer)', () => {
   test('[BUG FIX] Alice reacts to Bob message → Bob sees the reaction pill', async ({ browser }) => {
     const [alice, bob] = await setupConnectedPair(browser, 'React Sync 2');
     try {
-      await sendMessage(bob.page, 'Alice, please react to this one!');
-      await waitForMessage(alice.page, 'Alice, please react to this one!');
+      await sendMessage(bob.page, 'Alice, please react to this one!', alice.page);
+      await waitForMessage(alice.page, 'Alice, please react to this one!', 15000, bob.page);
 
-      await reactToMessage(alice.page, 'Alice, please react to this one!', '❤️');
+      await reactToMessage(alice.page, 'Alice, please react to this one!', '❤️', bob.page);
 
       await waitForReactionPill(bob.page, 'Alice, please react to this one!', '❤️', 1);
       const count = await getReactionCount(bob.page, 'Alice, please react to this one!', '❤️');
@@ -361,13 +500,13 @@ test.describe('Reaction Sync (cross-peer)', () => {
   test('both peers react with same emoji → count shows 2 on both sides', async ({ browser }) => {
     const [alice, bob] = await setupConnectedPair(browser, 'React Count 2');
     try {
-      await sendMessage(alice.page, 'Everyone react!');
-      await waitForMessage(bob.page, 'Everyone react!');
+      await sendMessage(alice.page, 'Everyone react!', bob.page);
+      await waitForMessage(bob.page, 'Everyone react!', 15000, alice.page);
 
       // Alice reacts first (she owns the message, so reaction is local + broadcast)
-      await reactToMessage(alice.page, 'Everyone react!', '😂');
+      await reactToMessage(alice.page, 'Everyone react!', '😂', bob.page);
       // Bob also reacts with the same emoji
-      await reactToMessage(bob.page, 'Everyone react!', '😂');
+      await reactToMessage(bob.page, 'Everyone react!', '😂', alice.page);
 
       // Both should see count 2
       await waitForReactionPill(alice.page, 'Everyone react!', '😂', 2);
@@ -388,16 +527,16 @@ test.describe('Reaction Sync (cross-peer)', () => {
   test('remove reaction propagates to peer', async ({ browser }) => {
     const [alice, bob] = await setupConnectedPair(browser, 'React Remove');
     try {
-      await sendMessage(alice.page, 'I will un-react to this');
-      await waitForMessage(bob.page, 'I will un-react to this');
+      await sendMessage(alice.page, 'I will un-react to this', bob.page);
+      await waitForMessage(bob.page, 'I will un-react to this', 15000, alice.page);
 
       // Bob reacts
-      await reactToMessage(bob.page, 'I will un-react to this', '🎉');
+      await reactToMessage(bob.page, 'I will un-react to this', '🎉', alice.page);
       // Alice sees it
       await waitForReactionPill(alice.page, 'I will un-react to this', '🎉', 1);
 
       // Bob removes the reaction (toggle off)
-      await reactToMessage(bob.page, 'I will un-react to this', '🎉');
+      await reactToMessage(bob.page, 'I will un-react to this', '🎉', alice.page);
 
       // Alice should no longer see the 🎉 pill
       await alice.page.waitForFunction(
@@ -423,12 +562,12 @@ test.describe('Reaction Sync (cross-peer)', () => {
   test('multiple emoji reactions on same message sync independently', async ({ browser }) => {
     const [alice, bob] = await setupConnectedPair(browser, 'Multi Emoji');
     try {
-      await sendMessage(alice.page, 'React with different emoji!');
-      await waitForMessage(bob.page, 'React with different emoji!');
+      await sendMessage(alice.page, 'React with different emoji!', bob.page);
+      await waitForMessage(bob.page, 'React with different emoji!', 15000, alice.page);
 
       // Alice: 👍, Bob: ❤️
-      await reactToMessage(alice.page, 'React with different emoji!', '👍');
-      await reactToMessage(bob.page, 'React with different emoji!', '❤️');
+      await reactToMessage(alice.page, 'React with different emoji!', '👍', bob.page);
+      await reactToMessage(bob.page, 'React with different emoji!', '❤️', alice.page);
 
       // Both peers should see both emoji pills (each with count 1)
       await waitForReactionPill(alice.page, 'React with different emoji!', '❤️', 1);
@@ -456,8 +595,8 @@ test.describe('Reaction Sync (cross-peer)', () => {
     const [alice, bob] = await setupConnectedPair(browser, 'ID Match Test');
     try {
       // Alice sends message
-      await sendMessage(alice.page, 'Check my ID');
-      await waitForMessage(bob.page, 'Check my ID');
+      await sendMessage(alice.page, 'Check my ID', bob.page);
+      await waitForMessage(bob.page, 'Check my ID', 15000, alice.page);
 
       // Get the DOM message ID on both sides — they must match after the fix
       const aliceMsgId = await alice.page.evaluate(() => {
@@ -479,7 +618,7 @@ test.describe('Reaction Sync (cross-peer)', () => {
       expect(aliceMsgId).toBe(bobMsgId); // This would fail before the fix
 
       // And confirm reactions actually work
-      await reactToMessage(bob.page, 'Check my ID', '👍');
+      await reactToMessage(bob.page, 'Check my ID', '👍', alice.page);
       await waitForReactionPill(alice.page, 'Check my ID', '👍', 1);
     } finally {
       await closeUser(alice);

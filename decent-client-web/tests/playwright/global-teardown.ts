@@ -4,7 +4,9 @@ import path from 'node:path';
 import { createConnection } from 'node:net';
 
 const SIGNAL_PORT = Number(process.env.PW_SIGNAL_PORT || '9000');
-const STATE_FILE = path.join(os.tmpdir(), `decentchat-playwright-signal-${SIGNAL_PORT}.json`);
+const SIGNAL_RUN_KEY = process.env.PW_SIGNAL_RUN_KEY || 'default';
+const SIGNAL_RUN_KEY_SAFE = SIGNAL_RUN_KEY.replace(/[^a-zA-Z0-9_-]/g, '_');
+const STATE_FILE = path.join(os.tmpdir(), `decentchat-playwright-signal-${SIGNAL_PORT}-${SIGNAL_RUN_KEY_SAFE}.json`);
 
 interface SignalState {
   pid: number;

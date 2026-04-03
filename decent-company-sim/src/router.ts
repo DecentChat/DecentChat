@@ -133,10 +133,22 @@ function decideBaseCompanyParticipationForEmployee(params: RoutingParams, employ
       return { shouldRespond: false, reason: assignedChannel ? 'not-mentioned' : 'not-owned-channel', preferredReply: 'channel' };
 
     case 'proactive-on-owned-channel':
-      if (assignedChannel) {
-        return { shouldRespond: true, reason: 'owned-channel', preferredReply: inThread ? 'thread' : 'channel' };
+      if (!assignedChannel) {
+        return { shouldRespond: false, reason: 'not-owned-channel', preferredReply: inThread ? 'thread' : 'channel' };
       }
-      return { shouldRespond: false, reason: 'not-owned-channel', preferredReply: inThread ? 'thread' : 'channel' };
+      if (explicitTaskOwner && !taskOwnerMatch) {
+        return { shouldRespond: false, reason: 'not-task-owner', preferredReply: 'thread' };
+      }
+      if (explicitHandoffTarget && !handoffTargetMatch) {
+        return { shouldRespond: false, reason: 'not-handoff-target', preferredReply: 'thread' };
+      }
+      if (threadAssignedEmployeeId && !threadAssigneeMatch) {
+        return { shouldRespond: false, reason: 'not-thread-assignee', preferredReply: 'thread' };
+      }
+      if (threadAssignedEmployeeId && threadAssigneeMatch) {
+        return { shouldRespond: true, reason: 'thread-assignee', preferredReply: 'thread' };
+      }
+      return { shouldRespond: true, reason: 'owned-channel', preferredReply: inThread ? 'thread' : 'channel' };
   }
 }
 

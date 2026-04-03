@@ -30,6 +30,12 @@ export const DEFAULT_MESSAGE_HEIGHT = 76;
 export const MIN_ESTIMATED_HEIGHT = 40;
 export const MAX_ESTIMATED_HEIGHT = 280;
 export const MESSAGE_VERTICAL_GAP_PX = 1;
+const SYSTEM_MESSAGE_BASE_HEIGHT = 36;
+const MESSAGE_CHROME_HEIGHT = 34;
+const GROUPED_MESSAGE_CHROME_HEIGHT = 8;
+const MIN_MESSAGE_CONTENT_HEIGHT = 22;
+const ATTACHMENT_ROW_HEIGHT = 56;
+const ATTACHMENT_BLOCK_PADDING = 8;
 
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 
@@ -86,4 +92,34 @@ export function shouldKeepBottomAnchored(options: {
 
 export function shouldApplyTopSpacerCompensation(topDelta: number, thresholdPx = 1): boolean {
   return Math.abs(topDelta) > thresholdPx;
+}
+
+export function estimateMessageHeightFromContent(options: {
+  type: 'text' | 'file' | 'system';
+  contentHeightPx?: number | null;
+  isGrouped: boolean;
+  attachmentCount?: number;
+}): number {
+  const { type, contentHeightPx, isGrouped, attachmentCount = 0 } = options;
+
+  if (type === 'system') {
+    return clamp(SYSTEM_MESSAGE_BASE_HEIGHT + MESSAGE_VERTICAL_GAP_PX, MIN_ESTIMATED_HEIGHT, MAX_ESTIMATED_HEIGHT);
+  }
+
+  const safeContentHeight = Number.isFinite(contentHeightPx)
+    ? Math.max(MIN_MESSAGE_CONTENT_HEIGHT, Number(contentHeightPx))
+    : MIN_MESSAGE_CONTENT_HEIGHT;
+
+  const normalizedAttachmentCount = Math.max(0, Math.min(attachmentCount, 6));
+  const attachmentHeight = normalizedAttachmentCount > 0
+    ? (normalizedAttachmentCount * ATTACHMENT_ROW_HEIGHT) + ATTACHMENT_BLOCK_PADDING
+    : 0;
+
+  const chromeHeight = isGrouped ? GROUPED_MESSAGE_CHROME_HEIGHT : MESSAGE_CHROME_HEIGHT;
+
+  return clamp(
+    chromeHeight + safeContentHeight + attachmentHeight + MESSAGE_VERTICAL_GAP_PX,
+    MIN_ESTIMATED_HEIGHT,
+    MAX_ESTIMATED_HEIGHT,
+  );
 }

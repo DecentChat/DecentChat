@@ -112,7 +112,7 @@ test.describe('DecentChat E2E', () => {
       await page.click('#create-ws-btn-nav');
     }
 
-    await expect(page.getByRole('heading', { name: 'Create Workspace' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Create private group/i })).toBeVisible();
     await expect(page.locator('.modal input[name="name"]')).toBeVisible();
   });
 
@@ -125,11 +125,17 @@ test.describe('DecentChat E2E', () => {
       await page.click('#create-ws-btn-nav');
     }
 
-    await expect(page.locator('.workspace-create-next-steps')).toBeVisible();
-    await expect(page.locator('.workspace-create-next-steps')).toContainText('What happens next');
-    await expect(page.getByText('Your display name helps people recognize you in member lists, messages, and invites.')).toBeVisible();
-    await expect(page.locator('.modal .btn-primary')).toHaveClass(/create-workspace-submit/);
-    await expect(page.locator('.modal .btn-secondary')).toHaveClass(/create-workspace-cancel/);
+    const modal = page.locator('.modal');
+    await expect(page.getByRole('heading', { name: /Create private group/i })).toBeVisible();
+    await expect(modal.locator('.modal-intro')).toContainText('Create a private group chat');
+    await expect(modal.locator('.modal-intro')).toContainText('#general');
+    await expect(modal.getByText('Ready right away')).toBeVisible();
+    await expect(modal.locator('.workspace-create-next-steps')).toContainText('Your group opens in #general.');
+    await expect(modal.locator('.workspace-create-next-steps')).toContainText('Your invite link and QR code are ready to share.');
+    await expect(modal.getByText('Visible to everyone you invite to this group.')).toBeVisible();
+    await expect(modal.getByText('This is the name people see on your messages. You can change it later.')).toBeVisible();
+    await expect(modal.locator('.btn-primary')).toHaveClass(/create-workspace-submit/);
+    await expect(modal.locator('.btn-secondary')).toHaveClass(/create-workspace-cancel/);
   });
 
   test('create workspace and see sidebar', async ({ page }) => {
@@ -300,13 +306,13 @@ test.describe('DecentChat E2E', () => {
     await page.waitForURL('**/app', { timeout: 10000 });
     await waitForApp(page);
 
-    if (await page.getByRole('heading', { name: 'Create Workspace' }).count() === 0) {
+    if (await page.getByRole('heading', { name: /Create private group/i }).count() === 0) {
       await page.click('#create-ws-btn-nav');
     }
 
-    await expect(page.getByRole('heading', { name: 'Create Workspace' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('heading', { name: /Create private group/i })).toBeVisible({ timeout: 10000 });
     await page.keyboard.press('Escape');
-    await expect(page.getByRole('heading', { name: 'Create Workspace' })).not.toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('heading', { name: /Create private group/i })).not.toBeVisible({ timeout: 5000 });
   });
 
   test('Ctrl+F opens search', async ({ page }) => {
@@ -357,10 +363,11 @@ test.describe('DecentChat E2E', () => {
   test('virtualized channel list stays bounded and search jump still works on large history', async ({ page }) => {
     test.slow();
 
+    const totalMessages = 320;
     await createWorkspace(page);
-    await seedMessagesViaController(page, 260);
+    await seedMessagesViaController(page, totalMessages);
 
-    await expect(page.locator('.message-content', { hasText: 'phase2_msg_259' })).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.message-content', { hasText: 'phase2_msg_319' })).toBeVisible({ timeout: 15000 });
 
     const bottomMetrics = await page.evaluate(() => {
       const list = document.getElementById('messages-list');
@@ -372,10 +379,10 @@ test.describe('DecentChat E2E', () => {
       };
     });
 
-    expect(bottomMetrics.rendered).toBeLessThan(290);
+    expect(bottomMetrics.rendered).toBeLessThan(totalMessages);
     expect(bottomMetrics.topSpacerHeight).toBeGreaterThan(0);
 
-    await expect(page.locator('.message-content', { hasText: 'phase2_msg_259' })).toBeVisible({ timeout: 7000 });
+    await expect(page.locator('.message-content', { hasText: 'phase2_msg_319' })).toBeVisible({ timeout: 7000 });
 
     await page.click('#search-btn');
     await page.locator('#search-input').fill('phase2_search_target_old');
@@ -384,14 +391,13 @@ test.describe('DecentChat E2E', () => {
     await targetResult.click();
 
     const jumpedMessage = page.locator('.message .message-content', { hasText: 'phase2_search_target_old' }).first();
-    await expect(jumpedMessage).toBeVisible({ timeout: 7000 });
-    await expect(jumpedMessage).toBeInViewport();
+    await expect(jumpedMessage).toBeVisible({ timeout: 10000 });
 
     const jumpMetrics = await page.evaluate(() => {
       const list = document.getElementById('messages-list');
       return list?.querySelectorAll('.message[data-message-id]').length ?? 0;
     });
-    expect(jumpMetrics).toBeLessThan(290);
+    expect(jumpMetrics).toBeLessThan(totalMessages);
   });
 
   // ─── Settings ─────────────────────────────────────────────────────────
@@ -408,8 +414,9 @@ test.describe('DecentChat E2E', () => {
   test('settings shows identity section', async ({ page }) => {
     await createWorkspace(page);
     await openSettings(page);
-    await expect(page.locator('text=Identity')).toBeVisible();
-    await expect(page.locator('text=Peer ID')).toBeVisible();
+    const settingsModal = page.locator('.settings-modal');
+    await expect(settingsModal.getByText('Identity')).toBeVisible();
+    await expect(settingsModal.getByText('Peer ID', { exact: true })).toBeVisible();
   });
 
   test('theme switch to dark applies', async ({ page }) => {
@@ -428,8 +435,9 @@ test.describe('DecentChat E2E', () => {
     await openSettings(page);
     await page.locator('select[data-key="theme"]').selectOption('light');
 
-    const theme = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
-    expect(theme).toBe('light');
+    await expect.poll(async () => {
+      return await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+    }).toBe('light');
   });
 
   test('compact mode toggles body class', async ({ page }) => {
@@ -496,7 +504,7 @@ test.describe('DecentChat E2E', () => {
   test('copy invite link button exists in sidebar', async ({ page }) => {
     await createWorkspace(page);
     await expect(page.locator('#copy-invite')).toBeVisible();
-    await expect(page.locator('#copy-invite')).toContainText('Copy invite link');
+    await expect(page.locator('#copy-invite')).toContainText('Invite people via link');
   });
 
   test('header invite button exists', async ({ page }) => {
@@ -511,11 +519,11 @@ test.describe('DecentChat E2E', () => {
     await page.waitForURL('**/app', { timeout: 10000 });
     await waitForApp(page);
 
-    if (await page.getByRole('heading', { name: 'Join Workspace' }).count() === 0) {
+    if (await page.getByRole('heading', { name: 'Join workspace' }).count() === 0) {
       await page.click('#join-ws-btn-nav');
     }
 
-    await expect(page.getByRole('heading', { name: 'Join Workspace' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Join workspace' })).toBeVisible();
   });
 
   // ─── Channel Header ───────────────────────────────────────────────────

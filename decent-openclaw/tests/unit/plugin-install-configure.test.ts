@@ -158,7 +158,7 @@ describe("account resolution", () => {
             enabled: true,
             autoJoin: true,
             sttEngine: "gemini",
-            whisperModel: "gemini-2.0-flash",
+            whisperModel: "gemini-2.5-flash",
             sttApiKey: "gemini-key", // pragma: allowlist secret
             ttsEngine: "gemini",
             ttsModel: "gemini-2.5-flash-preview-tts",
@@ -170,7 +170,7 @@ describe("account resolution", () => {
     });
 
     expect(account.huddle?.sttEngine).toBe("gemini");
-    expect(account.huddle?.whisperModel).toBe("gemini-2.0-flash");
+    expect(account.huddle?.whisperModel).toBe("gemini-2.5-flash");
     expect(account.huddle?.sttApiKey).toBe("gemini-key"); // pragma: allowlist secret
     expect(account.huddle?.ttsEngine).toBe("gemini");
     expect(account.huddle?.ttsModel).toBe("gemini-2.5-flash-preview-tts");

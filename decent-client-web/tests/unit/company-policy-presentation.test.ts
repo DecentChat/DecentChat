@@ -7,20 +7,20 @@ const suite: CompanyTemplateBenchmarkSuiteSummary = {
   templateId: 'software-studio',
   scenarioIds: ['owner-routing', 'handoff-targeting', 'manager-summary-discipline', 'top-level-noise-control'],
   policyScores: {
-    minimal: { score: 34, unexpectedResponders: 3, missingExpectedResponders: 0, silentViolations: 2 },
-    disciplined: { score: 88, unexpectedResponders: 0, missingExpectedResponders: 0, silentViolations: 0 },
-    strict: { score: 88, unexpectedResponders: 0, missingExpectedResponders: 0, silentViolations: 0 },
+    minimal: { score: 70, unexpectedResponders: 1, missingExpectedResponders: 0, silentViolations: 1 },
+    disciplined: { score: 100, unexpectedResponders: 0, missingExpectedResponders: 0, silentViolations: 0 },
+    strict: { score: 100, unexpectedResponders: 0, missingExpectedResponders: 0, silentViolations: 0 },
   },
   recommendedPolicy: 'disciplined',
   recommendation: {
     policy: 'disciplined',
     reasonCode: 'default-tie-break',
-    scoreDeltaVsMinimal: 54,
+    scoreDeltaVsMinimal: 30,
   },
   rankedPolicies: [
-    { policy: 'disciplined', score: 88, deltaFromRecommended: 0, deltaFromMinimal: 54 },
-    { policy: 'strict', score: 88, deltaFromRecommended: 0, deltaFromMinimal: 54 },
-    { policy: 'minimal', score: 34, deltaFromRecommended: -54, deltaFromMinimal: 0 },
+    { policy: 'disciplined', score: 100, deltaFromRecommended: 0, deltaFromMinimal: 30 },
+    { policy: 'strict', score: 100, deltaFromRecommended: 0, deltaFromMinimal: 30 },
+    { policy: 'minimal', score: 70, deltaFromRecommended: -30, deltaFromMinimal: 0 },
   ],
 };
 
@@ -33,7 +33,7 @@ describe('company policy presentation', () => {
     expect(vm.summary).toContain('Recommended: Disciplined');
     expect(vm.summary).toContain('Selected: Strict');
     expect(vm.explainer).toContain('ties for the best benchmark score');
-    expect(vm.rankedPolicies[0]).toMatchObject({ label: 'Disciplined', score: 88, isRecommended: true });
-    expect(vm.rankedPolicies[1]).toMatchObject({ label: 'Strict', score: 88, isSelected: true });
+    expect(vm.rankedPolicies[0]).toMatchObject({ label: 'Disciplined', score: 100, isRecommended: true });
+    expect(vm.rankedPolicies[1]).toMatchObject({ label: 'Strict', score: 100, isSelected: true });
   });
 });

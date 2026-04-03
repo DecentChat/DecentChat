@@ -182,17 +182,12 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
 
   function showCreateWorkspaceModal(): void {
     showModal(
-      'Create Workspace',
-      `<p class="modal-intro">Create a private workspace for your team, group, or personal chat. You can invite people right after setup with an invite link or QR code.</p>
-       <div class="workspace-create-next-steps" aria-live="polite">
-         <strong>What happens next</strong>
-         <ul>
-           <li>We open your new workspace immediately.</li>
-           <li>You land in <code>#general</code> and can start inviting people.</li>
-         </ul>
-       </div>
-       <div class="form-group"><label>Workspace name <span class="modal-label-meta">(required)</span></label><input type="text" name="name" placeholder="e.g. Family chat or Design team" required /><small class="modal-help">This is the shared name everyone in the workspace will see.</small></div>
-       <div class="form-group"><label>Your display name <span class="modal-label-meta">(required)</span></label><input type="text" name="alias" placeholder="Your name" required autocapitalize="words" /><small class="modal-help">Your display name helps people recognize you in member lists, messages, and invites. You can change it later.</small></div>`,
+      'Create private group',
+      `<p class="modal-intro">Create a private group chat and jump straight into <code>#general</code>.</p>
+       <p class="modal-trust-note">No email required. Your group stays private by default.</p>
+       <div class="workspace-create-next-steps"><strong>Ready right away</strong><ul><li>Your group opens in <code>#general</code>.</li><li>Your invite link and QR code are ready to share.</li></ul></div>
+       <div class="form-group"><label>Group name <span class="modal-label-meta">(required)</span></label><input type="text" name="name" placeholder="e.g. Design team" required autofocus /><small class="modal-help">Visible to everyone you invite to this group.</small></div>
+       <div class="form-group"><label>Your display name <span class="modal-label-meta">(required)</span></label><input type="text" name="alias" placeholder="Your name" required autocapitalize="words" /><small class="modal-help">This is the name people see on your messages. You can change it later.</small></div>`,
       (form) => {
         const name = (form.elements.namedItem('name') as HTMLInputElement).value.trim();
         const alias = (form.elements.namedItem('alias') as HTMLInputElement).value.trim();
@@ -206,10 +201,11 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
           callbacks.persistSetting('myAlias', alias),
         ]).catch(err => console.error('[DecentChat] Failed to persist workspace:', err));
         renderApp();
-        showToast(`Workspace "${name}" is ready. Share the invite link or QR code to invite someone.`, 'success');
+        const nextStepHint = 'Send your first message or invite people with a link or QR code.';
+        showToast(`Private group \"${name}\" is ready. ${nextStepHint}`, 'success');
       },
       {
-        submitLabel: 'Create workspace',
+        submitLabel: 'Create private group',
         cancelLabel: 'Cancel',
         submitClassName: 'create-workspace-submit',
         cancelClassName: 'create-workspace-cancel',

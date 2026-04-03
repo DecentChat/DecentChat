@@ -391,22 +391,23 @@
 {#if isInWorkspace}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="invite-banner" id="copy-invite" title="Click to copy invite link" onclick={onCopyInvite}>
-    Copy invite link
+  <div class="invite-banner invite-banner-primary" id="copy-invite" title="Click to copy invite link" onclick={onCopyInvite}>
+    Invite people via link
   </div>
 {/if}
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="invite-banner" id="sidebar-qr-btn" title="Show or scan QR code" style="background: rgba(9, 132, 227, 0.12);" onclick={onShowQR}>
-  📱 QR Code
+  📱 Show invite QR
 </div>
 
 <div class="sidebar-footer">
   <span class="dm-status online"></span>
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <code id="copy-peer-id" title="Click to copy Peer ID" onclick={onCopyPeerId}>
-    {myPeerId.slice(0, 20)}...
-  </code>
+  <div class="sidebar-footer-meta">
+    <span class="sidebar-footer-label">Peer ID (advanced)</span>
+    <button type="button" class="sidebar-peer-id-button" id="copy-peer-id" title="Copy your peer ID" onclick={onCopyPeerId}>
+      <code>{myPeerId.slice(0, 20)}...</code>
+    </button>
+  </div>
 </div>

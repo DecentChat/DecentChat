@@ -25,25 +25,11 @@ async function createPage(browser: Browser): Promise<Page> {
   const script = getMockTransportScript(`ws://localhost:${relay.port}`);
   await page.addInitScript(script);
 
-  await page.goto('/');
-  await page.evaluate(async () => {
-    if (indexedDB.databases) {
-      const dbs = await indexedDB.databases();
-      for (const db of dbs) { if (db.name) indexedDB.deleteDatabase(db.name); }
-    }
-    localStorage.clear();
-    sessionStorage.clear();
-  });
-  await page.reload();
+  await page.goto('/app');
   await page.waitForFunction(() => {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 15000 });
-
-  const openAppBtn = page.getByRole('button', { name: /open app/i });
-  if (await openAppBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await openAppBtn.click();
-  }
 
   await page.waitForSelector('#create-ws-btn, .sidebar-header', { timeout: 15000 });
   await page.waitForFunction(() => {

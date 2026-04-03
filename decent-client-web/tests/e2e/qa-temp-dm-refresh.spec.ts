@@ -67,7 +67,8 @@ async function createWorkspace(page, name = 'QA Workspace', alias = 'Tester') {
     await page.goto('/app');
   }
 
-  await page.getByRole('heading', { name: 'Create Workspace' }).waitFor({ state: 'visible', timeout: 10000 });
+  await page.locator('.modal').waitFor({ state: 'visible', timeout: 10000 });
+  await expect(page.locator('.modal h2')).toHaveText(/Create private group|Create Workspace/);
 
   const nameInput = page.locator('.modal input[name="name"]');
   const aliasInput = page.locator('.modal input[name="alias"]');

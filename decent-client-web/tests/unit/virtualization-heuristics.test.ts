@@ -7,6 +7,7 @@ import {
   computeSmoothedAverageHeight,
   shouldKeepBottomAnchored,
   shouldApplyTopSpacerCompensation,
+  estimateMessageHeightFromContent,
 } from '../../src/lib/components/messages/virtualizationHeuristics';
 
 describe('virtualization heuristics', () => {
@@ -51,5 +52,51 @@ describe('virtualization heuristics', () => {
     expect(shouldApplyTopSpacerCompensation(0.4)).toBe(false);
     expect(shouldApplyTopSpacerCompensation(1.0)).toBe(false);
     expect(shouldApplyTopSpacerCompensation(1.1)).toBe(true);
+  });
+
+  test('estimates grouped messages lower than full messages for equal content', () => {
+    const full = estimateMessageHeightFromContent({
+      type: 'text',
+      contentHeightPx: 44,
+      isGrouped: false,
+      attachmentCount: 0,
+    });
+    const grouped = estimateMessageHeightFromContent({
+      type: 'text',
+      contentHeightPx: 44,
+      isGrouped: true,
+      attachmentCount: 0,
+    });
+
+    expect(grouped).toBeLessThan(full);
+  });
+
+  test('adds attachment overhead into height estimate', () => {
+    const noAttachment = estimateMessageHeightFromContent({
+      type: 'file',
+      contentHeightPx: 22,
+      isGrouped: false,
+      attachmentCount: 0,
+    });
+    const withAttachment = estimateMessageHeightFromContent({
+      type: 'file',
+      contentHeightPx: 22,
+      isGrouped: false,
+      attachmentCount: 2,
+    });
+
+    expect(withAttachment).toBeGreaterThan(noAttachment);
+  });
+
+  test('keeps system message estimates within bounds', () => {
+    const systemEstimate = estimateMessageHeightFromContent({
+      type: 'system',
+      contentHeightPx: 500,
+      isGrouped: false,
+      attachmentCount: 10,
+    });
+
+    expect(systemEstimate).toBeGreaterThanOrEqual(40);
+    expect(systemEstimate).toBeLessThanOrEqual(280);
   });
 });

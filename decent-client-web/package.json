@@ -1,7 +1,7 @@
 {
   "name": "decent-client-web",
   "version": "0.1.0",
-  "description": "Reference web client for decent-protocol \u2014 serverless P2P chat PWA",
+  "description": "Reference web client for decent-protocol — serverless P2P chat PWA",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -23,11 +23,12 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@chenglou/pretext": "^0.0.4",
+    "@decentchat/protocol": "workspace:^",
+    "@decentchat/transport-webrtc": "workspace:^",
     "@floating-ui/dom": "^1.7.5",
     "@sveltejs/vite-plugin-svelte": "4",
     "decent-client-core": "workspace:^",
-    "@decentchat/protocol": "workspace:^",
-    "@decentchat/transport-webrtc": "workspace:^",
     "dompurify": "^3.3.1",
     "marked": "^17.0.3",
     "peerjs": "^1.5.4",
