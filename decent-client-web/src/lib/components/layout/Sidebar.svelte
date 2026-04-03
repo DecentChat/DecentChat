@@ -78,6 +78,7 @@
     onSwitchToDMs: () => void;
     onSwitchWorkspace: (wsId: string) => void;
     onAddWorkspace: () => void;
+    onJoinWorkspace?: () => void;
     onOpenCompanySim: () => Promise<void> | void;
     onChannelClick: (channelId: string) => void;
     onMemberClick: (peerId: string) => void;
@@ -117,6 +118,7 @@
     onSwitchToDMs,
     onSwitchWorkspace,
     onAddWorkspace,
+    onJoinWorkspace,
     onOpenCompanySim,
     onChannelClick,
     onMemberClick,
@@ -236,6 +238,7 @@
   onSwitchToDMs={onSwitchToDMs}
   onSwitchWorkspace={onSwitchWorkspace}
   onAddWorkspace={onAddWorkspace}
+  onJoinWorkspace={onJoinWorkspace}
 />
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->

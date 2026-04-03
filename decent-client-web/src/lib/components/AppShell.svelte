@@ -171,6 +171,7 @@
           onSwitchWorkspace={cb.onSwitchWorkspace}
           onToggleActivity={cb.onToggleActivity}
           onAddWorkspace={cb.onAddWorkspace}
+          onJoinWorkspace={cb.onJoinWorkspace}
         />
       {/if}
     </div>
@@ -196,6 +197,7 @@
           onSwitchToDMs={cb.onSwitchToDMs}
           onSwitchWorkspace={cb.onSwitchWorkspace}
           onAddWorkspace={cb.onAddWorkspace}
+          onJoinWorkspace={cb.onJoinWorkspace}
           onOpenCompanySim={cb.onOpenCompanySim}
           onChannelClick={cb.onChannelClick}
           onMemberClick={cb.onMemberClick}

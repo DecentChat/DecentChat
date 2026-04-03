@@ -1184,7 +1184,10 @@ async function init(): Promise<void> {
     // If user clicked Create/Join on landing page, bootstrap full app first,
     // then open the intended modal on /app. This avoids landing-mode networkless
     // races (workspace created without active transport).
-    if (isAppRoute && ctrl.workspaceManager.getAllWorkspaces().length === 0) {
+    // Note: we check welcomeAction regardless of existing workspace count —
+    // a user with workspaces who clicks "Join with invite" should still see the
+    // JoinWorkspaceModal (ALE-657).
+    if (isAppRoute) {
       const pendingWelcomeAction = sessionStorage.getItem('decent:welcomeAction');
       if (pendingWelcomeAction === 'create' || pendingWelcomeAction === 'join') {
         sessionStorage.removeItem('decent:welcomeAction');

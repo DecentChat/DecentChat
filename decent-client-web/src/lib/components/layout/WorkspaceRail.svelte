@@ -19,6 +19,7 @@
     onSwitchWorkspace: (wsId: string) => void;
     onToggleActivity: () => void;
     onAddWorkspace: () => void;
+    onJoinWorkspace?: () => void;
   }
 
   let {
@@ -30,9 +31,36 @@
     onSwitchWorkspace,
     onToggleActivity,
     onAddWorkspace,
+    onJoinWorkspace,
   }: Props = $props();
 
   let isInDMs = $derived(activeWorkspaceId === null);
+  let showAddMenu = $state(false);
+
+  function handleAddClick() {
+    if (onJoinWorkspace) {
+      showAddMenu = !showAddMenu;
+    } else {
+      onAddWorkspace();
+    }
+  }
+
+  function handleCreate() {
+    showAddMenu = false;
+    onAddWorkspace();
+  }
+
+  function handleJoin() {
+    showAddMenu = false;
+    onJoinWorkspace?.();
+  }
+
+  function handleClickOutside(event: MouseEvent) {
+    const target = event.target as HTMLElement;
+    if (!target.closest('.ws-rail-add-wrap')) {
+      showAddMenu = false;
+    }
+  }
 </script>
 
 <div class="ws-rail-icon {isInDMs ? 'active' : ''}" id="ws-rail-dms" title="Direct Messages"
@@ -82,14 +110,79 @@
   {/if}
 </div>
 
-<div
-  class="ws-rail-icon ws-rail-add"
-  id="ws-rail-add"
-  title="Create or join workspace"
-  role="button"
-  tabindex="0"
-  onclick={onAddWorkspace}
-  onkeydown={(e) => e.key === 'Enter' && onAddWorkspace()}
->
-  +
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+{#if showAddMenu}
+  <div class="ws-add-menu-backdrop" onclick={handleClickOutside}></div>
+{/if}
+<div class="ws-rail-add-wrap">
+  <div
+    class="ws-rail-icon ws-rail-add"
+    id="ws-rail-add"
+    title="Create or join workspace"
+    role="button"
+    tabindex="0"
+    onclick={handleAddClick}
+    onkeydown={(e) => e.key === 'Enter' && handleAddClick()}
+  >
+    +
+  </div>
+  {#if showAddMenu}
+    <div class="ws-add-menu" role="menu">
+      <button class="ws-add-menu-item" role="menuitem" onclick={handleCreate}>
+        <span class="ws-add-menu-icon">+</span> Create workspace
+      </button>
+      <button class="ws-add-menu-item" role="menuitem" onclick={handleJoin}>
+        <span class="ws-add-menu-icon">↓</span> Join workspace
+      </button>
+    </div>
+  {/if}
 </div>
+
+<style>
+  .ws-rail-add-wrap {
+    position: relative;
+  }
+  .ws-add-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+  }
+  .ws-add-menu {
+    position: absolute;
+    left: calc(100% + 8px);
+    bottom: 0;
+    background: var(--bg-secondary, #2b2d31);
+    border: 1px solid var(--border-color, #3f4147);
+    border-radius: 6px;
+    padding: 4px;
+    min-width: 180px;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+  .ws-add-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary, #dbdee1);
+    font-size: 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .ws-add-menu-item:hover {
+    background: var(--bg-hover, #35373c);
+  }
+  .ws-add-menu-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    font-weight: 700;
+    color: var(--text-muted, #b5bac1);
+  }
+</style>
