@@ -630,6 +630,12 @@ async function init(): Promise<void> {
       await ctrl.persistentStore.saveSettings({ ...existingSettings, seedPhrase: mnemonic });
       // Clear stored peer ID so it gets re-derived from new seed on reload
       await ctrl.persistentStore.saveSetting('myPeerId', null);
+
+      // Close IndexedDB handles so the new page can open them without being
+      // "blocked" by lingering connections from this (soon-to-be-unloaded) page.
+      try { ctrl.keyStore.close(); } catch { /* best-effort */ }
+      try { await ctrl.persistentStore.close(); } catch { /* best-effort */ }
+
       // Navigate to /app to ensure the full app bootstrap runs (transport, key
       // derivation, workspace restore).  A plain reload() would keep the browser
       // on the current path — if that's the landing page ("/") the route split
@@ -723,7 +729,7 @@ async function init(): Promise<void> {
     label: string,
     initFn: () => Promise<void>,
     closeFn?: () => Promise<void> | void,
-    retries = 1,
+    retries = 3,
   ): Promise<void> => {
     let lastError: unknown = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -740,7 +746,9 @@ async function init(): Promise<void> {
         } catch {
           // best-effort cleanup before retry
         }
-        await sleep(900);
+        // Exponential backoff: 500ms, 1s, 2s — gives old connections time to
+        // be garbage-collected after a same-origin navigation (seed restore).
+        await sleep(500 * Math.pow(2, attempt));
       }
     }
 
@@ -758,7 +766,7 @@ async function init(): Promise<void> {
     // - /app and /join/* run full app bootstrap
     if (!isAppRoute && !isJoinRoute) {
       const landingDefaults: AppSettings = { theme: 'auto', notifications: true };
-      await initIndexedDbWithRetry('local storage', () => ctrl.persistentStore.init(), () => ctrl.persistentStore.close(), 1);
+      await initIndexedDbWithRetry('local storage', () => ctrl.persistentStore.init(), () => ctrl.persistentStore.close());
 
       const settings = await ctrl.persistentStore.getSettings<AppSettings>(landingDefaults);
       const myAlias = await ctrl.persistentStore.getSetting('myAlias');
@@ -800,10 +808,10 @@ async function init(): Promise<void> {
     }
 
     setLoadingHint('Preparing your secure keys...');
-    await initIndexedDbWithRetry('key storage', () => ctrl.keyStore.init(), () => ctrl.keyStore.close(), 1);
+    await initIndexedDbWithRetry('key storage', () => ctrl.keyStore.init(), () => ctrl.keyStore.close());
 
     setLoadingHint('Opening your secure message history...');
-    await initIndexedDbWithRetry('message storage', () => ctrl.persistentStore.init(), () => ctrl.persistentStore.close(), 1);
+    await initIndexedDbWithRetry('message storage', () => ctrl.persistentStore.init(), () => ctrl.persistentStore.close());
 
     // Wire offline queue → persistent storage
     ctrl.offlineQueue.setPersistence(

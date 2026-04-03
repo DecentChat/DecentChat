@@ -115,6 +115,9 @@ test.describe('seed restore navigates to /app', () => {
     // The full app should bootstrap (workspace UI or create-workspace button visible)
     await waitForApp(page);
     await expect(page.locator('#create-ws-btn, .sidebar-header')).toBeVisible({ timeout: 10000 });
+
+    // No startup error screen should appear (IndexedDB must not be "blocked")
+    await expect(page.locator('#clear-storage-btn')).not.toBeVisible();
   });
 
   test('restoring seed from /app stays on /app', async ({ page }) => {
@@ -146,6 +149,9 @@ test.describe('seed restore navigates to /app', () => {
     // Full app should bootstrap
     await waitForApp(page);
     await expect(page.locator('#create-ws-btn, .sidebar-header')).toBeVisible({ timeout: 10000 });
+
+    // No startup error screen should appear
+    await expect(page.locator('#clear-storage-btn')).not.toBeVisible();
   });
 
   test('seed is persisted after restore-from-landing navigation', async ({ page }) => {
@@ -173,5 +179,40 @@ test.describe('seed restore navigates to /app', () => {
       return await ctrl.persistentStore.getSetting('seedPhrase');
     });
     expect(storedSeed).toBe(VALID_MNEMONIC);
+  });
+
+  test('no startup error after rapid seed-restore navigation (IndexedDB handles closed)', async ({ page }) => {
+    await clearStorage(page);
+    await page.goto('/');
+    await waitForApp(page);
+
+    // Restore seed phrase (opens IndexedDB connections on landing page)
+    await page.locator('#restore-identity-btn').click();
+    await page.waitForSelector('.restore-modal', { timeout: 3000 });
+    await fillSeedPhrase(page, VALID_MNEMONIC);
+    await expect(page.locator('#restore-confirm-btn')).toBeEnabled();
+    await page.locator('#restore-confirm-btn').click();
+    await page.waitForSelector('#seed-restore-btn', { timeout: 3000 });
+
+    // Collect console errors during navigation to detect IndexedDB "blocked" issues
+    const consoleErrors: string[] = [];
+    page.on('console', msg => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+
+    const navigationPromise = page.waitForURL('**/app**', { timeout: 10000 });
+    await page.locator('#seed-restore-btn').click();
+    await navigationPromise;
+    await waitForApp(page);
+
+    // App should bootstrap successfully — no error screen
+    await expect(page.locator('#create-ws-btn, .sidebar-header')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('#clear-storage-btn')).not.toBeVisible();
+
+    // No IndexedDB "blocked" errors in console
+    const blockedErrors = consoleErrors.filter(e =>
+      e.toLowerCase().includes('blocked') || e.toLowerCase().includes('failed to initialize'),
+    );
+    expect(blockedErrors).toHaveLength(0);
   });
 });
