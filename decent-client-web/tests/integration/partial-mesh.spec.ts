@@ -4,7 +4,9 @@ test.setTimeout(45_000);
 
 test('partial mesh maintenance prunes conservatively and reports desired-topology status', async ({ page, browserName }) => {
   test.skip(browserName === 'firefox', 'Known Firefox bootstrap flake: app may hit initialization timeout before __ctrl exists; covered by stronger observability spec.');
-  await page.goto('/');
+  // Navigate to /app (not /) so full app bootstrap runs and __ctrl is exposed.
+  // The landing page at / takes a lightweight path that never sets __ctrl.
+  await page.goto('/app');
   await page.evaluate(async () => {
     if ((indexedDB as any).databases) {
       const dbs = await (indexedDB as any).databases();
@@ -15,32 +17,13 @@ test('partial mesh maintenance prunes conservatively and reports desired-topolog
     localStorage.clear();
     sessionStorage.clear();
   });
-  await page.reload();
+  // Re-navigate to /app after clearing storage (matches helpers.ts pattern)
+  await page.goto('/app');
 
   await page.waitForFunction(() => {
     const loading = document.getElementById('loading');
     return !loading || loading.style.opacity === '0';
   }, { timeout: 20_000 });
-
-  const clearDataBtn = page.getByRole('button', { name: /clear data/i });
-  if (await clearDataBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await clearDataBtn.click();
-    const retryBtn = page.getByRole('button', { name: /retry/i });
-    if (await retryBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await retryBtn.click();
-    } else {
-      await page.reload();
-    }
-  }
-
-  await page.waitForFunction(() => {
-    return !!(window as any).__ctrl || !!Array.from(document.querySelectorAll('button')).find((el) => /open app/i.test(el.textContent || ''));
-  }, { timeout: 20_000 });
-
-  if (!(await page.evaluate(() => !!(window as any).__ctrl))) {
-    const openAppBtn = page.getByRole('button', { name: /open app/i });
-    await openAppBtn.click();
-  }
 
   await page.waitForFunction(() => !!(window as any).__ctrl, undefined, { timeout: 20_000 });
 
