@@ -236,46 +236,46 @@
   <section class="lp-compare">
     <div class="lp-container">
       <h2 class="lp-section-title">The honest comparison</h2>
-      <div class="lp-compare-table">
-        <div class="lp-compare-header">
-          <span>Feature</span>
-          <span>Discord / WhatsApp / Telegram</span>
-          <span class="lp-compare-us">DecentChat 🐙</span>
+      <div class="lp-compare-table" role="table" aria-label="Feature comparison: traditional chat apps vs DecentChat">
+        <div class="lp-compare-header" role="row">
+          <span role="columnheader">Feature</span>
+          <span role="columnheader">Discord / WhatsApp / Telegram</span>
+          <span class="lp-compare-us" role="columnheader">DecentChat 🐙</span>
         </div>
-        <div class="lp-compare-row">
-          <span>Messages stored on servers</span>
-          <span class="bad">✓ Yes</span>
-          <span class="good">✗ Never</span>
+        <div class="lp-compare-row" role="row">
+          <span role="cell">Messages stored on servers</span>
+          <span class="bad" role="cell">✓ Yes</span>
+          <span class="good" role="cell">✗ Never</span>
         </div>
-        <div class="lp-compare-row">
-          <span>Requires phone / email</span>
-          <span class="bad">✓ Required</span>
-          <span class="good">✗ None needed</span>
+        <div class="lp-compare-row" role="row">
+          <span role="cell">Requires phone / email</span>
+          <span class="bad" role="cell">✓ Required</span>
+          <span class="good" role="cell">✗ None needed</span>
         </div>
-        <div class="lp-compare-row">
-          <span>ID or face scan to access</span>
-          <span class="bad">✓ Discord requires it now</span>
-          <span class="good">✗ Never</span>
+        <div class="lp-compare-row" role="row">
+          <span role="cell">ID or face scan to access</span>
+          <span class="bad" role="cell">✓ Discord requires it now</span>
+          <span class="good" role="cell">✗ Never</span>
         </div>
-        <div class="lp-compare-row">
-          <span>End-to-end encrypted by default</span>
-          <span class="mid">⚠️ Partial</span>
-          <span class="good">✓ Always</span>
+        <div class="lp-compare-row" role="row">
+          <span role="cell">End-to-end encrypted by default</span>
+          <span class="mid" role="cell">⚠️ Partial</span>
+          <span class="good" role="cell">✓ Always</span>
         </div>
-        <div class="lp-compare-row">
-          <span>Can be legally subpoenaed</span>
-          <span class="bad">✓ Yes</span>
-          <span class="good">Nothing to hand over</span>
+        <div class="lp-compare-row" role="row">
+          <span role="cell">Can be legally subpoenaed</span>
+          <span class="bad" role="cell">✓ Yes</span>
+          <span class="good" role="cell">Nothing to hand over</span>
         </div>
-        <div class="lp-compare-row">
-          <span>Survives company going bust</span>
-          <span class="bad">✗ App dies too</span>
-          <span class="good">✓ Protocol lives forever</span>
+        <div class="lp-compare-row" role="row">
+          <span role="cell">Survives company going bust</span>
+          <span class="bad" role="cell">✗ App dies too</span>
+          <span class="good" role="cell">✓ Protocol lives forever</span>
         </div>
-        <div class="lp-compare-row">
-          <span>Forward secrecy</span>
-          <span class="mid">⚠️ Sometimes</span>
-          <span class="good">✓ Every message</span>
+        <div class="lp-compare-row" role="row">
+          <span role="cell">Forward secrecy</span>
+          <span class="mid" role="cell">⚠️ Sometimes</span>
+          <span class="good" role="cell">✓ Every message</span>
         </div>
       </div>
     </div>
