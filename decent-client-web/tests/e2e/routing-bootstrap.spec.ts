@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { clearStorage, waitForApp, createWorkspace } from './helpers';
 
+const VALID_MNEMONIC =
+  'snack soul crime uncover invest leisure dad crazy latin media hip broom';
+
 const installMockTransport = async (page: any) => {
   await page.addInitScript(() => {
     class MockTransport {
@@ -24,6 +27,19 @@ const installMockTransport = async (page: any) => {
     (window as any).__MockTransport = MockTransport;
   });
 };
+
+/** Fill the seed phrase textarea and dispatch input event for validation */
+async function fillSeedPhrase(page: import('@playwright/test').Page, phrase: string) {
+  const textarea = page.locator('#restore-seed-input');
+  await textarea.fill(phrase);
+  await page.evaluate(() => {
+    const el = document.getElementById('restore-seed-input') as HTMLTextAreaElement;
+    if (el) {
+      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    }
+  });
+  await page.waitForTimeout(100);
+}
 
 test.describe('routing bootstrap split', () => {
   test('landing route does not initialize transport', async ({ page }) => {
@@ -64,5 +80,98 @@ test.describe('routing bootstrap split', () => {
     // The "Open App" CTA appears in the nav bar (#open-app-btn-nav) and/or
     // in the hero section (#open-app-btn) depending on async workspace restore.
     await expect(page.locator('#open-app-btn, #open-app-btn-nav').first()).toBeVisible();
+  });
+});
+
+// ─── Suite: Seed restore from landing page navigates to /app ──────────────────
+
+test.describe('seed restore navigates to /app', () => {
+  test('restoring seed from landing page (/) redirects to /app', async ({ page }) => {
+    await clearStorage(page);
+    await page.goto('/');
+    await waitForApp(page);
+
+    // Open restore modal
+    await page.locator('#restore-identity-btn').click();
+    await page.waitForSelector('.restore-modal', { timeout: 3000 });
+
+    // Enter valid seed phrase
+    await fillSeedPhrase(page, VALID_MNEMONIC);
+    await expect(page.locator('#restore-confirm-btn')).toBeEnabled();
+
+    // Click Restore then confirm
+    await page.locator('#restore-confirm-btn').click();
+    await page.waitForSelector('#seed-restore-btn', { timeout: 3000 });
+
+    // Click "Yes, Restore" and wait for navigation
+    const navigationPromise = page.waitForURL('**/app**', { timeout: 10000 });
+    await page.locator('#seed-restore-btn').click();
+    await navigationPromise;
+
+    // Verify we ended up on /app, NOT back on /
+    const url = new URL(page.url());
+    expect(url.pathname).toBe('/app');
+
+    // The full app should bootstrap (workspace UI or create-workspace button visible)
+    await waitForApp(page);
+    await expect(page.locator('#create-ws-btn, .sidebar-header')).toBeVisible({ timeout: 10000 });
+  });
+
+  test('restoring seed from /app stays on /app', async ({ page }) => {
+    await clearStorage(page);
+    await page.goto('/app');
+    await waitForApp(page);
+
+    // Open restore modal from the app route
+    await page.locator('#restore-identity-btn').click();
+    await page.waitForSelector('.restore-modal', { timeout: 3000 });
+
+    // Enter valid seed phrase
+    await fillSeedPhrase(page, VALID_MNEMONIC);
+    await expect(page.locator('#restore-confirm-btn')).toBeEnabled();
+
+    // Click Restore then confirm
+    await page.locator('#restore-confirm-btn').click();
+    await page.waitForSelector('#seed-restore-btn', { timeout: 3000 });
+
+    // Click "Yes, Restore" and wait for navigation
+    const navigationPromise = page.waitForURL('**/app**', { timeout: 10000 });
+    await page.locator('#seed-restore-btn').click();
+    await navigationPromise;
+
+    // Verify we're on /app
+    const url = new URL(page.url());
+    expect(url.pathname).toBe('/app');
+
+    // Full app should bootstrap
+    await waitForApp(page);
+    await expect(page.locator('#create-ws-btn, .sidebar-header')).toBeVisible({ timeout: 10000 });
+  });
+
+  test('seed is persisted after restore-from-landing navigation', async ({ page }) => {
+    await clearStorage(page);
+    await page.goto('/');
+    await waitForApp(page);
+
+    // Restore seed from landing page
+    await page.locator('#restore-identity-btn').click();
+    await page.waitForSelector('.restore-modal', { timeout: 3000 });
+    await fillSeedPhrase(page, VALID_MNEMONIC);
+    await expect(page.locator('#restore-confirm-btn')).toBeEnabled();
+    await page.locator('#restore-confirm-btn').click();
+    await page.waitForSelector('#seed-restore-btn', { timeout: 3000 });
+
+    const navigationPromise = page.waitForURL('**/app**', { timeout: 10000 });
+    await page.locator('#seed-restore-btn').click();
+    await navigationPromise;
+    await waitForApp(page);
+
+    // Verify seed was persisted by checking it's readable from the store
+    const storedSeed = await page.evaluate(async () => {
+      const ctrl = (window as any).__ctrl;
+      if (!ctrl) return null;
+      return await ctrl.persistentStore.getSetting('seedPhrase');
+    });
+    expect(storedSeed).toBe(VALID_MNEMONIC);
   });
 });

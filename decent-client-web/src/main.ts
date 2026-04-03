@@ -630,7 +630,11 @@ async function init(): Promise<void> {
       await ctrl.persistentStore.saveSettings({ ...existingSettings, seedPhrase: mnemonic });
       // Clear stored peer ID so it gets re-derived from new seed on reload
       await ctrl.persistentStore.saveSetting('myPeerId', null);
-      window.location.reload();
+      // Navigate to /app to ensure the full app bootstrap runs (transport, key
+      // derivation, workspace restore).  A plain reload() would keep the browser
+      // on the current path — if that's the landing page ("/") the route split
+      // renders the welcome screen instead of bootstrapping the app.
+      window.location.assign('/app');
     },
   });
 
