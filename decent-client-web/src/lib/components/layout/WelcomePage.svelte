@@ -4,6 +4,7 @@
 -->
 <script lang="ts">
   import { toast } from '../shared/Toast.svelte';
+  import { copyToClipboard } from '../../utils/clipboard';
 
   interface Props {
     myPeerId: string;
@@ -83,12 +84,12 @@
   }
 
   function copyPeerId() {
-    navigator.clipboard.writeText(myPeerId);
+    copyToClipboard(myPeerId);
     toast('Peer ID copied!');
   }
 
   function copyDonationAddress(name: string, address: string) {
-    navigator.clipboard.writeText(address);
+    copyToClipboard(address);
     toast(`${name} address copied!`);
   }
 </script>

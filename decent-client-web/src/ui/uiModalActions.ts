@@ -2,6 +2,7 @@ import type { WorkspaceManager, InviteData, Contact, WorkspacePermissions } from
 import { InviteURI } from '@decentchat/protocol';
 import type { AppState } from '../main';
 import type { UICallbacks, WorkspaceInviteItem, WorkspaceInviteLists, WorkspaceMemberDirectoryView } from './types';
+import { copyToClipboard } from '../lib/utils/clipboard';
 import { cachedData } from '../lib/stores/ui.svelte';
 import { shellData } from '../lib/stores/shell.svelte';
 import { showModal as svelteShowModal } from '../lib/components/shared/Modal.svelte';
@@ -677,10 +678,10 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
           return buildInviteView();
         }
 
-        try {
-          await navigator.clipboard.writeText(url);
+        const copied = await copyToClipboard(url);
+        if (copied) {
           showToast(permanent ? 'Permanent invite created and copied!' : 'Invite link created and copied!', 'success');
-        } catch {
+        } else {
           showToast('Invite created. Copy failed — check browser clipboard permission.', 'info');
         }
 
@@ -694,7 +695,7 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
           return false;
         }
 
-        await navigator.clipboard.writeText(invite.url);
+        await copyToClipboard(invite.url);
         showToast('Invite link copied!', 'success');
         return true;
       },

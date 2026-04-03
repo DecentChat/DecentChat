@@ -7,6 +7,7 @@ import type { UICallbacks, WorkspaceMemberDirectoryView } from './types';
 import { MessageSearch } from './MessageSearch';
 import { filterMentionMembers, searchMentionMembers } from './mentionSearch';
 import type { ModalActions } from './uiModalActions';
+import { copyToClipboard } from '../lib/utils/clipboard';
 
 interface RegisterShellCallbacksContext {
   state: AppState;
@@ -147,7 +148,7 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     if (!state.activeWorkspaceId) return;
     const inviteURL = await callbacks.generateInviteURL?.(state.activeWorkspaceId);
     if (inviteURL) {
-      await navigator.clipboard.writeText(inviteURL);
+      await copyToClipboard(inviteURL);
       showToast(successMessage, 'success');
     }
   };
@@ -220,7 +221,7 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
       await copyInviteForActiveWorkspace('Invite link copied!');
     },
     onShowQR: () => modalActions.showMyQR(),
-    onCopyPeerId: () => { navigator.clipboard.writeText(state.myPeerId); showToast('Peer ID copied!'); },
+    onCopyPeerId: () => { copyToClipboard(state.myPeerId); showToast('Peer ID copied!'); },
     onWorkspaceSettings: () => modalActions.showWorkspaceSettingsModal(),
     onWorkspaceMembers: () => modalActions.showWorkspaceMembersModal(),
     onWorkspaceInvite: async () => {

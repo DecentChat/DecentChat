@@ -5,6 +5,7 @@
 import type { CommandParser, CommandResult } from './CommandParser';
 import type { ChatController } from '../app/ChatController';
 import type { AppState } from '../main';
+import { copyToClipboard } from '../lib/utils/clipboard';
 
 export function registerCommands(parser: CommandParser, ctrl: ChatController, state: AppState): void {
 
@@ -499,7 +500,7 @@ export function registerCommands(parser: CommandParser, ctrl: ChatController, st
       const json = JSON.stringify(data, null, 2);
 
       // Copy to clipboard
-      navigator.clipboard?.writeText(json).catch(() => {});
+      copyToClipboard(json).catch(() => {});
 
       return {
         handled: true,

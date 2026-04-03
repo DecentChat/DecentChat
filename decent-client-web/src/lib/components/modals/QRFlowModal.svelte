@@ -80,6 +80,7 @@
   import QrScanner from 'qr-scanner';
   import { ContactURI, RecoveryURI } from 'decent-protocol';
   import type { QRFlowCallbacks } from './QRFlowModal.svelte';
+  import { copyToClipboard } from '../../utils/clipboard';
 
   const SEED_QR_PREFIX = 'decent-seed://v1?m=';
 
@@ -425,19 +426,19 @@
   }
 
   async function copyMyURI(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(myContactUri);
+    const copied = await copyToClipboard(myContactUri);
+    if (copied) {
       callbacks.showToast('Contact URI copied!', 'success');
-    } catch {
+    } else {
       callbacks.showToast('Failed to copy — try selecting the text manually', 'error');
     }
   }
 
   async function copySeedPhrase(phrase: string): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(phrase);
+    const copied = await copyToClipboard(phrase);
+    if (copied) {
       callbacks.showToast('Seed phrase copied!', 'success');
-    } catch {
+    } else {
       callbacks.showToast('Failed to copy seed phrase', 'error');
     }
   }
