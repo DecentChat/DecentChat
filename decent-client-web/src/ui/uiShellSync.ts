@@ -207,6 +207,7 @@ export function createShellSyncHelpers(ctx: ShellSyncContext): ShellSyncHelpers 
     shellData.messages.messages = messages;
     shellData.messages.channelName = channelName;
     shellData.messages.activeChannelId = state.activeChannelId;
+    shellData.messages.isDirectMessage = !!state.activeDirectConversationId;
     shellData.messages.myPeerId = state.myPeerId;
     shellData.messages.myDisplayName = getMyDisplayName();
     shellData.messages.frequentReactions = getFrequentReactions();

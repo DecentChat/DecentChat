@@ -296,6 +296,7 @@
                     messages={shellData.messages.messages}
                     channelName={shellData.messages.channelName}
                     activeChannelId={shellData.messages.activeChannelId}
+                    isDirectMessage={shellData.messages.isDirectMessage}
                     myPeerId={shellData.messages.myPeerId}
                     myDisplayName={shellData.messages.myDisplayName}
                     activeThreadRootId={shellData.thread.open ? shellData.thread.threadId : null}

@@ -131,6 +131,7 @@ export const shellData = $state({
     messages: [] as PlaintextMessage[],
     channelName: '',
     activeChannelId: null as string | null,
+    isDirectMessage: false,
     myPeerId: '',
     myDisplayName: '',
     frequentReactions: [] as string[],

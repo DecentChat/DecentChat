@@ -28,6 +28,7 @@
     messages: PlaintextMessage[];
     channelName: string;
     activeChannelId: string | null;
+    isDirectMessage?: boolean;
     myPeerId: string;
     myDisplayName: string;
     inThreadView?: boolean;
@@ -58,6 +59,7 @@
     messages,
     channelName,
     activeChannelId,
+    isDirectMessage = false,
     myPeerId,
     myDisplayName,
     inThreadView = false,
@@ -825,8 +827,13 @@
   {#if !activeChannelId}
     <div class="empty-state">
       <div class="emoji">💬</div>
-      <h3>No channel selected</h3>
-      <p>Pick a channel from the sidebar</p>
+      {#if isDirectMessage}
+        <h3>No conversation selected</h3>
+        <p>Select a conversation or start a new DM</p>
+      {:else}
+        <h3>No channel selected</h3>
+        <p>Pick a channel from the sidebar</p>
+      {/if}
     </div>
   {:else if messages.length === 0 && !threadRoot}
     <div class="empty-state">
