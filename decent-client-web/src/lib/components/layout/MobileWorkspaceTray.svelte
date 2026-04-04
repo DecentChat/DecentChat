@@ -75,10 +75,8 @@
     </button>
   {/each}
 
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
   {#if showAddMenu}
-    <div class="mobile-add-menu-backdrop" onclick={handleClickOutside}></div>
+    <div class="mobile-add-menu-backdrop" onclick={handleClickOutside} onkeydown={(e) => e.key === 'Escape' && handleClickOutside()} role="presentation"></div>
   {/if}
   <div class="mobile-workspace-add-wrap">
     <button

@@ -458,9 +458,7 @@
 </script>
 
 {#if mode === 'my-qr' && myQRData}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="modal-overlay" onclick={handleOverlayClick}>
+  <div class="modal-overlay" onclick={handleOverlayClick} onkeydown={(e) => e.key === 'Escape' && closeModal()} role="presentation">
     <div class="modal qr-modal">
       <div class="settings-header">
         <h2>My QR Code</h2>
@@ -487,9 +485,7 @@
 {/if}
 
 {#if mode === 'scan'}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="modal-overlay" onclick={handleOverlayClick}>
+  <div class="modal-overlay" onclick={handleOverlayClick} onkeydown={(e) => e.key === 'Escape' && closeModal()} role="presentation">
     <div class="modal qr-modal qr-scan-modal">
       <div class="settings-header">
         <h2>Scan QR Code</h2>
@@ -514,9 +510,7 @@
 {/if}
 
 {#if mode === 'paste'}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="modal-overlay" onclick={handleOverlayClick}>
+  <div class="modal-overlay" onclick={handleOverlayClick} onkeydown={(e) => e.key === 'Escape' && closeModal()} role="presentation">
     <div class="modal qr-modal">
       <div class="settings-header">
         <h2>Add Contact</h2>
@@ -524,7 +518,7 @@
       </div>
       <div class="qr-content">
         <div class="form-group" style="width:100%">
-          <label>Paste Contact URI</label>
+          <label for="qr-paste-input">Paste Contact URI</label>
           <input
             type="text"
             id="qr-paste-input"
@@ -553,9 +547,7 @@
 {/if}
 
 {#if mode === 'contact-confirm' && contactData}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="modal-overlay" onclick={handleOverlayClick}>
+  <div class="modal-overlay" onclick={handleOverlayClick} onkeydown={(e) => e.key === 'Escape' && closeModal()} role="presentation">
     <div class="modal qr-modal">
       <div class="settings-header">
         <h2>Add Contact</h2>
@@ -587,9 +579,7 @@
 {/if}
 
 {#if mode === 'seed-qr' && seedMnemonic}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="modal-overlay" onclick={handleOverlayClick}>
+  <div class="modal-overlay" onclick={handleOverlayClick} onkeydown={(e) => e.key === 'Escape' && closeModal()} role="presentation">
     <div class="modal qr-modal">
       <div class="settings-header">
         <h2>📲 Transfer to Another Device</h2>
@@ -618,9 +608,7 @@
 {/if}
 
 {#if mode === 'restore'}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="modal-overlay" onclick={handleOverlayClick}>
+  <div class="modal-overlay" onclick={handleOverlayClick} onkeydown={(e) => e.key === 'Escape' && closeModal()} role="presentation">
     <div class="modal qr-modal restore-modal">
       <div class="settings-header">
         <h2>Restore Your Account</h2>
@@ -672,9 +660,7 @@
 {/if}
 
 {#if mode === 'seed-confirm' && pendingSeed}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="modal-overlay" onclick={handleOverlayClick}>
+  <div class="modal-overlay" onclick={handleOverlayClick} onkeydown={(e) => e.key === 'Escape' && closeModal()} role="presentation">
     <div class="modal qr-modal">
       <div class="settings-header">
         <h2>Restore Identity?</h2>

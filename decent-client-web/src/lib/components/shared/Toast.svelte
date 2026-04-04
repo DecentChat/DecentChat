@@ -1,16 +1,16 @@
 <!--
   Toast.svelte — Drop-in replacement for UIRenderer.showToast()
-  
+
   Usage from Svelte: import { toast } from '$lib/components/shared/Toast.svelte'
   Usage from vanilla: import { toast } from './lib/components/shared/Toast.svelte'
-  
+
   The imperative `toast()` function is exported so existing UIRenderer code
   can call it without refactoring every call site.
 -->
 <script lang="ts" module>
   // ── Imperative API (callable from anywhere) ──
   type ToastType = 'info' | 'error' | 'success';
-  
+
   interface ToastItem {
     id: number;
     message: string;
@@ -54,8 +54,8 @@
     class="toast {item.type}"
     data-testid="toast"
     role="alert"
-    onclick={() => dismiss(item.id)}
   >
     {item.message}
+    <button type="button" class="toast-dismiss" aria-label="Dismiss" onclick={() => dismiss(item.id)}>✕</button>
   </div>
 {/each}

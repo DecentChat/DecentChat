@@ -241,9 +241,7 @@
   onJoinWorkspace={onJoinWorkspace}
 />
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="sidebar-nav" id="sidebar-nav">
+<div class="sidebar-nav" id="sidebar-nav" role="navigation">
   {#if isInWorkspace}
     <div class="sidebar-section">
       <div class="sidebar-section-header">
@@ -262,8 +260,8 @@
       {#each channels as ch (ch.id)}
         {@const unread = getUnreadCount(ch.id)}
         {@const isActive = ch.id === activeChannelId && !activeDirectConversationId}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
+        <button
+          type="button"
           class="sidebar-item {isActive ? 'active' : ''} {unread > 0 ? 'has-unread' : ''}"
           data-channel-id={ch.id}
           onclick={() => onChannelClick(ch.id)}
@@ -273,7 +271,7 @@
           {#if unread > 0}
             <span class="unread-badge">{unread > 99 ? '99+' : unread}</span>
           {/if}
-        </div>
+        </button>
       {/each}
     </div>
 
@@ -378,8 +376,8 @@
       <div id="contacts-list" data-testid="contacts-list"></div>
     </div>
 
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
+    <button
+      type="button"
       class="sidebar-item"
       id="connect-peer-sidebar-btn"
       style="font-size:12px; opacity:0.55; padding-top:6px; padding-bottom:6px;"
@@ -387,23 +385,19 @@
       onclick={onConnectPeer}
     >
       🔌 Connect to peer...
-    </div>
+    </button>
   {/if}
 </div>
 
 {#if isInWorkspace}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="invite-banner invite-banner-primary" id="copy-invite" title="Click to copy invite link" onclick={onCopyInvite}>
+  <button type="button" class="invite-banner invite-banner-primary" id="copy-invite" title="Click to copy invite link" onclick={onCopyInvite}>
     Invite people via link
-  </div>
+  </button>
 {/if}
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="invite-banner" id="sidebar-qr-btn" title="Show or scan QR code" style="background: rgba(9, 132, 227, 0.12);" onclick={onShowQR}>
+<button type="button" class="invite-banner" id="sidebar-qr-btn" title="Show or scan QR code" style="background: rgba(9, 132, 227, 0.12);" onclick={onShowQR}>
   📱 Show invite QR
-</div>
+</button>
 
 <div class="sidebar-footer">
   <span class="dm-status online"></span>

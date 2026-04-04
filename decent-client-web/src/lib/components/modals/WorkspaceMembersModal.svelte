@@ -202,9 +202,7 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="modal-overlay" onclick={handleOverlayClick}>
+<div class="modal-overlay" onclick={handleOverlayClick} onkeydown={(e) => e.key === 'Escape' && onClose()} role="presentation">
   <div class="modal">
     <h2>Workspace Members</h2>
     <form onsubmit={(e) => { e.preventDefault(); onClose(); }}>

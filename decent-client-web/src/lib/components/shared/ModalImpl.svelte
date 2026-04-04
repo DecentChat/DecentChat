@@ -29,6 +29,11 @@
     children,
   }: Props = $props();
 
+  // Unique IDs to avoid collisions when multiple modals are mounted
+  const uid = Math.random().toString(36).slice(2, 8);
+  const titleId = `modal-title-${uid}`;
+  const formId = `modal-form-${uid}`;
+
   let overlayEl: HTMLDivElement | undefined = $state();
 
   $effect(() => {
@@ -75,19 +80,19 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="modal-overlay"
   data-testid="modal-overlay"
   bind:this={overlayEl}
   onclick={handleOverlayClick}
+  onkeydown={(e) => e.key === 'Escape' && close()}
+  role="presentation"
 >
-  <div class="modal" data-testid="modal">
+  <div class="modal" data-testid="modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
     <button type="button" class="modal-close-button" aria-label={`Close ${title} dialog`} onclick={close}>×</button>
-    <h2>{title}</h2>
+    <h2 id={titleId}>{title}</h2>
     {#if children}
-      <form id="modal-form" onsubmit={handleSubmit}>
+      <form id={formId} onsubmit={handleSubmit}>
         {@render children()}
         <div class="modal-actions">
           <button type="button" class={`btn-secondary ${cancelClassName}`.trim()} onclick={close}>{cancelLabel}</button>
@@ -95,7 +100,7 @@
         </div>
       </form>
     {:else}
-      <form id="modal-form" onsubmit={handleSubmit}>
+      <form id={formId} onsubmit={handleSubmit}>
         {@html bodyHTML}
         <div class="modal-actions">
           <button type="button" class={`btn-secondary ${cancelClassName}`.trim()} onclick={close}>{cancelLabel}</button>

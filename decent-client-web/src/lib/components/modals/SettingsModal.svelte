@@ -225,9 +225,7 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="modal-overlay" onclick={handleOverlayClick}>
+<div class="modal-overlay" onclick={handleOverlayClick} onkeydown={(e) => e.key === 'Escape' && onClose()} role="presentation">
   <div class="modal settings-modal">
     <div class="settings-header">
       <h2>⚙️ Settings</h2>
@@ -481,9 +479,7 @@
 </div>
 
 {#if showDangerConfirm}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="modal-overlay" style="z-index:10001" onclick={handleDangerOverlayClick}>
+  <div class="modal-overlay" style="z-index:10001" onclick={handleDangerOverlayClick} onkeydown={(e) => e.key === 'Escape' && (showDangerConfirm = false)} role="presentation">
     <div class="modal" style="max-width:440px; padding:24px;">
       <h2 style="color:#e74c3c; margin:0 0 12px 0;">⚠️ Delete Everything?</h2>
       <p style="font-size:14px; line-height:1.6; margin:0 0 8px 0;">This will <strong>permanently delete</strong> all your:</p>

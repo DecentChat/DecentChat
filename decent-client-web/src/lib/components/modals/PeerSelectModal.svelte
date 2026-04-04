@@ -145,16 +145,15 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="modal-overlay" onclick={handleOverlayClick}>
+<div class="modal-overlay" onclick={handleOverlayClick} onkeydown={(e) => e.key === 'Escape' && onClose()} role="presentation">
   <div class="modal">
     <h2>{title}</h2>
     <form onsubmit={handleSubmit}>
       <div class="form-group">
-        <label>{label}</label>
+        <label for="peer-search-input">{label}</label>
         <input
           type="text"
+          id="peer-search-input"
           class="search-field"
           placeholder={searchPlaceholder}
           bind:value={searchQuery}
@@ -170,7 +169,8 @@
             {#each visiblePeers as peer (peer.peerId)}
               {@const isSelected = selectedPeerId === peer.peerId}
               {@const isDisabled = peer.disabled === true}
-              <div
+              <button
+                type="button"
                 class="sidebar-item {isDisabled ? 'dm-disallowed' : ''}"
                 style="background: var(--surface); margin: 4px 0; border-radius: 6px; color: var(--text); padding: 10px 12px; cursor: {isDisabled ? 'not-allowed' : 'pointer'}; opacity: {isDisabled ? 0.6 : 1}; {isSelected ? 'border: 2px solid var(--accent);' : 'border: 2px solid transparent;'}"
                 onclick={() => selectPeer(peer)}
@@ -180,7 +180,7 @@
                 {#if isDisabled}
                   <span style="font-size:11px; opacity:0.7; margin-left: 6px;">DM disabled</span>
                 {/if}
-              </div>
+              </button>
             {/each}
           {/if}
         </div>

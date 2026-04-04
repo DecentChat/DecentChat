@@ -310,9 +310,8 @@
       {/if}
 
       {#if !inThreadView}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
+        <button
+          type="button"
           class="message-thread-indicator{threadCount > 0 ? ' has-replies' : ''}"
           data-thread-id={id}
           onclick={() => onOpenThread(id)}
@@ -327,7 +326,7 @@
             </span>
             <span class="thread-indicator-count">{threadCount} {threadCount === 1 ? 'reply' : 'replies'}</span>
           {/if}
-        </div>
+        </button>
       {/if}
 
       <div

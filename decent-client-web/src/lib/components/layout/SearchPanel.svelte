@@ -83,15 +83,13 @@
       <div class="search-hint">No results found</div>
     {:else}
       {#each results as r (r.message.id)}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="search-result" data-msg-id={r.message.id} onclick={() => handleResultClick(r.message.id)}>
+        <button type="button" class="search-result" data-msg-id={r.message.id} onclick={() => handleResultClick(r.message.id)}>
           <div class="search-result-header">
             <span class="search-result-sender">{getSenderName(r.message.senderId)}</span>
             <span class="search-result-time">{new Date(r.message.timestamp).toLocaleString()}</span>
           </div>
           <div class="search-result-text">{r.highlight}</div>
-        </div>
+        </button>
       {/each}
     {/if}
   </div>

@@ -30,9 +30,7 @@
 </script>
 
 <div class="lightbox" id="lightbox" style="display:{open ? 'flex' : 'none'}">
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="lightbox-backdrop" id="lightbox-backdrop" onclick={onClose}></div>
+  <div class="lightbox-backdrop" id="lightbox-backdrop" onclick={onClose} onkeydown={(e) => e.key === 'Escape' && onClose()} role="presentation"></div>
   <button class="lightbox-close" id="lightbox-close" onclick={onClose}>✕</button>
   <img class="lightbox-img" id="lightbox-img" {src} alt={name} />
   <div class="lightbox-name" id="lightbox-name">{name}</div>

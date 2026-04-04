@@ -156,9 +156,7 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="modal-overlay" bind:this={overlayEl} onclick={handleOverlayClick}>
+<div class="modal-overlay" bind:this={overlayEl} onclick={handleOverlayClick} onkeydown={(e) => e.key === 'Escape' && onClose()} role="presentation">
   <div class="modal">
     <button type="button" class="modal-close-button" aria-label="Close join workspace dialog" onclick={onClose}>×</button>
     <h2>Join workspace</h2>

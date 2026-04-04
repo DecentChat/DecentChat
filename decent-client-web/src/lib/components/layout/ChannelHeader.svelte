@@ -134,8 +134,7 @@
 
       <!-- Overflow menu: secondary actions -->
       {#if !isDirectMessage}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="overflow-wrapper" onkeydown={handleOverflowKeydown}>
+        <div class="overflow-wrapper" onkeydown={handleOverflowKeydown} role="menu" tabindex="-1">
           <button
             class="icon-btn overflow-trigger"
             id="overflow-menu-btn"

@@ -61,9 +61,8 @@
   let isCompanyAgent = $derived(companySim?.automationKind === 'openclaw-agent');
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
+<button
+  type="button"
   class="sidebar-item member-row"
   class:active={isActive}
   class:has-unread={unreadCount > 0}
@@ -117,7 +116,7 @@
       {/if}
     </div>
   {/if}
-</div>
+</button>
 
 <style>
   .member-company-role {

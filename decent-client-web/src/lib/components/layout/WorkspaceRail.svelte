@@ -110,10 +110,8 @@
   {/if}
 </div>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
 {#if showAddMenu}
-  <div class="ws-add-menu-backdrop" onclick={handleClickOutside}></div>
+  <div class="ws-add-menu-backdrop" onclick={handleClickOutside} onkeydown={(e) => e.key === 'Escape' && handleClickOutside()} role="presentation"></div>
 {/if}
 <div class="ws-rail-add-wrap">
   <div

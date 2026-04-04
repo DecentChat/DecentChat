@@ -103,19 +103,19 @@
     if (!text && pendingAttachments.length === 0) return;
 
     const files = pendingAttachments.map(a => a.file);
-    
+
     // Clear immediately for responsiveness
     inputValue = '';
     const cleared = [...pendingAttachments];
     pendingAttachments = [];
-    
+
     // Cleanup preview URLs
     for (const att of cleared) {
       if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
     }
 
     stopTypingNow();
-    
+
     if (textareaEl) {
       textareaEl.style.height = 'auto';
     }
@@ -218,7 +218,7 @@
     const replacement = '@' + name.replace(/\s+/g, '-') + ' ';
     inputValue = clampText(inputValue.slice(0, atStart) + replacement + inputValue.slice(cursorPos));
     mentionSuggestions = [];
-    
+
     requestAnimationFrame(() => {
       if (textareaEl) {
         const newPos = atStart + replacement.length;
@@ -417,15 +417,16 @@
     <button class="compose-attach" id={target === 'thread' ? 'thread-attach-btn' : 'attach-btn'} title="Attach file" onclick={onAttachClick}>📎</button>
     <div class="compose-input-wrapper" style="position:relative;flex:1;">
       {#if showCommandAutocomplete}
-        <div class="command-autocomplete" id="command-autocomplete">
+        <div class="command-autocomplete" id="command-autocomplete" role="listbox">
           {#each commandSuggestions as s, i}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div 
-              class="command-suggestion" 
+            <div
+              class="command-suggestion"
               class:selected={i === commandSelectedIdx}
               data-cmd={'/' + s.name}
               onmousedown={(e) => { e.preventDefault(); selectCommand('/' + s.name); }}
+              role="option"
+              aria-selected={i === commandSelectedIdx}
+              tabindex="-1"
             >
               <span class="cmd-name">/{s.name}</span>
               <span class="cmd-desc">{s.description}</span>
@@ -434,16 +435,17 @@
         </div>
       {/if}
       {#if showMentionAutocomplete}
-        <div class="mention-autocomplete" id="mention-autocomplete">
+        <div class="mention-autocomplete" id="mention-autocomplete" role="listbox">
           {#each mentionSuggestions as m, i}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="mention-option"
               class:selected={i === mentionSelectedIdx}
               data-peer-id={m.peerId}
               data-name={m.name}
               onmousedown={(e) => { e.preventDefault(); insertMention(m.name); }}
+              role="option"
+              aria-selected={i === mentionSelectedIdx}
+              tabindex="-1"
             >
               <span class="mention-option-name">{m.name}</span>
               <span class="mention-option-id">{m.peerId.slice(0, 8)}</span>
