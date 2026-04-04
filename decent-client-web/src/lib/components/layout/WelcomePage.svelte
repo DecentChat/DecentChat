@@ -236,48 +236,52 @@
   <section class="lp-compare">
     <div class="lp-container">
       <h2 class="lp-section-title">The honest comparison</h2>
-      <div class="lp-compare-table" role="table" aria-label="Feature comparison: traditional chat apps vs DecentChat">
-        <div class="lp-compare-header" role="row">
-          <span role="columnheader">Feature</span>
-          <span role="columnheader">Discord / WhatsApp / Telegram</span>
-          <span class="lp-compare-us" role="columnheader">DecentChat 🐙</span>
-        </div>
-        <div class="lp-compare-row" role="row">
-          <span role="cell">Messages stored on servers</span>
-          <span class="bad" role="cell">✓ Yes</span>
-          <span class="good" role="cell">✗ Never</span>
-        </div>
-        <div class="lp-compare-row" role="row">
-          <span role="cell">Requires phone / email</span>
-          <span class="bad" role="cell">✓ Required</span>
-          <span class="good" role="cell">✗ None needed</span>
-        </div>
-        <div class="lp-compare-row" role="row">
-          <span role="cell">ID or face scan to access</span>
-          <span class="bad" role="cell">✓ Discord requires it now</span>
-          <span class="good" role="cell">✗ Never</span>
-        </div>
-        <div class="lp-compare-row" role="row">
-          <span role="cell">End-to-end encrypted by default</span>
-          <span class="mid" role="cell">⚠️ Partial</span>
-          <span class="good" role="cell">✓ Always</span>
-        </div>
-        <div class="lp-compare-row" role="row">
-          <span role="cell">Can be legally subpoenaed</span>
-          <span class="bad" role="cell">✓ Yes</span>
-          <span class="good" role="cell">Nothing to hand over</span>
-        </div>
-        <div class="lp-compare-row" role="row">
-          <span role="cell">Survives company going bust</span>
-          <span class="bad" role="cell">✗ App dies too</span>
-          <span class="good" role="cell">✓ Protocol lives forever</span>
-        </div>
-        <div class="lp-compare-row" role="row">
-          <span role="cell">Forward secrecy</span>
-          <span class="mid" role="cell">⚠️ Sometimes</span>
-          <span class="good" role="cell">✓ Every message</span>
-        </div>
-      </div>
+      <table class="lp-compare-table" aria-label="Feature comparison: traditional chat apps vs DecentChat">
+        <thead>
+          <tr class="lp-compare-header">
+            <th scope="col">Feature</th>
+            <th scope="col">Discord / WhatsApp / Telegram</th>
+            <th scope="col" class="lp-compare-us">DecentChat 🐙</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="lp-compare-row">
+            <td>Messages stored on servers</td>
+            <td class="bad">✓ Yes</td>
+            <td class="good">✗ Never</td>
+          </tr>
+          <tr class="lp-compare-row">
+            <td>Requires phone / email</td>
+            <td class="bad">✓ Required</td>
+            <td class="good">✗ None needed</td>
+          </tr>
+          <tr class="lp-compare-row">
+            <td>ID or face scan to access</td>
+            <td class="bad">✓ Discord requires it now</td>
+            <td class="good">✗ Never</td>
+          </tr>
+          <tr class="lp-compare-row">
+            <td>End-to-end encrypted by default</td>
+            <td class="mid">⚠️ Partial</td>
+            <td class="good">✓ Always</td>
+          </tr>
+          <tr class="lp-compare-row">
+            <td>Can be legally subpoenaed</td>
+            <td class="bad">✓ Yes</td>
+            <td class="good">Nothing to hand over</td>
+          </tr>
+          <tr class="lp-compare-row">
+            <td>Survives company going bust</td>
+            <td class="bad">✗ App dies too</td>
+            <td class="good">✓ Protocol lives forever</td>
+          </tr>
+          <tr class="lp-compare-row">
+            <td>Forward secrecy</td>
+            <td class="mid">⚠️ Sometimes</td>
+            <td class="good">✓ Every message</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </section>
 
