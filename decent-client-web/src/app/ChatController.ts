@@ -8456,10 +8456,36 @@ export class ChatController {
   }
 
   async startHuddle(channelId: string): Promise<void> {
+    // Guard: check signaling server connectivity before starting a huddle.
+    // Without signaling, we cannot discover or reach peers, so the huddle
+    // would silently fail with no user feedback.
+    const signalingStatus = typeof this.transport?.getSignalingStatus === 'function'
+      ? this.transport.getSignalingStatus()
+      : [];
+    const signalingConnected = signalingStatus.length === 0 ||
+      signalingStatus.some((s: any) => !!s.connected);
+
+    if (!signalingConnected) {
+      this.ui?.showToast('Huddle unavailable — not connected to signaling server', 'error');
+      return;
+    }
+
     await this.huddle?.startHuddle(channelId);
   }
 
   async joinHuddle(channelId: string): Promise<void> {
+    // Guard: check signaling server connectivity before joining a huddle.
+    const signalingStatus = typeof this.transport?.getSignalingStatus === 'function'
+      ? this.transport.getSignalingStatus()
+      : [];
+    const signalingConnected = signalingStatus.length === 0 ||
+      signalingStatus.some((s: any) => !!s.connected);
+
+    if (!signalingConnected) {
+      this.ui?.showToast('Huddle unavailable — not connected to signaling server', 'error');
+      return;
+    }
+
     await this.huddle?.joinHuddle(channelId);
   }
 
