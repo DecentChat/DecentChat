@@ -30,11 +30,11 @@
     </style>
   </head>
   <body>
-    <div id="loading">
+    <div id="loading" role="status" aria-live="polite">
       <img src="/icons/logo-v2-light.png" alt="DecentChat" class="loading-logo" />
       <div class="logo">DecentChat</div>
-      <div class="spinner"></div>
-      <div class="hint">Initializing encryption...</div>
+      <div class="spinner" aria-hidden="true"></div>
+      <div class="hint" aria-label="Loading status">Initializing encryption...</div>
     </div>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>

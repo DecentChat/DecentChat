@@ -13,6 +13,7 @@ import {
   shouldHydrateTitleTooltipAttribute,
 } from './ui/titleTooltipObserver';
 import { canGenerateSeed } from './lib/identity/seedSettings';
+import { ConnectionRetryProgress } from './app/ConnectionRetryProgress';
 
 // ─── Single-Tab Lock ─────────────────────────────────────────────────────────
 // Prevent multiple tabs from running simultaneously (shared IndexedDB,
@@ -936,8 +937,11 @@ async function init(): Promise<void> {
     let myPeerId: string = preferredPeerId || crypto.randomUUID();
 
     const initDelaysMs = [0, 800, 2000, 5000, 10_000];
+    const totalAttempts = initDelaysMs.length;
     let initError: Error | null = null;
-    for (let attempt = 0; attempt < initDelaysMs.length; attempt++) {
+    const retryProgress = new ConnectionRetryProgress(totalAttempts, { setLoadingHint });
+    for (let attempt = 0; attempt < totalAttempts; attempt++) {
+      retryProgress.beforeAttempt(attempt);
       if (attempt > 0) {
         await sleep(initDelaysMs[attempt]);
       }
@@ -954,11 +958,12 @@ async function init(): Promise<void> {
           myPeerId = transportId;
         }
         initError = null;
+        retryProgress.onSuccess();
         break;
       } catch (err) {
         initError = err as Error;
         console.warn(
-          `[DecentChat] Transport init attempt ${attempt + 1}/${initDelaysMs.length} failed:`,
+          `[DecentChat] Transport init attempt ${attempt + 1}/${totalAttempts} failed:`,
           initError.message,
         );
       }
@@ -966,7 +971,9 @@ async function init(): Promise<void> {
     if (initError) {
       // Signaling server unavailable — work offline with a deterministic/local ID.
       console.warn('[DecentChat] Signaling server unavailable, working offline:', initError.message);
+      retryProgress.onExhausted();
     }
+    const wentOffline = retryProgress.wentOffline;
 
     state.myPeerId = myPeerId;
     state.myAlias = myPeerId.slice(0, 8);
@@ -1005,6 +1012,12 @@ async function init(): Promise<void> {
       document.body.appendChild(svelteRoot);
       mount(App, { target: svelteRoot });
       appLog.info('Svelte 5 bridge + AppShell initialized');
+
+      // Show offline toast now that the Toast component is mounted
+      if (wentOffline) {
+        const { toast } = await import('./lib/components/shared/Toast.svelte');
+        toast('Offline mode \u2014 messages will sync when connected', 'info', 6000);
+      }
     } catch (err) {
       console.warn("[DecentChat] Svelte mount failed (non-fatal):", err);
     }
