@@ -395,12 +395,14 @@ test.describe('Channel Operations', () => {
     await expect(header).toContainText('general');
   });
 
-  test('channel has search, invite, and settings buttons', async () => {
+  test('channel has search, settings, and overflow with invite button', async () => {
     await createWorkspace(alice.page, 'Buttons Test', 'Alice');
 
     await expect(alice.page.locator('#search-btn')).toBeVisible();
-    await expect(alice.page.locator('#invite-btn')).toBeVisible();
     await expect(alice.page.locator('#settings-btn')).toBeVisible();
+    // Invite button is now inside the overflow menu
+    await alice.page.click('#overflow-menu-btn');
+    await expect(alice.page.locator('#invite-btn')).toBeVisible();
   });
 
   test('create channel via /create command', async () => {
@@ -694,9 +696,10 @@ test.describe('Invite URL Flow', () => {
     await expect(alice.page.locator('#copy-invite')).toBeVisible();
   });
 
-  test('invite button is visible in channel header', async () => {
+  test('invite button is visible in channel header overflow menu', async () => {
     await createWorkspace(alice.page, 'Header Copy', 'Alice');
 
+    await alice.page.click('#overflow-menu-btn');
     await expect(alice.page.locator('#invite-btn')).toBeVisible();
   });
 });

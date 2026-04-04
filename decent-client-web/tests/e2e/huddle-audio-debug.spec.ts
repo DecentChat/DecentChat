@@ -130,6 +130,7 @@ test.describe('Huddle Audio Debug', () => {
       console.log('[Test] P2P connected');
 
       // Alice starts huddle
+      await alice.page.click('#overflow-menu-btn');
       await alice.page.click('#huddle-start-btn');
       await alice.page.waitForFunction(() => {
         const bar = document.getElementById('huddle-bar');

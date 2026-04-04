@@ -129,11 +129,13 @@ test.describe('Huddle — Single User', () => {
     await context?.close();
   });
 
-  test('huddle start button appears in channel header', async () => {
+  test('huddle start button appears in overflow menu', async () => {
+    await page.click('#overflow-menu-btn');
     await expect(page.locator('#huddle-start-btn')).toBeVisible();
   });
 
   test('clicking start huddle shows active huddle bar', async () => {
+    await page.click('#overflow-menu-btn');
     await page.click('#huddle-start-btn');
 
     // Huddle bar should appear
@@ -151,6 +153,7 @@ test.describe('Huddle — Single User', () => {
   });
 
   test('mute button toggles mute state', async () => {
+    await page.click('#overflow-menu-btn');
     await page.click('#huddle-start-btn');
     await page.waitForFunction(
       () => {
@@ -182,6 +185,7 @@ test.describe('Huddle — Single User', () => {
   });
 
   test('leave button ends huddle and hides bar', async () => {
+    await page.click('#overflow-menu-btn');
     await page.click('#huddle-start-btn');
     await page.waitForFunction(
       () => {
@@ -256,6 +260,7 @@ test.describe('Huddle — Multi User', () => {
 
   test('Bob sees join banner when Alice starts a huddle', async () => {
     // Alice starts huddle
+    await alice.click('#overflow-menu-btn');
     await alice.click('#huddle-start-btn');
     await alice.waitForFunction(
       () => {
@@ -280,6 +285,7 @@ test.describe('Huddle — Multi User', () => {
 
   test('Bob joins huddle and both see participants', async () => {
     // Alice starts huddle
+    await alice.click('#overflow-menu-btn');
     await alice.click('#huddle-start-btn');
     await alice.waitForFunction(
       () => {
@@ -320,6 +326,7 @@ test.describe('Huddle — Multi User', () => {
 
   test('huddle ends when last member leaves', async () => {
     // Alice starts huddle
+    await alice.click('#overflow-menu-btn');
     await alice.click('#huddle-start-btn');
     await alice.waitForFunction(
       () => {
@@ -434,6 +441,7 @@ test.describe('Huddle — Audio & WebRTC Diagnostics', () => {
     bob.on('console', msg => { if (msg.text().includes('[Huddle]')) bobLogs.push(`Bob: ${msg.text()}`); });
 
     // Alice starts huddle
+    await alice.click('#overflow-menu-btn');
     await alice.click('#huddle-start-btn');
     await alice.waitForFunction(() => {
       const bar = document.getElementById('huddle-bar');

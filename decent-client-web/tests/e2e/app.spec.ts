@@ -507,8 +507,9 @@ test.describe('DecentChat E2E', () => {
     await expect(page.locator('#copy-invite')).toContainText('Invite people via link');
   });
 
-  test('header invite button exists', async ({ page }) => {
+  test('header invite button exists in overflow menu', async ({ page }) => {
     await createWorkspace(page);
+    await page.click('#overflow-menu-btn');
     await expect(page.locator('#invite-btn')).toBeVisible();
   });
 
@@ -528,11 +529,13 @@ test.describe('DecentChat E2E', () => {
 
   // ─── Channel Header ───────────────────────────────────────────────────
 
-  test('channel header shows search, invite, settings buttons', async ({ page }) => {
+  test('channel header shows search, settings, and invite in overflow', async ({ page }) => {
     await createWorkspace(page);
     await expect(page.locator('#search-btn')).toBeVisible();
-    await expect(page.locator('#invite-btn')).toBeVisible();
     await expect(page.locator('#settings-btn')).toBeVisible();
+    // Invite is now in overflow menu
+    await page.click('#overflow-menu-btn');
+    await expect(page.locator('#invite-btn')).toBeVisible();
   });
 
   // ─── Message Reactions ────────────────────────────────────────────────

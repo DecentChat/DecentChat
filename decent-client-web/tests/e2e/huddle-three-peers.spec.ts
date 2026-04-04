@@ -106,6 +106,7 @@ async function waitForPeerConnection(page: Page, expectedOnline = 2, timeoutMs =
 }
 
 async function startHuddle(page: Page) {
+  await page.click('#overflow-menu-btn');
   await page.click('#huddle-start-btn');
   await page.waitForFunction(() => {
     const bar = document.getElementById('huddle-bar');

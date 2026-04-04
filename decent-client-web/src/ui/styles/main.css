@@ -950,6 +950,60 @@ body {
 
 .icon-btn:hover { background: var(--bg-hover); color: var(--text); }
 
+/* Overflow menu for channel header secondary actions */
+.overflow-wrapper {
+  position: relative;
+}
+
+.overflow-trigger {
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+.overflow-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 100;
+  min-width: 200px;
+  padding: 4px 0;
+  margin-top: 4px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.overflow-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.overflow-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.overflow-menu-item.active {
+  color: var(--success, #00b894);
+}
+
+.overflow-menu-icon {
+  font-size: 16px;
+  width: 22px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
 /* === Messages Area === */
 .messages-area {
   flex: 1;
@@ -4644,9 +4698,7 @@ body:has(.landing-page) #app {
 
 
 @media (max-width: 390px) {
-  #qr-btn,
-  #connect-peer-header-btn,
-  #invite-btn { display: none; }
+  /* Secondary actions now live in overflow menu; no need to hide individual buttons */
   .channel-header-right { gap: 0; }
 }
 
@@ -4698,8 +4750,7 @@ html, body {
     font-size: 18px;
   }
 
-  /* Channel header — hide less critical buttons on tiny screens */
-  #huddle-start-btn { display: none; }
+  /* Huddle button now in overflow menu — no longer hidden individually */
 
   /* Messages list tighter on tiny screens */
   .messages-list {

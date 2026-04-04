@@ -1,6 +1,7 @@
 <!--
   ChannelHeader.svelte — Replaces renderChannelHeaderHTML() in UIRenderer.
   Renders the channel header with name, member count, and action buttons.
+  Secondary actions are grouped behind an overflow (⋯) menu.
 -->
 <script lang="ts">
   interface PresenceSummary {
@@ -53,6 +54,7 @@
   }: Props = $props();
 
   let loadingMorePresence = $state(false);
+  let overflowOpen = $state(false);
 
   async function loadMorePresenceSample() {
     if (loadingMorePresence || !presence.hasMore) return;
@@ -63,7 +65,35 @@
       loadingMorePresence = false;
     }
   }
+
+  function toggleOverflow() {
+    overflowOpen = !overflowOpen;
+  }
+
+  function closeOverflow() {
+    overflowOpen = false;
+  }
+
+  function handleOverflowAction(action: () => void) {
+    action();
+    closeOverflow();
+  }
+
+  function handleOverflowKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      closeOverflow();
+    }
+  }
+
+  function handleClickOutside(e: MouseEvent) {
+    const target = e.target as HTMLElement;
+    if (!target.closest('.overflow-wrapper')) {
+      closeOverflow();
+    }
+  }
 </script>
+
+<svelte:document onclick={overflowOpen ? handleClickOutside : undefined} />
 
 <div class="channel-header" data-testid="channel-header">
   <div class="channel-header-left">
@@ -98,23 +128,64 @@
   </div>
   {#if hasActiveChannel}
     <div class="channel-header-right">
-      {#if !isDirectMessage}
-        <button
-          class="icon-btn{isHuddleActive ? ' huddle-start-btn active' : ''}"
-          id="huddle-start-btn"
-          title="Start Huddle"
-          onclick={onHuddleToggle}
-        >🎧</button>
-      {/if}
-      <button class="icon-btn" id="connect-peer-header-btn" title="Connect to peer" onclick={onConnectPeer}>🔌</button>
-      {#if !isDirectMessage}
-        <button class="icon-btn" id="qr-btn" title="QR Code" onclick={onShowQR}>📱</button>
-      {/if}
+      <!-- Primary actions: always visible -->
       <button class="icon-btn" id="search-btn" title="Search messages (Ctrl+F)" onclick={onSearch}>🔍</button>
-      {#if !isDirectMessage}
-        <button class="icon-btn" id="invite-btn" title="Invite code" onclick={onInvite}>🔗</button>
-      {/if}
       <button class="icon-btn" id="settings-btn" title="Settings" onclick={onSettings}>⚙️</button>
+
+      <!-- Overflow menu: secondary actions -->
+      {#if !isDirectMessage}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="overflow-wrapper" onkeydown={handleOverflowKeydown}>
+          <button
+            class="icon-btn overflow-trigger"
+            id="overflow-menu-btn"
+            title="More actions"
+            aria-haspopup="menu"
+            aria-expanded={overflowOpen}
+            onclick={toggleOverflow}
+          >⋯</button>
+          {#if overflowOpen}
+            <div class="overflow-menu" role="menu">
+              <button
+                class="overflow-menu-item{isHuddleActive ? ' active' : ''}"
+                role="menuitem"
+                id="huddle-start-btn"
+                onclick={() => handleOverflowAction(onHuddleToggle)}
+              >
+                <span class="overflow-menu-icon">🎧</span>
+                <span>{isHuddleActive ? 'Leave Huddle' : 'Start Huddle'}</span>
+              </button>
+              <button
+                class="overflow-menu-item"
+                role="menuitem"
+                id="connect-peer-header-btn"
+                onclick={() => handleOverflowAction(onConnectPeer)}
+              >
+                <span class="overflow-menu-icon">🔌</span>
+                <span>Connect to peer</span>
+              </button>
+              <button
+                class="overflow-menu-item"
+                role="menuitem"
+                id="qr-btn"
+                onclick={() => handleOverflowAction(onShowQR)}
+              >
+                <span class="overflow-menu-icon">📱</span>
+                <span>QR Code</span>
+              </button>
+              <button
+                class="overflow-menu-item"
+                role="menuitem"
+                id="invite-btn"
+                onclick={() => handleOverflowAction(onInvite)}
+              >
+                <span class="overflow-menu-icon">🔗</span>
+                <span>Invite code</span>
+              </button>
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
   {/if}
 </div>

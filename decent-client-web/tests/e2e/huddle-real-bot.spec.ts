@@ -45,8 +45,8 @@ test.skip('Real browser joins huddle and captures bot audio diagnostics', async 
     await page.click('.modal .btn-primary');
 
     // Wait for workspace to load
-    await page.waitForSelector('#huddle-start-btn', { timeout: 15000 });
-    console.log('[Test] Workspace loaded, huddle button visible');
+    await page.waitForSelector('#overflow-menu-btn', { timeout: 15000 });
+    console.log('[Test] Workspace loaded, overflow menu button visible');
 
     // Inject diagnostic script before starting huddle
     await page.evaluate(() => {
@@ -101,7 +101,8 @@ test.skip('Real browser joins huddle and captures bot audio diagnostics', async 
       };
     });
 
-    // Start huddle
+    // Start huddle (via overflow menu)
+    await page.click('#overflow-menu-btn');
     await page.click('#huddle-start-btn');
     console.log('[Test] Clicked Start Huddle');
 
