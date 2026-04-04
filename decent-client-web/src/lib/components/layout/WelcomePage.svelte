@@ -83,14 +83,22 @@
     window.location.assign('/app');
   }
 
-  function copyPeerId() {
-    copyToClipboard(myPeerId);
-    toast('Peer ID copied!');
+  async function copyPeerId() {
+    const copied = await copyToClipboard(myPeerId);
+    if (copied) {
+      toast('Peer ID copied!');
+    } else {
+      toast('Copy failed — check browser clipboard permission.');
+    }
   }
 
-  function copyDonationAddress(name: string, address: string) {
-    copyToClipboard(address);
-    toast(`${name} address copied!`);
+  async function copyDonationAddress(name: string, address: string) {
+    const copied = await copyToClipboard(address);
+    if (copied) {
+      toast(`${name} address copied!`);
+    } else {
+      toast('Copy failed — check browser clipboard permission.');
+    }
   }
 </script>
 

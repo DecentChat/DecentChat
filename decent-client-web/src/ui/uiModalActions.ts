@@ -695,9 +695,13 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
           return false;
         }
 
-        await copyToClipboard(invite.url);
-        showToast('Invite link copied!', 'success');
-        return true;
+        const copied = await copyToClipboard(invite.url);
+        if (copied) {
+          showToast('Invite link copied!', 'success');
+        } else {
+          showToast('Copy failed — check browser clipboard permission.', 'info');
+        }
+        return copied;
       },
       onRevokeInvite: async (inviteId: string) => {
         if (!isAdminOrOwner) {

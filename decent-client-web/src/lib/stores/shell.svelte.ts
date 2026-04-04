@@ -223,9 +223,9 @@ export interface ShellCallbacks {
   onStartDM: () => void;
   onAddContact: () => void;
   onConnectPeer: () => void;
-  onCopyInvite: () => void;
+  onCopyInvite: () => Promise<void> | void;
   onShowQR: () => void;
-  onCopyPeerId: () => void;
+  onCopyPeerId: () => Promise<void> | void;
   onWorkspaceSettings: () => void;
   onWorkspaceMembers: () => void;
   onWorkspaceInvite: () => void;

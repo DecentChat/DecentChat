@@ -148,8 +148,12 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
     if (!state.activeWorkspaceId) return;
     const inviteURL = await callbacks.generateInviteURL?.(state.activeWorkspaceId);
     if (inviteURL) {
-      await copyToClipboard(inviteURL);
-      showToast(successMessage, 'success');
+      const copied = await copyToClipboard(inviteURL);
+      if (copied) {
+        showToast(successMessage, 'success');
+      } else {
+        showToast('Invite created. Copy failed — check browser clipboard permission.', 'info');
+      }
     }
   };
 
@@ -221,7 +225,14 @@ export function registerShellCallbacks(ctx: RegisterShellCallbacksContext): void
       await copyInviteForActiveWorkspace('Invite link copied!');
     },
     onShowQR: () => modalActions.showMyQR(),
-    onCopyPeerId: () => { copyToClipboard(state.myPeerId); showToast('Peer ID copied!'); },
+    onCopyPeerId: async () => {
+      const copied = await copyToClipboard(state.myPeerId);
+      if (copied) {
+        showToast('Peer ID copied!', 'success');
+      } else {
+        showToast('Copy failed — check browser clipboard permission.', 'info');
+      }
+    },
     onWorkspaceSettings: () => modalActions.showWorkspaceSettingsModal(),
     onWorkspaceMembers: () => modalActions.showWorkspaceMembersModal(),
     onWorkspaceInvite: async () => {
