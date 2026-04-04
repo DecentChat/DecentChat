@@ -38,6 +38,12 @@
     cleanupAppEvents();
   });
 
+  // Derived: true when a channel or direct conversation is active.
+  // Used to hide compose area and header action buttons when nothing is selected.
+  let hasActiveConversation = $derived(
+    !!shellData.messages.activeChannelId || !!shellData.sidebar.activeDirectConversationId
+  );
+
   // Re-bind event listeners when the view changes (e.g. welcome -> app),
   // because elements like #messages-list and .messages-area don't exist
   // until the 'app' view renders.
@@ -241,6 +247,7 @@
               presence={shellData.header.presence}
               isDirectMessage={shellData.header.isDirectMessage}
               isHuddleActive={shellData.header.isHuddleActive}
+              hasActiveChannel={hasActiveConversation}
               onHamburger={cb.onHamburger}
               onHuddleToggle={cb.onHuddleToggle}
               onConnectPeer={cb.onHeaderConnectPeer}
@@ -320,7 +327,7 @@
             </div>
             <div id="huddle-bar-mount"></div>
             <div id="compose-mount">
-              {#if cb}
+              {#if cb && hasActiveConversation}
                 <ComposeArea
                   placeholder={shellData.compose.placeholder}
                   target="main"

@@ -20,6 +20,8 @@
     presence: PresenceSummary;
     isDirectMessage: boolean;
     isHuddleActive: boolean;
+    /** When false, hides action buttons (no channel/DM selected). */
+    hasActiveChannel?: boolean;
     // Callbacks
     onHamburger: () => void;
     onHuddleToggle: () => void;
@@ -38,6 +40,7 @@
     presence,
     isDirectMessage,
     isHuddleActive,
+    hasActiveChannel = true,
     onHamburger,
     onHuddleToggle,
     onConnectPeer,
@@ -66,7 +69,7 @@
   <div class="channel-header-left">
     <button class="icon-btn hamburger" id="hamburger-btn" onclick={onHamburger}>☰</button>
     <h2>{channelName}</h2>
-    {#if !isDirectMessage && memberCount > 0}
+    {#if hasActiveChannel && !isDirectMessage && memberCount > 0}
       <button
         class="member-count"
         id="channel-members-btn"
@@ -93,23 +96,25 @@
       {/if}
     {/if}
   </div>
-  <div class="channel-header-right">
-    {#if !isDirectMessage}
-      <button
-        class="icon-btn{isHuddleActive ? ' huddle-start-btn active' : ''}"
-        id="huddle-start-btn"
-        title="Start Huddle"
-        onclick={onHuddleToggle}
-      >🎧</button>
-    {/if}
-    <button class="icon-btn" id="connect-peer-header-btn" title="Connect to peer" onclick={onConnectPeer}>🔌</button>
-    {#if !isDirectMessage}
-      <button class="icon-btn" id="qr-btn" title="QR Code" onclick={onShowQR}>📱</button>
-    {/if}
-    <button class="icon-btn" id="search-btn" title="Search messages (Ctrl+F)" onclick={onSearch}>🔍</button>
-    {#if !isDirectMessage}
-      <button class="icon-btn" id="invite-btn" title="Invite code" onclick={onInvite}>🔗</button>
-    {/if}
-    <button class="icon-btn" id="settings-btn" title="Settings" onclick={onSettings}>⚙️</button>
-  </div>
+  {#if hasActiveChannel}
+    <div class="channel-header-right">
+      {#if !isDirectMessage}
+        <button
+          class="icon-btn{isHuddleActive ? ' huddle-start-btn active' : ''}"
+          id="huddle-start-btn"
+          title="Start Huddle"
+          onclick={onHuddleToggle}
+        >🎧</button>
+      {/if}
+      <button class="icon-btn" id="connect-peer-header-btn" title="Connect to peer" onclick={onConnectPeer}>🔌</button>
+      {#if !isDirectMessage}
+        <button class="icon-btn" id="qr-btn" title="QR Code" onclick={onShowQR}>📱</button>
+      {/if}
+      <button class="icon-btn" id="search-btn" title="Search messages (Ctrl+F)" onclick={onSearch}>🔍</button>
+      {#if !isDirectMessage}
+        <button class="icon-btn" id="invite-btn" title="Invite code" onclick={onInvite}>🔗</button>
+      {/if}
+      <button class="icon-btn" id="settings-btn" title="Settings" onclick={onSettings}>⚙️</button>
+    </div>
+  {/if}
 </div>
