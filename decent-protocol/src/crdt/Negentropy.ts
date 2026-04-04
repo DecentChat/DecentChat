@@ -46,6 +46,7 @@ const SPLIT_BUCKETS = 16;
 interface Entry {
   key: string;
   item: NegentropyItem;
+  hash: Uint8Array;
 }
 
 export class Negentropy {
@@ -59,9 +60,16 @@ export class Negentropy {
       return a.id.localeCompare(b.id);
     });
 
-    this.entries = this.items.map((item) => ({
+    // Pre-compute SHA-256 hashes for all items during build so that
+    // fingerprintEntries only needs synchronous XOR operations.
+    const hashes = await Promise.all(
+      this.items.map((item) => this.hashItem(item)),
+    );
+
+    this.entries = this.items.map((item, i) => ({
       key: this.makeKey(item),
       item,
+      hash: hashes[i],
     }));
 
     this.itemMap = new Map(this.items.map((item) => [item.id, item]));
@@ -76,7 +84,7 @@ export class Negentropy {
       ranges: [{
         start: null,
         end: null,
-        fingerprint: await this.fingerprintEntries(this.entries),
+        fingerprint: this.fingerprintEntries(this.entries),
         count: this.entries.length,
       }],
     };
@@ -96,7 +104,7 @@ export class Negentropy {
 
     for (const remoteRange of query.ranges) {
       const localEntries = this.getEntriesInRange(remoteRange.start, remoteRange.end);
-      const localFingerprint = await this.fingerprintEntries(localEntries);
+      const localFingerprint = this.fingerprintEntries(localEntries);
 
       if (remoteRange.count === localEntries.length && remoteRange.fingerprint === localFingerprint) {
         continue;
@@ -118,7 +126,7 @@ export class Negentropy {
           start: partition.start,
           end: partition.end,
           count: partEntries.length,
-          fingerprint: await this.fingerprintEntries(partEntries),
+          fingerprint: this.fingerprintEntries(partEntries),
         });
       }
     }
@@ -174,7 +182,7 @@ export class Negentropy {
           start: requestedRange.start,
           end: requestedRange.end,
           count: localEntries.length,
-          fingerprint: await this.fingerprintEntries(localEntries),
+          fingerprint: this.fingerprintEntries(localEntries),
         });
       }
 
@@ -252,12 +260,12 @@ export class Negentropy {
     return ranges.length > 0 ? ranges : [{ start: range.start, end: range.end }];
   }
 
-  private async fingerprintEntries(entries: Entry[]): Promise<string> {
+  private fingerprintEntries(entries: Entry[]): string {
     if (entries.length === 0) return EMPTY_FINGERPRINT;
 
     const xor = new Uint8Array(32);
     for (const entry of entries) {
-      const hash = await this.hashItem(entry.item);
+      const hash = entry.hash;
       for (let i = 0; i < xor.length; i++) {
         xor[i] ^= hash[i];
       }
