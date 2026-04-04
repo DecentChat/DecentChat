@@ -3697,8 +3697,8 @@ body.compact .messages-list { gap: 0; }
   text-underline-offset: 4px;
 }
 .lp-inline-link:hover {
-  color: #463ab8;
-  text-decoration-color: rgba(91,79,209,0.8);
+  color: #c2b9ff; /* was #463ab8 — invisible on dark bg; now WCAG AA pass on #0f0f23 */
+  text-decoration-color: rgba(162,155,254,0.8);
 }
 .btn-lg { padding: 14px 28px !important; font-size: 16px !important; font-weight: 700 !important; }
 .lp-hero-note {
@@ -3739,7 +3739,6 @@ body.compact .messages-list { gap: 0; }
 }
 .lp-problem-grid {
   display: flex;
-  gap: 0;
   align-items: stretch;
   flex-wrap: wrap;
   gap: 16px;
@@ -3891,7 +3890,7 @@ body.compact .messages-list { gap: 0; }
 }
 
 .lp-feature-card--highlight::after {
-  content: "vs Discord ↗";
+  content: "vs Discord";
   position: absolute;
   top: 14px;
   right: 14px;
@@ -3935,9 +3934,9 @@ body.compact .messages-list { gap: 0; }
 }
 .lp-compare-us { color: var(--primary); font-weight: 700; }
 .lp-compare-row:nth-child(even) { background: var(--bg-secondary); }
-.lp-compare-row .bad { color: #e74c3c; font-weight: 600; }
-.lp-compare-row .mid { color: #d4870e; font-weight: 600; }
-.lp-compare-row .good { color: #00b894; font-weight: 600; }
+.lp-compare-row .bad { color: var(--error); font-weight: 600; }
+.lp-compare-row .mid { color: var(--warning); font-weight: 600; }
+.lp-compare-row .good { color: var(--success); font-weight: 600; }
 .lp-compare-row td:last-child {
   background: rgba(0,184,148,0.07);
   padding: 4px 10px;
@@ -4167,6 +4166,10 @@ body.compact .messages-list { gap: 0; }
   font-family: 'SF Mono', 'Fira Code', monospace;
   cursor: pointer;
 }
+.lp-footer-peer code:hover {
+  text-decoration: underline;
+  opacity: 0.85;
+}
 
 /* ── Responsive ── */
 @media (max-width: 768px) {
@@ -4212,8 +4215,68 @@ body.compact .messages-list { gap: 0; }
   .lp-support-grid { grid-template-columns: 1fr; }
   .lp-support-card-top { flex-direction: column; }
   .lp-copy-btn { width: 100%; }
-  .lp-compare-header th:nth-child(2),
-  .lp-compare-row td:nth-child(2) { display: none; }
+  /* Comparison table: stacked card layout on mobile to preserve competitive context */
+  .lp-compare-table {
+    border: none;
+    border-radius: 0;
+  }
+  .lp-compare-table thead { display: none; }
+  .lp-compare-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .lp-compare-row {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+  .lp-compare-row:nth-child(even) { background: none; }
+  .lp-compare-row td {
+    display: block;
+    width: 100% !important;
+    padding: 10px 16px;
+    font-size: 13px;
+    border-bottom: none;
+  }
+  /* Feature name as card header */
+  .lp-compare-row td:first-child {
+    background: var(--bg-secondary);
+    font-weight: 700;
+    font-size: 13px;
+    padding: 12px 16px 8px;
+    color: var(--text); /* was var(--text-primary) which is undefined */
+    border-bottom: 1px solid var(--border-light);
+  }
+  /* Competitor column with inline label */
+  .lp-compare-row td:nth-child(2) {
+    padding: 8px 16px 4px;
+  }
+  .lp-compare-row td:nth-child(2)::before {
+    content: "Others: ";
+    font-weight: 600;
+    color: var(--text-muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  /* DecentChat column with inline label */
+  .lp-compare-row td:last-child {
+    padding: 4px 16px 12px;
+    background: none;
+    border: none;
+    border-radius: 0;
+  }
+  .lp-compare-row td:last-child::before {
+    content: "DecentChat: ";
+    font-weight: 600;
+    color: var(--primary);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
   .lp-compare-us { color: var(--primary); }
   .landing-nav-join-link { display: none; }
   .lp-hero-path-note,

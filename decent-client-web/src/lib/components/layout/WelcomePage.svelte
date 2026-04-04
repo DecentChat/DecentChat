@@ -268,7 +268,7 @@
           <tr class="lp-compare-row">
             <td>Can be legally subpoenaed</td>
             <td class="bad">✓ Yes</td>
-            <td class="good">Nothing to hand over</td>
+            <td class="good">✗ Nothing to hand over</td>
           </tr>
           <tr class="lp-compare-row">
             <td>Survives company going bust</td>
@@ -380,8 +380,6 @@
         <p class="lp-footer-note">Open protocol · No tracking · No ads · Built with ❤️ and WebRTC</p>
         <p class="lp-footer-peer">
           Your anonymous ID:
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <code id="welcome-peer-id" title="Click to copy" onclick={copyPeerId}>{myPeerId.slice(0, 20)}…</code>
