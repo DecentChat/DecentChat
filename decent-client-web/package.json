@@ -17,9 +17,9 @@
     "test:integration:all": "bun run test:integration:bun && PW_SCOPE=all playwright test tests/integration/",
     "test:integration:headed": "bun run test:integration:bun && PW_SCOPE=integration playwright test --project=chromium --headed",
     "test:integration:migration": "PW_ENABLE_SIGNALING=0 playwright test tests/integration/migration-sync-convergence.spec.ts",
-    "test:unit": "bun test tests/unit/",
+    "test:unit": "bun test ./tests/unit/",
     "test:e2e:live-smoke": "playwright test -c playwright.live-smoke.config.ts",
-    "test:integration:bun": "bun test tests/integration/capability-peer-failure.spec.ts tests/integration/presence-slices.spec.ts tests/integration/public-channel-fanout.spec.ts tests/integration/public-workspace-mixed-client.spec.ts"
+    "test:integration:bun": "bun test ./tests/integration/capability-peer-failure.spec.ts ./tests/integration/presence-slices.spec.ts ./tests/integration/public-channel-fanout.spec.ts ./tests/integration/public-workspace-mixed-client.spec.ts"
   },
   "license": "MIT",
   "dependencies": {

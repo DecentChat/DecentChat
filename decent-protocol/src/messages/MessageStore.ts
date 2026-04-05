@@ -16,12 +16,41 @@ export class MessageStore {
   private hashChain: HashChain;
   // In-memory store per channel (channelId → messages[])
   private channels = new Map<string, PlaintextMessage[]>();
+  // O(1) duplicate-ID lookup per channel — kept in sync with `channels`.
+  private channelIdSets = new Map<string, Set<string>>();
   // Thread root snapshots — copies of parent messages that started threads.
   // Stored separately from the hash chain to preserve thread context after channel compaction.
   private threadRoots = new Map<string, PlaintextMessage>();
 
   constructor() {
     this.hashChain = new HashChain();
+  }
+
+  /** Ensure both the message array and ID set exist for a channel. */
+  private ensureChannel(channelId: string): { msgs: PlaintextMessage[]; ids: Set<string> } {
+    if (!this.channels.has(channelId)) {
+      this.channels.set(channelId, []);
+      this.channelIdSets.set(channelId, new Set());
+    }
+    return {
+      msgs: this.channels.get(channelId)!,
+      ids: this.channelIdSets.get(channelId)!,
+    };
+  }
+
+  /** Binary-search for the first index where msgs[i].timestamp > target. */
+  private upperBoundTimestamp(msgs: PlaintextMessage[], target: number): number {
+    let lo = 0;
+    let hi = msgs.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (msgs[mid].timestamp <= target) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
   }
 
   /**
@@ -65,10 +94,10 @@ export class MessageStore {
    * Verifies hash chain integrity before adding
    */
   async addMessage(message: PlaintextMessage): Promise<{ success: boolean; error?: string }> {
-    const channelMessages = this.channels.get(message.channelId) || [];
+    const { msgs: channelMessages, ids } = this.ensureChannel(message.channelId);
 
     // Reject duplicate IDs early to keep insertions replay-safe.
-    if (channelMessages.some(m => m.id === message.id)) {
+    if (ids.has(message.id)) {
       return { success: false, error: `Duplicate message ID: ${message.id}` };
     }
 
@@ -109,10 +138,8 @@ export class MessageStore {
     }
 
     // Add to store
-    if (!this.channels.has(message.channelId)) {
-      this.channels.set(message.channelId, []);
-    }
-    this.channels.get(message.channelId)!.push(message);
+    channelMessages.push(message);
+    ids.add(message.id);
 
     return { success: true };
   }
@@ -123,19 +150,17 @@ export class MessageStore {
    * The hash chain was already verified when messages were first received.
    */
   forceAdd(message: PlaintextMessage): void {
-    if (!this.channels.has(message.channelId)) {
-      this.channels.set(message.channelId, []);
-    }
-    const msgs = this.channels.get(message.channelId)!;
-    // Avoid duplicates
-    if (msgs.some(m => m.id === message.id)) return;
-    // Insert in timestamp order
-    const insertIdx = msgs.findIndex(m => m.timestamp > message.timestamp);
-    if (insertIdx === -1) {
+    const { msgs, ids } = this.ensureChannel(message.channelId);
+    // Avoid duplicates — O(1) via Set
+    if (ids.has(message.id)) return;
+    // Insert in timestamp order — O(log n) via binary search
+    const insertIdx = this.upperBoundTimestamp(msgs, message.timestamp);
+    if (insertIdx === msgs.length) {
       msgs.push(message);
     } else {
       msgs.splice(insertIdx, 0, message);
     }
+    ids.add(message.id);
   }
 
   /**
@@ -153,16 +178,13 @@ export class MessageStore {
       byChannel.get(msg.channelId)!.push(msg);
     }
     for (const [channelId, newMsgs] of byChannel) {
-      if (!this.channels.has(channelId)) {
-        this.channels.set(channelId, []);
-      }
-      const existing = this.channels.get(channelId)!;
-      const existingIds = new Set(existing.map(m => m.id));
+      const { msgs: existing, ids: existingIds } = this.ensureChannel(channelId);
       const deduped = newMsgs.filter(m => !existingIds.has(m.id));
       if (deduped.length === 0) continue;
       // Merge: push all then sort once — O(n log n)
       for (const m of deduped) {
         existing.push(m);
+        existingIds.add(m.id);
       }
       existing.sort((a, b) => a.timestamp - b.timestamp);
       added += deduped.length;
@@ -237,6 +259,7 @@ export class MessageStore {
 
     // Replace channel messages (peer's chain is valid)
     this.channels.set(channelId, normalized);
+    this.channelIdSets.set(channelId, new Set(normalized.map(m => m.id)));
     return { success: true };
   }
 
@@ -272,14 +295,17 @@ export class MessageStore {
 
     // Merge with existing messages at newId, deduplicating by message ID,
     // then sort by timestamp to maintain chronological order.
-    const existing = this.channels.get(newId) || [];
-    const existingIds = new Set(existing.map(m => m.id));
+    const { msgs: existing, ids: existingIds } = this.ensureChannel(newId);
     const deduped = messages.filter(m => !existingIds.has(m.id));
     const merged = [...existing, ...deduped];
     merged.sort((a, b) => a.timestamp - b.timestamp);
 
+    // Rebuild ID set for the merged channel
+    const mergedIds = new Set(merged.map(m => m.id));
     this.channels.set(newId, merged);
+    this.channelIdSets.set(newId, mergedIds);
     this.channels.delete(oldId);
+    this.channelIdSets.delete(oldId);
 
     return this.channels.get(newId)!;
   }
@@ -294,7 +320,12 @@ export class MessageStore {
     if (!msgs || msgs.length <= maxSize) return 0;
     const evictCount = msgs.length - maxSize;
     // Messages are sorted by timestamp; splice off the oldest.
-    msgs.splice(0, evictCount);
+    const evicted = msgs.splice(0, evictCount);
+    // Remove evicted IDs from the set
+    const ids = this.channelIdSets.get(channelId);
+    if (ids) {
+      for (const m of evicted) ids.delete(m.id);
+    }
     return evictCount;
   }
 
@@ -305,15 +336,12 @@ export class MessageStore {
    */
   prependMessages(channelId: string, older: PlaintextMessage[]): number {
     if (older.length === 0) return 0;
-    if (!this.channels.has(channelId)) {
-      this.channels.set(channelId, []);
-    }
-    const existing = this.channels.get(channelId)!;
-    const existingIds = new Set(existing.map(m => m.id));
+    const { msgs: existing, ids: existingIds } = this.ensureChannel(channelId);
     const deduped = older.filter(m => !existingIds.has(m.id));
     if (deduped.length === 0) return 0;
     // Prepend (older messages go to the front).
     existing.unshift(...deduped);
+    for (const m of deduped) existingIds.add(m.id);
     return deduped.length;
   }
 
@@ -322,6 +350,7 @@ export class MessageStore {
    */
   clearChannel(channelId: string): void {
     this.channels.delete(channelId);
+    this.channelIdSets.delete(channelId);
   }
 
 

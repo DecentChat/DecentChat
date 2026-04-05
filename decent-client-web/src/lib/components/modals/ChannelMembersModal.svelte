@@ -61,6 +61,8 @@
 </script>
 
 <script lang="ts">
+  import { untrack } from 'svelte';
+
   interface CompanyProfile {
     automationKind?: string;
     roleTitle?: string;
@@ -110,7 +112,7 @@
     onClose,
   }: Props = $props();
 
-  let members = $state(initialMembers);
+  let members = $state(untrack(() => initialMembers));
   let loadingMore = $state(false);
   let visibleCount = $derived(members.length);
   let totalMemberCount = $derived(totalCount ?? visibleCount);

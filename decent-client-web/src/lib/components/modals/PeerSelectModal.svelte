@@ -43,6 +43,8 @@
 </script>
 
 <script lang="ts">
+  import { untrack } from 'svelte';
+
   interface Props {
     title: string;
     label: string;
@@ -69,7 +71,7 @@
 
   let selectedPeerId = $state('');
   let searchQuery = $state('');
-  let visiblePeers = $state(peers);
+  let visiblePeers = $state(untrack(() => peers));
   let searching = $state(false);
 
   let searchNonce = 0;

@@ -148,6 +148,7 @@
 </script>
 
 <script lang="ts">
+  import { untrack } from 'svelte';
   import type { AppSettings } from './SettingsModal.svelte';
 
   interface Props {
@@ -160,7 +161,7 @@
 
   let { settings: initialSettings, getSettings, saveSetting, onAction, onClose }: Props = $props();
 
-  let settings = $state<AppSettings>({ ...initialSettings });
+  let settings = $state<AppSettings>(untrack(() => ({ ...initialSettings })));
   let seedVisible = $state(false);
   let generatingSeed = $state(false);
 

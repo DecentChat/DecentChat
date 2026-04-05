@@ -58,6 +58,8 @@
 </script>
 
 <script lang="ts">
+  import { untrack } from 'svelte';
+
   interface WorkspaceInviteView {
     inviteId: string;
     inviteCode?: string;
@@ -113,13 +115,13 @@
     onClose,
   }: Props = $props();
 
-  let wsName = $state(initialName);
-  let wsDescription = $state(initialDesc);
-  let whoCanCreateChannels = $state(permissions.whoCanCreateChannels);
-  let whoCanInviteMembers = $state(permissions.whoCanInviteMembers);
+  let wsName = $state(untrack(() => initialName));
+  let wsDescription = $state(untrack(() => initialDesc));
+  let whoCanCreateChannels = $state(untrack(() => permissions.whoCanCreateChannels));
+  let whoCanInviteMembers = $state(untrack(() => permissions.whoCanInviteMembers));
 
-  let activeInvites = $state(inviteLists.active);
-  let revokedInvites = $state(inviteLists.revoked);
+  let activeInvites = $state(untrack(() => inviteLists.active));
+  let revokedInvites = $state(untrack(() => inviteLists.revoked));
   let inviteBusy = $state(false);
   let inviteBusyId = $state<string | null>(null);
 

@@ -75,6 +75,7 @@
 </script>
 
 <script lang="ts">
+  import { untrack } from 'svelte';
   import type { ContactURIData } from 'decent-protocol';
   import QRCode from 'qrcode';
   import QrScanner from 'qr-scanner';
@@ -98,7 +99,7 @@
 
   let { callbacks, initialMode, myQRData, seedMnemonic, recoverySourcePeerId, onClose }: Props = $props();
 
-  let mode = $state<Mode>(initialMode);
+  let mode = $state<Mode>(untrack(() => initialMode));
 
   let qrDataUrl = $state('');
   let myContactUri = $state('');
@@ -121,9 +122,9 @@
 
   let pendingSeed = $state('');
 
-  let scanVideoEl: HTMLVideoElement | null = null;
-  let restoreVideoEl: HTMLVideoElement | null = null;
-  let pasteInputEl: HTMLInputElement | null = null;
+  let scanVideoEl = $state<HTMLVideoElement | null>(null);
+  let restoreVideoEl = $state<HTMLVideoElement | null>(null);
+  let pasteInputEl = $state<HTMLInputElement | null>(null);
 
   let scanner: QrScanner | null = null;
   let restoreScanner: QrScanner | null = null;

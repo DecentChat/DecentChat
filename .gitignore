@@ -48,3 +48,4 @@ review-output/
 worktrees/
 .gstack/
 tmp
+opencode.json

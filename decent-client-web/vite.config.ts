@@ -23,6 +23,30 @@ export default defineConfig({
       '$lib': path.resolve(__dirname, 'src/lib'),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          // Vendor: PeerJS (WebRTC transport layer)
+          if (id.includes('peerjs')) {
+            return 'vendor-peerjs';
+          }
+          // Vendor: protocol crypto & identity primitives
+          if (id.includes('decent-protocol/src/crypto') || id.includes('decent-protocol/src/identity')) {
+            return 'vendor-protocol-crypto';
+          }
+          // Vendor: remaining protocol modules (messaging, sync, CRDT, storage, etc.)
+          if (id.includes('decent-protocol/src/')) {
+            return 'vendor-protocol-core';
+          }
+          // Vendor: WebRTC transport wrapper
+          if (id.includes('decent-transport-webrtc/src/')) {
+            return 'vendor-transport';
+          }
+        },
+      },
+    },
+  },
   define: {
     '__APP_VERSION__': JSON.stringify(VERSION),
     '__BUILD_TIME__': JSON.stringify(new Date().toISOString()),

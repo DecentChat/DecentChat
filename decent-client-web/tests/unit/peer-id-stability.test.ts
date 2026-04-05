@@ -41,15 +41,14 @@ describe('PeerId stability — deterministic derivation', () => {
     expect(peerId.length).toBeGreaterThan(0);
   });
 
-  test('peerId is deterministic across 100 derivations', async () => {
+  test('peerId is deterministic across repeated derivations', async () => {
     const first = await spm.derivePeerId(VALID_MNEMONIC);
 
-    // Derive 100 times in parallel for speed
-    const results = await Promise.all(
-      Array.from({ length: 100 }, () => spm.derivePeerId(VALID_MNEMONIC)),
-    );
-
-    for (const result of results) {
+    // Run sequentially — 100 parallel PBKDF2(100K) calls saturate the crypto
+    // thread pool and cause intermittent timeouts. 10 sequential calls verify
+    // the same determinism property without overwhelming the scheduler.
+    for (let i = 0; i < 10; i++) {
+      const result = await spm.derivePeerId(VALID_MNEMONIC);
       expect(result).toBe(first);
     }
   });

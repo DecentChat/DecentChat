@@ -1,0 +1,7 @@
+[test]
+# Scope bare `bun test` to unit tests only.
+# Playwright e2e/integration specs must be run via:
+#   bun run test:e2e          — Playwright e2e specs
+#   bun run test:integration  — Playwright + bun-native integration specs
+#   bun run test:unit         — same as bare `bun test`
+root = "./tests/unit"

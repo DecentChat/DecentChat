@@ -75,27 +75,10 @@ import { ConnectionRetryProgress } from './app/ConnectionRetryProgress';
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { initTooltips } from './ui/TooltipManager';
-import { ChatController } from './app/ChatController';
-import { LifecycleReconnectGuard } from './app/LifecycleReconnectGuard';
-import { createUIService, type UIService } from './ui/uiService';
-import { navigateFromNotification } from './ui/notificationNavigation';
-import { CommandParser } from './commands/CommandParser';
-import { registerCommands } from './commands/registerCommands';
-import {
-  buildCompanyTemplatePreview,
-  getLocalCompanyTemplate,
-  listLocalCompanyTemplates,
-} from './lib/company-sim/templateCatalog';
-import { describeCompanyTemplateInstallStatus } from './lib/company-sim/installStatus';
-import {
-  normalizeRuntimeBridgeInstallResult,
-  resolveCompanyTemplateRuntimeBridge,
-} from './lib/company-sim/runtimeBridge';
-import { setCompanySimControlPlaneTransport } from './lib/company-sim/controlPlane';
 import type { CompanyTemplateProvisioningMode } from './ui/types';
 import type { AppSettings } from './storage/types';
-import { SeedPhraseManager as _SeedPhraseManager, IdentityManager as _IdentityManager, createLogger } from '@decentchat/protocol';
-const _spm = new _SeedPhraseManager();
+// Import createLogger directly from source to avoid pulling in the entire protocol barrel
+import { createLogger } from '@decentchat/protocol';
 const appLog = createLogger('Main', 'app');
 const perfLog = createLogger('Main', 'perf');
 
@@ -349,6 +332,26 @@ function renderStartupError(error: unknown): void {
 
 async function init(): Promise<void> {
   const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+  // ── Lazy-load heavy modules to enable code splitting ──
+  const [
+    { ChatController },
+    { LifecycleReconnectGuard },
+    { createUIService },
+    { navigateFromNotification },
+    { CommandParser },
+    { registerCommands },
+    { setCompanySimControlPlaneTransport },
+  ] = await Promise.all([
+    import('./app/ChatController'),
+    import('./app/LifecycleReconnectGuard'),
+    import('./ui/uiService'),
+    import('./ui/notificationNavigation'),
+    import('./commands/CommandParser'),
+    import('./commands/registerCommands'),
+    import('./lib/company-sim/controlPlane'),
+  ]);
+
   const state: AppState = {
     myPeerId: '',
     myAlias: '',
@@ -368,23 +371,38 @@ async function init(): Promise<void> {
   const ctrl = new ChatController(state);
 
   setCompanySimControlPlaneTransport({
-    requestState: ({ workspaceId }) => ctrl.requestCompanySimStateViaControlPlane({ workspaceId }),
-    readDocument: ({ workspaceId, relativePath }) => ctrl.readCompanySimDocumentViaControlPlane({ workspaceId, relativePath }),
-    writeDocument: ({ workspaceId, relativePath, content }) => ctrl.writeCompanySimDocumentViaControlPlane({ workspaceId, relativePath, content }),
-    requestEmployeeContext: ({ workspaceId, employeeId }) => ctrl.requestCompanySimEmployeeContextViaControlPlane({ workspaceId, employeeId }),
-    requestRoutingPreview: ({ workspaceId, chatType, channelNameOrId, text, threadId }) =>
-      ctrl.requestCompanySimRoutingPreviewViaControlPlane({ workspaceId, chatType, channelNameOrId, text, threadId }),
+    requestState: (req) => ctrl.requestCompanySimStateViaControlPlane(req),
+    readDocument: (req) => ctrl.readCompanySimDocumentViaControlPlane(req),
+    writeDocument: (req) => ctrl.writeCompanySimDocumentViaControlPlane(req),
+    requestEmployeeContext: (req) => ctrl.requestCompanySimEmployeeContextViaControlPlane(req),
+    requestRoutingPreview: (req) => ctrl.requestCompanySimRoutingPreviewViaControlPlane(req),
   });
+
+  // SeedPhraseManager + IdentityManager for sync usage — protocol barrel is already
+  // in memory from ChatController import so this dynamic import resolves instantly.
+  const { SeedPhraseManager: _SeedPhraseManager, IdentityManager: _IdentityManager } = await import('@decentchat/protocol');
+  const _spm = new _SeedPhraseManager();
 
   // Create command parser
   const commandParser = new CommandParser();
   registerCommands(commandParser, ctrl, state);
 
+  // Lazy-load company-sim modules on first use (infrequent action)
   const installCompanyTemplateToWorkspace = async (request: {
     templateId: string;
     workspaceId: string;
     answers: Record<string, string>;
   }) => {
+    const [
+      { getLocalCompanyTemplate, buildCompanyTemplatePreview },
+      { describeCompanyTemplateInstallStatus },
+      { normalizeRuntimeBridgeInstallResult },
+    ] = await Promise.all([
+      import('./lib/company-sim/templateCatalog'),
+      import('./lib/company-sim/installStatus'),
+      import('./lib/company-sim/runtimeBridge'),
+    ]);
+
     const template = getLocalCompanyTemplate(request.templateId);
     if (!template) throw new Error(`Unknown template: ${request.templateId}`);
 
@@ -398,8 +416,8 @@ async function init(): Promise<void> {
       ...request,
       answers: installAnswers,
     })
-      .then((result) => normalizeRuntimeBridgeInstallResult(result))
-      .catch((controlError) => {
+      .then((result: any) => normalizeRuntimeBridgeInstallResult(result))
+      .catch((controlError: unknown) => {
         const controlMessage = (controlError as Error)?.message || String(controlError);
         throw new Error(`AI team install requires host provisioning and could not be completed (host control bridge: ${controlMessage}).`);
       });
@@ -592,6 +610,7 @@ async function init(): Promise<void> {
     loadOlderMessages: (channelId) => ctrl.loadOlderMessages(channelId),
     hasOlderMessages: (channelId) => ctrl.hasOlderMessages(channelId),
     listCompanyTemplates: async () => {
+      const { resolveCompanyTemplateRuntimeBridge } = await import('./lib/company-sim/runtimeBridge');
       const runtimeBridge = resolveCompanyTemplateRuntimeBridge();
       if (runtimeBridge?.listTemplates) {
         try {
@@ -605,6 +624,7 @@ async function init(): Promise<void> {
           });
         }
       }
+      const { listLocalCompanyTemplates } = await import('./lib/company-sim/templateCatalog');
       return listLocalCompanyTemplates();
     },
     installCompanyTemplate: async (request) => {

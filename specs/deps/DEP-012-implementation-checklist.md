@@ -21,9 +21,9 @@
 - [ ] Optional tooltip/detail: `acked/total`
 - [ ] Optional per-recipient delivery inspector in debug panel
 
-## Phase 5 — Tests (next)
-- [ ] Unit: recipient snapshot immutability
-- [ ] Unit: duplicate ACK idempotency
-- [ ] Unit: group message needs all ACKs for delivered
-- [ ] Integration: one recipient offline, replay on reconnect
-- [ ] Integration: sender refresh race + eventual delivery
+## Phase 5 — Tests
+- [x] Unit: recipient snapshot immutability
+- [x] Unit: duplicate ACK idempotency
+- [x] Unit: group message needs all ACKs for delivered
+- [x] Integration: one recipient offline, replay on reconnect
+- [x] Integration: partial delivery progress tracking

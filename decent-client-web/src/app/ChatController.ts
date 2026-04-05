@@ -83,7 +83,7 @@ import { IndexedDBBlobStorage } from '../storage/IndexedDBBlobStorage';
 import { StorageQuotaManager } from '../storage/StorageQuotaManager';
 // Database.ts is kept on disk (task #8 — not deleted yet) but is no longer
 // instantiated here; PersistentStore is the single source of truth.
-import { MessageProtocol } from '../messages/MessageProtocol';
+import type { MessageProtocol } from '../messages/MessageProtocol';
 import { PresenceManager } from '../ui/PresenceManager';
 import { ReactionManager } from '../ui/ReactionManager';
 import type { ReactionEvent } from '../ui/ReactionManager';
