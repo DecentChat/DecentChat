@@ -990,13 +990,11 @@ body {
 }
 
 .overflow-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 100;
+  position: fixed;
+  /* top/right set dynamically via inline style from ChannelHeader */
+  z-index: 9999;
   min-width: 200px;
   padding: 4px 0;
-  margin-top: 4px;
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -2694,6 +2692,10 @@ body.debug-mode .msg-delivery-detail {
 .message { position: relative; }
 .message:hover .message-actions-bar,
 .message:focus-within .message-actions-bar { display: flex; }
+
+/* While the overflow menu is open, suppress message hover so the
+   message-actions-bar doesn't flash behind the open menu. */
+body.overflow-menu-open .message:hover .message-actions-bar { display: none; }
 
 /* Thread follows the same floating behavior for consistency and no layout jump. */
 #thread-messages .message .message-actions-bar.in-thread {

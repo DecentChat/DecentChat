@@ -36,9 +36,15 @@
 
   let isInDMs = $derived(activeWorkspaceId === null);
   let showAddMenu = $state(false);
+  let addBtnEl = $state<HTMLElement | undefined>(undefined);
+  let menuPos = $state({ top: 0, left: 0 });
 
   function handleAddClick() {
     if (onJoinWorkspace) {
+      if (!showAddMenu && addBtnEl) {
+        const rect = addBtnEl.getBoundingClientRect();
+        menuPos = { top: rect.top, left: rect.right + 8 };
+      }
       showAddMenu = !showAddMenu;
     } else {
       onAddWorkspace();
@@ -120,13 +126,14 @@
     title="Create or join workspace"
     role="button"
     tabindex="0"
+    bind:this={addBtnEl}
     onclick={handleAddClick}
     onkeydown={(e) => e.key === 'Enter' && handleAddClick()}
   >
     +
   </div>
   {#if showAddMenu}
-    <div class="ws-add-menu" role="menu">
+    <div class="ws-add-menu" role="menu" style="top: {menuPos.top}px; left: {menuPos.left}px;">
       <button class="ws-add-menu-item" role="menuitem" onclick={handleCreate}>
         <span class="ws-add-menu-icon">+</span> Create workspace
       </button>
@@ -147,9 +154,7 @@
     z-index: 999;
   }
   .ws-add-menu {
-    position: absolute;
-    left: calc(100% + 8px);
-    bottom: 0;
+    position: fixed;
     background: var(--bg-secondary, #2b2d31);
     border: 1px solid var(--border-color, #3f4147);
     border-radius: 6px;
