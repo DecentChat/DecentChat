@@ -376,6 +376,16 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* button reset — sidebar-item can be a <button> for a11y */
+  background: none;
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 0;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  line-height: inherit;
 }
 
 .sidebar-item:hover {
@@ -407,6 +417,15 @@ body {
   padding: 10px 12px;
   border-radius: 10px;
   transition: background 0.15s;
+  /* button reset */
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  cursor: pointer;
 }
 
 .member-row:hover {
