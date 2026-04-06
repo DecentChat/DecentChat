@@ -2,6 +2,8 @@
 
 > Serverless, encrypted, peer-to-peer chat — like email, anyone can build a client.
 
+**[→ Try it live at decentchat.app](https://decentchat.app)**
+
 Inspired by **Bitcoin** (seed phrase identity, no central authority), **BitTorrent** (decentralized mesh, no servers), and **Signal Protocol** (E2E encryption, safety numbers, forward secrecy).
 
 Instead of Bitcoin's Proof of Work, DecentChat achieves consensus through **CRDTs** (Conflict-free Replicated Data Types) — a mathematical guarantee that all peers converge to the same state without mining, voting, or coordination. Combined with **vector clocks** for causal ordering and **Negentropy set reconciliation** for efficient sync, peers can go offline, diverge, and merge back seamlessly. No energy wasted, no blocks to wait for — just eventual consistency by design.
@@ -38,23 +40,14 @@ decent-client-web/        ← Reference Slack-like PWA (142KB JS)
 - **Efficient sync** — Negentropy set reconciliation (minimal delta exchange)
 - **Persistent** — IndexedDB survives refresh/restart
 - **NAT traversal** — STUN + TURN servers with retry
-- **PWA** — Installable on phone, works offline
-
-## Documentation
-
-- Docs site entry: [`docs/`](docs/)
-- Run locally: `bun run docs:dev`
-- Build static docs: `bun run docs:build`
-- Deploy docs: `bun run deploy:docs`
-- Protocol specifications: [`decent-protocol/spec/`](decent-protocol/spec/)
-- DEP process and proposals: [`specs/deps/`](specs/deps/)
+- **PWA** — Installable on mobile, works offline
 
 ## Quick Start
 
 ```bash
 bun install
 
-# Run tests (200 tests, 0 failures)
+# Run tests
 bun run test
 
 # Start dev server
@@ -63,48 +56,6 @@ bun run dev:client
 # Build for production
 bun run build:client
 ```
-
-## Local Perf + Integrity Runner
-
-Run local peer simulation scenarios (no CI required) with Bun:
-
-```bash
-# Baseline: all peers online
-bun run perf:smoke
-
-# Chaos: subset offline, then reconnect + queue flush
-bun run perf:reconnect
-```
-
-CLI flags (runner: `decent-protocol/tests/perf/run.ts`):
-
-- `--peers=<n>` number of simulated peers (default: `5`)
-- `--scenario=smoke|reconnect-chaos` scenario selection
-- `--check-integrity` fail process if any integrity check fails
-
-Report output:
-
-- `artifacts/perf-report.json`
-
-The report includes pass/fail checks for:
-- message/history integrity (missing/duplicate IDs, count consistency)
-- workspace integrity (channel/member consistency after settle)
-- thread integrity (`threadId`/`replyToId` linkage)
-- persistence integrity after restart (count + last IDs stable)
-- offline queue integrity (queued entries flush on reconnect)
-
-## Live Streaming Transport Smoke (Opt-in)
-
-For Alex: run this only when you want a real transport check for streamed assistant deltas.
-It uses 2 browser contexts and a local signaling server, so it is excluded from default Playwright runs.
-
-```bash
-# from repo root
-bun run test:e2e:live-smoke
-```
-
-This smoke verifies that a streamed assistant message is observed progressively on the receiving peer
-(multiple visible updates before finalization) over real peer transport, not direct event injection.
 
 ## Protocol Design
 
@@ -134,6 +85,35 @@ Your identity = your key pair. No email, no phone number, no server signup.
 - **Verification**: 60-digit safety number (like Signal) for in-person verification
 - **Multi-device**: Same seed phrase on multiple devices
 
+## Local Perf + Integrity Runner
+
+Run local peer simulation scenarios (no CI required):
+
+```bash
+# Baseline: all peers online
+bun run perf:smoke
+
+# Chaos: subset offline, then reconnect + queue flush
+bun run perf:reconnect
+```
+
+CLI flags (runner: `decent-protocol/tests/perf/run.ts`):
+
+- `--peers=<n>` number of simulated peers (default: `5`)
+- `--scenario=smoke|reconnect-chaos` scenario selection
+- `--check-integrity` fail process if any integrity check fails
+
+Report output: `artifacts/perf-report.json`
+
+Integrity checks cover message/history, workspace, thread, persistence, and offline queue consistency.
+
+## Documentation
+
+- Docs site: [`docs/`](docs/)
+- Run locally: `bun run docs:dev`
+- Protocol specifications: [`decent-protocol/spec/`](decent-protocol/spec/)
+- DEP process and proposals: [`specs/deps/`](specs/deps/)
+
 ## Specs
 
 Detailed protocol specifications in `decent-protocol/spec/`:
@@ -146,26 +126,41 @@ Detailed protocol specifications in `decent-protocol/spec/`:
 
 Formal evolution process for the protocol (inspired by Bitcoin BIPs, Nostr NIPs):
 
-- **[DEP-000](specs/deps/DEP-000.md)** — DEP Process (Final)
-- **[DEP-001](specs/deps/DEP-001.md)** — Negentropy Set Reconciliation (Draft)
-- **[DEP-002](specs/deps/DEP-002.md)** — Peer Exchange for Signaling Server Discovery (Draft)
+- **[DEP-000](specs/deps/DEP-000.md)** — DEP Process
+- **[DEP-001](specs/deps/DEP-001.md)** — Negentropy Set Reconciliation
+- **[DEP-002](specs/deps/DEP-002.md)** — Peer Exchange for Signaling Server Discovery
+- **[DEP-003](specs/deps/DEP-003-derived-peer-id.md)** — Derived Peer ID
+- **[DEP-004](specs/deps/DEP-004-heartbeat.md)** — Heartbeat
+- **[DEP-005](specs/deps/DEP-005-delivery-ack.md)** — Delivery Acknowledgement
+- **[DEP-006](specs/deps/DEP-006-pre-keys.md)** — Pre-Key Bundle (X3DH)
+- **[DEP-007](specs/deps/DEP-007-workspace-snapshot.md)** — Workspace Snapshot
+- **[DEP-008](specs/deps/DEP-008-gossip.md)** — Gossip Relay
+- **[DEP-009](specs/deps/DEP-009-multi-transport.md)** — Multi-Transport
+- **[DEP-010](specs/deps/DEP-010-dht.md)** — DHT Peer Discovery
+- **[DEP-011](specs/deps/DEP-011-at-rest-encryption.md)** — At-Rest Encryption
+- **[DEP-012](specs/deps/DEP-012-reliable-multi-recipient-delivery.md)** — Reliable Multi-Recipient Delivery
+- **[DEP-013](specs/deps/DEP-013-workspace-dm-privacy.md)** — Workspace DM Privacy
+- **[DEP-014](specs/deps/DEP-014-adaptive-public-workspaces.md)** — Adaptive Public Workspaces
+- **[DEP-015](specs/deps/DEP-015-public-channel-delivery.md)** — Public Channel Delivery
+- **[DEP-016](specs/deps/DEP-016-mobile-client-ios.md)** — Mobile Client (iOS)
 
-See [specs/deps/](specs/deps/) for all proposals and submission process.
+See [specs/deps/](specs/deps/) for the full list and submission process.
 
 ## Tests
 
 ```
-200 pass, 0 fail, 10 test files, 502 assertions
-├── crypto (19)        — ECDH, AES-GCM, ECDSA, KeyStore
-├── integrity (27)     — Hash chains, anti-tampering (7 attack scenarios)
-├── workspace (28)     — CRUD, members, channels, DMs, invite codes, sync
-├── sync (11)          — Join flow, broadcasting, full sync, tamper rejection
-├── vector-clock (17)  — Ordering, merge, concurrent detection
-├── crdt (13)          — G-Set properties, offline merge, 3-peer scenarios
-├── negentropy (15+)   — Set reconciliation, diff, bidirectional sync
-├── identity (24)      — Export/import, safety numbers, device linking, QR
-├── seed-phrase (19)   — BIP39 mnemonic, deterministic derivation, full flow
-└── persistence (27)   — IndexedDB, offline queue, restart survival
+1394 pass, 0 fail — 94 test files
+├── crypto              — ECDH, AES-GCM, ECDSA, KeyStore
+├── integrity           — Hash chains, anti-tampering, attack scenarios
+├── workspace           — CRUD, members, channels, DMs, invite codes, sync
+├── sync                — Join flow, broadcasting, full sync, tamper rejection
+├── vector-clock        — Ordering, merge, concurrent detection
+├── crdt                — G-Set properties, offline merge, 3-peer scenarios
+├── negentropy          — Set reconciliation, diff, bidirectional sync
+├── identity            — Export/import, safety numbers, device linking, QR
+├── seed-phrase         — BIP39 mnemonic, deterministic derivation, full flow
+├── persistence         — IndexedDB, offline queue, restart survival
+└── security            — Encryption edge cases, ban persistence, clock skew
 ```
 
 ## Support / Sponsorship
