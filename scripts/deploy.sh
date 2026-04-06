@@ -69,14 +69,7 @@ echo "✅ Build succeeded"
 echo "📦 Deploying to decentchat.app..."
 lftp -u "$DEPLOY_USER,$DEPLOY_PASS" "sftp://$DEPLOY_HOST" -e "
   set sftp:auto-confirm yes
-
-  # Landing page → root (served at https://decentchat.app/)
-  put decent-landing/index.html -o ${DEPLOY_REMOTE_PATH}index.html
-
-  # App → /app/ subdirectory (served at https://decentchat.app/app/)
-  mirror --reverse --verbose decent-client-web/dist/ ${DEPLOY_REMOTE_PATH}app/
-  put decent-client-web/dist/app-htaccess -o ${DEPLOY_REMOTE_PATH}app/.htaccess
-
+  mirror --reverse --verbose decent-client-web/dist/ $DEPLOY_REMOTE_PATH
   bye
 "
 
@@ -84,8 +77,7 @@ echo ""
 echo "✅ Deployed to https://decentchat.app"
 echo ""
 echo "📋 Post-deploy smoke test:"
-echo "   → Landing page loads at https://decentchat.app/"
-echo "   → GitHub link visible in nav + hero"
-echo "   → App loads at https://decentchat.app/app/"
+echo "   → Page loads without JS errors"
+echo "   → GitHub link visible in nav"
 echo "   → Create Workspace modal opens"
 echo "   → Reload the page — workspace + messages persist"

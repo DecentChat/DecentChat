@@ -111,6 +111,7 @@
         <span class="landing-nav-name">DecentChat</span>
       </div>
       <div class="landing-nav-actions">
+        <a class="landing-nav-join-link" href="https://github.com/DecentChat/DecentChat" target="_blank" rel="noopener">GitHub</a>
         <button class="landing-nav-join-link" id="join-ws-btn-nav" onclick={handleJoin}>Join with invite</button>
         {#if hasWorkspace}
           <button class="btn-primary btn-sm" id="open-app-btn-nav" onclick={handleOpenApp}>Open App</button>

@@ -15,7 +15,6 @@ let commitHash = 'dev';
 try { commitHash = execSync('git rev-parse --short HEAD', { cwd: __dirname }).toString().trim(); } catch {};
 
 export default defineConfig({
-  base: '/app/',
   // Resolve workspace packages from source (monorepo development mode)
   resolve: {
     alias: {
