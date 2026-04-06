@@ -1349,6 +1349,14 @@ body.debug-mode .msg-delivery-detail {
   height: 0;
   overflow: hidden;
   transition: height 0.15s ease;
+  /* button reset */
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  text-align: left;
+  padding: 0;
 }
 
 .message-thread-indicator.has-replies {
@@ -2810,6 +2818,14 @@ body.debug-mode .msg-delivery-detail {
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background 0.1s;
+  /* button reset */
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
 }
 
 .search-result:hover { background: var(--bg-hover); }
