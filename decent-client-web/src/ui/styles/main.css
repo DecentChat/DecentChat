@@ -751,6 +751,8 @@ body {
   min-height: 56px;
   background: var(--bg);
   backdrop-filter: blur(8px);
+  position: relative;
+  z-index: 10;
 }
 
 .channel-header-left {
