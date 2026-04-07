@@ -107,12 +107,17 @@ describe('Deploy smoke — bundle integrity', () => {
   test('version in version.json matches __APP_VERSION__ in bundle', () => {
     if (!distExists) return;
     const versionData = JSON.parse(readFileSync(join(DIST, 'version.json'), 'utf-8'));
-    const bundlePath = findMainBundle();
-    if (!bundlePath) return;
+    const assetsDir = join(DIST, 'assets');
+    if (!existsSync(assetsDir)) return;
 
-    const bundleContent = readFileSync(bundlePath, 'utf-8');
-    // The version string should appear somewhere in the bundle
-    expect(bundleContent).toContain(versionData.version);
+    // When PWA is disabled, the main entry's __APP_VERSION__ usage may be
+    // tree-shaken.  Search ALL JS bundles in dist/assets/ so code-splitting
+    // doesn't cause a false negative.
+    const jsFiles = readdirSync(assetsDir).filter(f => f.endsWith('.js'));
+    const found = jsFiles.some(f =>
+      readFileSync(join(assetsDir, f), 'utf-8').includes(versionData.version),
+    );
+    expect(found).toBe(true);
   });
 
   test('no localhost:5173 references in production bundle', () => {

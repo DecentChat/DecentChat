@@ -9649,6 +9649,7 @@ export class ChatController {
   }
 
   private isMessagePendingForPeer(channelId: string, messageId: string, peerId: string): boolean {
+    if (typeof this.messageStore?.getMessages !== 'function') return false;
     const msg = this.messageStore.getMessages(channelId).find((candidate: any) => candidate.id === messageId) as any;
     if (!msg) return false;
     if (msg.senderId !== this.state.myPeerId) return false;

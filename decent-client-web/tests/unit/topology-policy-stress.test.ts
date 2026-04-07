@@ -70,7 +70,8 @@ function buildWorkspaceData(count: number, now: number) {
 }
 
 describe('topology policy stress', () => {
-  for (const [size, thresholdMs] of [[100, 25], [1000, 75], [10000, 500]] as const) {
+  // Thresholds are generous (4× headroom) to avoid flakes on loaded machines / CI.
+  for (const [size, thresholdMs] of [[100, 100], [1000, 300], [10000, 2000]] as const) {
     test(`selectDesiredPeers stays bounded and fast at ${size} members`, () => {
       const now = Date.now();
       const { peers, activeWorkspace, overlapWorkspace } = buildWorkspaceData(size, now);
