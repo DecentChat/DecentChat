@@ -336,13 +336,19 @@ export class DecentHermesPeer {
   async getChatInfo(chatId: string): Promise<{ name: string; type: string; chat_id: string }> {
     if (chatId.startsWith('dm:')) {
       const peerId = chatId.slice(3);
+      const truncatedPeerId =
+        peerId.length > 16 ? `${peerId.slice(0, 8)}...${peerId.slice(-4)}` : peerId;
       const aliasFromDirectory = this.peer
         ?.listDirectoryPeersLive({ query: peerId, limit: 20 })
         .find((entry) => entry.id === peerId)
         ?.name
         ?.trim();
       const aliasFromCache = ((this.peer as any)?.store?.get?.(`peer-alias-${peerId}`, '') as string | undefined)?.trim();
-      return { name: aliasFromDirectory || aliasFromCache || peerId, type: 'private', chat_id: chatId };
+      return {
+        name: aliasFromDirectory || aliasFromCache || truncatedPeerId,
+        type: 'private',
+        chat_id: chatId,
+      };
     }
     if (chatId.startsWith('voice:')) {
       return { name: `Voice: ${chatId.slice(6)}`, type: 'voice', chat_id: chatId };
