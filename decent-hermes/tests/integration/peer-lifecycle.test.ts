@@ -50,6 +50,18 @@ class MockDecentChatNodePeer {
     body: string;
     threadId: string | undefined;
     replyToId: string | undefined;
+    messageId: string | undefined;
+  }> = [];
+  startDirectStreamCalls: Array<{ peerId: string; messageId: string }> = [];
+  streamDeltaCalls: Array<{ peerId: string; messageId: string; content: string }> = [];
+  streamDoneCalls: Array<{ peerId: string; messageId: string }> = [];
+  persistedMessages: Array<{
+    channelId: string;
+    workspaceId: string;
+    content: string;
+    threadId: string | undefined;
+    replyToId: string | undefined;
+    messageId: string | undefined;
   }> = [];
 
   constructor(opts: { onIncomingMessage: (payload: IncomingEnvelope) => Promise<void> }) {
@@ -70,8 +82,39 @@ class MockDecentChatNodePeer {
     body: string,
     threadId?: string,
     replyToId?: string,
+    messageId?: string,
   ): Promise<void> {
-    this.sendDirectCalls.push({ peerId, body, threadId, replyToId });
+    this.sendDirectCalls.push({ peerId, body, threadId, replyToId, messageId });
+  }
+
+  async startDirectStream(params: { peerId: string; messageId: string }): Promise<void> {
+    this.startDirectStreamCalls.push(params);
+  }
+
+  async sendDirectStreamDelta(params: { peerId: string; messageId: string; content: string }): Promise<void> {
+    this.streamDeltaCalls.push(params);
+  }
+
+  async sendDirectStreamDone(params: { peerId: string; messageId: string }): Promise<void> {
+    this.streamDoneCalls.push(params);
+  }
+
+  async persistMessageLocally(
+    channelId: string,
+    workspaceId: string,
+    content: string,
+    threadId?: string,
+    replyToId?: string,
+    messageId?: string,
+  ): Promise<void> {
+    this.persistedMessages.push({
+      channelId,
+      workspaceId,
+      content,
+      threadId,
+      replyToId,
+      messageId,
+    });
   }
 }
 
@@ -127,6 +170,7 @@ describe('DecentHermesPeer lifecycle integration', () => {
         body: 'outbound hello',
         threadId: 'reply-1',
         replyToId: 'reply-1',
+        messageId: sentMessageId,
       },
     ]);
 
@@ -137,5 +181,43 @@ describe('DecentHermesPeer lifecycle integration', () => {
     expect(stopResult).toBe('stopped');
     expect(latestPeer!.destroyCalls).toBe(1);
     expect(bridgePeer.isConnected()).toBe(false);
+  });
+
+  test('supports direct-message stream lifecycle with a stable message id', async () => {
+    const bridgePeer = new DecentHermesPeer({ seedPhrase: TEST_SEED });
+    await bridgePeer.start();
+
+    const messageId = await bridgePeer.startStream('dm:peer-remote', {
+      messageId: 'stream-msg-1',
+      replyTo: 'parent-1',
+    });
+    expect(messageId).toBe('stream-msg-1');
+
+    await bridgePeer.appendStream('dm:peer-remote', messageId, 'Hello ');
+    await bridgePeer.appendStream('dm:peer-remote', messageId, 'world');
+    await bridgePeer.finishStream('dm:peer-remote', messageId);
+
+    expect(latestPeer!.startDirectStreamCalls).toEqual([
+      { peerId: 'peer-remote', messageId: 'stream-msg-1' },
+    ]);
+    expect(latestPeer!.streamDeltaCalls).toEqual([
+      { peerId: 'peer-remote', messageId: 'stream-msg-1', content: 'Hello ' },
+      { peerId: 'peer-remote', messageId: 'stream-msg-1', content: 'world' },
+    ]);
+    expect(latestPeer!.streamDoneCalls).toEqual([
+      { peerId: 'peer-remote', messageId: 'stream-msg-1' },
+    ]);
+    expect(latestPeer!.persistedMessages).toEqual([
+      {
+        channelId: 'peer-remote',
+        workspaceId: 'direct',
+        content: 'Hello world',
+        threadId: 'parent-1',
+        replyToId: 'parent-1',
+        messageId: 'stream-msg-1',
+      },
+    ]);
+
+    await bridgePeer.stop();
   });
 });

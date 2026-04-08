@@ -6,6 +6,17 @@ export type BridgePeer = {
   isConnected: () => boolean;
   drainMessages: () => unknown[];
   sendMessage: (chatId: string, body: string, ...rest: unknown[]) => Promise<string>;
+  startStream: (
+    chatId: string,
+    options?: {
+      replyTo?: string;
+      threadId?: string;
+      model?: Record<string, unknown>;
+      messageId?: string;
+    },
+  ) => Promise<string>;
+  appendStream: (chatId: string, messageId: string, content: string) => Promise<void>;
+  finishStream: (chatId: string, messageId: string) => Promise<void>;
   sendTyping?: (chatId: string, typing: boolean) => Promise<void>;
   getChatInfo: (chatId: string) => Promise<BridgeChatInfo>;
 };
@@ -100,10 +111,9 @@ export function createBridgeApp(
   });
 
   app.post('/send', async (req, res) => {
-    const { chatId, body, voice, replyTo, threadId, model } = req.body as {
+    const { chatId, body, replyTo, threadId, model } = req.body as {
       chatId: string;
       body: string;
-      voice?: boolean;
       replyTo?: string;
       threadId?: string;
       model?: { modelId?: string; modelName?: string; modelAlias?: string; modelLabel?: string };
@@ -114,17 +124,81 @@ export function createBridgeApp(
     }
     try {
       const chunks = splitReplyIntoChunks(body, maxReplyChunkChars);
-      let firstMessageId = '';
+      const messageId = await peer.startStream(chatId, {
+        ...(replyTo ? { replyTo } : {}),
+        ...(threadId ? { threadId } : {}),
+        ...(model ? { model } : {}),
+      });
 
       for (let index = 0; index < chunks.length; index += 1) {
-        const messageId = await peer.sendMessage(chatId, chunks[index], voice === true, replyTo, threadId, model);
-        if (!firstMessageId) firstMessageId = messageId;
+        await peer.appendStream(chatId, messageId, chunks[index]);
         if (index < chunks.length - 1 && chunkDelayMs > 0) {
           await sleep(chunkDelayMs);
         }
       }
 
-      res.json({ success: true, messageId: firstMessageId, chunkCount: chunks.length });
+      await peer.finishStream(chatId, messageId);
+      res.json({ success: true, messageId, chunkCount: chunks.length });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: String(e?.message ?? e) });
+    }
+  });
+
+  app.post('/stream/start', async (req, res) => {
+    const { chatId, replyTo, threadId, model, messageId } = req.body as {
+      chatId: string;
+      replyTo?: string;
+      threadId?: string;
+      model?: Record<string, unknown>;
+      messageId?: string;
+    };
+    if (!chatId) {
+      res.status(400).json({ success: false, error: 'chatId required' });
+      return;
+    }
+    try {
+      const startedMessageId = await peer.startStream(chatId, {
+        ...(replyTo ? { replyTo } : {}),
+        ...(threadId ? { threadId } : {}),
+        ...(model ? { model } : {}),
+        ...(messageId ? { messageId } : {}),
+      });
+      res.json({ success: true, messageId: startedMessageId });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: String(e?.message ?? e) });
+    }
+  });
+
+  app.post('/stream/chunk', async (req, res) => {
+    const { chatId, messageId, content } = req.body as {
+      chatId: string;
+      messageId: string;
+      content?: string;
+    };
+    if (!chatId || !messageId) {
+      res.status(400).json({ success: false, error: 'chatId and messageId required' });
+      return;
+    }
+    try {
+      await peer.appendStream(chatId, messageId, String(content ?? ''));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: String(e?.message ?? e) });
+    }
+  });
+
+  app.post('/stream/done', async (req, res) => {
+    const { chatId, messageId } = req.body as {
+      chatId: string;
+      messageId: string;
+    };
+    if (!chatId || !messageId) {
+      res.status(400).json({ success: false, error: 'chatId and messageId required' });
+      return;
+    }
+    try {
+      await peer.finishStream(chatId, messageId);
+      res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ success: false, error: String(e?.message ?? e) });
     }

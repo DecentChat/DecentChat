@@ -94,7 +94,7 @@ export interface DecentChatNodePeerOptions {
     inReplyToId: string;
   }) => void;
   onHuddleTranscription?: (text: string, peerId: string, channelId: string, senderName: string) => Promise<string | undefined>;
-  log?: { info: (s: string) => void; warn?: (s: string) => void; error?: (s: string) => void };
+  log?: { info: (s: string) => void; debug?: (s: string) => void; warn?: (s: string) => void; error?: (s: string) => void };
 }
 
 type MediaChunk = {
@@ -167,6 +167,12 @@ type PendingPreKeyBundleFetch = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+type PendingHandshakeAck = {
+  peerId: string;
+  resolve: (value: boolean) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 type DirectoryEntry = {
   kind: 'user' | 'group';
   id: string;
@@ -185,6 +191,8 @@ export class DecentChatNodePeer {
   // multiple handshakes within 30s, the peer auto-bans us. 60s cooldown
   // gives plenty of headroom while still allowing legitimate reconnects.
   private static readonly CONNECT_HANDSHAKE_COOLDOWN_MS = 60_000;
+  private static readonly HANDSHAKE_ACK_TIMEOUT_MS = 7_500;
+  private static readonly HANDSHAKE_MAX_ATTEMPTS = 2;
   private static readonly INBOUND_HANDSHAKE_COOLDOWN_MS = 5_000;
   private static readonly PEER_MAINTENANCE_RETRY_BASE_MS = 30_000;
   private static readonly PEER_MAINTENANCE_RETRY_MAX_MS = 60 * 60_000; // 1 hour (was 10 min)
@@ -214,6 +222,7 @@ export class DecentChatNodePeer {
   private readonly opts: DecentChatNodePeerOptions;
   private readonly pendingMediaRequests = new Map<string, PendingMediaRequest>();
   private readonly pendingPreKeyBundleFetches = new Map<string, PendingPreKeyBundleFetch>();
+  private readonly pendingHandshakeAcks = new Map<string, PendingHandshakeAck>();
   private readonly publishedPreKeyVersionByWorkspace = new Map<string, string>();
   private readonly decryptRecoveryAtByPeer = new Map<string, number>();
   private readonly connectHandshakeAtByPeer = new Map<string, number>();
@@ -404,6 +413,7 @@ export class DecentChatNodePeer {
       this.transport.onDisconnect = (peerId) => {
         this.opts.log?.info(`[decentchat-peer] peer disconnected: ${peerId}`);
         this.messageProtocol?.clearSharedSecret(peerId);
+        this.failHandshakeAcksForPeer(peerId);
         // DO NOT clear connectHandshakeAtByPeer on disconnect — the cooldown
         // MUST persist across reconnects to avoid handshake-storm bans on the
         // remote peer's MessageGuard (handshake bucket = 3 burst, 1/10s).
@@ -996,6 +1006,7 @@ export class DecentChatNodePeer {
       pending.resolve(false);
     }
     this.pendingPreKeyBundleFetches.clear();
+    this.failAllHandshakeAcks();
     this.botHuddle?.destroy();
     this.botHuddle = null;
     this.signingKeyPair = null;
@@ -1146,6 +1157,13 @@ export class DecentChatNodePeer {
       return;
     }
 
+    if (msg?.type === 'handshake-ack') {
+      const handshakeId = typeof msg?.handshakeId === 'string' ? msg.handshakeId : '';
+      if (!handshakeId) return;
+      this.resolveHandshakeAck(fromPeerId, handshakeId);
+      return;
+    }
+
     if (await this.handlePreKeyControl(fromPeerId, msg)) {
       return;
     }
@@ -1164,6 +1182,16 @@ export class DecentChatNodePeer {
         });
       }
       await this.publishPreKeyBundle(fromPeerId);
+      const inboundHandshakeId = typeof msg?.handshakeId === 'string' ? msg.handshakeId : '';
+      if (inboundHandshakeId) {
+        const accepted = this.transport.send(fromPeerId, {
+          type: 'handshake-ack',
+          handshakeId: inboundHandshakeId,
+        });
+        this.opts.log?.debug?.(
+          `[decentchat-peer] handshake-ack sent to ${fromPeerId.slice(0, 8)} handshakeId=${inboundHandshakeId.slice(0, 8)} accepted=${accepted}`,
+        );
+      }
       const knownKeys = this.store.get<Record<string, string>>('peer-public-keys', {});
       knownKeys[fromPeerId] = msg.publicKey;
       this.store.set('peer-public-keys', knownKeys);
@@ -1598,6 +1626,16 @@ export class DecentChatNodePeer {
     const MAX_ACKS_PER_SYNC_RESPONSE = 5;
     let acksSent = 0;
 
+    // Per-sync-response diagnostic counters. The "sync import failed" warning
+    // fires when hash-chain verification rejects a message — without
+    // throttling this can emit 2+ warnings per second if the peer's CRDT is
+    // full of unverifiable messages (e.g. legacy messages with
+    // `prevHash: undefined`). Log the first failure per channel with full
+    // detail, then suppress subsequent failures and summarize the total at
+    // the end of the sync-response.
+    const importFailedChannels = new Set<string>();
+    let importFailedCount = 0;
+
     for (const m of messages) {
       const channelId = typeof m.channelId === 'string' ? m.channelId : null;
       const id = typeof m.id === 'string' ? m.id : '';
@@ -1611,37 +1649,6 @@ export class DecentChatNodePeer {
 
       const existing = this.messageStore.getMessages(channelId);
       const alreadyStored = existing.some((ex: any) => ex.id === id);
-
-      // Skip ACK for messages we already have stored locally.  If we have
-      // the message, we already ACK'd it when it first arrived (either via
-      // direct delivery or a previous sync).  Re-ACKing duplicates burns
-      // through the receiver's 'message' bucket and triggers auto-ban.
-      if (!alreadyStored && acksSent < MAX_ACKS_PER_SYNC_RESPONSE) {
-        const ackPayload = {
-          type: 'ack' as const,
-          messageId: id,
-          channelId,
-        };
-        try {
-          if (this.transport) {
-            const accepted = this.transport.send(fromPeerId, ackPayload);
-            console.log(`[decentchat-peer] ACK→${fromPeerId.slice(0,8)} msgId=${id.slice(0,8)} accepted=${accepted} (sync-path)`);
-            if (!accepted) {
-              await this.enqueueOffline(fromPeerId, ackPayload);
-            }
-            acksSent++;
-          }
-        } catch (err) {
-          this.opts.log?.warn?.(`[decentchat-peer] failed to ack synced message ${id.slice(0, 8)}: ${String(err)}`);
-          try { await this.enqueueOffline(fromPeerId, ackPayload); } catch (_) { /* best effort */ }
-        }
-      } else if (!alreadyStored && acksSent >= MAX_ACKS_PER_SYNC_RESPONSE) {
-        // Rate-limit threshold reached; log once per sync-response
-        if (acksSent === MAX_ACKS_PER_SYNC_RESPONSE) {
-          console.log(`[decentchat-peer] ACK throttled for ${fromPeerId.slice(0,8)}: ${messages.length - acksSent} skipped (will retry via sync)`);
-          acksSent++;  // prevent re-logging
-        }
-      }
 
       if (alreadyStored) continue;
       if (!content) continue;
@@ -1660,8 +1667,61 @@ export class DecentChatNodePeer {
         type: m.type || 'text',
       };
 
-      await this.messageStore.importMessages(channelId, [...existing, storedMsg as any]);
+      // CRITICAL: `importMessages` can return `{success: false}` without throwing
+      // when hash-chain verification fails. Ignoring the return value caused the
+      // original ALE-1117 symptom: messages were silently rejected at import time,
+      // `alreadyStored` was still false on the next sync cycle, and the ACK fired
+      // again — forever. Check the result explicitly.
+      //
+      // This also guards against a subtler failure mode: the loop calls
+      // `importMessages(channelId, [...existing, storedMsg])` once per message,
+      // which forces per-message chain verification. If the sync-response is
+      // delivered out of order for the first few messages of a channel (e.g. the
+      // peer's chain rebuilds in mid-batch), early iterations will fail verification
+      // even though the full batch would verify correctly. We can't cheaply fix the
+      // batching here without a larger refactor, but we CAN stop spamming ACKs for
+      // messages we didn't actually store.
+      const importResult = await this.messageStore.importMessages(channelId, [...existing, storedMsg as any]);
+      if (!importResult?.success) {
+        importFailedCount++;
+        // Log the first failure per channel with full detail; suppress the
+        // rest to avoid log spam (we'll summarize totals at the end).
+        if (!importFailedChannels.has(channelId)) {
+          importFailedChannels.add(channelId);
+          this.opts.log?.warn?.(
+            `[decentchat-peer] sync import failed for msg ${id.slice(0, 8)} in channel ${channelId.slice(0, 8)}: ${importResult?.error ?? 'unknown error'} — skipping ACK (further failures in this channel suppressed until sync summary)`,
+          );
+        }
+        continue;
+      }
       this.persistMessagesForChannel(channelId);
+
+      const ackPayload = {
+        type: 'ack' as const,
+        messageId: id,
+        channelId,
+      };
+      // ACK only messages we actually persisted from sync. Duplicate or
+      // dropped messages should not be re-ACKed every sync cycle.
+      if (acksSent < MAX_ACKS_PER_SYNC_RESPONSE) {
+        try {
+          if (this.transport) {
+            const accepted = this.transport.send(fromPeerId, ackPayload);
+            console.log(`[decentchat-peer] ACK→${fromPeerId.slice(0,8)} msgId=${id.slice(0,8)} accepted=${accepted} (sync-path)`);
+            if (!accepted) {
+              await this.enqueueOffline(fromPeerId, ackPayload);
+            }
+            acksSent++;
+          }
+        } catch (err) {
+          this.opts.log?.warn?.(`[decentchat-peer] failed to ack synced message ${id.slice(0, 8)}: ${String(err)}`);
+          try { await this.enqueueOffline(fromPeerId, ackPayload); } catch (_) { /* best effort */ }
+        }
+      } else if (acksSent === MAX_ACKS_PER_SYNC_RESPONSE) {
+        // Rate-limit threshold reached; log once per sync-response.
+        console.log(`[decentchat-peer] ACK throttled for ${fromPeerId.slice(0,8)}: ${messages.length - acksSent} skipped (will retry via sync)`);
+        acksSent++;  // prevent re-logging
+      }
 
       // Only surface to agent if message is recent enough (post-startup)
       if (ts < RECENT_CUTOFF_MS) continue;
@@ -1678,6 +1738,14 @@ export class DecentChatNodePeer {
         replyToId: typeof m.replyToId === 'string' ? m.replyToId : undefined,
         threadId: typeof m.threadId === 'string' ? m.threadId : undefined,
       });
+    }
+
+    // Summary: if any imports failed, emit a single info-level log line so
+    // operators can see the total without the per-message warning flood.
+    if (importFailedCount > 0) {
+      this.opts.log?.info?.(
+        `[decentchat-peer] sync import summary from ${fromPeerId.slice(0, 8)}: ${importFailedCount}/${messages.length} messages failed verification across ${importFailedChannels.size} channel(s)`,
+      );
     }
   }
 
@@ -2353,7 +2421,6 @@ export class DecentChatNodePeer {
     const cooldownActive = now - lastHandshakeAt < DecentChatNodePeer.CONNECT_HANDSHAKE_COOLDOWN_MS;
 
     if (!cooldownActive) {
-      this.connectHandshakeAtByPeer.set(peerId, now);
       // Send a fresh handshake — but only when cooldown allows it. The cooldown
       // matters because the remote MessageGuard has a handshake bucket of 3
       // burst, 1/10s; flapping connections can otherwise burn through it and
@@ -2381,26 +2448,105 @@ export class DecentChatNodePeer {
     return false;
   }
 
+  private handshakeAckTimeoutMs(): number {
+    return DecentChatNodePeer.HANDSHAKE_ACK_TIMEOUT_MS;
+  }
+
+  private handshakeMaxAttempts(): number {
+    return DecentChatNodePeer.HANDSHAKE_MAX_ATTEMPTS;
+  }
+
+  private waitForHandshakeAck(peerId: string, handshakeId: string, timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        const pending = this.pendingHandshakeAcks.get(handshakeId);
+        if (!pending || pending.peerId !== peerId) return;
+        this.pendingHandshakeAcks.delete(handshakeId);
+        pending.resolve(false);
+      }, timeoutMs);
+      this.pendingHandshakeAcks.set(handshakeId, {
+        peerId,
+        timer,
+        resolve: (value: boolean) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+      });
+    });
+  }
+
+  private resolveHandshakeAck(peerId: string, handshakeId: string): void {
+    const pending = this.pendingHandshakeAcks.get(handshakeId);
+    if (!pending || pending.peerId !== peerId) return;
+    this.pendingHandshakeAcks.delete(handshakeId);
+    pending.resolve(true);
+  }
+
+  private failHandshakeAcksForPeer(peerId: string): void {
+    for (const [handshakeId, pending] of this.pendingHandshakeAcks.entries()) {
+      if (pending.peerId !== peerId) continue;
+      this.pendingHandshakeAcks.delete(handshakeId);
+      pending.resolve(false);
+    }
+  }
+
+  private failAllHandshakeAcks(): void {
+    for (const [handshakeId, pending] of this.pendingHandshakeAcks.entries()) {
+      this.pendingHandshakeAcks.delete(handshakeId);
+      pending.resolve(false);
+    }
+  }
+
   private async sendHandshake(peerId: string, recovery: boolean = false): Promise<void> {
     if (!this.transport || !this.messageProtocol) return;
     try {
-      const handshake = await this.messageProtocol.createHandshake();
-      const capabilities = ['negentropy-sync-v1'];
-      const payload: any = { type: 'handshake', ...handshake, capabilities };
-      if (recovery) payload.recovery = true;
-      this.transport.send(peerId, payload);
-      await this.publishPreKeyBundle(peerId);
-      // Announce display name (separate unencrypted message — same pattern as the web client)
-      // Include workspaceId so the peer can deterministically add us to the correct workspace
-      // (critical when the peer has multiple workspaces — without this, we'd only update
-      // existing members, never add new ones)
-      const announceWorkspaceId = this.resolveNameAnnounceWorkspaceId(peerId);
-      this.transport.send(peerId, {
-        type: 'name-announce',
-        alias: this.opts.account.alias,
-        isBot: true,
-        ...(announceWorkspaceId ? { workspaceId: announceWorkspaceId } : {}),
-      });
+      const maxAttempts = Math.max(1, this.handshakeMaxAttempts());
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const handshake = await this.messageProtocol.createHandshake();
+        const capabilities = ['negentropy-sync-v1'];
+        const handshakeId = randomUUID();
+        const payload: any = { type: 'handshake', handshakeId, ...handshake, capabilities };
+        if (recovery) payload.recovery = true;
+        const accepted = this.transport.send(peerId, payload);
+        this.opts.log?.debug?.(
+          `[decentchat-peer] handshake sent to ${peerId.slice(0, 8)} attempt ${attempt}/${maxAttempts} accepted=${accepted}`,
+        );
+
+        await this.publishPreKeyBundle(peerId);
+        // Announce display name (separate unencrypted message — same pattern as the web client)
+        // Include workspaceId so the peer can deterministically add us to the correct workspace
+        // (critical when the peer has multiple workspaces — without this, we'd only update
+        // existing members, never add new ones)
+        const announceWorkspaceId = this.resolveNameAnnounceWorkspaceId(peerId);
+        this.transport.send(peerId, {
+          type: 'name-announce',
+          alias: this.opts.account.alias,
+          isBot: true,
+          ...(announceWorkspaceId ? { workspaceId: announceWorkspaceId } : {}),
+        });
+
+        const acknowledged = await this.waitForHandshakeAck(
+          peerId,
+          handshakeId,
+          this.handshakeAckTimeoutMs(),
+        );
+        if (acknowledged) {
+          this.connectHandshakeAtByPeer.set(peerId, Date.now());
+          return;
+        }
+
+        if (attempt < maxAttempts) {
+          this.opts.log?.warn?.(
+            `[decentchat-peer] handshake not acknowledged by ${peerId.slice(0, 8)} (attempt ${attempt}/${maxAttempts}) — will retry`,
+          );
+          continue;
+        }
+
+        this.connectHandshakeAtByPeer.delete(peerId);
+        this.opts.log?.warn?.(
+          `[decentchat-peer] handshake not acknowledged by ${peerId.slice(0, 8)} — clearing cooldown for retry on next connect`,
+        );
+      }
     } catch (err) {
       this.opts.log?.error?.(`[decentchat-peer] handshake failed for ${peerId}: ${String(err)}`);
     }

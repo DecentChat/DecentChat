@@ -20416,6 +20416,8 @@ class DecentChatNodePeer {
   static PRE_KEY_FETCH_TIMEOUT_MS = 2500;
   static DECRYPT_RECOVERY_HANDSHAKE_COOLDOWN_MS = 5000;
   static CONNECT_HANDSHAKE_COOLDOWN_MS = 60000;
+  static HANDSHAKE_ACK_TIMEOUT_MS = 7500;
+  static HANDSHAKE_MAX_ATTEMPTS = 2;
   static INBOUND_HANDSHAKE_COOLDOWN_MS = 5000;
   static PEER_MAINTENANCE_RETRY_BASE_MS = 30000;
   static PEER_MAINTENANCE_RETRY_MAX_MS = 60 * 60000;
@@ -20443,6 +20445,7 @@ class DecentChatNodePeer {
   opts;
   pendingMediaRequests = new Map;
   pendingPreKeyBundleFetches = new Map;
+  pendingHandshakeAcks = new Map;
   publishedPreKeyVersionByWorkspace = new Map;
   decryptRecoveryAtByPeer = new Map;
   connectHandshakeAtByPeer = new Map;
@@ -20599,6 +20602,7 @@ class DecentChatNodePeer {
       this.transport.onDisconnect = (peerId2) => {
         this.opts.log?.info(`[decentchat-peer] peer disconnected: ${peerId2}`);
         this.messageProtocol?.clearSharedSecret(peerId2);
+        this.failHandshakeAcksForPeer(peerId2);
         this.inboundHandshakeAtByPeer.delete(peerId2);
         this.decryptRecoveryAtByPeer.delete(peerId2);
       };
@@ -21043,6 +21047,7 @@ class DecentChatNodePeer {
       pending.resolve(false);
     }
     this.pendingPreKeyBundleFetches.clear();
+    this.failAllHandshakeAcks();
     this.botHuddle?.destroy();
     this.botHuddle = null;
     this.signingKeyPair = null;
@@ -21166,6 +21171,13 @@ class DecentChatNodePeer {
       await this.handleInboundReceipt(fromPeerId, msg, "read");
       return;
     }
+    if (msg?.type === "handshake-ack") {
+      const handshakeId = typeof msg?.handshakeId === "string" ? msg.handshakeId : "";
+      if (!handshakeId)
+        return;
+      this.resolveHandshakeAck(fromPeerId, handshakeId);
+      return;
+    }
     if (await this.handlePreKeyControl(fromPeerId, msg)) {
       return;
     }
@@ -21183,6 +21195,14 @@ class DecentChatNodePeer {
         });
       }
       await this.publishPreKeyBundle(fromPeerId);
+      const inboundHandshakeId = typeof msg?.handshakeId === "string" ? msg.handshakeId : "";
+      if (inboundHandshakeId) {
+        const accepted = this.transport.send(fromPeerId, {
+          type: "handshake-ack",
+          handshakeId: inboundHandshakeId
+        });
+        this.opts.log?.debug?.(`[decentchat-peer] handshake-ack sent to ${fromPeerId.slice(0, 8)} handshakeId=${inboundHandshakeId.slice(0, 8)} accepted=${accepted}`);
+      }
       const knownKeys = this.store.get("peer-public-keys", {});
       knownKeys[fromPeerId] = msg.publicKey;
       this.store.set("peer-public-keys", knownKeys);
@@ -21525,6 +21545,8 @@ class DecentChatNodePeer {
     const RECENT_CUTOFF_MS = this.startedAt - 60000;
     const MAX_ACKS_PER_SYNC_RESPONSE = 5;
     let acksSent = 0;
+    const importFailedChannels = new Set;
+    let importFailedCount = 0;
     for (const m of messages) {
       const channelId = typeof m.channelId === "string" ? m.channelId : null;
       const id = typeof m.id === "string" ? m.id : "";
@@ -21537,33 +21559,6 @@ class DecentChatNodePeer {
         continue;
       const existing = this.messageStore.getMessages(channelId);
       const alreadyStored = existing.some((ex) => ex.id === id);
-      if (!alreadyStored && acksSent < MAX_ACKS_PER_SYNC_RESPONSE) {
-        const ackPayload = {
-          type: "ack",
-          messageId: id,
-          channelId
-        };
-        try {
-          if (this.transport) {
-            const accepted = this.transport.send(fromPeerId, ackPayload);
-            console.log(`[decentchat-peer] ACK→${fromPeerId.slice(0, 8)} msgId=${id.slice(0, 8)} accepted=${accepted} (sync-path)`);
-            if (!accepted) {
-              await this.enqueueOffline(fromPeerId, ackPayload);
-            }
-            acksSent++;
-          }
-        } catch (err) {
-          this.opts.log?.warn?.(`[decentchat-peer] failed to ack synced message ${id.slice(0, 8)}: ${String(err)}`);
-          try {
-            await this.enqueueOffline(fromPeerId, ackPayload);
-          } catch (_) {}
-        }
-      } else if (!alreadyStored && acksSent >= MAX_ACKS_PER_SYNC_RESPONSE) {
-        if (acksSent === MAX_ACKS_PER_SYNC_RESPONSE) {
-          console.log(`[decentchat-peer] ACK throttled for ${fromPeerId.slice(0, 8)}: ${messages.length - acksSent} skipped (will retry via sync)`);
-          acksSent++;
-        }
-      }
       if (alreadyStored)
         continue;
       if (!content)
@@ -21581,8 +21576,41 @@ class DecentChatNodePeer {
         timestamp: ts,
         type: m.type || "text"
       };
-      await this.messageStore.importMessages(channelId, [...existing, storedMsg]);
+      const importResult = await this.messageStore.importMessages(channelId, [...existing, storedMsg]);
+      if (!importResult?.success) {
+        importFailedCount++;
+        if (!importFailedChannels.has(channelId)) {
+          importFailedChannels.add(channelId);
+          this.opts.log?.warn?.(`[decentchat-peer] sync import failed for msg ${id.slice(0, 8)} in channel ${channelId.slice(0, 8)}: ${importResult?.error ?? "unknown error"} — skipping ACK (further failures in this channel suppressed until sync summary)`);
+        }
+        continue;
+      }
       this.persistMessagesForChannel(channelId);
+      const ackPayload = {
+        type: "ack",
+        messageId: id,
+        channelId
+      };
+      if (acksSent < MAX_ACKS_PER_SYNC_RESPONSE) {
+        try {
+          if (this.transport) {
+            const accepted = this.transport.send(fromPeerId, ackPayload);
+            console.log(`[decentchat-peer] ACK→${fromPeerId.slice(0, 8)} msgId=${id.slice(0, 8)} accepted=${accepted} (sync-path)`);
+            if (!accepted) {
+              await this.enqueueOffline(fromPeerId, ackPayload);
+            }
+            acksSent++;
+          }
+        } catch (err) {
+          this.opts.log?.warn?.(`[decentchat-peer] failed to ack synced message ${id.slice(0, 8)}: ${String(err)}`);
+          try {
+            await this.enqueueOffline(fromPeerId, ackPayload);
+          } catch (_) {}
+        }
+      } else if (acksSent === MAX_ACKS_PER_SYNC_RESPONSE) {
+        console.log(`[decentchat-peer] ACK throttled for ${fromPeerId.slice(0, 8)}: ${messages.length - acksSent} skipped (will retry via sync)`);
+        acksSent++;
+      }
       if (ts < RECENT_CUTOFF_MS)
         continue;
       await this.opts.onIncomingMessage({
@@ -21597,6 +21625,9 @@ class DecentChatNodePeer {
         replyToId: typeof m.replyToId === "string" ? m.replyToId : undefined,
         threadId: typeof m.threadId === "string" ? m.threadId : undefined
       });
+    }
+    if (importFailedCount > 0) {
+      this.opts.log?.info?.(`[decentchat-peer] sync import summary from ${fromPeerId.slice(0, 8)}: ${importFailedCount}/${messages.length} messages failed verification across ${importFailedChannels.size} channel(s)`);
     }
   }
   sendMessageSyncRequest(peerId, workspaceId, channelTimestamps = {}) {
@@ -22141,7 +22172,6 @@ class DecentChatNodePeer {
     const lastHandshakeAt = this.connectHandshakeAtByPeer.get(peerId) ?? 0;
     const cooldownActive = now - lastHandshakeAt < DecentChatNodePeer.CONNECT_HANDSHAKE_COOLDOWN_MS;
     if (!cooldownActive) {
-      this.connectHandshakeAtByPeer.set(peerId, now);
       await this.sendHandshake(peerId);
     } else {
       this.opts.log?.info?.(`[decentchat-peer] handshake cooldown active for ${peerId.slice(0, 8)} (${Math.round((DecentChatNodePeer.CONNECT_HANDSHAKE_COOLDOWN_MS - (now - lastHandshakeAt)) / 1000)}s left), skipping handshake`);
@@ -22160,24 +22190,86 @@ class DecentChatNodePeer {
     this.inboundHandshakeAtByPeer.set(peerId, now);
     return false;
   }
+  handshakeAckTimeoutMs() {
+    return DecentChatNodePeer.HANDSHAKE_ACK_TIMEOUT_MS;
+  }
+  handshakeMaxAttempts() {
+    return DecentChatNodePeer.HANDSHAKE_MAX_ATTEMPTS;
+  }
+  waitForHandshakeAck(peerId, handshakeId, timeoutMs) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        const pending = this.pendingHandshakeAcks.get(handshakeId);
+        if (!pending || pending.peerId !== peerId)
+          return;
+        this.pendingHandshakeAcks.delete(handshakeId);
+        pending.resolve(false);
+      }, timeoutMs);
+      this.pendingHandshakeAcks.set(handshakeId, {
+        peerId,
+        timer,
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        }
+      });
+    });
+  }
+  resolveHandshakeAck(peerId, handshakeId) {
+    const pending = this.pendingHandshakeAcks.get(handshakeId);
+    if (!pending || pending.peerId !== peerId)
+      return;
+    this.pendingHandshakeAcks.delete(handshakeId);
+    pending.resolve(true);
+  }
+  failHandshakeAcksForPeer(peerId) {
+    for (const [handshakeId, pending] of this.pendingHandshakeAcks.entries()) {
+      if (pending.peerId !== peerId)
+        continue;
+      this.pendingHandshakeAcks.delete(handshakeId);
+      pending.resolve(false);
+    }
+  }
+  failAllHandshakeAcks() {
+    for (const [handshakeId, pending] of this.pendingHandshakeAcks.entries()) {
+      this.pendingHandshakeAcks.delete(handshakeId);
+      pending.resolve(false);
+    }
+  }
   async sendHandshake(peerId, recovery = false) {
     if (!this.transport || !this.messageProtocol)
       return;
     try {
-      const handshake = await this.messageProtocol.createHandshake();
-      const capabilities = ["negentropy-sync-v1"];
-      const payload = { type: "handshake", ...handshake, capabilities };
-      if (recovery)
-        payload.recovery = true;
-      this.transport.send(peerId, payload);
-      await this.publishPreKeyBundle(peerId);
-      const announceWorkspaceId = this.resolveNameAnnounceWorkspaceId(peerId);
-      this.transport.send(peerId, {
-        type: "name-announce",
-        alias: this.opts.account.alias,
-        isBot: true,
-        ...announceWorkspaceId ? { workspaceId: announceWorkspaceId } : {}
-      });
+      const maxAttempts = Math.max(1, this.handshakeMaxAttempts());
+      for (let attempt = 1;attempt <= maxAttempts; attempt += 1) {
+        const handshake = await this.messageProtocol.createHandshake();
+        const capabilities = ["negentropy-sync-v1"];
+        const handshakeId = randomUUID();
+        const payload = { type: "handshake", handshakeId, ...handshake, capabilities };
+        if (recovery)
+          payload.recovery = true;
+        const accepted = this.transport.send(peerId, payload);
+        this.opts.log?.debug?.(`[decentchat-peer] handshake sent to ${peerId.slice(0, 8)} attempt ${attempt}/${maxAttempts} accepted=${accepted}`);
+        await this.publishPreKeyBundle(peerId);
+        const announceWorkspaceId = this.resolveNameAnnounceWorkspaceId(peerId);
+        this.transport.send(peerId, {
+          type: "name-announce",
+          alias: this.opts.account.alias,
+          isBot: true,
+          ...announceWorkspaceId ? { workspaceId: announceWorkspaceId } : {}
+        });
+        const acknowledged = await this.waitForHandshakeAck(peerId, handshakeId, this.handshakeAckTimeoutMs());
+        if (acknowledged) {
+          this.connectHandshakeAtByPeer.set(peerId, Date.now());
+          return;
+        }
+        if (attempt < maxAttempts) {
+          this.opts.log?.warn?.(`[decentchat-peer] handshake not acknowledged by ${peerId.slice(0, 8)} (attempt ${attempt}/${maxAttempts}) — will retry`);
+          continue;
+        }
+        this.connectHandshakeAtByPeer.delete(peerId);
+        this.opts.log?.warn?.(`[decentchat-peer] handshake not acknowledged by ${peerId.slice(0, 8)} — clearing cooldown for retry on next connect`);
+      }
     } catch (err) {
       this.opts.log?.error?.(`[decentchat-peer] handshake failed for ${peerId}: ${String(err)}`);
     }
@@ -24714,15 +24806,25 @@ async function main() {
   console.log(`[decent-hermes-bridge] Starting DecentChat peer as "${ALIAS}"...`);
   await peer.start();
   console.log("[decent-hermes-bridge] Peer connected");
+  const _logSignal = (sig) => {
+    const ppid = process.ppid ?? "unknown";
+    const upMs = Math.round(process.uptime() * 1000);
+    console.log(`[decent-hermes-bridge] Received ${sig} (pid=${process.pid} ppid=${ppid} uptime=${upMs}ms)`);
+  };
   process.on("SIGTERM", async () => {
+    _logSignal("SIGTERM");
     console.log("[decent-hermes-bridge] Shutting down...");
     await peer.stop();
     process.exit(0);
   });
   process.on("SIGINT", async () => {
+    _logSignal("SIGINT");
     await peer.stop();
     process.exit(0);
   });
+  for (const sig of ["SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2", "SIGPIPE"]) {
+    process.on(sig, () => _logSignal(sig));
+  }
 }
 var isMainModule = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMainModule) {

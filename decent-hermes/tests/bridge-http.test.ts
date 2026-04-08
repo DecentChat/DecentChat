@@ -11,6 +11,12 @@ type FakePeer = {
   isConnected: () => boolean;
   drainMessages: () => IncomingMessage[];
   sendMessage: (chatId: string, body: string) => Promise<string>;
+  startStream: (
+    chatId: string,
+    options?: { replyTo?: string; threadId?: string; model?: Record<string, unknown> },
+  ) => Promise<string>;
+  appendStream: (chatId: string, messageId: string, content: string) => Promise<void>;
+  finishStream: (chatId: string, messageId: string) => Promise<void>;
   sendTyping: (chatId: string, typing: boolean) => Promise<void>;
   getChatInfo: (chatId: string) => Promise<{ name: string; type: string; chat_id: string }>;
 };
@@ -61,6 +67,9 @@ describe('bridge HTTP app', () => {
       isConnected: () => true,
       drainMessages: () => queue.splice(0, queue.length),
       sendMessage: async () => 'sent-1',
+      startStream: async () => 'stream-1',
+      appendStream: async () => {},
+      finishStream: async () => {},
       sendTyping: async () => {},
       getChatInfo: async (chatId: string) => ({ name: chatId, type: 'group', chat_id: chatId }),
     };
@@ -116,13 +125,24 @@ describe('bridge HTTP app', () => {
   test('POST /send sends long replies as sequential chunks', async () => {
     const sentBodies: string[] = [];
     const sentAt: number[] = [];
+    const startedMessageIds: string[] = [];
+    const finishedMessageIds: string[] = [];
+    let startCount = 0;
     const peer: FakePeer = {
       isConnected: () => true,
       drainMessages: () => [],
-      sendMessage: async (_chatId: string, body: string) => {
+      sendMessage: async () => 'unused',
+      startStream: async () => {
+        startCount += 1;
+        return 'stream-send-1';
+      },
+      appendStream: async (_chatId: string, messageId: string, body: string) => {
+        startedMessageIds.push(messageId);
         sentBodies.push(body);
         sentAt.push(Date.now());
-        return `sent-${sentBodies.length}`;
+      },
+      finishStream: async (_chatId: string, messageId: string) => {
+        finishedMessageIds.push(messageId);
       },
       sendTyping: async () => {},
       getChatInfo: async (chatId: string) => ({ name: chatId, type: 'group', chat_id: chatId }),
@@ -146,9 +166,13 @@ describe('bridge HTTP app', () => {
     const payload = await response.json();
     expect(payload.success).toBeTrue();
     expect(payload.chunkCount).toBeGreaterThan(1);
+    expect(payload.messageId).toBe('stream-send-1');
 
     expect(sentBodies.length).toBeGreaterThan(1);
     expect(sentBodies.every((chunk) => chunk.length <= PROGRESSIVE_REPLY_CHUNK_MAX_CHARS)).toBeTrue();
+    expect(startCount).toBe(1);
+    expect(startedMessageIds.every((messageId) => messageId === 'stream-send-1')).toBeTrue();
+    expect(finishedMessageIds).toEqual(['stream-send-1']);
 
     for (let idx = 1; idx < sentAt.length; idx += 1) {
       expect(sentAt[idx] - sentAt[idx - 1]).toBeGreaterThanOrEqual(10);
@@ -157,12 +181,21 @@ describe('bridge HTTP app', () => {
 
   test('POST /send keeps short replies as a single outbound message', async () => {
     const sentBodies: string[] = [];
+    let started = 0;
+    let finished = 0;
     const peer: FakePeer = {
       isConnected: () => true,
       drainMessages: () => [],
-      sendMessage: async (_chatId: string, body: string) => {
+      sendMessage: async () => 'unused',
+      startStream: async () => {
+        started += 1;
+        return 'stream-short-1';
+      },
+      appendStream: async (_chatId: string, _messageId: string, body: string) => {
         sentBodies.push(body);
-        return 'sent-short';
+      },
+      finishStream: async () => {
+        finished += 1;
       },
       sendTyping: async () => {},
       getChatInfo: async (chatId: string) => ({ name: chatId, type: 'group', chat_id: chatId }),
@@ -182,6 +215,102 @@ describe('bridge HTTP app', () => {
     const payload = await response.json();
     expect(payload.success).toBeTrue();
     expect(payload.chunkCount).toBe(1);
+    expect(payload.messageId).toBe('stream-short-1');
+    expect(started).toBe(1);
+    expect(finished).toBe(1);
     expect(sentBodies).toEqual(['short reply']);
+  });
+
+  test('stream endpoints forward start/chunk/done to peer streaming lifecycle', async () => {
+    const calls: Array<{ kind: 'start' | 'chunk' | 'done'; payload: Record<string, unknown> }> = [];
+    const peer: FakePeer = {
+      isConnected: () => true,
+      drainMessages: () => [],
+      sendMessage: async () => 'unused',
+      startStream: async (chatId, options) => {
+        calls.push({ kind: 'start', payload: { chatId, options } });
+        return 'stream-msg-1';
+      },
+      appendStream: async (chatId, messageId, content) => {
+        calls.push({ kind: 'chunk', payload: { chatId, messageId, content } });
+      },
+      finishStream: async (chatId, messageId) => {
+        calls.push({ kind: 'done', payload: { chatId, messageId } });
+      },
+      sendTyping: async () => {},
+      getChatInfo: async (chatId: string) => ({ name: chatId, type: 'group', chat_id: chatId }),
+    };
+
+    const app = createBridgeApp(peer, 'Hermes QA');
+    const listening = await listen(app);
+    server = listening.server;
+
+    const startResp = await fetch(`${listening.baseUrl}/stream/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        chatId: 'ws:general',
+        replyTo: 'msg-parent',
+        threadId: 'thread-1',
+        model: { modelId: 'gpt-5.4' },
+      }),
+    });
+    expect(startResp.status).toBe(200);
+    expect(await startResp.json()).toEqual({
+      success: true,
+      messageId: 'stream-msg-1',
+    });
+
+    const chunkResp = await fetch(`${listening.baseUrl}/stream/chunk`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        chatId: 'ws:general',
+        messageId: 'stream-msg-1',
+        content: 'partial token payload',
+      }),
+    });
+    expect(chunkResp.status).toBe(200);
+    expect(await chunkResp.json()).toEqual({ success: true });
+
+    const doneResp = await fetch(`${listening.baseUrl}/stream/done`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        chatId: 'ws:general',
+        messageId: 'stream-msg-1',
+      }),
+    });
+    expect(doneResp.status).toBe(200);
+    expect(await doneResp.json()).toEqual({ success: true });
+
+    expect(calls).toEqual([
+      {
+        kind: 'start',
+        payload: {
+          chatId: 'ws:general',
+          options: {
+            replyTo: 'msg-parent',
+            threadId: 'thread-1',
+            model: { modelId: 'gpt-5.4' },
+          },
+        },
+      },
+      {
+        kind: 'chunk',
+        payload: {
+          chatId: 'ws:general',
+          messageId: 'stream-msg-1',
+          content: 'partial token payload',
+        },
+      },
+      {
+        kind: 'done',
+        payload: {
+          chatId: 'ws:general',
+          messageId: 'stream-msg-1',
+        },
+      },
+    ]);
   });
 });

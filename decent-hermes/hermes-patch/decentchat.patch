@@ -1,8 +1,8 @@
 diff --git a/agent/prompt_builder.py b/agent/prompt_builder.py
-index fbb5f0fa..182fa281 100644
+index df5532e1..2849864a 100644
 --- a/agent/prompt_builder.py
 +++ b/agent/prompt_builder.py
-@@ -219,6 +219,12 @@ GOOGLE_MODEL_OPERATIONAL_GUIDANCE = (
+@@ -259,6 +259,12 @@ GOOGLE_MODEL_OPERATIONAL_GUIDANCE = (
  DEVELOPER_ROLE_MODELS = ("gpt-5", "codex")
  
  PLATFORM_HINTS = {
@@ -16,10 +16,10 @@ index fbb5f0fa..182fa281 100644
          "You are on a text messaging communication platform, WhatsApp. "
          "Please do not use markdown as it does not render. "
 diff --git a/cron/scheduler.py b/cron/scheduler.py
-index b0147998..423a6e04 100644
+index e164c1f3..74abbe04 100644
 --- a/cron/scheduler.py
 +++ b/cron/scheduler.py
-@@ -159,6 +159,7 @@ def _deliver_result(job: dict, content: str) -> None:
+@@ -227,6 +227,7 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
          "discord": Platform.DISCORD,
          "slack": Platform.SLACK,
          "whatsapp": Platform.WHATSAPP,
@@ -27,6 +27,669 @@ index b0147998..423a6e04 100644
          "signal": Platform.SIGNAL,
          "matrix": Platform.MATRIX,
          "mattermost": Platform.MATTERMOST,
+diff --git a/gateway/config.py b/gateway/config.py
+index ab0d7c11..fb3a10c7 100644
+--- a/gateway/config.py
++++ b/gateway/config.py
+@@ -50,6 +50,7 @@ class Platform(Enum):
+     LOCAL = "local"
+     TELEGRAM = "telegram"
+     DISCORD = "discord"
++    DECENTCHAT = "decentchat"
+     WHATSAPP = "whatsapp"
+     SLACK = "slack"
+     SIGNAL = "signal"
+@@ -172,14 +173,21 @@ class PlatformConfig:
+         home_channel = None
+         if "home_channel" in data:
+             home_channel = HomeChannel.from_dict(data["home_channel"])
+-        
++
++        # Known top-level keys — everything else flows into extra so that
++        # platform-specific settings (seed_phrase, alias, data_dir, …) work
++        # whether written as top-level YAML keys or nested under `extra:`.
++        _known = {"enabled", "token", "api_key", "home_channel", "reply_to_mode", "extra"}
++        extra = {k: v for k, v in data.items() if k not in _known}
++        extra.update(data.get("extra", {}))   # explicit extra: block takes precedence
++
+         return cls(
+             enabled=data.get("enabled", False),
+             token=data.get("token"),
+             api_key=data.get("api_key"),
+             home_channel=home_channel,
+             reply_to_mode=data.get("reply_to_mode", "first"),
+-            extra=data.get("extra", {}),
++            extra=extra,
+         )
+ 
+ 
+@@ -266,6 +274,9 @@ class GatewayConfig:
+             # WhatsApp uses enabled flag only (bridge handles auth)
+             elif platform == Platform.WHATSAPP:
+                 connected.append(platform)
++            # DecentChat uses enabled flag only (bridge handles auth via seed phrase)
++            elif platform == Platform.DECENTCHAT:
++                connected.append(platform)
+             # Signal uses extra dict for config (http_url + account)
+             elif platform == Platform.SIGNAL and config.extra.get("http_url"):
+                 connected.append(platform)
+@@ -718,7 +729,15 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
+         if Platform.WHATSAPP not in config.platforms:
+             config.platforms[Platform.WHATSAPP] = PlatformConfig()
+         config.platforms[Platform.WHATSAPP].enabled = True
+-    
++
++    # DecentChat
++    dc_seed = os.getenv("DECENTCHAT_SEED_PHRASE")
++    if dc_seed:
++        if Platform.DECENTCHAT not in config.platforms:
++            config.platforms[Platform.DECENTCHAT] = PlatformConfig()
++        config.platforms[Platform.DECENTCHAT].enabled = True
++        config.platforms[Platform.DECENTCHAT].extra["seed_phrase"] = dc_seed
++
+     # Slack
+     slack_token = os.getenv("SLACK_BOT_TOKEN")
+     if slack_token:
+diff --git a/gateway/platforms/ADDING_A_PLATFORM.md b/gateway/platforms/ADDING_A_PLATFORM.md
+index f773f8c8..af38f5bf 100644
+--- a/gateway/platforms/ADDING_A_PLATFORM.md
++++ b/gateway/platforms/ADDING_A_PLATFORM.md
+@@ -5,6 +5,9 @@ Use this as a reference when building a new adapter — every item here is a
+ real integration point that exists in the codebase. Missing any of them will
+ cause broken functionality, missing features, or inconsistent behavior.
+ 
++Example implementation docs:
++- DecentChat: `docs/platforms/decentchat.md`
++
+ ---
+ 
+ ## 1. Core Adapter (`gateway/platforms/<platform>.py`)
+diff --git a/gateway/platforms/base.py b/gateway/platforms/base.py
+index a888eede..dffc6df4 100644
+--- a/gateway/platforms/base.py
++++ b/gateway/platforms/base.py
+@@ -491,7 +491,12 @@ class BasePlatformAdapter(ABC):
+         # Track active message handlers per session for interrupt support
+         # Key: session_key (e.g., chat_id), Value: (event, asyncio.Event for interrupt)
+         self._active_sessions: Dict[str, asyncio.Event] = {}
+-        self._pending_messages: Dict[str, MessageEvent] = {}
++        # Pending messages per session.  Using a LIST (not a single event)
++        # so rapid bursts (N messages arriving while the agent is still
++        # processing msg 1) queue properly.  Previously this was a Dict[str,
++        # MessageEvent] where later arrivals overwrote earlier ones, silently
++        # dropping middle messages in a 3+ burst.
++        self._pending_messages: Dict[str, List[MessageEvent]] = {}
+         # Background message-processing tasks spawned by handle_message().
+         # Gateway shutdown cancels these so an old gateway instance doesn't keep
+         # working on a task after --replace or manual restarts.
+@@ -1187,21 +1192,37 @@ class BasePlatformAdapter(ABC):
+             # Special case: photo bursts/albums frequently arrive as multiple near-
+             # simultaneous messages. Queue them without interrupting the active run,
+             # then process them immediately after the current task finishes.
++            # Photos DO merge into a single pending entry (album semantics).
+             if event.message_type == MessageType.PHOTO:
+                 logger.debug("[%s] Queuing photo follow-up for session %s without interrupt", self.name, session_key)
+-                existing = self._pending_messages.get(session_key)
+-                if existing and existing.message_type == MessageType.PHOTO:
+-                    existing.media_urls.extend(event.media_urls)
+-                    existing.media_types.extend(event.media_types)
++                queue = self._pending_messages.setdefault(session_key, [])
++                if queue and queue[-1].message_type == MessageType.PHOTO:
++                    last = queue[-1]
++                    last.media_urls.extend(event.media_urls)
++                    last.media_types.extend(event.media_types)
+                     if event.text:
+-                        existing.text = self._merge_caption(existing.text, event.text)
++                        last.text = self._merge_caption(last.text, event.text)
+                 else:
+-                    self._pending_messages[session_key] = event
++                    queue.append(event)
+                 return  # Don't interrupt now - will run after current task completes
+ 
+-            # Default behavior for non-photo follow-ups: interrupt the running agent
+-            logger.debug("[%s] New message while session %s is active — triggering interrupt", self.name, session_key)
+-            self._pending_messages[session_key] = event
++            # Default behavior for non-photo follow-ups: interrupt the running agent.
++            #
++            # APPEND to the pending queue (never overwrite).  Each text message
++            # in a burst gets its own agent turn with its own reply in its own
++            # thread.  Earlier versions used Dict[str, MessageEvent] and silently
++            # dropped middle messages in a 3+ rapid burst because later arrivals
++            # overwrote the single slot.  Later versions merged text, but that
++            # collapsed separate threads into one reply — wrong semantics for
++            # DecentChat where each user message is expected to get its own
++            # threaded reply.
++            logger.debug("[%s] New message while session %s is active — queuing and triggering interrupt", self.name, session_key)
++            queue = self._pending_messages.setdefault(session_key, [])
++            queue.append(event)
++            logger.debug(
++                "[%s] Queue depth for session %s is now %d",
++                self.name, session_key, len(queue),
++            )
+             # Signal the interrupt (the processing task checks this)
+             self._active_sessions[session_key].set()
+             return  # Don't process now - will be handled after current task finishes
+@@ -1453,10 +1474,21 @@ class BasePlatformAdapter(ABC):
+             processing_ok = delivery_succeeded if delivery_attempted else not bool(response)
+             await self._run_processing_hook("on_processing_complete", event, processing_ok)
+ 
+-            # Check if there's a pending message that was queued during our processing
+-            if session_key in self._pending_messages:
+-                pending_event = self._pending_messages.pop(session_key)
+-                logger.debug("[%s] Processing queued message from interrupt", self.name)
++            # Check if there's a pending message that was queued during our processing.
++            # Pop the OLDEST entry (FIFO) and recurse.  Remaining queued messages
++            # will be picked up by subsequent recursive calls, each one processed
++            # as its own agent turn with its own threaded reply.
++            queue = self._pending_messages.get(session_key)
++            if queue:
++                pending_event = queue.pop(0)
++                if not queue:
++                    # Drop the empty list so `session_key in self._pending_messages`
++                    # is accurate for the next handle_message call.
++                    self._pending_messages.pop(session_key, None)
++                logger.debug(
++                    "[%s] Processing queued message from interrupt (remaining queue: %d)",
++                    self.name, len(queue),
++                )
+                 # Clean up current session before processing pending
+                 if session_key in self._active_sessions:
+                     del self._active_sessions[session_key]
+@@ -1465,7 +1497,10 @@ class BasePlatformAdapter(ABC):
+                     await typing_task
+                 except asyncio.CancelledError:
+                     pass
+-                # Process pending message in new background task
++                # Re-mark session as active so any further incoming messages
++                # during THIS follow-up turn also queue instead of spawning
++                # a parallel task.
++                self._active_sessions[session_key] = asyncio.Event()
+                 await self._process_message_background(pending_event, session_key)
+                 return  # Already cleaned up
+                 
+@@ -1529,8 +1564,14 @@ class BasePlatformAdapter(ABC):
+         return session_key in self._active_sessions and self._active_sessions[session_key].is_set()
+     
+     def get_pending_message(self, session_key: str) -> Optional[MessageEvent]:
+-        """Get and clear any pending message for a session."""
+-        return self._pending_messages.pop(session_key, None)
++        """Get and remove the OLDEST pending message for a session (FIFO)."""
++        queue = self._pending_messages.get(session_key)
++        if not queue:
++            return None
++        event = queue.pop(0)
++        if not queue:
++            self._pending_messages.pop(session_key, None)
++        return event
+     
+     def build_source(
+         self,
+diff --git a/gateway/run.py b/gateway/run.py
+index 99c71d91..c3d4edca 100644
+--- a/gateway/run.py
++++ b/gateway/run.py
+@@ -349,6 +349,27 @@ def _dequeue_pending_text(adapter, session_key: str) -> str | None:
+     return text
+ 
+ 
++def _dequeue_pending_event(adapter, session_key: str):
++    """Consume and return the full pending MessageEvent (for threading).
++
++    Returns a tuple (text, message_id, thread_id) so the caller can pass
++    them to the recursive _run_agent call and the follow-up reply lands in
++    the correct thread of the correct user message.  Returns None if no
++    pending message.
++    """
++    event = adapter.get_pending_message(session_key)
++    if not event:
++        return None
++    text = event.text
++    if not text and getattr(event, "media_urls", None):
++        text = _build_media_placeholder(event)
++    if not text:
++        return None
++    message_id = getattr(event, "message_id", None)
++    thread_id = getattr(getattr(event, "source", None), "thread_id", None)
++    return (text, message_id, thread_id, event)
++
++
+ def _check_unavailable_skill(command_name: str) -> str | None:
+     """Check if a command matches a known-but-inactive skill.
+ 
+@@ -421,14 +442,26 @@ def _resolve_gateway_model(config: dict | None = None) -> str:
+     Without this, temporary AIAgent instances (memory flush, /compress) fall
+     back to the hardcoded default which fails when the active provider is
+     openai-codex.
++
++    Also normalize provider-prefixed Codex model strings
++    ("openai-codex/gpt-5.4" → "gpt-5.4"). The CLI already strips these, but
++    gateway sessions read config directly and would otherwise pass the invalid
++    provider-prefixed value to the Codex Responses API.
+     """
+     cfg = config if config is not None else _load_gateway_config()
+     model_cfg = cfg.get("model", {})
++
++    provider = ""
++    model = ""
+     if isinstance(model_cfg, str):
+-        return model_cfg
++        model = model_cfg
+     elif isinstance(model_cfg, dict):
+-        return model_cfg.get("default") or model_cfg.get("model") or ""
+-    return ""
++        provider = str(model_cfg.get("provider") or "")
++        model = model_cfg.get("default") or model_cfg.get("model") or ""
++
++    if provider == "openai-codex" and isinstance(model, str) and "/" in model:
++        return model.split("/", 1)[1]
++    return model or ""
+ 
+ 
+ def _resolve_hermes_bin() -> Optional[list[str]]:
+@@ -1562,7 +1595,14 @@ class GatewayRunner:
+                 logger.warning("WhatsApp: Node.js not installed or bridge not configured")
+                 return None
+             return WhatsAppAdapter(config)
+-        
++
++        elif platform == Platform.DECENTCHAT:
++            from gateway.platforms.decentchat import DecentChatAdapter, check_decentchat_requirements
++            if not check_decentchat_requirements():
++                logger.warning("[gateway] DecentChat: Node.js not found — skipping")
++                return None
++            return DecentChatAdapter(config)
++
+         elif platform == Platform.SLACK:
+             from gateway.platforms.slack import SlackAdapter, check_slack_requirements
+             if not check_slack_requirements():
+@@ -1678,6 +1718,7 @@ class GatewayRunner:
+             Platform.TELEGRAM: "TELEGRAM_ALLOWED_USERS",
+             Platform.DISCORD: "DISCORD_ALLOWED_USERS",
+             Platform.WHATSAPP: "WHATSAPP_ALLOWED_USERS",
++            Platform.DECENTCHAT: "DECENTCHAT_ALLOWED_USERS",
+             Platform.SLACK: "SLACK_ALLOWED_USERS",
+             Platform.SIGNAL: "SIGNAL_ALLOWED_USERS",
+             Platform.EMAIL: "EMAIL_ALLOWED_USERS",
+@@ -1692,6 +1733,7 @@ class GatewayRunner:
+             Platform.TELEGRAM: "TELEGRAM_ALLOW_ALL_USERS",
+             Platform.DISCORD: "DISCORD_ALLOW_ALL_USERS",
+             Platform.WHATSAPP: "WHATSAPP_ALLOW_ALL_USERS",
++            Platform.DECENTCHAT: "DECENTCHAT_ALLOW_ALL_USERS",
+             Platform.SLACK: "SLACK_ALLOW_ALL_USERS",
+             Platform.SIGNAL: "SIGNAL_ALLOW_ALL_USERS",
+             Platform.EMAIL: "EMAIL_ALLOW_ALL_USERS",
+@@ -7205,24 +7247,27 @@ class GatewayRunner:
+             
+             # Get pending message from adapter.
+             # Use session_key (not source.chat_id) to match adapter's storage keys.
+-            pending = None
++            # We dequeue the full event (not just text) so we can pass the
++            # message_id to the recursive _run_agent call and the follow-up
++            # reply threads back to the correct user message.
++            pending_info = None  # (text, message_id, thread_id, event) or None
+             if result and adapter and session_key:
+                 if result.get("interrupted"):
+-                    pending = _dequeue_pending_text(adapter, session_key)
+-                    if not pending and result.get("interrupt_message"):
+-                        pending = result.get("interrupt_message")
++                    pending_info = _dequeue_pending_event(adapter, session_key)
++                    if not pending_info and result.get("interrupt_message"):
++                        pending_info = (result.get("interrupt_message"), None, None, None)
+                 else:
+-                    pending = _dequeue_pending_text(adapter, session_key)
+-                    if pending:
+-                        logger.debug("Processing queued message after agent completion: '%s...'", pending[:40])
+-            
++                    pending_info = _dequeue_pending_event(adapter, session_key)
++                    if pending_info:
++                        logger.debug("Processing queued message after agent completion: '%s...'", pending_info[0][:40])
++
+             # Safety net: if the pending text is a slash command (e.g. "/stop",
+             # "/new"), discard it — commands should never be passed to the agent
+             # as user input.  The primary fix is in base.py (commands bypass the
+             # active-session guard), but this catches edge cases where command
+             # text leaks through the interrupt_message fallback.
+-            if pending and pending.strip().startswith("/"):
+-                _pending_parts = pending.strip().split(None, 1)
++            if pending_info and pending_info[0].strip().startswith("/"):
++                _pending_parts = pending_info[0].strip().split(None, 1)
+                 _pending_cmd_word = _pending_parts[0][1:].lower() if _pending_parts else ""
+                 if _pending_cmd_word:
+                     try:
+@@ -7233,19 +7278,21 @@ class GatewayRunner:
+                                 "commands must not be passed as agent input",
+                                 _pending_cmd_word,
+                             )
+-                            pending = None
++                            pending_info = None
+                     except Exception:
+                         pass
+ 
+-            if pending:
+-                logger.debug("Processing pending message: '%s...'", pending[:40])
+-                
++            if pending_info:
++                pending_text, pending_msg_id, pending_thread_id, pending_event = pending_info
++                logger.debug("Processing pending message: '%s...'", pending_text[:40])
++
++
+                 # Clear the adapter's interrupt event so the next _run_agent call
+                 # doesn't immediately re-trigger the interrupt before the new agent
+                 # even makes its first API call (this was causing an infinite loop).
+                 if adapter and hasattr(adapter, '_active_sessions') and session_key and session_key in adapter._active_sessions:
+                     adapter._active_sessions[session_key].clear()
+-                
++
+                 # Cap recursion depth to prevent resource exhaustion when the
+                 # user sends multiple messages while the agent keeps failing. (#816)
+                 if _interrupt_depth >= self._MAX_INTERRUPT_DEPTH:
+@@ -7257,37 +7304,60 @@ class GatewayRunner:
+                     # Queue the pending message for normal processing on next turn
+                     adapter = self.adapters.get(source.platform)
+                     if adapter and hasattr(adapter, 'queue_message'):
+-                        adapter.queue_message(session_key, pending)
++                        adapter.queue_message(session_key, pending_text)
+                     return result_holder[0] or {"final_response": response, "messages": history}
+ 
+                 was_interrupted = result.get("interrupted")
+                 if not was_interrupted:
+                     # Queued message after normal completion — deliver the first
+-                    # response before processing the queued follow-up.
+-                    # Skip if streaming already delivered it.
++                    # response (reply to the CURRENT message) before processing
++                    # the queued follow-up.  Skip if streaming already delivered it.
+                     _sc = stream_consumer_holder[0]
+                     _already_streamed = _sc and getattr(_sc, "already_sent", False)
+                     first_response = result.get("final_response", "")
+                     if first_response and not _already_streamed:
+                         try:
+-                            await adapter.send(source.chat_id, first_response,
+-                                               metadata=getattr(event, "metadata", None))
++                            # Thread the current reply back to the current message.
++                            _current_reply_to = event_message_id
++                            _current_thread_meta = (
++                                {"thread_id": source.thread_id}
++                                if getattr(source, "thread_id", None)
++                                else None
++                            )
++                            await adapter.send(
++                                source.chat_id,
++                                first_response,
++                                reply_to=_current_reply_to,
++                                metadata=_current_thread_meta,
++                            )
+                         except Exception as e:
+                             logger.warning("Failed to send first response before queued message: %s", e)
+                 # else: interrupted — discard the interrupted response ("Operation
+                 # interrupted." is just noise; the user already knows they sent a
+                 # new message).
+ 
++                # Build a new source carrying the pending message's thread_id so
++                # the recursive run's reply threads back to the pending message.
++                if pending_thread_id and pending_thread_id != getattr(source, "thread_id", None):
++                    try:
++                        from dataclasses import replace as _dc_replace
++                        recursive_source = _dc_replace(source, thread_id=pending_thread_id)
++                    except Exception:
++                        recursive_source = source
++                else:
++                    recursive_source = source
++
+                 # Process the pending message with updated history
+                 updated_history = result.get("messages", history)
+                 return await self._run_agent(
+-                    message=pending,
++                    message=pending_text,
+                     context_prompt=context_prompt,
+                     history=updated_history,
+-                    source=source,
++                    source=recursive_source,
+                     session_id=session_id,
+                     session_key=session_key,
+                     _interrupt_depth=_interrupt_depth + 1,
++                    event_message_id=pending_msg_id,
+                 )
+         finally:
+             # Stop progress sender, interrupt monitor, and notification task
+diff --git a/hermes_cli/tools_config.py b/hermes_cli/tools_config.py
+index 65525d27..faef1ef3 100644
+--- a/hermes_cli/tools_config.py
++++ b/hermes_cli/tools_config.py
+@@ -80,6 +80,7 @@ CONFIGURABLE_TOOLSETS = [
+     ("todo",            "📋 Task Planning",             "todo"),
+     ("memory",          "💾 Memory",                    "persistent memory across sessions"),
+     ("session_search",  "🔎 Session Search",            "search past conversations"),
++    ("decentchat_search","🔎 DecentChat Search",         "semantic search across DecentChat history"),
+     ("clarify",         "❓ Clarifying Questions",      "clarify"),
+     ("delegation",      "👥 Task Delegation",           "delegate_task"),
+     ("cronjob",         "⏰ Cron Jobs",                 "create/list/update/pause/resume/run, with optional attached skills"),
+diff --git a/model_tools.py b/model_tools.py
+index c37007c4..f6628103 100644
+--- a/model_tools.py
++++ b/model_tools.py
+@@ -151,6 +151,7 @@ def _discover_tools():
+         "tools.todo_tool",
+         "tools.memory_tool",
+         "tools.session_search_tool",
++        "tools.decentchat_search_tool",
+         "tools.clarify_tool",
+         "tools.code_execution_tool",
+         "tools.delegate_tool",
+diff --git a/tests/tools/test_send_message_tool.py b/tests/tools/test_send_message_tool.py
+index 34cea278..82fc31cd 100644
+--- a/tests/tools/test_send_message_tool.py
++++ b/tests/tools/test_send_message_tool.py
+@@ -9,7 +9,7 @@ from types import SimpleNamespace
+ from unittest.mock import AsyncMock, MagicMock, patch
+ 
+ from gateway.config import Platform
+-from tools.send_message_tool import _send_telegram, _send_to_platform, send_message_tool
++from tools.send_message_tool import _send_decentchat, _send_telegram, _send_to_platform, send_message_tool
+ 
+ 
+ def _run_async_immediately(coro):
+@@ -482,6 +482,104 @@ class TestSendToPlatformWhatsapp:
+         async_mock.assert_awaited_once_with({"bridge_port": 3000}, chat_id, "hello from hermes")
+ 
+ 
++class _AsyncCM:
++    def __init__(self, value):
++        self.value = value
++
++    async def __aenter__(self):
++        return self.value
++
++    async def __aexit__(self, *exc):
++        return False
++
++
++class TestSendDecentChat:
++    def test_returns_structured_success_payload(self, monkeypatch):
++        class _Resp:
++            status = 200
++
++            async def json(self):
++                return {"success": True, "messageId": "dc-123"}
++
++            async def text(self):
++                return ""
++
++        class _Session:
++            def __init__(self):
++                self.calls = []
++
++            async def __aenter__(self):
++                return self
++
++            async def __aexit__(self, *exc):
++                return False
++
++            def post(self, url, **kwargs):
++                self.calls.append((url, kwargs))
++                return _AsyncCM(_Resp())
++
++        fake_session = _Session()
++        fake_aiohttp = SimpleNamespace(
++            ClientSession=lambda: fake_session,
++            ClientTimeout=lambda total: total,
++        )
++        monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
++
++        result = asyncio.run(
++            _send_decentchat(
++                SimpleNamespace(extra={"bridge_port": 3210}),
++                "ws:general",
++                "hello",
++            )
++        )
++
++        assert result == {
++            "success": True,
++            "platform": "decentchat",
++            "chat_id": "ws:general",
++            "message_id": "dc-123",
++        }
++        assert fake_session.calls[0][0] == "http://127.0.0.1:3210/send"
++        assert fake_session.calls[0][1]["json"] == {"chatId": "ws:general", "body": "hello"}
++
++    def test_returns_error_payload_on_http_failure(self, monkeypatch):
++        class _Resp:
++            status = 500
++
++            async def json(self):
++                return {"success": False, "error": "boom"}
++
++            async def text(self):
++                return "bridge exploded"
++
++        class _Session:
++            async def __aenter__(self):
++                return self
++
++            async def __aexit__(self, *exc):
++                return False
++
++            def post(self, *_args, **_kwargs):
++                return _AsyncCM(_Resp())
++
++        fake_aiohttp = SimpleNamespace(
++            ClientSession=lambda: _Session(),
++            ClientTimeout=lambda total: total,
++        )
++        monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
++
++        result = asyncio.run(
++            _send_decentchat(
++                SimpleNamespace(extra={"bridge_port": 3001}),
++                "ws:general",
++                "hello",
++            )
++        )
++
++        assert "error" in result
++        assert "DecentChat bridge error (500)" in result["error"]
++
++
+ class TestSendTelegramHtmlDetection:
+     """Verify that messages containing HTML tags are sent with parse_mode=HTML
+     and that plain / markdown messages use MarkdownV2."""
+diff --git a/tools/send_message_tool.py b/tools/send_message_tool.py
+index 164b8a2f..5dbf9102 100644
+--- a/tools/send_message_tool.py
++++ b/tools/send_message_tool.py
+@@ -147,6 +147,7 @@ def _handle_send(args):
+         "discord": Platform.DISCORD,
+         "slack": Platform.SLACK,
+         "whatsapp": Platform.WHATSAPP,
++        "decentchat": Platform.DECENTCHAT,
+         "signal": Platform.SIGNAL,
+         "matrix": Platform.MATRIX,
+         "mattermost": Platform.MATTERMOST,
+@@ -378,6 +379,8 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
+             result = await _send_slack(pconfig.token, chat_id, chunk)
+         elif platform == Platform.WHATSAPP:
+             result = await _send_whatsapp(pconfig.extra, chat_id, chunk)
++        elif platform == Platform.DECENTCHAT:
++            result = await _send_decentchat(pconfig, chat_id, chunk)
+         elif platform == Platform.SIGNAL:
+             result = await _send_signal(pconfig.extra, chat_id, chunk)
+         elif platform == Platform.EMAIL:
+@@ -605,6 +608,38 @@ async def _send_whatsapp(extra, chat_id, message):
+         return _error(f"WhatsApp send failed: {e}")
+ 
+ 
++async def _send_decentchat(pconfig, chat_id: str, message: str):
++    """Send a DecentChat message directly via the bridge HTTP API."""
++    try:
++        import aiohttp
++    except ImportError:
++        return {"error": "aiohttp not installed. Run: pip install aiohttp"}
++
++    port = pconfig.extra.get("bridge_port", 3001)
++    url = f"http://127.0.0.1:{port}/send"
++    try:
++        async with aiohttp.ClientSession() as session:
++            async with session.post(
++                url,
++                json={"chatId": chat_id, "body": message},
++                timeout=aiohttp.ClientTimeout(total=10),
++            ) as resp:
++                if resp.status != 200:
++                    body = await resp.text()
++                    return {"error": f"DecentChat bridge error ({resp.status}): {body}"}
++                data = await resp.json()
++                if data.get("success"):
++                    return {
++                        "success": True,
++                        "platform": "decentchat",
++                        "chat_id": chat_id,
++                        "message_id": data.get("messageId"),
++                    }
++                return {"error": data.get("error", "DecentChat send failed")}
++    except Exception as e:
++        return {"error": f"DecentChat send failed: {e}"}
++
++
+ async def _send_signal(extra, chat_id, message):
+     """Send via signal-cli JSON-RPC API."""
+     try:
+diff --git a/toolsets.py b/toolsets.py
+index 2a359b60..37ef6084 100644
+--- a/toolsets.py
++++ b/toolsets.py
+@@ -173,7 +173,13 @@ TOOLSETS = {
+         "tools": ["session_search"],
+         "includes": []
+     },
+-    
++
++    "decentchat_search": {
++        "description": "Semantic search over DecentChat P2P message history (local Ollama embeddings)",
++        "tools": ["decentchat_search"],
++        "includes": []
++    },
++
+     "clarify": {
+         "description": "Ask the user clarifying questions (multiple-choice or open-ended)",
+         "tools": ["clarify"],
+@@ -365,10 +371,16 @@ TOOLSETS = {
+         "includes": []
+     },
+ 
++    "hermes-decentchat": {
++        "description": "DecentChat P2P bot toolset",
++        "tools": _HERMES_CORE_TOOLS + ["decentchat_search"],
++        "includes": []
++    },
++
+     "hermes-gateway": {
+         "description": "Gateway toolset - union of all messaging platform tools",
+         "tools": [],
+-        "includes": ["hermes-telegram", "hermes-discord", "hermes-whatsapp", "hermes-slack", "hermes-signal", "hermes-homeassistant", "hermes-email", "hermes-sms", "hermes-mattermost", "hermes-matrix", "hermes-dingtalk", "hermes-feishu", "hermes-wecom", "hermes-webhook"]
++        "includes": ["hermes-telegram", "hermes-discord", "hermes-whatsapp", "hermes-slack", "hermes-signal", "hermes-homeassistant", "hermes-email", "hermes-sms", "hermes-mattermost", "hermes-matrix", "hermes-dingtalk", "hermes-feishu", "hermes-wecom", "hermes-webhook", "hermes-decentchat"]
+     }
+ }
+ 
 diff --git a/docs/platforms/decentchat.md b/docs/platforms/decentchat.md
 new file mode 100644
 index 00000000..c649ebc6
@@ -93,215 +756,12 @@ index 00000000..c649ebc6
 +
 +- Bridge log: `~/.hermes/decentchat/bridge.log`
 +- Gateway log: your normal Hermes gateway log destination
-diff --git a/gateway/config.py b/gateway/config.py
-index 1896db9f..cc5be5d3 100644
---- a/gateway/config.py
-+++ b/gateway/config.py
-@@ -50,6 +50,7 @@ class Platform(Enum):
-     LOCAL = "local"
-     TELEGRAM = "telegram"
-     DISCORD = "discord"
-+    DECENTCHAT = "decentchat"
-     WHATSAPP = "whatsapp"
-     SLACK = "slack"
-     SIGNAL = "signal"
-@@ -172,14 +173,21 @@ class PlatformConfig:
-         home_channel = None
-         if "home_channel" in data:
-             home_channel = HomeChannel.from_dict(data["home_channel"])
--        
-+
-+        # Known top-level keys — everything else flows into extra so that
-+        # platform-specific settings (seed_phrase, alias, data_dir, …) work
-+        # whether written as top-level YAML keys or nested under `extra:`.
-+        _known = {"enabled", "token", "api_key", "home_channel", "reply_to_mode", "extra"}
-+        extra = {k: v for k, v in data.items() if k not in _known}
-+        extra.update(data.get("extra", {}))   # explicit extra: block takes precedence
-+
-         return cls(
-             enabled=data.get("enabled", False),
-             token=data.get("token"),
-             api_key=data.get("api_key"),
-             home_channel=home_channel,
-             reply_to_mode=data.get("reply_to_mode", "first"),
--            extra=data.get("extra", {}),
-+            extra=extra,
-         )
- 
- 
-@@ -265,6 +273,9 @@ class GatewayConfig:
-             # WhatsApp uses enabled flag only (bridge handles auth)
-             elif platform == Platform.WHATSAPP:
-                 connected.append(platform)
-+            # DecentChat uses enabled flag only (bridge handles auth via seed phrase)
-+            elif platform == Platform.DECENTCHAT:
-+                connected.append(platform)
-             # Signal uses extra dict for config (http_url + account)
-             elif platform == Platform.SIGNAL and config.extra.get("http_url"):
-                 connected.append(platform)
-@@ -683,7 +694,15 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
-         if Platform.WHATSAPP not in config.platforms:
-             config.platforms[Platform.WHATSAPP] = PlatformConfig()
-         config.platforms[Platform.WHATSAPP].enabled = True
--    
-+
-+    # DecentChat
-+    dc_seed = os.getenv("DECENTCHAT_SEED_PHRASE")
-+    if dc_seed:
-+        if Platform.DECENTCHAT not in config.platforms:
-+            config.platforms[Platform.DECENTCHAT] = PlatformConfig()
-+        config.platforms[Platform.DECENTCHAT].enabled = True
-+        config.platforms[Platform.DECENTCHAT].extra["seed_phrase"] = dc_seed
-+
-     # Slack
-     slack_token = os.getenv("SLACK_BOT_TOKEN")
-     if slack_token:
-diff --git a/gateway/platforms/ADDING_A_PLATFORM.md b/gateway/platforms/ADDING_A_PLATFORM.md
-index f773f8c8..af38f5bf 100644
---- a/gateway/platforms/ADDING_A_PLATFORM.md
-+++ b/gateway/platforms/ADDING_A_PLATFORM.md
-@@ -5,6 +5,9 @@ Use this as a reference when building a new adapter — every item here is a
- real integration point that exists in the codebase. Missing any of them will
- cause broken functionality, missing features, or inconsistent behavior.
- 
-+Example implementation docs:
-+- DecentChat: `docs/platforms/decentchat.md`
-+
- ---
- 
- ## 1. Core Adapter (`gateway/platforms/<platform>.py`)
-diff --git a/gateway/platforms/base.py b/gateway/platforms/base.py
-index 51a50c8c..f7854168 100644
---- a/gateway/platforms/base.py
-+++ b/gateway/platforms/base.py
-@@ -425,7 +425,12 @@ class BasePlatformAdapter(ABC):
-         # Track active message handlers per session for interrupt support
-         # Key: session_key (e.g., chat_id), Value: (event, asyncio.Event for interrupt)
-         self._active_sessions: Dict[str, asyncio.Event] = {}
--        self._pending_messages: Dict[str, MessageEvent] = {}
-+        # Pending messages per session.  Using a LIST (not a single event)
-+        # so rapid bursts (N messages arriving while the agent is still
-+        # processing msg 1) queue properly.  Previously this was a Dict[str,
-+        # MessageEvent] where later arrivals overwrote earlier ones, silently
-+        # dropping middle messages in a 3+ burst.
-+        self._pending_messages: Dict[str, List[MessageEvent]] = {}
-         # Background message-processing tasks spawned by handle_message().
-         # Gateway shutdown cancels these so an old gateway instance doesn't keep
-         # working on a task after --replace or manual restarts.
-@@ -1051,24 +1056,40 @@ class BasePlatformAdapter(ABC):
-             # Special case: photo bursts/albums frequently arrive as multiple near-
-             # simultaneous messages. Queue them without interrupting the active run,
-             # then process them immediately after the current task finishes.
-+            # Photos DO merge into a single pending entry (album semantics).
-             if event.message_type == MessageType.PHOTO:
-                 logger.debug("[%s] Queuing photo follow-up for session %s without interrupt", self.name, session_key)
--                existing = self._pending_messages.get(session_key)
--                if existing and existing.message_type == MessageType.PHOTO:
--                    existing.media_urls.extend(event.media_urls)
--                    existing.media_types.extend(event.media_types)
-+                queue = self._pending_messages.setdefault(session_key, [])
-+                if queue and queue[-1].message_type == MessageType.PHOTO:
-+                    last = queue[-1]
-+                    last.media_urls.extend(event.media_urls)
-+                    last.media_types.extend(event.media_types)
-                     if event.text:
--                        if not existing.text:
--                            existing.text = event.text
--                        elif event.text not in existing.text:
--                            existing.text = f"{existing.text}\n\n{event.text}".strip()
-+                        if not last.text:
-+                            last.text = event.text
-+                        elif event.text not in last.text:
-+                            last.text = f"{last.text}\n\n{event.text}".strip()
-                 else:
--                    self._pending_messages[session_key] = event
-+                    queue.append(event)
-                 return  # Don't interrupt now - will run after current task completes
- 
--            # Default behavior for non-photo follow-ups: interrupt the running agent
--            logger.debug("[%s] New message while session %s is active — triggering interrupt", self.name, session_key)
--            self._pending_messages[session_key] = event
-+            # Default behavior for non-photo follow-ups: interrupt the running agent.
-+            #
-+            # APPEND to the pending queue (never overwrite).  Each text message
-+            # in a burst gets its own agent turn with its own reply in its own
-+            # thread.  Earlier versions used Dict[str, MessageEvent] and silently
-+            # dropped middle messages in a 3+ rapid burst because later arrivals
-+            # overwrote the single slot.  Later versions merged text, but that
-+            # collapsed separate threads into one reply — wrong semantics for
-+            # DecentChat where each user message is expected to get its own
-+            # threaded reply.
-+            logger.debug("[%s] New message while session %s is active — queuing and triggering interrupt", self.name, session_key)
-+            queue = self._pending_messages.setdefault(session_key, [])
-+            queue.append(event)
-+            logger.debug(
-+                "[%s] Queue depth for session %s is now %d",
-+                self.name, session_key, len(queue),
-+            )
-             # Signal the interrupt (the processing task checks this)
-             self._active_sessions[session_key].set()
-             return  # Don't process now - will be handled after current task finishes
-@@ -1315,10 +1336,21 @@ class BasePlatformAdapter(ABC):
-             processing_ok = delivery_succeeded if delivery_attempted else not bool(response)
-             await self._run_processing_hook("on_processing_complete", event, processing_ok)
- 
--            # Check if there's a pending message that was queued during our processing
--            if session_key in self._pending_messages:
--                pending_event = self._pending_messages.pop(session_key)
--                logger.debug("[%s] Processing queued message from interrupt", self.name)
-+            # Check if there's a pending message that was queued during our processing.
-+            # Pop the OLDEST entry (FIFO) and recurse.  Remaining queued messages
-+            # will be picked up by subsequent recursive calls, each one processed
-+            # as its own agent turn with its own threaded reply.
-+            queue = self._pending_messages.get(session_key)
-+            if queue:
-+                pending_event = queue.pop(0)
-+                if not queue:
-+                    # Drop the empty list so `session_key in self._pending_messages`
-+                    # is accurate for the next handle_message call.
-+                    self._pending_messages.pop(session_key, None)
-+                logger.debug(
-+                    "[%s] Processing queued message from interrupt (remaining queue: %d)",
-+                    self.name, len(queue),
-+                )
-                 # Clean up current session before processing pending
-                 if session_key in self._active_sessions:
-                     del self._active_sessions[session_key]
-@@ -1327,7 +1359,10 @@ class BasePlatformAdapter(ABC):
-                     await typing_task
-                 except asyncio.CancelledError:
-                     pass
--                # Process pending message in new background task
-+                # Re-mark session as active so any further incoming messages
-+                # during THIS follow-up turn also queue instead of spawning
-+                # a parallel task.
-+                self._active_sessions[session_key] = asyncio.Event()
-                 await self._process_message_background(pending_event, session_key)
-                 return  # Already cleaned up
-                 
-@@ -1391,8 +1426,14 @@ class BasePlatformAdapter(ABC):
-         return session_key in self._active_sessions and self._active_sessions[session_key].is_set()
-     
-     def get_pending_message(self, session_key: str) -> Optional[MessageEvent]:
--        """Get and clear any pending message for a session."""
--        return self._pending_messages.pop(session_key, None)
-+        """Get and remove the OLDEST pending message for a session (FIFO)."""
-+        queue = self._pending_messages.get(session_key)
-+        if not queue:
-+            return None
-+        event = queue.pop(0)
-+        if not queue:
-+            self._pending_messages.pop(session_key, None)
-+        return event
-     
-     def build_source(
-         self,
 diff --git a/gateway/platforms/decentchat.py b/gateway/platforms/decentchat.py
 new file mode 100644
-index 00000000..dfaa946a
+index 00000000..d08be7d0
 --- /dev/null
 +++ b/gateway/platforms/decentchat.py
-@@ -0,0 +1,860 @@
+@@ -0,0 +1,1140 @@
 +"""
 +DecentChat platform adapter.
 +
@@ -459,6 +919,11 @@ index 00000000..dfaa946a
 +        self._bridge_log: Optional[Path] = None
 +        self._bridge_log_fh = None
 +        self._poll_task: Optional[asyncio.Task] = None
++        self._watchdog_task: Optional[asyncio.Task] = None
++        # Remembered bridge spawn parameters so the watchdog can respawn the
++        # subprocess without going through the full `connect()` lifecycle.
++        self._bridge_cmd: Optional[list] = None
++        self._bridge_cwd: Optional[str] = None
 +        self._http_session: Optional["aiohttp.ClientSession"] = None  # type: ignore[name-defined]
 +        self._session_lock_identity: Optional[str] = None
 +        # Per-chat typing state — refresh tasks keep the indicator alive past
@@ -590,6 +1055,11 @@ index 00000000..dfaa946a
 +            if self._tts_voice:
 +                cmd += ["--tts-voice", self._tts_voice]
 +
++            # Remember spawn params so the watchdog can respawn this exact
++            # subprocess later without re-running the full connect() lifecycle.
++            self._bridge_cmd = list(cmd)
++            self._bridge_cwd = str(bridge_dir)
++
 +            # Route bridge output to a log file
 +            self._bridge_log = self._data_dir.parent / "bridge.log"
 +            bridge_log_fh = open(self._bridge_log, "a")
@@ -672,6 +1142,13 @@ index 00000000..dfaa946a
 +            # Start message polling task
 +            self._poll_task = asyncio.create_task(self._poll_messages())
 +
++            # Start bridge-health watchdog. Polls /health periodically and
++            # respawns the bridge subprocess if it dies or if /health reports
++            # `connected: false` for several consecutive checks. Skipped when
++            # we're attached to an external (un-managed) bridge.
++            if self._bridge_process is not None and self._bridge_cmd is not None:
++                self._watchdog_task = asyncio.create_task(self._bridge_watchdog())
++
 +            # Kick off RAG index backfill in the background (non-blocking).
 +            # New messages from the poll loop get embedded incrementally; the
 +            # backfill catches up any pre-existing messages on first boot or
@@ -706,11 +1183,26 @@ index 00000000..dfaa946a
 +            self._bridge_log_fh = None
 +
 +    async def _check_managed_bridge_exit(self) -> Optional[str]:
-+        """Return a fatal error message if the managed bridge child exited."""
++        """Return a fatal error message if the managed bridge child exited.
++
++        If the bridge-health watchdog is active, this returns None — a dead
++        subprocess is a transient recovery condition, not a fatal error, and
++        the watchdog owns the respawn. The poll loop will see the next
++        `/messages` HTTP call fail, sleep, and retry; once the watchdog's
++        respawn completes the long-poll reconnects automatically.
++        """
 +        if self._bridge_process is None:
 +            return None
 +        returncode = self._bridge_process.poll()
 +        if returncode is None:
++            return None
++        # Watchdog in charge → don't escalate, don't set fatal. Just log.
++        if self._watchdog_task is not None and not self._watchdog_task.done():
++            logger.warning(
++                "[%s] Bridge process exited (code %s) — watchdog will respawn",
++                self.name,
++                returncode,
++            )
 +            return None
 +        message = f"DecentChat bridge process exited unexpectedly (code {returncode})."
 +        if not self.has_fatal_error:
@@ -720,8 +1212,256 @@ index 00000000..dfaa946a
 +            await self._notify_fatal_error()
 +        return self.fatal_error_message or message
 +
++    # ------------------------------------------------------------------
++    # Bridge health watchdog
++    # ------------------------------------------------------------------
++    #
++    # The legacy connect() path only checks /health during startup. Once the
++    # bridge was marked "connected" it was never re-checked, which meant a
++    # zombied bridge (e.g. PeerJS signaling silently dead while the HTTP
++    # server stayed up) could leave Xena permanently offline on DecentChat
++    # without the gateway noticing.
++    #
++    # The watchdog closes that gap by:
++    #   1. Polling /health every `WATCHDOG_POLL_INTERVAL` seconds.
++    #   2. Counting consecutive failures (HTTP error, non-200, or
++    #      `connected: false`). `connected` is now honest after the
++    #      `decent-hermes` bridge-side fix: it mirrors the real
++    #      PeerTransport signaling state.
++    #   3. Also detecting a subprocess that exited outright.
++    #   4. After `WATCHDOG_FAIL_THRESHOLD` consecutive failures, killing the
++    #      subprocess and respawning it with the stashed cmd/cwd from
++    #      connect(). The HTTP session and polling task remain live, so
++    #      message flow resumes as soon as the new bridge comes up.
++    #
++    # The watchdog deliberately does NOT:
++    #   - touch `_http_session` or `_poll_task` (they're bridge-agnostic)
++    #   - mark the adapter as fatal-error (a transient respawn is recovery,
++    #     not a fatal condition)
++    #   - run when attached to an external bridge (self._bridge_process is
++    #     None) — in that case we assume the operator supervises it.
++
++    WATCHDOG_POLL_INTERVAL = 30          # seconds between /health polls
++    WATCHDOG_FAIL_THRESHOLD = 2          # consecutive failures → respawn
++    WATCHDOG_HEALTH_TIMEOUT = 5          # seconds per /health request
++    WATCHDOG_STARTUP_GRACE = 5           # seconds to let a fresh bridge settle
++    WATCHDOG_RESPAWN_READY_TIMEOUT = 30  # seconds to wait for a respawn to report healthy
++
++    async def _bridge_watchdog(self) -> None:
++        """Periodic bridge-health watchdog. Runs until disconnect()."""
++        import aiohttp  # local import — keeps top-level imports lean
++
++        # Short grace period so the freshly-spawned bridge from connect()
++        # isn't immediately probed on top of its own phase-2 waits.
++        try:
++            await asyncio.sleep(self.WATCHDOG_STARTUP_GRACE)
++        except asyncio.CancelledError:
++            return
++
++        consecutive_failures = 0
++        health_url = f"http://127.0.0.1:{self._bridge_port}/health"
++
++        while True:
++            try:
++                await asyncio.sleep(self.WATCHDOG_POLL_INTERVAL)
++            except asyncio.CancelledError:
++                return
++
++            # Managed subprocess died outright — force immediate respawn.
++            proc = self._bridge_process
++            if proc is not None and proc.poll() is not None:
++                logger.warning(
++                    "[%s] Watchdog: bridge process exited (code %s) — respawning",
++                    self.name,
++                    proc.returncode,
++                )
++                try:
++                    await self._restart_bridge(reason=f"process-exit code={proc.returncode}")
++                except Exception as err:
++                    logger.exception("[%s] Watchdog: restart after process-exit failed: %s", self.name, err)
++                consecutive_failures = 0
++                continue
++
++            # Probe /health. connected=false OR HTTP failure counts as a hit.
++            hit = False
++            reason = ""
++            try:
++                async with aiohttp.ClientSession() as session:
++                    async with session.get(
++                        health_url,
++                        timeout=aiohttp.ClientTimeout(total=self.WATCHDOG_HEALTH_TIMEOUT),
++                    ) as resp:
++                        if resp.status != 200:
++                            hit = True
++                            reason = f"HTTP {resp.status}"
++                        else:
++                            data = await resp.json()
++                            if data.get("connected") is not True:
++                                hit = True
++                                reason = f"connected={data.get('connected')!r} status={data.get('status')!r}"
++            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, OSError) as err:
++                hit = True
++                reason = f"probe error: {type(err).__name__}: {err}"
++            except asyncio.CancelledError:
++                return
++            except Exception as err:
++                # Unknown probe failure — don't crash the loop, just count it.
++                hit = True
++                reason = f"unexpected error: {type(err).__name__}: {err}"
++
++            if hit:
++                consecutive_failures += 1
++                logger.warning(
++                    "[%s] Watchdog: /health unhealthy (%d/%d): %s",
++                    self.name,
++                    consecutive_failures,
++                    self.WATCHDOG_FAIL_THRESHOLD,
++                    reason,
++                )
++            else:
++                if consecutive_failures > 0:
++                    logger.info(
++                        "[%s] Watchdog: /health recovered after %d failure(s)",
++                        self.name,
++                        consecutive_failures,
++                    )
++                consecutive_failures = 0
++
++            if consecutive_failures >= self.WATCHDOG_FAIL_THRESHOLD:
++                logger.error(
++                    "[%s] Watchdog: bridge unhealthy for %d consecutive checks — respawning",
++                    self.name,
++                    consecutive_failures,
++                )
++                try:
++                    await self._restart_bridge(reason=f"health-fail: {reason}")
++                except Exception as err:
++                    logger.exception("[%s] Watchdog: restart failed: %s", self.name, err)
++                consecutive_failures = 0
++
++    async def _restart_bridge(self, reason: str) -> None:
++        """Kill the current bridge subprocess and respawn it using the
++        remembered `_bridge_cmd`/`_bridge_cwd`. Called only by the watchdog.
++        """
++        import aiohttp
++
++        if self._bridge_cmd is None or self._bridge_cwd is None:
++            logger.warning(
++                "[%s] Watchdog: cannot restart — no stashed spawn params (external bridge?)",
++                self.name,
++            )
++            return
++
++        logger.info("[%s] Watchdog: restarting bridge (reason: %s)", self.name, reason)
++
++        # Kill the old process group (same logic as disconnect()).
++        if self._bridge_process is not None:
++            try:
++                import signal as _signal
++                try:
++                    if _IS_WINDOWS:
++                        self._bridge_process.terminate()
++                    else:
++                        os.killpg(os.getpgid(self._bridge_process.pid), _signal.SIGTERM)
++                except (ProcessLookupError, PermissionError):
++                    try:
++                        self._bridge_process.terminate()
++                    except Exception:
++                        pass
++                # Wait briefly for clean shutdown; SIGKILL if it lingers.
++                for _ in range(10):
++                    if self._bridge_process.poll() is not None:
++                        break
++                    await asyncio.sleep(0.2)
++                if self._bridge_process.poll() is None:
++                    try:
++                        if _IS_WINDOWS:
++                            self._bridge_process.kill()
++                        else:
++                            os.killpg(os.getpgid(self._bridge_process.pid), _signal.SIGKILL)
++                    except (ProcessLookupError, PermissionError):
++                        try:
++                            self._bridge_process.kill()
++                        except Exception:
++                            pass
++            except Exception as err:
++                logger.warning("[%s] Watchdog: error killing old bridge: %s", self.name, err)
++
++        # Evict anything still holding the port (safety net).
++        try:
++            _kill_port_process(self._bridge_port)
++        except Exception:
++            pass
++        await asyncio.sleep(1)
++
++        # Reuse the same log file; keep the existing handle open and let the
++        # new subprocess append to it so the log stays continuous.
++        if self._bridge_log_fh is None and self._bridge_log is not None:
++            try:
++                self._bridge_log_fh = open(self._bridge_log, "a")
++            except Exception as err:
++                logger.warning("[%s] Watchdog: could not reopen bridge log: %s", self.name, err)
++
++        try:
++            self._bridge_process = subprocess.Popen(
++                list(self._bridge_cmd),
++                stdout=self._bridge_log_fh,
++                stderr=self._bridge_log_fh,
++                preexec_fn=None if _IS_WINDOWS else os.setsid,
++                cwd=self._bridge_cwd,
++            )
++        except Exception as err:
++            logger.exception("[%s] Watchdog: failed to respawn bridge: %s", self.name, err)
++            return
++
++        # Wait for the new bridge to report healthy, up to RESPAWN_READY_TIMEOUT.
++        health_url = f"http://127.0.0.1:{self._bridge_port}/health"
++        for _ in range(self.WATCHDOG_RESPAWN_READY_TIMEOUT):
++            await asyncio.sleep(1)
++            if self._bridge_process.poll() is not None:
++                logger.error(
++                    "[%s] Watchdog: respawned bridge died during startup (code %s)",
++                    self.name,
++                    self._bridge_process.returncode,
++                )
++                return
++            try:
++                async with aiohttp.ClientSession() as session:
++                    async with session.get(
++                        health_url,
++                        timeout=aiohttp.ClientTimeout(total=self.WATCHDOG_HEALTH_TIMEOUT),
++                    ) as resp:
++                        if resp.status == 200:
++                            data = await resp.json()
++                            if data.get("connected") is True:
++                                logger.info(
++                                    "[%s] Watchdog: respawned bridge healthy (PID %s)",
++                                    self.name,
++                                    self._bridge_process.pid,
++                                )
++                                return
++            except Exception:
++                continue
++
++        logger.warning(
++            "[%s] Watchdog: respawned bridge did not report healthy within %ds — "
++            "will retry on next poll cycle",
++            self.name,
++            self.WATCHDOG_RESPAWN_READY_TIMEOUT,
++        )
++
 +    async def disconnect(self) -> None:
 +        """Stop the DecentChat bridge and clean up."""
++        # Cancel the watchdog BEFORE killing the bridge so it doesn't race
++        # with us by trying to respawn what we're tearing down.
++        if self._watchdog_task and not self._watchdog_task.done():
++            self._watchdog_task.cancel()
++            try:
++                await self._watchdog_task
++            except (asyncio.CancelledError, Exception):
++                pass
++        self._watchdog_task = None
++
 +        # Cancel any in-flight typing tasks so they don't keep poking the bridge
 +        for task in list(self._typing_refresh_tasks.values()):
 +            if not task.done():
@@ -1809,241 +2549,12 @@ index 00000000..13f08dc4
 +        _rag_instance = DecentChatRAG()
 +        _rag_instance.load()
 +    return _rag_instance
-diff --git a/gateway/run.py b/gateway/run.py
-index 33bfa1d7..db0798ae 100644
---- a/gateway/run.py
-+++ b/gateway/run.py
-@@ -340,6 +340,27 @@ def _dequeue_pending_text(adapter, session_key: str) -> str | None:
-     return text
- 
- 
-+def _dequeue_pending_event(adapter, session_key: str):
-+    """Consume and return the full pending MessageEvent (for threading).
-+
-+    Returns a tuple (text, message_id, thread_id) so the caller can pass
-+    them to the recursive _run_agent call and the follow-up reply lands in
-+    the correct thread of the correct user message.  Returns None if no
-+    pending message.
-+    """
-+    event = adapter.get_pending_message(session_key)
-+    if not event:
-+        return None
-+    text = event.text
-+    if not text and getattr(event, "media_urls", None):
-+        text = _build_media_placeholder(event)
-+    if not text:
-+        return None
-+    message_id = getattr(event, "message_id", None)
-+    thread_id = getattr(getattr(event, "source", None), "thread_id", None)
-+    return (text, message_id, thread_id, event)
-+
-+
- def _check_unavailable_skill(command_name: str) -> str | None:
-     """Check if a command matches a known-but-inactive skill.
- 
-@@ -412,14 +433,26 @@ def _resolve_gateway_model(config: dict | None = None) -> str:
-     Without this, temporary AIAgent instances (memory flush, /compress) fall
-     back to the hardcoded default which fails when the active provider is
-     openai-codex.
-+
-+    Also normalize provider-prefixed Codex model strings
-+    ("openai-codex/gpt-5.4" → "gpt-5.4"). The CLI already strips these, but
-+    gateway sessions read config directly and would otherwise pass the invalid
-+    provider-prefixed value to the Codex Responses API.
-     """
-     cfg = config if config is not None else _load_gateway_config()
-     model_cfg = cfg.get("model", {})
-+
-+    provider = ""
-+    model = ""
-     if isinstance(model_cfg, str):
--        return model_cfg
-+        model = model_cfg
-     elif isinstance(model_cfg, dict):
--        return model_cfg.get("default") or model_cfg.get("model") or ""
--    return ""
-+        provider = str(model_cfg.get("provider") or "")
-+        model = model_cfg.get("default") or model_cfg.get("model") or ""
-+
-+    if provider == "openai-codex" and isinstance(model, str) and "/" in model:
-+        return model.split("/", 1)[1]
-+    return model or ""
- 
- 
- def _resolve_hermes_bin() -> Optional[list[str]]:
-@@ -1489,7 +1522,14 @@ class GatewayRunner:
-                 logger.warning("WhatsApp: Node.js not installed or bridge not configured")
-                 return None
-             return WhatsAppAdapter(config)
--        
-+
-+        elif platform == Platform.DECENTCHAT:
-+            from gateway.platforms.decentchat import DecentChatAdapter, check_decentchat_requirements
-+            if not check_decentchat_requirements():
-+                logger.warning("[gateway] DecentChat: Node.js not found — skipping")
-+                return None
-+            return DecentChatAdapter(config)
-+
-         elif platform == Platform.SLACK:
-             from gateway.platforms.slack import SlackAdapter, check_slack_requirements
-             if not check_slack_requirements():
-@@ -1605,6 +1645,7 @@ class GatewayRunner:
-             Platform.TELEGRAM: "TELEGRAM_ALLOWED_USERS",
-             Platform.DISCORD: "DISCORD_ALLOWED_USERS",
-             Platform.WHATSAPP: "WHATSAPP_ALLOWED_USERS",
-+            Platform.DECENTCHAT: "DECENTCHAT_ALLOWED_USERS",
-             Platform.SLACK: "SLACK_ALLOWED_USERS",
-             Platform.SIGNAL: "SIGNAL_ALLOWED_USERS",
-             Platform.EMAIL: "EMAIL_ALLOWED_USERS",
-@@ -1619,6 +1660,7 @@ class GatewayRunner:
-             Platform.TELEGRAM: "TELEGRAM_ALLOW_ALL_USERS",
-             Platform.DISCORD: "DISCORD_ALLOW_ALL_USERS",
-             Platform.WHATSAPP: "WHATSAPP_ALLOW_ALL_USERS",
-+            Platform.DECENTCHAT: "DECENTCHAT_ALLOW_ALL_USERS",
-             Platform.SLACK: "SLACK_ALLOW_ALL_USERS",
-             Platform.SIGNAL: "SIGNAL_ALLOW_ALL_USERS",
-             Platform.EMAIL: "EMAIL_ALLOW_ALL_USERS",
-@@ -6285,26 +6327,30 @@ class GatewayRunner:
-             
-             # Get pending message from adapter.
-             # Use session_key (not source.chat_id) to match adapter's storage keys.
--            pending = None
-+            # We dequeue the full event (not just text) so we can pass the
-+            # message_id to the recursive _run_agent call and the follow-up
-+            # reply threads back to the correct user message.
-+            pending_info = None  # (text, message_id, thread_id, event) or None
-             if result and adapter and session_key:
-                 if result.get("interrupted"):
--                    pending = _dequeue_pending_text(adapter, session_key)
--                    if not pending and result.get("interrupt_message"):
--                        pending = result.get("interrupt_message")
-+                    pending_info = _dequeue_pending_event(adapter, session_key)
-+                    if not pending_info and result.get("interrupt_message"):
-+                        pending_info = (result.get("interrupt_message"), None, None, None)
-                 else:
--                    pending = _dequeue_pending_text(adapter, session_key)
--                    if pending:
--                        logger.debug("Processing queued message after agent completion: '%s...'", pending[:40])
--            
--            if pending:
--                logger.debug("Processing pending message: '%s...'", pending[:40])
--                
-+                    pending_info = _dequeue_pending_event(adapter, session_key)
-+                    if pending_info:
-+                        logger.debug("Processing queued message after agent completion: '%s...'", pending_info[0][:40])
-+
-+            if pending_info:
-+                pending_text, pending_msg_id, pending_thread_id, pending_event = pending_info
-+                logger.debug("Processing pending message: '%s...'", pending_text[:40])
-+
-                 # Clear the adapter's interrupt event so the next _run_agent call
-                 # doesn't immediately re-trigger the interrupt before the new agent
-                 # even makes its first API call (this was causing an infinite loop).
-                 if adapter and hasattr(adapter, '_active_sessions') and session_key and session_key in adapter._active_sessions:
-                     adapter._active_sessions[session_key].clear()
--                
-+
-                 # Cap recursion depth to prevent resource exhaustion when the
-                 # user sends multiple messages while the agent keeps failing. (#816)
-                 if _interrupt_depth >= self._MAX_INTERRUPT_DEPTH:
-@@ -6316,37 +6362,60 @@ class GatewayRunner:
-                     # Queue the pending message for normal processing on next turn
-                     adapter = self.adapters.get(source.platform)
-                     if adapter and hasattr(adapter, 'queue_message'):
--                        adapter.queue_message(session_key, pending)
-+                        adapter.queue_message(session_key, pending_text)
-                     return result_holder[0] or {"final_response": response, "messages": history}
- 
-                 was_interrupted = result.get("interrupted")
-                 if not was_interrupted:
-                     # Queued message after normal completion — deliver the first
--                    # response before processing the queued follow-up.
--                    # Skip if streaming already delivered it.
-+                    # response (reply to the CURRENT message) before processing
-+                    # the queued follow-up.  Skip if streaming already delivered it.
-                     _sc = stream_consumer_holder[0]
-                     _already_streamed = _sc and getattr(_sc, "already_sent", False)
-                     first_response = result.get("final_response", "")
-                     if first_response and not _already_streamed:
-                         try:
--                            await adapter.send(source.chat_id, first_response,
--                                               metadata=getattr(event, "metadata", None))
-+                            # Thread the current reply back to the current message.
-+                            _current_reply_to = event_message_id
-+                            _current_thread_meta = (
-+                                {"thread_id": source.thread_id}
-+                                if getattr(source, "thread_id", None)
-+                                else None
-+                            )
-+                            await adapter.send(
-+                                source.chat_id,
-+                                first_response,
-+                                reply_to=_current_reply_to,
-+                                metadata=_current_thread_meta,
-+                            )
-                         except Exception as e:
-                             logger.warning("Failed to send first response before queued message: %s", e)
-                 # else: interrupted — discard the interrupted response ("Operation
-                 # interrupted." is just noise; the user already knows they sent a
-                 # new message).
- 
-+                # Build a new source carrying the pending message's thread_id so
-+                # the recursive run's reply threads back to the pending message.
-+                if pending_thread_id and pending_thread_id != getattr(source, "thread_id", None):
-+                    try:
-+                        from dataclasses import replace as _dc_replace
-+                        recursive_source = _dc_replace(source, thread_id=pending_thread_id)
-+                    except Exception:
-+                        recursive_source = source
-+                else:
-+                    recursive_source = source
-+
-                 # Process the pending message with updated history
-                 updated_history = result.get("messages", history)
-                 return await self._run_agent(
--                    message=pending,
-+                    message=pending_text,
-                     context_prompt=context_prompt,
-                     history=updated_history,
--                    source=source,
-+                    source=recursive_source,
-                     session_id=session_id,
-                     session_key=session_key,
-                     _interrupt_depth=_interrupt_depth + 1,
-+                    event_message_id=pending_msg_id,
-                 )
-         finally:
-             # Stop progress sender, interrupt monitor, and notification task
-diff --git a/hermes_cli/tools_config.py b/hermes_cli/tools_config.py
-index 1a0b3067..41dfb7be 100644
---- a/hermes_cli/tools_config.py
-+++ b/hermes_cli/tools_config.py
-@@ -96,6 +96,7 @@ CONFIGURABLE_TOOLSETS = [
-     ("todo",            "📋 Task Planning",             "todo"),
-     ("memory",          "💾 Memory",                    "persistent memory across sessions"),
-     ("session_search",  "🔎 Session Search",            "search past conversations"),
-+    ("decentchat_search","🔎 DecentChat Search",         "semantic search across DecentChat history"),
-     ("clarify",         "❓ Clarifying Questions",      "clarify"),
-     ("delegation",      "👥 Task Delegation",           "delegate_task"),
-     ("cronjob",         "⏰ Cron Jobs",                 "create/list/update/pause/resume/run, with optional attached skills"),
-diff --git a/model_tools.py b/model_tools.py
-index ec472ff9..b07594c5 100644
---- a/model_tools.py
-+++ b/model_tools.py
-@@ -151,6 +151,7 @@ def _discover_tools():
-         "tools.todo_tool",
-         "tools.memory_tool",
-         "tools.session_search_tool",
-+        "tools.decentchat_search_tool",
-         "tools.clarify_tool",
-         "tools.code_execution_tool",
-         "tools.delegate_tool",
 diff --git a/tests/gateway/test_decentchat_adapter.py b/tests/gateway/test_decentchat_adapter.py
 new file mode 100644
-index 00000000..c4a7a2c4
+index 00000000..492471dc
 --- /dev/null
 +++ b/tests/gateway/test_decentchat_adapter.py
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,330 @@
 +"""Unit tests for the DecentChat gateway adapter."""
 +
 +import asyncio
@@ -2065,6 +2576,25 @@ index 00000000..c4a7a2c4
 +
 +    async def __aexit__(self, *exc):
 +        return False
++
++
++def _make_watchdog_adapter():
++    """Build a bare DecentChatAdapter suitable for poking the watchdog path.
++
++    Uses `__new__` to bypass `__init__` (mirrors the `TestPollMessages`
++    pattern) and fills only the fields the watchdog reads/writes.
++    """
++    adapter = DecentChatAdapter.__new__(DecentChatAdapter)
++    # `name` is a read-only property derived from `platform`; set platform
++    # directly so the watchdog's f"[{self.name}]" log strings resolve.
++    adapter.platform = Platform.DECENTCHAT
++    adapter._bridge_port = 3001
++    adapter._bridge_process = None
++    adapter._bridge_cmd = ["node", "/tmp/fake-bridge.js"]
++    adapter._bridge_cwd = "/tmp"
++    adapter._bridge_log = None
++    adapter._bridge_log_fh = None
++    return adapter
 +
 +
 +class TestCheckRequirements:
@@ -2144,6 +2674,217 @@ index 00000000..c4a7a2c4
 +
 +        adapter.handle_message.assert_awaited_once_with(event)
 +        adapter._build_message_event.assert_called_once()
++
++
++class TestRestartBridge:
++    """Unit tests for `_restart_bridge` (called only by the watchdog)."""
++
++    def test_early_exit_when_no_stashed_spawn_params(self):
++        """External bridges have no `_bridge_cmd` — restart must no-op."""
++        adapter = _make_watchdog_adapter()
++        adapter._bridge_cmd = None
++        adapter._bridge_cwd = None
++
++        # Ensure subprocess.Popen is NOT called.
++        with patch("gateway.platforms.decentchat.subprocess.Popen") as popen:
++            asyncio.run(adapter._restart_bridge(reason="unit-test"))
++            popen.assert_not_called()
++
++
++class TestBridgeWatchdog:
++    """Unit tests for the `_bridge_watchdog` loop."""
++
++    def _fast_sleep(self):
++        """Return an async no-op replacement for asyncio.sleep so the
++        watchdog loop runs at full speed during tests.
++        """
++        async def _noop(_t):
++            return None
++        return _noop
++
++    def test_detects_process_exit_and_respawns(self):
++        """If the managed subprocess has a non-None returncode, the
++        watchdog must call `_restart_bridge` on the very first iteration.
++        """
++        adapter = _make_watchdog_adapter()
++
++        fake_proc = MagicMock()
++        fake_proc.poll.return_value = 42  # died with code 42
++        fake_proc.returncode = 42
++        adapter._bridge_process = fake_proc
++
++        restart_called = {"n": 0, "reasons": []}
++
++        async def fake_restart(reason):
++            restart_called["n"] += 1
++            restart_called["reasons"].append(reason)
++            # Stop the loop by cancelling the watchdog task after one restart.
++            raise asyncio.CancelledError()
++
++        adapter._restart_bridge = fake_restart
++
++        with patch("gateway.platforms.decentchat.asyncio.sleep", new=self._fast_sleep()):
++            try:
++                asyncio.run(adapter._bridge_watchdog())
++            except asyncio.CancelledError:
++                pass
++
++        assert restart_called["n"] == 1
++        assert "process-exit" in restart_called["reasons"][0]
++        assert "42" in restart_called["reasons"][0]
++
++    def test_counts_consecutive_health_failures_until_threshold(self):
++        """Two consecutive probe failures must trigger exactly one restart.
++        Also verifies that the failure counter is what drives the restart
++        decision and that the restart happens AT the threshold, not before.
++        """
++        adapter = _make_watchdog_adapter()
++
++        # Alive subprocess so the process-exit branch never fires.
++        fake_proc = MagicMock()
++        fake_proc.poll.return_value = None
++        adapter._bridge_process = fake_proc
++
++        restart_call_count = {"n": 0}
++
++        async def fake_restart(reason):
++            restart_call_count["n"] += 1
++            raise asyncio.CancelledError()
++
++        adapter._restart_bridge = fake_restart
++
++        # Fake aiohttp that always fails with a network error on /health.
++        fake_aiohttp = SimpleNamespace(
++            ClientError=Exception,
++            ClientTimeout=lambda total: total,
++            ClientSession=lambda: _FailingSession(),
++        )
++
++        class _FailingSession:
++            async def __aenter__(self):
++                return self
++            async def __aexit__(self, *_):
++                return False
++            def get(self, *_args, **_kwargs):
++                raise OSError("simulated network failure")
++
++        with patch.dict(sys.modules, {"aiohttp": fake_aiohttp}), \
++             patch("gateway.platforms.decentchat.asyncio.sleep", new=self._fast_sleep()):
++            try:
++                asyncio.run(adapter._bridge_watchdog())
++            except asyncio.CancelledError:
++                pass
++
++        # Threshold is 2 consecutive failures. First iteration = 1 failure
++        # (no restart yet). Second iteration = 2 failures (restart fires).
++        assert restart_call_count["n"] == 1
++
++    def test_counter_resets_on_successful_probe(self):
++        """A single transient failure followed by a successful probe must
++        NOT trigger a restart. Verifies the counter-reset path.
++        """
++        adapter = _make_watchdog_adapter()
++
++        fake_proc = MagicMock()
++        fake_proc.poll.return_value = None
++        adapter._bridge_process = fake_proc
++
++        restart_called = {"n": 0}
++
++        async def fake_restart(reason):
++            restart_called["n"] += 1
++            raise asyncio.CancelledError()
++
++        adapter._restart_bridge = fake_restart
++
++        # Scripted sequence: fail, succeed, succeed → should reach iter 3
++        # with 0 restarts. We stop the loop via an attribute after 3 iters.
++        probe_iter = {"n": 0}
++
++        class _ScriptedSession:
++            async def __aenter__(self):
++                return self
++            async def __aexit__(self, *_):
++                return False
++            def get(self, *_args, **_kwargs):
++                probe_iter["n"] += 1
++                if probe_iter["n"] == 1:
++                    raise OSError("simulated transient failure")
++                if probe_iter["n"] >= 3:
++                    raise asyncio.CancelledError()  # break loop
++                return _AsyncCM(_OkResp(connected=True))
++
++        class _OkResp:
++            def __init__(self, connected):
++                self.status = 200
++                self._connected = connected
++            async def json(self):
++                return {"status": "connected", "connected": self._connected}
++
++        fake_aiohttp = SimpleNamespace(
++            ClientError=Exception,
++            ClientTimeout=lambda total: total,
++            ClientSession=lambda: _ScriptedSession(),
++        )
++
++        with patch.dict(sys.modules, {"aiohttp": fake_aiohttp}), \
++             patch("gateway.platforms.decentchat.asyncio.sleep", new=self._fast_sleep()):
++            try:
++                asyncio.run(adapter._bridge_watchdog())
++            except asyncio.CancelledError:
++                pass
++
++        assert restart_called["n"] == 0
++
++    def test_connected_false_counts_as_failure(self):
++        """An honest `connected: false` response (e.g. after the bridge-side
++        signaling-state fix) counts the same as an HTTP failure toward the
++        restart threshold.
++        """
++        adapter = _make_watchdog_adapter()
++
++        fake_proc = MagicMock()
++        fake_proc.poll.return_value = None
++        adapter._bridge_process = fake_proc
++
++        restart_called = {"n": 0, "reason": None}
++
++        async def fake_restart(reason):
++            restart_called["n"] += 1
++            restart_called["reason"] = reason
++            raise asyncio.CancelledError()
++
++        adapter._restart_bridge = fake_restart
++
++        class _DownResp:
++            status = 200
++            async def json(self):
++                return {"status": "connecting", "connected": False}
++
++        class _DownSession:
++            async def __aenter__(self):
++                return self
++            async def __aexit__(self, *_):
++                return False
++            def get(self, *_args, **_kwargs):
++                return _AsyncCM(_DownResp())
++
++        fake_aiohttp = SimpleNamespace(
++            ClientError=Exception,
++            ClientTimeout=lambda total: total,
++            ClientSession=lambda: _DownSession(),
++        )
++
++        with patch.dict(sys.modules, {"aiohttp": fake_aiohttp}), \
++             patch("gateway.platforms.decentchat.asyncio.sleep", new=self._fast_sleep()):
++            try:
++                asyncio.run(adapter._bridge_watchdog())
++            except asyncio.CancelledError:
++                pass
++
++        assert restart_called["n"] == 1
++        assert restart_called["reason"] is not None
++        assert "connected=False" in restart_called["reason"]
 diff --git a/tests/gateway/test_decentchat_integration.py b/tests/gateway/test_decentchat_integration.py
 new file mode 100644
 index 00000000..bd408145
@@ -2269,124 +3010,6 @@ index 00000000..bd408145
 +        _terminate_process(proc)
 +
 +    assert proc.poll() is not None
-diff --git a/tests/tools/test_send_message_tool.py b/tests/tools/test_send_message_tool.py
-index 058678d3..6417e09b 100644
---- a/tests/tools/test_send_message_tool.py
-+++ b/tests/tools/test_send_message_tool.py
-@@ -9,7 +9,7 @@ from types import SimpleNamespace
- from unittest.mock import AsyncMock, MagicMock, patch
- 
- from gateway.config import Platform
--from tools.send_message_tool import _send_telegram, _send_to_platform, send_message_tool
-+from tools.send_message_tool import _send_decentchat, _send_telegram, _send_to_platform, send_message_tool
- 
- 
- def _run_async_immediately(coro):
-@@ -417,6 +417,104 @@ class TestSendToPlatformWhatsapp:
-         async_mock.assert_awaited_once_with({"bridge_port": 3000}, chat_id, "hello from hermes")
- 
- 
-+class _AsyncCM:
-+    def __init__(self, value):
-+        self.value = value
-+
-+    async def __aenter__(self):
-+        return self.value
-+
-+    async def __aexit__(self, *exc):
-+        return False
-+
-+
-+class TestSendDecentChat:
-+    def test_returns_structured_success_payload(self, monkeypatch):
-+        class _Resp:
-+            status = 200
-+
-+            async def json(self):
-+                return {"success": True, "messageId": "dc-123"}
-+
-+            async def text(self):
-+                return ""
-+
-+        class _Session:
-+            def __init__(self):
-+                self.calls = []
-+
-+            async def __aenter__(self):
-+                return self
-+
-+            async def __aexit__(self, *exc):
-+                return False
-+
-+            def post(self, url, **kwargs):
-+                self.calls.append((url, kwargs))
-+                return _AsyncCM(_Resp())
-+
-+        fake_session = _Session()
-+        fake_aiohttp = SimpleNamespace(
-+            ClientSession=lambda: fake_session,
-+            ClientTimeout=lambda total: total,
-+        )
-+        monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
-+
-+        result = asyncio.run(
-+            _send_decentchat(
-+                SimpleNamespace(extra={"bridge_port": 3210}),
-+                "ws:general",
-+                "hello",
-+            )
-+        )
-+
-+        assert result == {
-+            "success": True,
-+            "platform": "decentchat",
-+            "chat_id": "ws:general",
-+            "message_id": "dc-123",
-+        }
-+        assert fake_session.calls[0][0] == "http://127.0.0.1:3210/send"
-+        assert fake_session.calls[0][1]["json"] == {"chatId": "ws:general", "body": "hello"}
-+
-+    def test_returns_error_payload_on_http_failure(self, monkeypatch):
-+        class _Resp:
-+            status = 500
-+
-+            async def json(self):
-+                return {"success": False, "error": "boom"}
-+
-+            async def text(self):
-+                return "bridge exploded"
-+
-+        class _Session:
-+            async def __aenter__(self):
-+                return self
-+
-+            async def __aexit__(self, *exc):
-+                return False
-+
-+            def post(self, *_args, **_kwargs):
-+                return _AsyncCM(_Resp())
-+
-+        fake_aiohttp = SimpleNamespace(
-+            ClientSession=lambda: _Session(),
-+            ClientTimeout=lambda total: total,
-+        )
-+        monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
-+
-+        result = asyncio.run(
-+            _send_decentchat(
-+                SimpleNamespace(extra={"bridge_port": 3001}),
-+                "ws:general",
-+                "hello",
-+            )
-+        )
-+
-+        assert "error" in result
-+        assert "DecentChat bridge error (500)" in result["error"]
-+
-+
- class TestSendTelegramHtmlDetection:
-     """Verify that messages containing HTML tags are sent with parse_mode=HTML
-     and that plain / markdown messages use MarkdownV2."""
 diff --git a/tools/decentchat_search_tool.py b/tools/decentchat_search_tool.py
 new file mode 100644
 index 00000000..5b7af567
@@ -2649,100 +3272,3 @@ index 00000000..5b7af567
 +    check_fn=check_decentchat_search_requirements,
 +    emoji="🔎",
 +)
-diff --git a/tools/send_message_tool.py b/tools/send_message_tool.py
-index d12eed50..181273ac 100644
---- a/tools/send_message_tool.py
-+++ b/tools/send_message_tool.py
-@@ -124,6 +124,7 @@ def _handle_send(args):
-         "discord": Platform.DISCORD,
-         "slack": Platform.SLACK,
-         "whatsapp": Platform.WHATSAPP,
-+        "decentchat": Platform.DECENTCHAT,
-         "signal": Platform.SIGNAL,
-         "matrix": Platform.MATRIX,
-         "mattermost": Platform.MATTERMOST,
-@@ -353,6 +354,8 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
-             result = await _send_slack(pconfig.token, chat_id, chunk)
-         elif platform == Platform.WHATSAPP:
-             result = await _send_whatsapp(pconfig.extra, chat_id, chunk)
-+        elif platform == Platform.DECENTCHAT:
-+            result = await _send_decentchat(pconfig, chat_id, chunk)
-         elif platform == Platform.SIGNAL:
-             result = await _send_signal(pconfig.extra, chat_id, chunk)
-         elif platform == Platform.EMAIL:
-@@ -576,6 +579,38 @@ async def _send_whatsapp(extra, chat_id, message):
-         return {"error": f"WhatsApp send failed: {e}"}
- 
- 
-+async def _send_decentchat(pconfig, chat_id: str, message: str):
-+    """Send a DecentChat message directly via the bridge HTTP API."""
-+    try:
-+        import aiohttp
-+    except ImportError:
-+        return {"error": "aiohttp not installed. Run: pip install aiohttp"}
-+
-+    port = pconfig.extra.get("bridge_port", 3001)
-+    url = f"http://127.0.0.1:{port}/send"
-+    try:
-+        async with aiohttp.ClientSession() as session:
-+            async with session.post(
-+                url,
-+                json={"chatId": chat_id, "body": message},
-+                timeout=aiohttp.ClientTimeout(total=10),
-+            ) as resp:
-+                if resp.status != 200:
-+                    body = await resp.text()
-+                    return {"error": f"DecentChat bridge error ({resp.status}): {body}"}
-+                data = await resp.json()
-+                if data.get("success"):
-+                    return {
-+                        "success": True,
-+                        "platform": "decentchat",
-+                        "chat_id": chat_id,
-+                        "message_id": data.get("messageId"),
-+                    }
-+                return {"error": data.get("error", "DecentChat send failed")}
-+    except Exception as e:
-+        return {"error": f"DecentChat send failed: {e}"}
-+
-+
- async def _send_signal(extra, chat_id, message):
-     """Send via signal-cli JSON-RPC API."""
-     try:
-diff --git a/toolsets.py b/toolsets.py
-index 84c19637..f22787dd 100644
---- a/toolsets.py
-+++ b/toolsets.py
-@@ -175,7 +175,13 @@ TOOLSETS = {
-         "tools": ["session_search"],
-         "includes": []
-     },
--    
-+
-+    "decentchat_search": {
-+        "description": "Semantic search over DecentChat P2P message history (local Ollama embeddings)",
-+        "tools": ["decentchat_search"],
-+        "includes": []
-+    },
-+
-     "clarify": {
-         "description": "Ask the user clarifying questions (multiple-choice or open-ended)",
-         "tools": ["clarify"],
-@@ -369,10 +375,16 @@ TOOLSETS = {
-         "includes": []
-     },
- 
-+    "hermes-decentchat": {
-+        "description": "DecentChat P2P bot toolset",
-+        "tools": _HERMES_CORE_TOOLS + ["decentchat_search"],
-+        "includes": []
-+    },
-+
-     "hermes-gateway": {
-         "description": "Gateway toolset - union of all messaging platform tools",
-         "tools": [],
--        "includes": ["hermes-telegram", "hermes-discord", "hermes-whatsapp", "hermes-slack", "hermes-signal", "hermes-homeassistant", "hermes-email", "hermes-sms", "hermes-mattermost", "hermes-matrix", "hermes-dingtalk", "hermes-feishu", "hermes-wecom", "hermes-webhook"]
-+        "includes": ["hermes-telegram", "hermes-discord", "hermes-whatsapp", "hermes-slack", "hermes-signal", "hermes-homeassistant", "hermes-email", "hermes-sms", "hermes-mattermost", "hermes-matrix", "hermes-dingtalk", "hermes-feishu", "hermes-wecom", "hermes-webhook", "hermes-decentchat"]
-     }
- }
- 
