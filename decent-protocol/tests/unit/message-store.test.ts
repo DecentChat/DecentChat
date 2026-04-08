@@ -72,6 +72,7 @@ describe('MessageStore - Basic Operations', () => {
 
     expect(result.success).toBe(true)
     expect(store.getMessages('channel1')).toHaveLength(2)
+    expect(() => store.validateInvariants()).not.toThrow()
   })
 
   test('addMessage rejects broken hash chain', async () => {
@@ -275,6 +276,7 @@ describe('MessageStore - Import Messages', () => {
     expect(result.success).toBe(true)
     expect(result.error).toBeUndefined()
     expect(store.getMessages('channel1')).toHaveLength(2)
+    expect(() => store.validateInvariants()).not.toThrow()
   })
 
   test('importMessages replaces existing channel', async () => {
@@ -616,5 +618,83 @@ describe('MessageStore - Thread Roots', () => {
     // Thread root should still exist after channel clear
     expect(store.getThreadRoot('p1')).toBeDefined()
     expect(store.getThreadRoot('p1')!.content).toBe('Preserved')
+  })
+})
+
+describe('MessageStore - Invariant Validation', () => {
+  let store: MessageStore
+
+  const message = (id: string, channelId = 'c1', timestamp = 1000): PlaintextMessage => ({
+    id,
+    channelId,
+    senderId: 'alice',
+    timestamp,
+    content: id,
+    type: 'text',
+    prevHash: GENESIS_HASH,
+    status: 'sent',
+  })
+
+  beforeEach(() => {
+    store = new MessageStore()
+  })
+
+  test('passes after common mutation operations', () => {
+    store.forceAdd(message('m1', 'c1', 1000))
+    store.forceAdd(message('m2', 'c1', 2000))
+    store.prependMessages('c1', [message('m0', 'c1', 500)])
+    store.trimChannel('c1', 2)
+    store.bulkAdd([message('m3', 'c1', 3000), message('n1', 'c2', 1200)])
+    store.remapChannel('c2', 'c3')
+
+    expect(() => store.validateInvariants()).not.toThrow()
+  })
+
+  test('detects key parity violation', () => {
+    store.forceAdd(message('m1'))
+    store['channelIdSets'].delete('c1')
+
+    expect(() => store.validateInvariants()).toThrow(/Key parity/)
+  })
+
+  test('detects size parity violation', () => {
+    store.forceAdd(message('m1'))
+    store['channelIdSets'].get('c1')!.add('phantom-id')
+
+    expect(() => store.validateInvariants()).toThrow(/Size parity/)
+  })
+
+  test('detects array-to-set coverage violation', () => {
+    store.forceAdd(message('m1'))
+    const ids = store['channelIdSets'].get('c1')!
+    ids.clear()
+    ids.add('different-id')
+
+    expect(() => store.validateInvariants()).toThrow(/Array→Set/)
+  })
+
+  test('detects duplicate IDs in a channel array', () => {
+    store.forceAdd(message('m1', 'c1', 1000))
+    store['channelIdSets'].get('c1')!.add('padding-id')
+    store['channels'].get('c1')!.push(message('m1', 'c1', 2000))
+
+    expect(() => store.validateInvariants()).toThrow(/Duplicate IDs/)
+  })
+
+  test('detects channelId mismatch', () => {
+    store.forceAdd(message('m1'))
+    store['channels'].get('c1')![0]!.channelId = 'wrong-channel'
+
+    expect(() => store.validateInvariants()).toThrow(/ChannelId mismatch/)
+  })
+
+  test('detects timestamp order violation', () => {
+    store.forceAdd(message('m1', 'c1', 1000))
+    store.forceAdd(message('m2', 'c1', 2000))
+
+    const msgs = store['channels'].get('c1')!
+    msgs[1]!.timestamp = 999
+
+    expect(() => store.validateInvariants()).toThrow(/Timestamp order/)
   })
 })

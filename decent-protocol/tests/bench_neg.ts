@@ -14,7 +14,7 @@ console.log(`Build (10K items): ${buildMs.toFixed(1)}ms`);
 
 // Measure createQuery (which triggers fingerprintEntries on all items)
 const queryStart = performance.now();
-const query = await alice.createQuery();
+await alice.createQuery();
 const queryMs = performance.now() - queryStart;
 console.log(`createQuery: ${queryMs.toFixed(1)}ms`);
 

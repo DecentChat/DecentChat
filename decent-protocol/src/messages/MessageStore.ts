@@ -379,6 +379,85 @@ export class MessageStore {
     return new Map(this.threadRoots);
   }
 
+  /**
+   * Assert internal consistency between `channels` and `channelIdSets`.
+   * Throws descriptive errors when invariants are violated.
+   */
+  validateInvariants(): void {
+    // In Vite production builds, skip invariant checks to avoid runtime overhead.
+    if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV === false) return;
+
+    if (this.channels.size !== this.channelIdSets.size) {
+      throw new Error(
+        `[MessageStore] Key parity violated: channels.size=${this.channels.size} !== channelIdSets.size=${this.channelIdSets.size}`
+      );
+    }
+
+    for (const channelId of this.channels.keys()) {
+      if (!this.channelIdSets.has(channelId)) {
+        throw new Error(
+          `[MessageStore] Key parity violated: '${channelId}' exists in channels but is missing from channelIdSets`
+        );
+      }
+    }
+
+    for (const channelId of this.channelIdSets.keys()) {
+      if (!this.channels.has(channelId)) {
+        throw new Error(
+          `[MessageStore] Key parity violated: '${channelId}' exists in channelIdSets but is missing from channels`
+        );
+      }
+    }
+
+    for (const [channelId, msgs] of this.channels) {
+      const ids = this.channelIdSets.get(channelId)!;
+
+      if (msgs.length !== ids.size) {
+        throw new Error(
+          `[MessageStore] Size parity violated for '${channelId}': msgs.length=${msgs.length} !== ids.size=${ids.size}`
+        );
+      }
+
+      const seen = new Set<string>();
+      for (let i = 0; i < msgs.length; i++) {
+        const msg = msgs[i]!;
+
+        if (seen.has(msg.id)) {
+          throw new Error(
+            `[MessageStore] Duplicate IDs violated for '${channelId}': duplicate id='${msg.id}'`
+          );
+        }
+        seen.add(msg.id);
+
+        if (!ids.has(msg.id)) {
+          throw new Error(
+            `[MessageStore] Array→Set violated for '${channelId}': msgs[${i}].id='${msg.id}' missing in channelIdSets`
+          );
+        }
+
+        if (msg.channelId !== channelId) {
+          throw new Error(
+            `[MessageStore] ChannelId mismatch for '${channelId}': msgs[${i}].channelId='${msg.channelId}'`
+          );
+        }
+
+        if (i > 0 && msg.timestamp < msgs[i - 1]!.timestamp) {
+          throw new Error(
+            `[MessageStore] Timestamp order violated for '${channelId}': msgs[${i}].timestamp=${msg.timestamp} < msgs[${i - 1}].timestamp=${msgs[i - 1]!.timestamp}`
+          );
+        }
+      }
+
+      for (const id of ids) {
+        if (!seen.has(id)) {
+          throw new Error(
+            `[MessageStore] Set→Array violated for '${channelId}': id='${id}' missing from message array`
+          );
+        }
+      }
+    }
+  }
+
   // === Helpers ===
 
   private toHashable(msg: PlaintextMessage): HashableMessage {

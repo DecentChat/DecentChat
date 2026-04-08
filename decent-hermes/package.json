@@ -1,0 +1,31 @@
+{
+  "name": "@decentchat/hermes-bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "decent-hermes-bridge": "dist/bridge.js"
+  },
+  "scripts": {
+    "build": "bun build src/bridge.ts --outdir dist --target node --external node-datachannel --external opusscript --external better-sqlite3 --external express",
+    "dev": "bun run src/bridge.ts",
+    "test": "bun test tests/",
+    "postinstall": "node postinstall.cjs"
+  },
+  "dependencies": {
+    "@decentchat/decentchat-plugin": "workspace:^",
+    "@decentchat/protocol": "workspace:^",
+    "@decentchat/transport-webrtc": "workspace:^",
+    "better-sqlite3": "^12.8.0",
+    "express": "^4.21.0",
+    "node-datachannel": "^0.32.1",
+    "opusscript": "^0.1.1",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/better-sqlite3": "^7.6.13"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

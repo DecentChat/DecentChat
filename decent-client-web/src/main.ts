@@ -14,63 +14,122 @@ import {
 } from './ui/titleTooltipObserver';
 import { canGenerateSeed } from './lib/identity/seedSettings';
 import { ConnectionRetryProgress } from './app/ConnectionRetryProgress';
+import { isChunkLoadError, renderChunkLoadError } from './lib/utils/chunkLoadError';
+import { classifySingleTabMessage, isSingleTabLockRoute } from './app/singleTabLock';
 
 // ─── Single-Tab Lock ─────────────────────────────────────────────────────────
 // Prevent multiple tabs from running simultaneously (shared IndexedDB,
 // WebRTC peer ID, and signaling connection would cause race conditions).
-(() => {
-  // Only lock tabs on /app routes — landing page, docs etc. can open freely
-  const p = window.location.pathname;
-  if (p !== "/app" && !p.startsWith("/app/")) return;
-  if (typeof BroadcastChannel === 'undefined') return; // SSR / old browser fallback
+const singleTabLock = (() => {
+  // Only lock tabs on /app routes — landing page, docs etc. can open freely.
+  if (!isSingleTabLockRoute(window.location.pathname) || typeof BroadcastChannel === 'undefined') {
+    return {
+      isBlocked: () => false,
+      waitForProbe: async () => {},
+    };
+  }
 
   const LOCK_CHANNEL = 'decentchat-tab-lock';
   const TAB_ID = crypto.randomUUID();
   const bc = new BroadcastChannel(LOCK_CHANNEL);
+  const PROBE_TIMEOUT_MS = 220;
+  let blocked = false;
 
-  // Announce presence
+  let probeResolved = false;
+  let resolveProbe: (() => void) | null = null;
+  const probePromise = new Promise<void>((resolve) => {
+    resolveProbe = resolve;
+  });
+
+  const resolveProbeOnce = () => {
+    if (probeResolved) return;
+    probeResolved = true;
+    resolveProbe?.();
+  };
+
+  const probeTimeout = window.setTimeout(resolveProbeOnce, PROBE_TIMEOUT_MS);
+
+  const requestFocusExistingTab = () => {
+    bc.postMessage({ type: 'focus-tab', tabId: TAB_ID });
+  };
+
+  const requestFocusForThisTab = () => {
+    try {
+      window.focus();
+    } catch {
+      // Best effort — browsers can block focus without user gesture.
+    }
+  };
+
+  const showTabBlocker = () => {
+    if (blocked) return;
+    blocked = true;
+    window.clearTimeout(probeTimeout);
+    resolveProbeOnce();
+
+    const blockApp = () => {
+      document.body.innerHTML = `
+        <div style="
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          min-height: 100vh; background: #0f172a; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          text-align: center; padding: 24px;
+        ">
+          <h1 style="font-size: 24px; font-weight: 700; margin: 0 0 12px;">Chat is open in another tab - switching now</h1>
+          <p style="font-size: 14px; color: #94a3b8; max-width: 480px; line-height: 1.55; margin: 0 0 20px;">
+            We asked your browser to focus the active DecentChat tab. If it did not switch automatically, use the button below.
+          </p>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
+            <button id="switch-open-tab-btn" style="
+              padding: 10px 20px; border-radius: 10px; border: none;
+              background: #38bdf8; color: #082f49; font-size: 14px; font-weight: 700; cursor: pointer;
+            ">Switch to open tab</button>
+            <button id="reload-tab-btn" style="
+              padding: 10px 20px; border-radius: 10px; border: 1px solid #334155;
+              background: transparent; color: #cbd5e1; font-size: 14px; font-weight: 600; cursor: pointer;
+            ">Reload this tab</button>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('switch-open-tab-btn')?.addEventListener('click', () => {
+        requestFocusExistingTab();
+      });
+      document.getElementById('reload-tab-btn')?.addEventListener('click', () => {
+        window.location.reload();
+      });
+    };
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', blockApp, { once: true });
+      return;
+    }
+    blockApp();
+  };
+
+  // Announce presence.
   bc.postMessage({ type: 'ping', tabId: TAB_ID });
 
   bc.onmessage = (e) => {
-    if (e.data?.type === 'ping' && e.data.tabId !== TAB_ID) {
-      // Another tab just opened — tell it we're already here
+    const action = classifySingleTabMessage(e.data, TAB_ID);
+    if (action === 'respond-pong') {
+      // Another tab just opened — tell it we're already here.
       bc.postMessage({ type: 'pong', tabId: TAB_ID });
+      return;
     }
-    if (e.data?.type === 'pong' && e.data.tabId !== TAB_ID) {
-      // We received a response — another tab is already running
+    if (action === 'focus-existing-tab') {
+      requestFocusForThisTab();
+      return;
+    }
+    if (action === 'duplicate-tab-detected') {
+      requestFocusExistingTab();
       showTabBlocker();
     }
   };
 
-  function showTabBlocker() {
-    // Stop all scripts from running further
-    document.addEventListener('DOMContentLoaded', blockApp);
-    if (document.readyState !== 'loading') blockApp();
-
-    function blockApp() {
-      document.body.innerHTML = `
-        <div style="
-          display: flex; flex-direction: column; align-items: center; justify-content: center;
-          height: 100vh; background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          text-align: center; padding: 20px;
-        ">
-          <div style="font-size: 48px; margin-bottom: 16px;">🔒</div>
-          <h1 style="font-size: 22px; font-weight: 700; margin: 0 0 12px;">DecentChat is already open</h1>
-          <p style="font-size: 14px; color: #999; max-width: 400px; line-height: 1.5; margin: 0 0 24px;">
-            DecentChat can only run in one tab at a time to keep your encrypted connections stable.
-            Please switch to the other tab, or close it and reload this page.
-          </p>
-          <button onclick="location.reload()" style="
-            padding: 10px 24px; border-radius: 8px; border: none;
-            background: #6c5ce7; color: #fff; font-size: 14px; font-weight: 600;
-            cursor: pointer;
-          ">Reload this tab</button>
-        </div>
-      `;
-      // Prevent any further app initialization
-      throw new Error('DecentChat: blocked duplicate tab');
-    }
-  }
+  return {
+    isBlocked: () => blocked,
+    waitForProbe: () => probePromise,
+  };
 })();
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -81,6 +140,21 @@ import type { AppSettings } from './storage/types';
 import { createLogger } from '@decentchat/protocol';
 const appLog = createLogger('Main', 'app');
 const perfLog = createLogger('Main', 'perf');
+
+window.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
+  if (!isChunkLoadError(event.reason)) return;
+  event.preventDefault();
+  appLog.warn('[DecentChat] Chunk load failed (unhandledrejection):', String((event.reason as Error)?.message ?? event.reason));
+  renderChunkLoadError();
+});
+
+window.addEventListener('error', (event: ErrorEvent) => {
+  const candidate = event.error ?? event.message;
+  if (!isChunkLoadError(candidate)) return;
+  event.preventDefault();
+  appLog.warn('[DecentChat] Chunk load failed (error event):', String((event.error as Error)?.message ?? event.message));
+  renderChunkLoadError();
+});
 
 // ─── PERF: Long Task Observer ────────────────────────────────────────────────
 // Logs any main-thread task that blocks for >50ms.  Remove after debugging.
@@ -261,6 +335,12 @@ async function clearLocalAppData(): Promise<void> {
 }
 
 function renderStartupError(error: unknown): void {
+  if (isChunkLoadError(error)) {
+    appLog.warn('[DecentChat] Startup failed due to chunk-load error:', String((error as Error)?.message ?? error));
+    renderChunkLoadError();
+    return;
+  }
+
   const err = error instanceof Error ? error : new Error(String(error));
   const storageIssue = isLikelyStorageInitIssue(err);
 
@@ -331,6 +411,7 @@ function renderStartupError(error: unknown): void {
 // ---------------------------------------------------------------------------
 
 async function init(): Promise<void> {
+  if (singleTabLock.isBlocked()) return;
   const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
   // ── Lazy-load heavy modules to enable code splitting ──
@@ -1320,6 +1401,9 @@ if (document.readyState === 'loading') {
 
 // Wrapper that adds a timeout to detect stuck initialization
 async function initWithTimeout() {
+  await singleTabLock.waitForProbe();
+  if (singleTabLock.isBlocked()) return;
+
   const INIT_TIMEOUT = 30000; // 30 seconds
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
@@ -1392,7 +1476,7 @@ if ('serviceWorker' in navigator && __PWA_ENABLED__) {
 
 // Wire AutoUpdater — polls /version.json every 5 min as a backup mechanism.
 // If server has a newer version.json but SW hasn't picked it up yet, nudge it.
-if (typeof __APP_VERSION__ !== 'undefined' && __PWA_ENABLED__) {
+if (typeof __APP_VERSION__ !== 'undefined' && __PWA_ENABLED__ && !import.meta.env.DEV) {
   import('./updater/AutoUpdater').then(({ AutoUpdater }) => {
     const updater = new AutoUpdater(__APP_VERSION__, {
       checkIntervalMs: 5 * 60 * 1000,
@@ -1403,5 +1487,12 @@ if (typeof __APP_VERSION__ !== 'undefined' && __PWA_ENABLED__) {
       },
     });
     updater.start();
+  }).catch((error) => {
+    if (isChunkLoadError(error)) {
+      appLog.warn('[AutoUpdater] chunk failed to load:', String((error as Error)?.message ?? error));
+      return;
+    }
+
+    appLog.warn('[AutoUpdater] failed to initialize:', String((error as Error)?.message ?? error));
   });
 }

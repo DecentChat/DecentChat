@@ -7,7 +7,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PWA_ENABLED = false; // TEMP: disable SW/PWA during rapid development
+const PWA_ENABLED = true;
 
 // Generate version.json on build
 const VERSION = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8')).version;
@@ -82,6 +82,10 @@ export default defineConfig({
         strategies: 'injectManifest',
         srcDir: 'src',
         filename: 'sw.ts',
+        devOptions: {
+          enabled: true,
+          type: 'module',
+        },
         manifest: {
           name: 'DecentChat',
           short_name: 'DecentChat',

@@ -1,0 +1,13 @@
+{
+  "name": "hermes-decentchat-bridge",
+  "version": "0.1.0",
+  "description": "DecentChat P2P bridge for Hermes Agent",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "express": "^4.21.0",
+    "node-datachannel": "^0.32.1",
+    "opusscript": "^0.1.1"
+  }
+}

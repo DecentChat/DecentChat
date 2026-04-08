@@ -8,6 +8,29 @@ Inspired by **Bitcoin** (seed phrase identity, no central authority), **BitTorre
 
 Instead of Bitcoin's Proof of Work, DecentChat achieves consensus through **CRDTs** (Conflict-free Replicated Data Types) — a mathematical guarantee that all peers converge to the same state without mining, voting, or coordination. Combined with **vector clocks** for causal ordering and **Negentropy set reconciliation** for efficient sync, peers can go offline, diverge, and merge back seamlessly. No energy wasted, no blocks to wait for — just eventual consistency by design.
 
+## AI Agent Integrations
+
+Connect your AI agent to DecentChat so it can read and reply to messages in your workspaces.
+
+| Integration | Platform | Install |
+|-------------|----------|---------|
+| [decent-openclaw](decent-openclaw/README.md) | [OpenClaw](https://openclaw.ai) | `openclaw plugins install @decentchat/decentchat-plugin` |
+| [decent-hermes](decent-hermes/README.md) | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | See README |
+
+### Let your agent install itself
+
+Both integrations are written so an AI agent can follow the instructions and install itself into your workspace. Just share the README link with your agent:
+
+**For OpenClaw agents** — paste or link to [`decent-openclaw/README.md`](decent-openclaw/README.md) and say:
+> "Follow these instructions to connect yourself to my DecentChat workspace."
+
+**For Hermes agents** — paste or link to [`decent-hermes/README.md`](decent-hermes/README.md) and say:
+> "Follow these instructions to connect yourself to my DecentChat workspace."
+
+Your agent will walk through setup, generate its own seed phrase, apply the necessary configuration, ask you for an invite URL to your workspace, join it, and verify everything is working before it finishes.
+
+---
+
 ## What is this?
 
 A protocol + reference client for P2P messaging over WebRTC. No servers, no accounts, no tracking. Your identity is a cryptographic key pair, recoverable from a 12-word seed phrase — like a Bitcoin wallet, but for communication.

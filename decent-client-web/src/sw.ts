@@ -5,7 +5,9 @@ declare const self: ServiceWorkerGlobalScope & typeof globalThis
 declare const __APP_VERSION__: string
 declare const __COMMIT_HASH__: string
 
-const SW_BUILD_ID = `${__APP_VERSION__}:${__COMMIT_HASH__}`
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev'
+const COMMIT_HASH = typeof __COMMIT_HASH__ !== 'undefined' ? __COMMIT_HASH__ : 'dev'
+const SW_BUILD_ID = `${APP_VERSION}:${COMMIT_HASH}`
 
 cleanupOutdatedCaches()
 precacheAndRoute(self.__WB_MANIFEST)

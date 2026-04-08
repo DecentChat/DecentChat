@@ -1,0 +1,867 @@
+diff --git a/agent/prompt_builder.py b/agent/prompt_builder.py
+index fbb5f0fa..182fa281 100644
+--- a/agent/prompt_builder.py
++++ b/agent/prompt_builder.py
+@@ -219,6 +219,12 @@ GOOGLE_MODEL_OPERATIONAL_GUIDANCE = (
+ DEVELOPER_ROLE_MODELS = ("gpt-5", "codex")
+
+ PLATFORM_HINTS = {
++    "decentchat": (
++        "You are on DecentChat, a P2P end-to-end encrypted chat network. "
++        "Messages do not support markdown rendering — use plain text only. "
++        "The network is decentralised; there are no central servers. "
++        "Chat IDs are in the format workspaceId:channelId (groups) or dm:peerId (direct)."
++    ),
+     "whatsapp": (
+         "You are on a text messaging communication platform, WhatsApp. "
+         "Please do not use markdown as it does not render. "
+diff --git a/cron/scheduler.py b/cron/scheduler.py
+index b0147998..423a6e04 100644
+--- a/cron/scheduler.py
++++ b/cron/scheduler.py
+@@ -159,6 +159,7 @@ def _deliver_result(job: dict, content: str) -> None:
+         "discord": Platform.DISCORD,
+         "slack": Platform.SLACK,
+         "whatsapp": Platform.WHATSAPP,
++        "decentchat": Platform.DECENTCHAT,
+         "signal": Platform.SIGNAL,
+         "matrix": Platform.MATRIX,
+         "mattermost": Platform.MATTERMOST,
+diff --git a/gateway/config.py b/gateway/config.py
+index 1896db9f..cc5be5d3 100644
+--- a/gateway/config.py
++++ b/gateway/config.py
+@@ -50,6 +50,7 @@ class Platform(Enum):
+     LOCAL = "local"
+     TELEGRAM = "telegram"
+     DISCORD = "discord"
++    DECENTCHAT = "decentchat"
+     WHATSAPP = "whatsapp"
+     SLACK = "slack"
+     SIGNAL = "signal"
+@@ -172,14 +173,21 @@ class PlatformConfig:
+         home_channel = None
+         if "home_channel" in data:
+             home_channel = HomeChannel.from_dict(data["home_channel"])
+-
++
++        # Known top-level keys — everything else flows into extra so that
++        # platform-specific settings (seed_phrase, alias, data_dir, …) work
++        # whether written as top-level YAML keys or nested under `extra:`.
++        _known = {"enabled", "token", "api_key", "home_channel", "reply_to_mode", "extra"}
++        extra = {k: v for k, v in data.items() if k not in _known}
++        extra.update(data.get("extra", {}))   # explicit extra: block takes precedence
++
+         return cls(
+             enabled=data.get("enabled", False),
+             token=data.get("token"),
+             api_key=data.get("api_key"),
+             home_channel=home_channel,
+             reply_to_mode=data.get("reply_to_mode", "first"),
+-            extra=data.get("extra", {}),
++            extra=extra,
+         )
+
+
+@@ -265,6 +273,9 @@ class GatewayConfig:
+             # WhatsApp uses enabled flag only (bridge handles auth)
+             elif platform == Platform.WHATSAPP:
+                 connected.append(platform)
++            # DecentChat uses enabled flag only (bridge handles auth via seed phrase)
++            elif platform == Platform.DECENTCHAT:
++                connected.append(platform)
+             # Signal uses extra dict for config (http_url + account)
+             elif platform == Platform.SIGNAL and config.extra.get("http_url"):
+                 connected.append(platform)
+@@ -683,7 +694,15 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
+         if Platform.WHATSAPP not in config.platforms:
+             config.platforms[Platform.WHATSAPP] = PlatformConfig()
+         config.platforms[Platform.WHATSAPP].enabled = True
+-
++
++    # DecentChat
++    dc_seed = os.getenv("DECENTCHAT_SEED_PHRASE")
++    if dc_seed:
++        if Platform.DECENTCHAT not in config.platforms:
++            config.platforms[Platform.DECENTCHAT] = PlatformConfig()
++        config.platforms[Platform.DECENTCHAT].enabled = True
++        config.platforms[Platform.DECENTCHAT].extra["seed_phrase"] = dc_seed
++
+     # Slack
+     slack_token = os.getenv("SLACK_BOT_TOKEN")
+     if slack_token:
+diff --git a/gateway/platforms/decentchat.py b/gateway/platforms/decentchat.py
+new file mode 100644
+index 00000000..4ace4e27
+--- /dev/null
++++ b/gateway/platforms/decentchat.py
+@@ -0,0 +1,769 @@
++"""
++DecentChat platform adapter.
++
++DecentChat is a P2P end-to-end encrypted chat network.  This adapter
++communicates with a local Node.js bridge subprocess that handles the
++DecentChat protocol.  The bridge exposes a simple HTTP API on a
++configurable port (default 3001).
++
++Architecture:
++  Python adapter  ←→  HTTP  ←→  bridge.js  ←→  DecentChat P2P network
++
++Voice flow:
++  Peer sends voice → bridge does STT → adapter receives text message →
++  agent replies → adapter calls POST /send with voice:true →
++  bridge does TTS → peer receives audio
++"""
++
++import asyncio
++import json
++import logging
++import os
++import platform as _platform_mod
++import subprocess
++import sys
++from pathlib import Path
++from typing import Dict, Optional, Any
++
++_IS_WINDOWS = _platform_mod.system() == "Windows"
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
++
++from gateway.config import Platform, PlatformConfig
++from gateway.platforms.base import (
++    BasePlatformAdapter,
++    MessageEvent,
++    MessageType,
++    SendResult,
++    cache_image_from_url,
++)
++
++logger = logging.getLogger(__name__)
++
++
++def _kill_port_process(port: int) -> None:
++    """Kill any process listening on the given TCP port."""
++    try:
++        if _IS_WINDOWS:
++            result = subprocess.run(
++                ["netstat", "-ano", "-p", "TCP"],
++                capture_output=True, text=True, timeout=5,
++            )
++            for line in result.stdout.splitlines():
++                parts = line.split()
++                if len(parts) >= 5 and parts[3] == "LISTENING":
++                    local_addr = parts[1]
++                    if local_addr.endswith(f":{port}"):
++                        try:
++                            subprocess.run(
++                                ["taskkill", "/PID", parts[4], "/F"],
++                                capture_output=True, timeout=5,
++                            )
++                        except subprocess.SubprocessError:
++                            pass
++        else:
++            result = subprocess.run(
++                ["fuser", f"{port}/tcp"],
++                capture_output=True, timeout=5,
++            )
++            if result.returncode == 0:
++                subprocess.run(
++                    ["fuser", "-k", f"{port}/tcp"],
++                    capture_output=True, timeout=5,
++                )
++    except Exception:
++        pass
++
++
++def check_decentchat_requirements() -> bool:
++    """Check if DecentChat dependencies are available (requires Node.js)."""
++    try:
++        result = subprocess.run(
++            ["node", "--version"],
++            capture_output=True,
++            text=True,
++            timeout=5,
++        )
++        return result.returncode == 0
++    except Exception:
++        return False
++
++
++class DecentChatAdapter(BasePlatformAdapter):
++    """
++    DecentChat adapter.
++
++    Uses an HTTP bridge pattern:
++      1. A Node.js process runs the DecentChat P2P client.
++      2. Messages are forwarded via HTTP long-polling to this Python adapter.
++      3. Replies are sent back through the bridge HTTP API.
++
++    Configuration (from PlatformConfig.extra):
++      - seed_phrase      (required) Wallet seed phrase for DecentChat identity
++      - bridge_port      (default: 3001) HTTP port for bridge communication
++      - bridge_script    (default: bundled bridge.js path)
++      - signaling_server (default: https://0.peerjs.com/)
++      - alias            (default: Hermes Agent) Display name on the network
++      - data_dir         (default: ~/.hermes/decentchat/data)
++      - invites          List or comma-separated string of peer IDs to invite
++      - stt_engine       Speech-to-text engine for the bridge
++      - tts_engine       Text-to-speech engine for the bridge
++      - tts_api_key      API key for TTS engine
++      - tts_voice        Voice ID/name for TTS engine
++    """
++
++    MAX_MESSAGE_LENGTH = 65536
++
++    _DEFAULT_BRIDGE_SCRIPT = (
++        Path(__file__).resolve().parents[2]
++        / "scripts"
++        / "decentchat-bridge"
++        / "bridge.js"
++    )
++
++    def __init__(self, config: PlatformConfig):
++        super().__init__(config, Platform.DECENTCHAT)
++        self._bridge_process: Optional[subprocess.Popen] = None
++        self._bridge_port: int = int(config.extra.get("bridge_port", 3001))
++        self._bridge_script: str = config.extra.get(
++            "bridge_script", str(self._DEFAULT_BRIDGE_SCRIPT)
++        )
++        self._signaling_server: str = config.extra.get(
++            "signaling_server", "https://0.peerjs.com/"
++        )
++        self._alias: str = config.extra.get("alias", "Hermes Agent")
++        from hermes_constants import get_hermes_dir
++        self._data_dir: Path = Path(
++            config.extra.get(
++                "data_dir",
++                get_hermes_dir("platforms/decentchat/data", "decentchat/data"),
++            )
++        ).expanduser()
++        # Invites: list or comma-separated string of peer IDs
++        raw_invites = config.extra.get("invites", [])
++        if isinstance(raw_invites, list):
++            self._invites = [str(i).strip() for i in raw_invites if str(i).strip()]
++        else:
++            self._invites = [p.strip() for p in str(raw_invites).split(",") if p.strip()]
++        # Voice / STT / TTS settings
++        self._stt_engine: Optional[str] = config.extra.get("stt_engine")
++        self._tts_engine: Optional[str] = config.extra.get("tts_engine")
++        self._tts_api_key: Optional[str] = config.extra.get("tts_api_key")
++        self._tts_voice: Optional[str] = config.extra.get("tts_voice")
++
++        self._bridge_log: Optional[Path] = None
++        self._bridge_log_fh = None
++        self._poll_task: Optional[asyncio.Task] = None
++        self._http_session: Optional["aiohttp.ClientSession"] = None  # type: ignore[name-defined]
++        self._session_lock_identity: Optional[str] = None
++        # Per-chat typing state — refresh tasks keep the indicator alive past
++        # the protocol TTL, and pending-stop tasks defer the off-state until
++        # AFTER the response message is delivered (avoids visible "stopped
++        # typing → long pause → message arrives" UX glitch).
++        self._typing_refresh_tasks: Dict[str, asyncio.Task] = {}
++        self._typing_pending_stops: Dict[str, asyncio.Task] = {}
++
++    # ------------------------------------------------------------------
++    # Connection lifecycle
++    # ------------------------------------------------------------------
++
++    async def connect(self) -> bool:
++        """Start the DecentChat bridge and begin polling for messages."""
++        if not check_decentchat_requirements():
++            logger.warning("[%s] Node.js not found. DecentChat requires Node.js.", self.name)
++            return False
++
++        bridge_path = Path(self._bridge_script)
++        if not bridge_path.exists():
++            logger.warning("[%s] Bridge script not found: %s", self.name, bridge_path)
++            return False
++
++        logger.info("[%s] Bridge found at %s", self.name, bridge_path)
++
++        # Acquire scoped lock to prevent duplicate sessions
++        try:
++            from gateway.status import acquire_scoped_lock
++
++            self._session_lock_identity = str(self._data_dir)
++            acquired, existing = acquire_scoped_lock(
++                "decentchat-session",
++                self._session_lock_identity,
++                metadata={"platform": self.platform.value},
++            )
++            if not acquired:
++                owner_pid = existing.get("pid") if isinstance(existing, dict) else None
++                message = (
++                    "Another local Hermes gateway is already using this DecentChat session"
++                    + (f" (PID {owner_pid})." if owner_pid else ".")
++                    + " Stop the other gateway before starting a second DecentChat bridge."
++                )
++                logger.error("[%s] %s", self.name, message)
++                self._set_fatal_error("decentchat_session_lock", message, retryable=False)
++                return False
++        except Exception as e:
++            logger.warning("[%s] Could not acquire session lock (non-fatal): %s", self.name, e)
++
++        # Auto-install npm dependencies if node_modules doesn't exist
++        bridge_dir = bridge_path.parent
++        if not (bridge_dir / "node_modules").exists():
++            print(f"[{self.name}] Installing DecentChat bridge dependencies...")
++            try:
++                install_result = subprocess.run(
++                    ["npm", "install", "--silent"],
++                    cwd=str(bridge_dir),
++                    capture_output=True,
++                    text=True,
++                    timeout=120,
++                )
++                if install_result.returncode != 0:
++                    print(f"[{self.name}] npm install failed: {install_result.stderr}")
++                    return False
++                print(f"[{self.name}] Dependencies installed")
++            except Exception as e:
++                print(f"[{self.name}] Failed to install dependencies: {e}")
++                return False
++
++        try:
++            # Ensure data directory exists
++            self._data_dir.mkdir(parents=True, exist_ok=True)
++
++            # Check if bridge is already running and connected
++            import aiohttp
++
++            try:
++                async with aiohttp.ClientSession() as session:
++                    async with session.get(
++                        f"http://127.0.0.1:{self._bridge_port}/health",
++                        timeout=aiohttp.ClientTimeout(total=2),
++                    ) as resp:
++                        if resp.status == 200:
++                            data = await resp.json()
++                            bridge_status = data.get("status", "unknown")
++                            if bridge_status == "connected":
++                                print(
++                                    f"[{self.name}] Using existing bridge "
++                                    f"(status: {bridge_status})"
++                                )
++                                self._mark_connected()
++                                self._bridge_process = None
++                                self._http_session = aiohttp.ClientSession()
++                                self._poll_task = asyncio.create_task(
++                                    self._poll_messages()
++                                )
++                                return True
++                            else:
++                                print(
++                                    f"[{self.name}] Bridge found but not connected "
++                                    f"(status: {bridge_status}), restarting"
++                                )
++            except Exception:
++                pass  # Bridge not running, start a new one
++
++            # Kill any orphaned bridge from a previous gateway run
++            _kill_port_process(self._bridge_port)
++            await asyncio.sleep(1)
++
++            # Build bridge subprocess args
++            seed = self.config.extra.get("seed_phrase", "")
++            cmd = [
++                "node",
++                str(bridge_path),
++                "--port", str(self._bridge_port),
++                "--data-dir", str(self._data_dir),
++                "--seed-phrase", seed,
++                "--alias", self._alias,
++                "--signaling-server", self._signaling_server,
++            ]
++            if self._invites:
++                cmd += ["--invites", ",".join(self._invites)]
++            if self._stt_engine:
++                cmd += ["--stt-engine", self._stt_engine]
++            if self._tts_engine:
++                cmd += ["--tts-engine", self._tts_engine]
++            if self._tts_api_key:
++                cmd += ["--tts-api-key", self._tts_api_key]
++            if self._tts_voice:
++                cmd += ["--tts-voice", self._tts_voice]
++
++            # Route bridge output to a log file
++            self._bridge_log = self._data_dir.parent / "bridge.log"
++            bridge_log_fh = open(self._bridge_log, "a")
++            self._bridge_log_fh = bridge_log_fh
++
++            self._bridge_process = subprocess.Popen(
++                cmd,
++                stdout=bridge_log_fh,
++                stderr=bridge_log_fh,
++                preexec_fn=None if _IS_WINDOWS else os.setsid,
++                cwd=str(bridge_dir),
++            )
++
++            # Phase 1: wait for the HTTP server to come up (up to 15 s)
++            http_ready = False
++            data: Dict[str, Any] = {}
++            for _ in range(15):
++                await asyncio.sleep(1)
++                if self._bridge_process.poll() is not None:
++                    print(
++                        f"[{self.name}] Bridge process died "
++                        f"(exit code {self._bridge_process.returncode})"
++                    )
++                    print(f"[{self.name}] Check log: {self._bridge_log}")
++                    self._close_bridge_log()
++                    return False
++                try:
++                    async with aiohttp.ClientSession() as session:
++                        async with session.get(
++                            f"http://127.0.0.1:{self._bridge_port}/health",
++                            timeout=aiohttp.ClientTimeout(total=2),
++                        ) as resp:
++                            if resp.status == 200:
++                                http_ready = True
++                                data = await resp.json()
++                                if data.get("status") == "connected":
++                                    print(f"[{self.name}] Bridge ready (status: connected)")
++                                    break
++                except Exception:
++                    continue
++
++            if not http_ready:
++                print(f"[{self.name}] Bridge HTTP server did not start in 15s")
++                print(f"[{self.name}] Check log: {self._bridge_log}")
++                self._close_bridge_log()
++                return False
++
++            # Phase 2: wait for DecentChat connection (up to 15 s more)
++            if data.get("status") != "connected":
++                print(f"[{self.name}] Bridge HTTP ready, waiting for DecentChat connection...")
++                for _ in range(15):
++                    await asyncio.sleep(1)
++                    if self._bridge_process.poll() is not None:
++                        print(f"[{self.name}] Bridge process died during connection")
++                        print(f"[{self.name}] Check log: {self._bridge_log}")
++                        self._close_bridge_log()
++                        return False
++                    try:
++                        async with aiohttp.ClientSession() as session:
++                            async with session.get(
++                                f"http://127.0.0.1:{self._bridge_port}/health",
++                                timeout=aiohttp.ClientTimeout(total=2),
++                            ) as resp:
++                                if resp.status == 200:
++                                    data = await resp.json()
++                                    if data.get("status") == "connected":
++                                        print(
++                                            f"[{self.name}] Bridge ready (status: connected)"
++                                        )
++                                        break
++                    except Exception:
++                        continue
++                else:
++                    print(f"[{self.name}] ⚠ DecentChat not connected after 30s")
++                    print(f"[{self.name}]   Bridge log: {self._bridge_log}")
++
++            # Create a persistent HTTP session for all bridge communication
++            self._http_session = aiohttp.ClientSession()
++
++            # Start message polling task
++            self._poll_task = asyncio.create_task(self._poll_messages())
++
++            self._mark_connected()
++            print(f"[{self.name}] Bridge started on port {self._bridge_port}")
++            return True
++
++        except Exception as e:
++            if self._session_lock_identity:
++                try:
++                    from gateway.status import release_scoped_lock
++                    release_scoped_lock("decentchat-session", self._session_lock_identity)
++                except Exception:
++                    pass
++            logger.error("[%s] Failed to start bridge: %s", self.name, e, exc_info=True)
++            self._close_bridge_log()
++            return False
++
++    def _close_bridge_log(self) -> None:
++        """Close the bridge log file handle if open."""
++        if self._bridge_log_fh:
++            try:
++                self._bridge_log_fh.close()
++            except Exception:
++                pass
++            self._bridge_log_fh = None
++
++    async def _check_managed_bridge_exit(self) -> Optional[str]:
++        """Return a fatal error message if the managed bridge child exited."""
++        if self._bridge_process is None:
++            return None
++        returncode = self._bridge_process.poll()
++        if returncode is None:
++            return None
++        message = f"DecentChat bridge process exited unexpectedly (code {returncode})."
++        if not self.has_fatal_error:
++            logger.error("[%s] %s", self.name, message)
++            self._set_fatal_error("decentchat_bridge_exited", message, retryable=True)
++            self._close_bridge_log()
++            await self._notify_fatal_error()
++        return self.fatal_error_message or message
++
++    async def disconnect(self) -> None:
++        """Stop the DecentChat bridge and clean up."""
++        # Cancel any in-flight typing tasks so they don't keep poking the bridge
++        for task in list(self._typing_refresh_tasks.values()):
++            if not task.done():
++                task.cancel()
++        for task in list(self._typing_pending_stops.values()):
++            if not task.done():
++                task.cancel()
++        self._typing_refresh_tasks.clear()
++        self._typing_pending_stops.clear()
++
++        if self._bridge_process:
++            try:
++                import signal as _signal
++                try:
++                    if _IS_WINDOWS:
++                        self._bridge_process.terminate()
++                    else:
++                        os.killpg(
++                            os.getpgid(self._bridge_process.pid), _signal.SIGTERM
++                        )
++                except (ProcessLookupError, PermissionError):
++                    self._bridge_process.terminate()
++                await asyncio.sleep(1)
++                if self._bridge_process.poll() is None:
++                    try:
++                        if _IS_WINDOWS:
++                            self._bridge_process.kill()
++                        else:
++                            os.killpg(
++                                os.getpgid(self._bridge_process.pid), _signal.SIGKILL
++                            )
++                    except (ProcessLookupError, PermissionError):
++                        self._bridge_process.kill()
++            except Exception as e:
++                print(f"[{self.name}] Error stopping bridge: {e}")
++        else:
++            print(f"[{self.name}] Disconnecting (external bridge left running)")
++
++        if self._poll_task and not self._poll_task.done():
++            self._poll_task.cancel()
++            try:
++                await self._poll_task
++            except (asyncio.CancelledError, Exception):
++                pass
++        self._poll_task = None
++
++        if self._http_session and not self._http_session.closed:
++            await self._http_session.close()
++        self._http_session = None
++
++        if self._session_lock_identity:
++            try:
++                from gateway.status import release_scoped_lock
++                release_scoped_lock("decentchat-session", self._session_lock_identity)
++            except Exception as e:
++                logger.warning(
++                    "[%s] Error releasing DecentChat session lock: %s", self.name, e
++                )
++
++        self._mark_disconnected()
++        self._bridge_process = None
++        self._close_bridge_log()
++        self._session_lock_identity = None
++        print(f"[{self.name}] Disconnected")
++
++    # ------------------------------------------------------------------
++    # Message polling
++    # ------------------------------------------------------------------
++
++    async def _poll_messages(self) -> None:
++        """Long-poll the bridge for incoming messages."""
++        import aiohttp
++
++        while self._running:
++            if not self._http_session:
++                break
++            bridge_exit = await self._check_managed_bridge_exit()
++            if bridge_exit:
++                print(f"[{self.name}] {bridge_exit}")
++                break
++            try:
++                async with self._http_session.get(
++                    f"http://127.0.0.1:{self._bridge_port}/messages",
++                    timeout=aiohttp.ClientTimeout(total=25),
++                ) as resp:
++                    if resp.status == 200:
++                        messages = await resp.json()
++                        for msg_data in messages:
++                            event = self._build_message_event(msg_data)
++                            if event:
++                                await self.handle_message(event)
++            except asyncio.CancelledError:
++                break
++            except Exception as e:
++                bridge_exit = await self._check_managed_bridge_exit()
++                if bridge_exit:
++                    print(f"[{self.name}] {bridge_exit}")
++                    break
++                logger.debug("[%s] Poll error: %s", self.name, e)
++                await asyncio.sleep(5)
++
++    def _build_message_event(self, data: Dict[str, Any]) -> Optional[MessageEvent]:
++        """Build a MessageEvent from bridge message data."""
++        try:
++            sender_id = str(data.get("senderId") or "")
++            sender_alias = str(data.get("senderAlias") or "")
++            body = str(data.get("body") or "")
++            chat_id = str(data.get("chatId") or "")
++            thread_id = data.get("threadId")
++            is_group = bool(data.get("isGroup", True))
++            msg_type = MessageType.TEXT
++            chat_type = "group" if is_group else "dm"
++            # Skip only messages where alias exactly matches our own alias (self-messages)
++            if sender_alias and self._alias and sender_alias.lower() == self._alias.lower():
++                return None
++            source = self.build_source(
++                chat_id=chat_id,
++                chat_name=data.get("chatName"),
++                chat_type=chat_type,
++                user_id=sender_id,
++                user_name=sender_alias,
++                # Forwarding threadId here causes Hermes' build_session_key
++                # to create a separate session per thread, so multiple parallel
++                # conversations from the same user in the same channel don't
++                # block each other.
++                thread_id=str(thread_id) if thread_id else None,
++            )
++            return MessageEvent(
++                text=body,
++                message_type=msg_type,
++                source=source,
++                raw_message=data,
++                message_id=data.get("id"),
++            )
++        except Exception as e:
++            logger.debug("[%s] Error building event: %s", self.name, e)
++            return None
++
++    # ------------------------------------------------------------------
++    # Sending
++    # ------------------------------------------------------------------
++
++    async def send(
++        self,
++        chat_id: str,
++        content: str,
++        reply_to: Optional[str] = None,
++        metadata: Optional[Dict[str, Any]] = None,
++    ) -> SendResult:
++        """Send a text message via the DecentChat bridge."""
++        if not self._running or not self._http_session:
++            return SendResult(success=False, error="Not connected")
++        bridge_exit = await self._check_managed_bridge_exit()
++        if bridge_exit:
++            return SendResult(success=False, error=bridge_exit)
++
++        try:
++            import aiohttp
++
++            payload: Dict[str, Any] = {"chatId": chat_id, "body": content}
++            if reply_to:
++                payload["replyTo"] = reply_to
++            # Attach current model meta so DecentChat clients can show which model replied
++            model_meta = self._build_model_meta()
++            if model_meta:
++                payload["model"] = model_meta
++            async with self._http_session.post(
++                f"http://127.0.0.1:{self._bridge_port}/send",
++                json=payload,
++                timeout=aiohttp.ClientTimeout(total=30),
++            ) as resp:
++                if resp.status == 200:
++                    data = await resp.json()
++                    # Now that the response message has been delivered to peers,
++                    # immediately turn off the typing indicator. This preempts the
++                    # deferred stop scheduled by the gateway's stop_typing() call
++                    # and eliminates the visible "stopped typing → wait → message
++                    # arrives" gap the user reported.
++                    try:
++                        await self._force_stop_typing(chat_id)
++                    except Exception:
++                        pass
++                    return SendResult(
++                        success=True,
++                        message_id=data.get("messageId"),
++                        raw_response=data,
++                    )
++                error = await resp.text()
++                return SendResult(success=False, error=error)
++        except Exception as e:
++            # Last-resort error fallback: try to surface the failure to the user
++            # so they don't see silent dead air. Best-effort only.
++            try:
++                await self._send_error_fallback(chat_id, reply_to, str(e))
++            except Exception:
++                pass
++            return SendResult(success=False, error=str(e))
++
++    def _build_model_meta(self) -> Optional[Dict[str, Any]]:
++        """Build model metadata for the currently active gateway model."""
++        try:
++            from gateway.run import _resolve_gateway_model
++            model_id = _resolve_gateway_model()
++            if not model_id:
++                return None
++            return {
++                "modelId": model_id,
++                "modelName": model_id,
++                "modelLabel": model_id,
++            }
++        except Exception:
++            return None
++
++    async def _send_error_fallback(self, chat_id: str, reply_to: Optional[str], reason: str) -> None:
++        """Best-effort fallback notice when normal send fails."""
++        if not self._http_session:
++            return
++        try:
++            import aiohttp
++            payload = {
++                "chatId": chat_id,
++                "body": "⚠️ Sorry — I ran into an internal error generating a reply. Please try again.",
++            }
++            if reply_to:
++                payload["replyTo"] = reply_to
++            async with self._http_session.post(
++                f"http://127.0.0.1:{self._bridge_port}/send",
++                json=payload,
++                timeout=aiohttp.ClientTimeout(total=10),
++            ) as resp:
++                if resp.status != 200:
++                    logger.warning("[%s] Error fallback send failed (status=%s, reason=%s)", self.name, resp.status, reason)
++        except Exception as e:
++            logger.warning("[%s] Error fallback send raised: %s (original=%s)", self.name, e, reason)
++
++    async def send_typing(self, chat_id: str, metadata=None) -> None:
++        """
++        Start a continuously-refreshed typing indicator for the chat.
++
++        DecentChat typing indicators expire after a few seconds of silence, so we
++        spin up a background task that re-pings every 4s until stop_typing() is
++        called or send() completes.
++        """
++        # Cancel any pending stop — we're typing again
++        pending = self._typing_pending_stops.pop(chat_id, None)
++        if pending and not pending.done():
++            pending.cancel()
++        # Cancel and replace any existing refresh loop
++        existing = self._typing_refresh_tasks.get(chat_id)
++        if existing and not existing.done():
++            existing.cancel()
++        self._typing_refresh_tasks[chat_id] = asyncio.create_task(
++            self._typing_refresh_loop(chat_id)
++        )
++
++    async def _typing_refresh_loop(self, chat_id: str) -> None:
++        """Keep the typing indicator alive by re-pinging every 4 seconds."""
++        try:
++            while self._running:
++                await self._send_typing_state(chat_id, True)
++                await asyncio.sleep(4)
++        except asyncio.CancelledError:
++            pass
++        except Exception as e:
++            logger.debug("[%s] typing refresh loop error: %s", self.name, e)
++
++    async def stop_typing(self, chat_id: str) -> None:
++        """
++        Schedule typing to stop, but DEFER the actual off-signal so it lands
++        after the response message is delivered. The gateway calls stop_typing
++        BEFORE send(), which would otherwise create a visible gap where the user
++        sees "typing stopped → wait → message arrives". Instead we cancel the
++        refresh loop now and arm a delayed stop that send() can preempt.
++        """
++        # Stop the refresh loop immediately so we don't keep advertising "typing"
++        refresh = self._typing_refresh_tasks.pop(chat_id, None)
++        if refresh and not refresh.done():
++            refresh.cancel()
++        # Cancel any prior pending stop
++        prior = self._typing_pending_stops.pop(chat_id, None)
++        if prior and not prior.done():
++            prior.cancel()
++        # Arm a deferred stop — send() will preempt it on success
++        self._typing_pending_stops[chat_id] = asyncio.create_task(
++            self._deferred_typing_stop(chat_id)
++        )
++
++    async def _deferred_typing_stop(self, chat_id: str) -> None:
++        """Wait briefly, then actually send typing=false (safety net if no send happens)."""
++        try:
++            await asyncio.sleep(5)  # Generous window for send() to land
++            await self._send_typing_state(chat_id, False)
++        except asyncio.CancelledError:
++            pass
++        finally:
++            self._typing_pending_stops.pop(chat_id, None)
++
++    async def _send_typing_state(self, chat_id: str, typing: bool) -> None:
++        if not self._running or not self._http_session:
++            return
++        try:
++            import aiohttp
++            async with self._http_session.post(
++                f"http://127.0.0.1:{self._bridge_port}/typing",
++                json={"chatId": chat_id, "typing": typing},
++                timeout=aiohttp.ClientTimeout(total=5),
++            ) as resp:
++                if resp.status != 200:
++                    logger.debug("[%s] typing %s failed: status=%s", self.name, typing, resp.status)
++        except Exception as e:
++            logger.debug("[%s] typing %s raised: %s", self.name, typing, e)
++
++    async def _force_stop_typing(self, chat_id: str) -> None:
++        """Cancel everything and immediately send typing=false. Called from send()."""
++        refresh = self._typing_refresh_tasks.pop(chat_id, None)
++        if refresh and not refresh.done():
++            refresh.cancel()
++        pending = self._typing_pending_stops.pop(chat_id, None)
++        if pending and not pending.done():
++            pending.cancel()
++        await self._send_typing_state(chat_id, False)
++
++    async def send_image(
++        self,
++        chat_id: str,
++        image_url: str,
++        caption: Optional[str] = None,
++        reply_to: Optional[str] = None,
++    ) -> SendResult:
++        """Send an image caption as text (v1 text fallback)."""
++        text = caption or image_url
++        return await self.send(chat_id, text)
++
++    async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
++        """Get information about a DecentChat chat."""
++        if not self._running or not self._http_session:
++            return {"name": chat_id, "type": "dm", "chat_id": chat_id}
++        if await self._check_managed_bridge_exit():
++            return {"name": chat_id, "type": "dm", "chat_id": chat_id}
++
++        try:
++            import aiohttp
++
++            encoded_id = chat_id.replace(":", "~")
++            async with self._http_session.get(
++                f"http://127.0.0.1:{self._bridge_port}/chat/{encoded_id}",
++                timeout=aiohttp.ClientTimeout(total=10),
++            ) as resp:
++                if resp.status == 200:
++                    data = await resp.json()
++                    return {
++                        "name": data.get("name", chat_id),
++                        "type": "group" if data.get("isGroup") else "dm",
++                        "chat_id": chat_id,
++                    }
++        except Exception as e:
++            logger.debug("Could not get DecentChat chat info for %s: %s", chat_id, e)
++
++        return {"name": chat_id, "type": "dm", "chat_id": chat_id}

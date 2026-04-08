@@ -41,6 +41,7 @@
     "decent-client-core",
     "decent-client-mobile",
     "decent-openclaw",
-    "decent-company-sim"
+    "decent-company-sim",
+    "decent-hermes"
   ]
 }
