@@ -59,6 +59,17 @@ export interface IncomingMessage {
   isGroup: boolean;
   workspaceId: string;
   voiceInput?: boolean; // true if this was transcribed from voice
+  threadId?: string;
+  replyToId?: string;
+  attachments?: Array<{
+    id: string;
+    name: string;
+    type: string;
+    size?: number;
+    thumbnail?: string;
+    width?: number;
+    height?: number;
+  }>;
 }
 
 export class DecentHermesPeer {
@@ -127,6 +138,7 @@ export class DecentHermesPeer {
           // per-thread session_key (enabling parallel conversations).
           threadId: params.threadId,
           replyToId: params.replyToId,
+          attachments: params.attachments,
         });
       },
       onReply: () => {},
@@ -323,7 +335,14 @@ export class DecentHermesPeer {
 
   async getChatInfo(chatId: string): Promise<{ name: string; type: string; chat_id: string }> {
     if (chatId.startsWith('dm:')) {
-      return { name: chatId.slice(3), type: 'private', chat_id: chatId };
+      const peerId = chatId.slice(3);
+      const aliasFromDirectory = this.peer
+        ?.listDirectoryPeersLive({ query: peerId, limit: 20 })
+        .find((entry) => entry.id === peerId)
+        ?.name
+        ?.trim();
+      const aliasFromCache = ((this.peer as any)?.store?.get?.(`peer-alias-${peerId}`, '') as string | undefined)?.trim();
+      return { name: aliasFromDirectory || aliasFromCache || peerId, type: 'private', chat_id: chatId };
     }
     if (chatId.startsWith('voice:')) {
       return { name: `Voice: ${chatId.slice(6)}`, type: 'voice', chat_id: chatId };
