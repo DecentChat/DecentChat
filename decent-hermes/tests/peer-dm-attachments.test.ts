@@ -1,9 +1,11 @@
 import { describe, expect, mock, test } from 'bun:test';
 
 let capturedPeerOptions: any;
+const BOT_PEER_ID = 'did:key:z6MktestHermesPeerId1234567890';
 
 class MockDecentChatNodePeer {
   directoryEntries: Array<{ id: string; name: string }> = [];
+  peerId = BOT_PEER_ID;
   store = {
     get: () => '',
   };
@@ -93,6 +95,75 @@ describe('DecentHermesPeer DM metadata', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0].chatId).toBe('dm:peer-123');
     expect(messages[0].attachments).toEqual(attachments);
+
+    await bridgePeer.stop();
+  });
+
+  test('forwards channel messages when bot alias is @mentioned', async () => {
+    const bridgePeer = new DecentHermesPeer({
+      seedPhrase: TEST_SEED,
+      alias: 'Hermes Agent',
+    });
+    await bridgePeer.start();
+
+    await capturedPeerOptions.onIncomingMessage({
+      channelId: 'chan-1',
+      workspaceId: 'ws-1',
+      content: 'Hey @Hermes-Agent, can you help?',
+      senderId: 'peer-456',
+      senderName: 'Bob',
+      messageId: 'msg-chan-mention',
+      chatType: 'channel',
+      timestamp: 1710000000001,
+    });
+
+    const messages = bridgePeer.drainMessages();
+    expect(messages).toHaveLength(1);
+    expect(messages[0].chatId).toBe('ws-1:chan-1');
+    expect(messages[0].body).toContain('@Hermes-Agent');
+
+    await bridgePeer.stop();
+  });
+
+  test('forwards channel messages when bot peer id is @mentioned', async () => {
+    const bridgePeer = new DecentHermesPeer({ seedPhrase: TEST_SEED });
+    await bridgePeer.start();
+
+    await capturedPeerOptions.onIncomingMessage({
+      channelId: 'chan-1',
+      workspaceId: 'ws-1',
+      content: `Hey @${BOT_PEER_ID}, can you help?`,
+      senderId: 'peer-456',
+      senderName: 'Bob',
+      messageId: 'msg-chan-peerid-mention',
+      chatType: 'channel',
+      timestamp: 1710000000002,
+    });
+
+    const messages = bridgePeer.drainMessages();
+    expect(messages).toHaveLength(1);
+    expect(messages[0].id).toBe('msg-chan-peerid-mention');
+
+    await bridgePeer.stop();
+  });
+
+  test('ignores channel messages without bot @mention', async () => {
+    const bridgePeer = new DecentHermesPeer({ seedPhrase: TEST_SEED });
+    await bridgePeer.start();
+
+    await capturedPeerOptions.onIncomingMessage({
+      channelId: 'chan-1',
+      workspaceId: 'ws-1',
+      content: 'General channel chatter without mention',
+      senderId: 'peer-456',
+      senderName: 'Bob',
+      messageId: 'msg-chan-no-mention',
+      chatType: 'channel',
+      timestamp: 1710000000003,
+    });
+
+    const messages = bridgePeer.drainMessages();
+    expect(messages).toHaveLength(0);
 
     await bridgePeer.stop();
   });

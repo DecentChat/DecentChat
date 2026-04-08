@@ -121,6 +121,9 @@ export class DecentHermesPeer {
     this.peer = new DecentChatNodePeer({
       account,
       onIncomingMessage: async (params) => {
+        if (!this.shouldForwardIncomingMessage(params)) {
+          return;
+        }
         const chatId = params.chatType === 'direct'
           ? `dm:${params.senderId}`
           : `${params.workspaceId}:${params.channelId}`;
@@ -201,6 +204,65 @@ export class DecentHermesPeer {
 
   isConnected(): boolean {
     return this.connected && this.peer !== null;
+  }
+
+  private shouldForwardIncomingMessage(params: {
+    chatType: 'direct' | 'channel';
+    content: string;
+  }): boolean {
+    if (params.chatType === 'direct') return true;
+    return this.messageMentionsBot(params.content);
+  }
+
+  private messageMentionsBot(content: string): boolean {
+    if (!content || !content.includes('@')) return false;
+
+    const normalizedContent = this.normalizeMentionValue(content);
+    const alias = this.alias.trim();
+    if (alias) {
+      const normalizedAlias = this.normalizeMentionValue(alias);
+      const hyphenatedAlias = this.normalizeMentionValue(alias.replace(/\s+/g, '-'));
+      if (
+        normalizedContent.includes(`@${normalizedAlias}`) ||
+        normalizedContent.includes(`@${hyphenatedAlias}`)
+      ) {
+        return true;
+      }
+    }
+
+    const mentionTokens = content.match(/(^|\s)@[A-Za-z0-9_.:-]+/g) ?? [];
+    if (mentionTokens.length === 0) return false;
+
+    const mentionTargets = this.getMentionTargets();
+    for (const token of mentionTokens) {
+      const mentionValue = this.normalizeMentionValue(token.replace(/^\s*@/, ''));
+      if (mentionTargets.has(mentionValue)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private getMentionTargets(): Set<string> {
+    const targets = new Set<string>();
+
+    const alias = this.alias.trim();
+    if (alias) {
+      targets.add(this.normalizeMentionValue(alias));
+      targets.add(this.normalizeMentionValue(alias.replace(/\s+/g, '-')));
+    }
+
+    const peerId = this.peer?.peerId?.trim();
+    if (peerId) {
+      targets.add(this.normalizeMentionValue(peerId));
+      if (peerId.length >= 8) targets.add(this.normalizeMentionValue(peerId.slice(0, 8)));
+    }
+
+    return targets;
+  }
+
+  private normalizeMentionValue(value: string): string {
+    return value.trim().toLowerCase();
   }
 
   drainMessages(): IncomingMessage[] {
