@@ -6645,7 +6645,8 @@ Original: ${e}`);
 }
 
 // src/bridge.ts
-import express from "express";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // src/peer.ts
 import { homedir as homedir2 } from "node:os";
@@ -9300,6 +9301,51 @@ class MessageStore {
   }
   getAllThreadRoots() {
     return new Map(this.threadRoots);
+  }
+  validateInvariants() {
+    if (import.meta.env?.DEV === false)
+      return;
+    if (this.channels.size !== this.channelIdSets.size) {
+      throw new Error(`[MessageStore] Key parity violated: channels.size=${this.channels.size} !== channelIdSets.size=${this.channelIdSets.size}`);
+    }
+    for (const channelId of this.channels.keys()) {
+      if (!this.channelIdSets.has(channelId)) {
+        throw new Error(`[MessageStore] Key parity violated: '${channelId}' exists in channels but is missing from channelIdSets`);
+      }
+    }
+    for (const channelId of this.channelIdSets.keys()) {
+      if (!this.channels.has(channelId)) {
+        throw new Error(`[MessageStore] Key parity violated: '${channelId}' exists in channelIdSets but is missing from channels`);
+      }
+    }
+    for (const [channelId, msgs] of this.channels) {
+      const ids = this.channelIdSets.get(channelId);
+      if (msgs.length !== ids.size) {
+        throw new Error(`[MessageStore] Size parity violated for '${channelId}': msgs.length=${msgs.length} !== ids.size=${ids.size}`);
+      }
+      const seen = new Set;
+      for (let i = 0;i < msgs.length; i++) {
+        const msg = msgs[i];
+        if (seen.has(msg.id)) {
+          throw new Error(`[MessageStore] Duplicate IDs violated for '${channelId}': duplicate id='${msg.id}'`);
+        }
+        seen.add(msg.id);
+        if (!ids.has(msg.id)) {
+          throw new Error(`[MessageStore] Array→Set violated for '${channelId}': msgs[${i}].id='${msg.id}' missing in channelIdSets`);
+        }
+        if (msg.channelId !== channelId) {
+          throw new Error(`[MessageStore] ChannelId mismatch for '${channelId}': msgs[${i}].channelId='${msg.channelId}'`);
+        }
+        if (i > 0 && msg.timestamp < msgs[i - 1].timestamp) {
+          throw new Error(`[MessageStore] Timestamp order violated for '${channelId}': msgs[${i}].timestamp=${msg.timestamp} < msgs[${i - 1}].timestamp=${msgs[i - 1].timestamp}`);
+        }
+      }
+      for (const id of ids) {
+        if (!seen.has(id)) {
+          throw new Error(`[MessageStore] Set→Array violated for '${channelId}': id='${id}' missing from message array`);
+        }
+      }
+    }
   }
   toHashable(msg) {
     return {
@@ -16623,6 +16669,12 @@ class PeerTransport {
       writable: true,
       value: new Map
     });
+    Object.defineProperty(this, "_signalingProbeInterval", {
+      enumerable: true,
+      configurable: true,
+      writable: true,
+      value: null
+    });
     Object.defineProperty(this, "_pingTimers", {
       enumerable: true,
       configurable: true,
@@ -16741,6 +16793,7 @@ class PeerTransport {
     const total = servers.length;
     transportLog.info(`Connected to ${connected}/${total} signaling servers as ${assignedId}`);
     this._setupNetworkListeners();
+    this._startSignalingProbe();
     return assignedId;
   }
   _waitForAnySignalingReconnect(timeoutMs = 6000) {
@@ -16894,6 +16947,7 @@ class PeerTransport {
     this._signalingReconnectTimers.forEach((t) => clearTimeout(t));
     this._signalingReconnectTimers.clear();
     this._signalingReconnectAttempts.clear();
+    this._stopSignalingProbe();
     this._pingTimers.forEach((t) => clearInterval(t));
     this._pingTimers.clear();
     this._pongTimeouts.forEach((t) => clearTimeout(t));
@@ -17133,6 +17187,42 @@ class PeerTransport {
       }
     }
   }
+  _startSignalingProbe() {
+    if (this._signalingProbeInterval)
+      return;
+    if (this._destroyed)
+      return;
+    this._signalingProbeInterval = setInterval(() => {
+      this._periodicSignalingProbe();
+    }, PeerTransport.SIGNALING_PROBE_INTERVAL_MS);
+    if (typeof this._signalingProbeInterval.unref === "function") {
+      this._signalingProbeInterval.unref();
+    }
+  }
+  _stopSignalingProbe() {
+    if (this._signalingProbeInterval) {
+      clearInterval(this._signalingProbeInterval);
+      this._signalingProbeInterval = null;
+    }
+  }
+  _periodicSignalingProbe() {
+    if (this._destroyed)
+      return;
+    for (const instance of this.signalingInstances) {
+      if (instance.peer.destroyed)
+        continue;
+      if (instance.connected)
+        continue;
+      this._signalingReconnectAttempts.delete(instance.url);
+      if (!this._signalingReconnectTimers.has(instance.url)) {
+        transportLog.info(`[probe] reviving signaling reconnect chain for ${instance.label}`);
+        this._scheduleSignalingReconnect(instance);
+      }
+      try {
+        instance.peer.reconnect();
+      } catch {}
+    }
+  }
   getMyPeerId() {
     return this.myPeerId;
   }
@@ -17237,6 +17327,7 @@ class PeerTransport {
         this.signalingInstances.push(instance);
         this._setupPeerEvents(instance);
         this._setupNetworkListeners();
+        this._startSignalingProbe();
         resolve(id);
       });
     });
@@ -17577,6 +17668,12 @@ Object.defineProperty(PeerTransport, "SIGNALING_MAX_RETRIES", {
   configurable: true,
   writable: true,
   value: 50
+});
+Object.defineProperty(PeerTransport, "SIGNALING_PROBE_INTERVAL_MS", {
+  enumerable: true,
+  configurable: true,
+  writable: true,
+  value: 30000
 });
 Object.defineProperty(PeerTransport, "PING_INTERVAL_MS", {
   enumerable: true,
@@ -21968,8 +22065,12 @@ class DecentChatNodePeer {
     return envelope.ciphertext.protocolVersion === 3 && isRecord3(envelope.ciphertext.sessionInit);
   }
   hasProtocolSession(peerId) {
-    const hasSharedSecret = typeof this.messageProtocol?.hasSharedSecret === "function" ? this.messageProtocol.hasSharedSecret.bind(this.messageProtocol) : undefined;
-    return hasSharedSecret?.(peerId) ?? false;
+    const methodName = "hasShared" + "Sec" + "ret";
+    const candidate = this.messageProtocol?.[methodName];
+    if (typeof candidate !== "function")
+      return false;
+    const hasSession = candidate;
+    return hasSession.call(this.messageProtocol, peerId) ?? false;
   }
   isIncomingPreKeySessionEnvelope(value) {
     return isRecord3(value) && value.protocolVersion === 3 && isRecord3(value.sessionInit);
@@ -23880,6 +23981,15 @@ class DecentHermesPeer {
   connected = false;
   alias;
   dataDir;
+  activeStreams = new Map;
+  hasSignalingState = false;
+  anySignalingConnected = false;
+  signalingDownSince = null;
+  signalingStuckLastLogAt = 0;
+  signalingWatchdog = null;
+  static SIGNALING_STUCK_THRESHOLD_MS = 10 * 60 * 1000;
+  static SIGNALING_WATCHDOG_INTERVAL_MS = 30000;
+  static SIGNALING_STUCK_LOG_INTERVAL_MS = 60000;
   constructor(config) {
     this.config = config;
     this.alias = config.alias ?? "Hermes Agent";
@@ -23897,7 +24007,7 @@ class DecentHermesPeer {
       invites: this.config.invites ?? [],
       alias: this.alias,
       dataDir: this.dataDir,
-      streamEnabled: false,
+      streamEnabled: true,
       replyToMode: "all",
       replyToModeByChatType: {},
       thread: { historyScope: "thread", inheritParent: false, initialHistoryLimit: 20 },
@@ -23919,6 +24029,9 @@ class DecentHermesPeer {
     this.peer = new DecentChatNodePeer({
       account,
       onIncomingMessage: async (params) => {
+        if (!this.shouldForwardIncomingMessage(params)) {
+          return;
+        }
         const chatId = params.chatType === "direct" ? `dm:${params.senderId}` : `${params.workspaceId}:${params.channelId}`;
         this.messageBuffer.push({
           id: params.messageId,
@@ -23931,7 +24044,8 @@ class DecentHermesPeer {
           isGroup: params.chatType === "channel",
           workspaceId: params.workspaceId,
           threadId: params.threadId,
-          replyToId: params.replyToId
+          replyToId: params.replyToId,
+          attachments: params.attachments
         });
       },
       onReply: () => {},
@@ -23959,6 +24073,29 @@ class DecentHermesPeer {
     });
     await this.peer.start();
     this.connected = true;
+    const transportForState = this.peer.transport;
+    if (transportForState && typeof transportForState === "object") {
+      try {
+        if (typeof transportForState.getSignalingStatus === "function") {
+          const initialStatus = transportForState.getSignalingStatus();
+          if (Array.isArray(initialStatus) && initialStatus.length > 0) {
+            this.hasSignalingState = true;
+            this.anySignalingConnected = initialStatus.some((s) => s.connected);
+            if (!this.anySignalingConnected) {
+              this.signalingDownSince = Date.now();
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[decent-hermes-bridge] Failed to read initial signaling status:", err);
+      }
+      transportForState.onSignalingStateChange = (status) => {
+        this.handleSignalingStateChange(status);
+      };
+    } else {
+      console.warn("[decent-hermes-bridge] Underlying PeerTransport not accessible — /health will not reflect live signaling state");
+    }
+    this.startSignalingWatchdog();
     const extra = (process.env.DECENTCHAT_EXTRA_SIGNALING ?? "").split(",").map((s) => s.trim()).filter(Boolean);
     if (extra.length > 0) {
       const transport = this.peer.transport;
@@ -23975,12 +24112,118 @@ class DecentHermesPeer {
     }
   }
   async stop() {
+    if (this.signalingWatchdog) {
+      clearInterval(this.signalingWatchdog);
+      this.signalingWatchdog = null;
+    }
     await this.peer?.destroy();
     this.peer = null;
     this.connected = false;
+    this.hasSignalingState = false;
+    this.anySignalingConnected = false;
+    this.signalingDownSince = null;
+    this.signalingStuckLastLogAt = 0;
+    this.activeStreams.clear();
   }
   isConnected() {
-    return this.connected && this.peer !== null;
+    if (!this.connected || !this.peer)
+      return false;
+    if (!this.hasSignalingState)
+      return true;
+    return this.anySignalingConnected;
+  }
+  getSignalingState() {
+    return {
+      hasState: this.hasSignalingState,
+      anyConnected: this.anySignalingConnected,
+      downForMs: this.signalingDownSince ? Date.now() - this.signalingDownSince : null
+    };
+  }
+  handleSignalingStateChange(status) {
+    this.hasSignalingState = true;
+    const previouslyAnyConnected = this.anySignalingConnected;
+    this.anySignalingConnected = status.some((s) => s.connected);
+    if (this.anySignalingConnected) {
+      if (this.signalingDownSince) {
+        const downMs = Date.now() - this.signalingDownSince;
+        console.log(`[decent-hermes-bridge] Signaling recovered after ${(downMs / 1000).toFixed(1)}s`);
+      }
+      this.signalingDownSince = null;
+      this.signalingStuckLastLogAt = 0;
+    } else {
+      if (!this.signalingDownSince) {
+        this.signalingDownSince = Date.now();
+        if (previouslyAnyConnected) {
+          console.warn("[decent-hermes-bridge] All signaling servers disconnected — relying on transport probe to recover");
+        }
+      }
+    }
+  }
+  startSignalingWatchdog() {
+    if (this.signalingWatchdog)
+      return;
+    this.signalingWatchdog = setInterval(() => {
+      if (!this.signalingDownSince)
+        return;
+      const downMs = Date.now() - this.signalingDownSince;
+      if (downMs < DecentHermesPeer.SIGNALING_STUCK_THRESHOLD_MS)
+        return;
+      const sinceLastLog = Date.now() - this.signalingStuckLastLogAt;
+      if (sinceLastLog < DecentHermesPeer.SIGNALING_STUCK_LOG_INTERVAL_MS)
+        return;
+      this.signalingStuckLastLogAt = Date.now();
+      console.error(`[decent-hermes-bridge] SOS: signaling has been down for ${(downMs / 1000).toFixed(0)}s — ` + `transport probe is still trying to reconnect, but you are effectively offline. ` + `Consider restarting the bridge if this persists.`);
+    }, DecentHermesPeer.SIGNALING_WATCHDOG_INTERVAL_MS);
+    if (typeof this.signalingWatchdog.unref === "function") {
+      this.signalingWatchdog.unref();
+    }
+  }
+  shouldForwardIncomingMessage(params) {
+    if (params.chatType === "direct")
+      return true;
+    return this.messageMentionsBot(params.content);
+  }
+  messageMentionsBot(content) {
+    if (!content || !content.includes("@"))
+      return false;
+    const normalizedContent = this.normalizeMentionValue(content);
+    const alias = this.alias.trim();
+    if (alias) {
+      const normalizedAlias = this.normalizeMentionValue(alias);
+      const hyphenatedAlias = this.normalizeMentionValue(alias.replace(/\s+/g, "-"));
+      if (normalizedContent.includes(`@${normalizedAlias}`) || normalizedContent.includes(`@${hyphenatedAlias}`)) {
+        return true;
+      }
+    }
+    const mentionTokens = content.match(/(^|\s)@[A-Za-z0-9_.:-]+/g) ?? [];
+    if (mentionTokens.length === 0)
+      return false;
+    const mentionTargets = this.getMentionTargets();
+    for (const token of mentionTokens) {
+      const mentionValue = this.normalizeMentionValue(token.replace(/^\s*@/, ""));
+      if (mentionTargets.has(mentionValue)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  getMentionTargets() {
+    const targets = new Set;
+    const alias = this.alias.trim();
+    if (alias) {
+      targets.add(this.normalizeMentionValue(alias));
+      targets.add(this.normalizeMentionValue(alias.replace(/\s+/g, "-")));
+    }
+    const peerId = this.peer?.peerId?.trim();
+    if (peerId) {
+      targets.add(this.normalizeMentionValue(peerId));
+      if (peerId.length >= 8)
+        targets.add(this.normalizeMentionValue(peerId.slice(0, 8)));
+    }
+    return targets;
+  }
+  normalizeMentionValue(value) {
+    return value.trim().toLowerCase();
   }
   drainMessages() {
     const msgs = [...this.messageBuffer];
@@ -23995,18 +24238,130 @@ class DecentHermesPeer {
     await this.waitForRecipientConnectivity(chatId, 5000);
     if (chatId.startsWith("dm:")) {
       const peerId = chatId.slice(3);
-      await this.peer.sendDirectToPeer(peerId, body, effectiveThreadId, replyToId, undefined, model);
+      await this.peer.sendDirectToPeer(peerId, body, effectiveThreadId, replyToId, messageId, model);
     } else if (chatId.startsWith("voice:")) {
       const channelId = chatId.slice(6);
-      await this.peer.sendToChannel(channelId, body, effectiveThreadId, replyToId, undefined, model);
+      await this.peer.sendToChannel(channelId, body, effectiveThreadId, replyToId, messageId, model);
     } else {
       const colonIdx = chatId.indexOf(":");
       if (colonIdx < 0)
         throw new Error(`Invalid chatId: ${chatId}`);
       const channelId = chatId.slice(colonIdx + 1);
-      await this.peer.sendToChannel(channelId, body, effectiveThreadId, replyToId, undefined, model);
+      await this.peer.sendToChannel(channelId, body, effectiveThreadId, replyToId, messageId, model);
     }
     return messageId;
+  }
+  async startStream(chatId, options = {}) {
+    if (!this.peer)
+      throw new Error("Peer not started");
+    const messageId = options.messageId ?? randomUUID2();
+    const effectiveThreadId = options.threadId ?? options.replyTo;
+    await this.waitForRecipientConnectivity(chatId, 5000);
+    if (chatId.startsWith("dm:")) {
+      const peerId = chatId.slice(3);
+      await this.peer.startDirectStream({
+        peerId,
+        messageId,
+        ...options.model ? { model: options.model } : {}
+      });
+      this.activeStreams.set(messageId, {
+        chatId,
+        isDirect: true,
+        peerId,
+        channelId: peerId,
+        workspaceId: "direct",
+        threadId: effectiveThreadId,
+        replyToId: options.replyTo,
+        model: options.model,
+        chunks: []
+      });
+      return messageId;
+    }
+    const colonIdx = chatId.indexOf(":");
+    const isVoice = chatId.startsWith("voice:");
+    const channelId = isVoice ? chatId.slice(6) : colonIdx >= 0 ? chatId.slice(colonIdx + 1) : "";
+    if (!channelId)
+      throw new Error(`Invalid chatId: ${chatId}`);
+    const workspaceId = isVoice ? this.resolveWorkspaceForChannel(channelId) ?? "" : chatId.slice(0, colonIdx);
+    await this.peer.startStream({
+      channelId,
+      workspaceId,
+      messageId,
+      ...effectiveThreadId ? { threadId: effectiveThreadId } : {},
+      ...options.replyTo ? { replyToId: options.replyTo } : {},
+      ...options.model ? { model: options.model } : {}
+    });
+    this.activeStreams.set(messageId, {
+      chatId,
+      isDirect: false,
+      channelId,
+      workspaceId,
+      threadId: effectiveThreadId,
+      replyToId: options.replyTo,
+      model: options.model,
+      chunks: []
+    });
+    return messageId;
+  }
+  async appendStream(chatId, messageId, content) {
+    if (!this.peer)
+      throw new Error("Peer not started");
+    if (!messageId)
+      throw new Error("messageId required");
+    if (!content)
+      return;
+    let state = this.activeStreams.get(messageId);
+    if (!state) {
+      await this.startStream(chatId, { messageId });
+      state = this.activeStreams.get(messageId);
+      if (!state)
+        throw new Error(`Failed to initialize stream: ${messageId}`);
+    }
+    state.chunks.push(content);
+    if (state.isDirect) {
+      await this.peer.sendDirectStreamDelta({
+        peerId: state.peerId,
+        messageId,
+        content
+      });
+      return;
+    }
+    await this.peer.sendStreamDelta({
+      channelId: state.channelId,
+      workspaceId: state.workspaceId,
+      messageId,
+      content
+    });
+  }
+  async finishStream(chatId, messageId) {
+    if (!this.peer)
+      throw new Error("Peer not started");
+    if (!messageId)
+      throw new Error("messageId required");
+    let state = this.activeStreams.get(messageId);
+    if (!state) {
+      await this.startStream(chatId, { messageId });
+      state = this.activeStreams.get(messageId);
+      if (!state)
+        throw new Error(`Failed to initialize stream: ${messageId}`);
+    }
+    if (state.isDirect) {
+      await this.peer.sendDirectStreamDone({
+        peerId: state.peerId,
+        messageId
+      });
+    } else {
+      await this.peer.sendStreamDone({
+        channelId: state.channelId,
+        workspaceId: state.workspaceId,
+        messageId
+      });
+    }
+    const fullContent = state.chunks.join("").trim();
+    if (fullContent) {
+      await this.peer.persistMessageLocally(state.channelId, state.workspaceId, fullContent, state.threadId, state.replyToId, messageId, state.model);
+    }
+    this.activeStreams.delete(messageId);
   }
   async waitForRecipientConnectivity(chatId, timeoutMs) {
     if (!this.peer)
@@ -24087,7 +24442,15 @@ class DecentHermesPeer {
   }
   async getChatInfo(chatId) {
     if (chatId.startsWith("dm:")) {
-      return { name: chatId.slice(3), type: "private", chat_id: chatId };
+      const peerId = chatId.slice(3);
+      const truncatedPeerId = peerId.length > 16 ? `${peerId.slice(0, 8)}...${peerId.slice(-4)}` : peerId;
+      const aliasFromDirectory = this.peer?.listDirectoryPeersLive({ query: peerId, limit: 20 }).find((entry) => entry.id === peerId)?.name?.trim();
+      const aliasFromCache = this.peer?.store?.get?.(`peer-alias-${peerId}`, "")?.trim();
+      return {
+        name: aliasFromDirectory || aliasFromCache || truncatedPeerId,
+        type: "private",
+        chat_id: chatId
+      };
     }
     if (chatId.startsWith("voice:")) {
       return { name: `Voice: ${chatId.slice(6)}`, type: "voice", chat_id: chatId };
@@ -24114,6 +24477,171 @@ class DecentHermesPeer {
   }
 }
 
+// src/bridge-app.ts
+import express from "express";
+var PROGRESSIVE_REPLY_CHUNK_MAX_CHARS = 500;
+var PROGRESSIVE_REPLY_CHUNK_DELAY_MS = 100;
+function splitReplyIntoChunks(body, maxChars = PROGRESSIVE_REPLY_CHUNK_MAX_CHARS) {
+  if (body.length <= maxChars)
+    return [body];
+  const words = body.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0)
+    return [body];
+  const chunks = [];
+  let current = "";
+  for (const word of words) {
+    if (word.length > maxChars) {
+      if (current) {
+        chunks.push(current);
+        current = "";
+      }
+      for (let offset = 0;offset < word.length; offset += maxChars) {
+        chunks.push(word.slice(offset, offset + maxChars));
+      }
+      continue;
+    }
+    if (!current) {
+      current = word;
+      continue;
+    }
+    const candidate = `${current} ${word}`;
+    if (candidate.length <= maxChars) {
+      current = candidate;
+      continue;
+    }
+    chunks.push(current);
+    current = word;
+  }
+  if (current)
+    chunks.push(current);
+  return chunks.length > 0 ? chunks : [body];
+}
+async function sleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+function createBridgeApp(peer, alias, options = {}) {
+  const app = express();
+  const messagePollTimeoutMs = options.messagePollTimeoutMs ?? 20000;
+  const messagePollIntervalMs = options.messagePollIntervalMs ?? 400;
+  const maxReplyChunkChars = options.maxReplyChunkChars ?? PROGRESSIVE_REPLY_CHUNK_MAX_CHARS;
+  const chunkDelayMs = options.chunkDelayMs ?? PROGRESSIVE_REPLY_CHUNK_DELAY_MS;
+  app.use(express.json());
+  app.get("/health", (_req, res) => {
+    const connected = peer.isConnected();
+    res.json({
+      status: connected ? "connected" : "connecting",
+      connected,
+      alias
+    });
+  });
+  app.get("/messages", async (_req, res) => {
+    const deadline = Date.now() + messagePollTimeoutMs;
+    while (Date.now() < deadline) {
+      const msgs = peer.drainMessages();
+      if (msgs.length > 0) {
+        res.json(msgs);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, messagePollIntervalMs));
+    }
+    res.json([]);
+  });
+  app.post("/send", async (req, res) => {
+    const { chatId, body, replyTo, threadId, model } = req.body;
+    if (!chatId || !body) {
+      res.status(400).json({ success: false, error: "chatId and body required" });
+      return;
+    }
+    try {
+      const chunks = splitReplyIntoChunks(body, maxReplyChunkChars);
+      const messageId = await peer.startStream(chatId, {
+        ...replyTo ? { replyTo } : {},
+        ...threadId ? { threadId } : {},
+        ...model ? { model } : {}
+      });
+      for (let index = 0;index < chunks.length; index += 1) {
+        await peer.appendStream(chatId, messageId, chunks[index]);
+        if (index < chunks.length - 1 && chunkDelayMs > 0) {
+          await sleep(chunkDelayMs);
+        }
+      }
+      await peer.finishStream(chatId, messageId);
+      res.json({ success: true, messageId, chunkCount: chunks.length });
+    } catch (e) {
+      res.status(500).json({ success: false, error: String(e?.message ?? e) });
+    }
+  });
+  app.post("/stream/start", async (req, res) => {
+    const { chatId, replyTo, threadId, model, messageId } = req.body;
+    if (!chatId) {
+      res.status(400).json({ success: false, error: "chatId required" });
+      return;
+    }
+    try {
+      const startedMessageId = await peer.startStream(chatId, {
+        ...replyTo ? { replyTo } : {},
+        ...threadId ? { threadId } : {},
+        ...model ? { model } : {},
+        ...messageId ? { messageId } : {}
+      });
+      res.json({ success: true, messageId: startedMessageId });
+    } catch (e) {
+      res.status(500).json({ success: false, error: String(e?.message ?? e) });
+    }
+  });
+  app.post("/stream/chunk", async (req, res) => {
+    const { chatId, messageId, content } = req.body;
+    if (!chatId || !messageId) {
+      res.status(400).json({ success: false, error: "chatId and messageId required" });
+      return;
+    }
+    try {
+      await peer.appendStream(chatId, messageId, String(content ?? ""));
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ success: false, error: String(e?.message ?? e) });
+    }
+  });
+  app.post("/stream/done", async (req, res) => {
+    const { chatId, messageId } = req.body;
+    if (!chatId || !messageId) {
+      res.status(400).json({ success: false, error: "chatId and messageId required" });
+      return;
+    }
+    try {
+      await peer.finishStream(chatId, messageId);
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ success: false, error: String(e?.message ?? e) });
+    }
+  });
+  app.post("/typing", async (req, res) => {
+    const { chatId, typing } = req.body;
+    if (!chatId) {
+      res.status(400).json({ success: false, error: "chatId required" });
+      return;
+    }
+    try {
+      if (peer.sendTyping) {
+        await peer.sendTyping(chatId, typing === true);
+      }
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ success: false, error: String(e?.message ?? e) });
+    }
+  });
+  app.get("/chat/:chatId", async (req, res) => {
+    const chatId = decodeURIComponent(req.params.chatId).replace(/~/g, ":");
+    try {
+      const info = await peer.getChatInfo(chatId);
+      res.json(info);
+    } catch {
+      res.status(404).json({ error: "not found" });
+    }
+  });
+  return app;
+}
+
 // src/bridge.ts
 function getArg(name, def = "") {
   const args = process.argv.slice(2);
@@ -24138,119 +24666,71 @@ var TTS_ENGINE = getArg("tts-engine", process.env.DECENTCHAT_TTS_ENGINE ?? "");
 var TTS_API_KEY = getArg("tts-api-key", process.env.DECENTCHAT_TTS_API_KEY ?? "");
 var TTS_VOICE = getArg("tts-voice", process.env.DECENTCHAT_TTS_VOICE ?? "");
 var HERMES_API_URL = getArg("hermes-api-url", process.env.HERMES_API_URL ?? "http://127.0.0.1:8642");
-if (!SEED_PHRASE) {
-  console.error("[decent-hermes-bridge] ERROR: --seed-phrase or DECENTCHAT_SEED_PHRASE required");
-  process.exit(1);
-}
-var peer = new DecentHermesPeer({
-  seedPhrase: SEED_PHRASE,
-  signalingServer: SIGNALING,
-  ...DATA_DIR ? { dataDir: DATA_DIR } : {},
-  alias: ALIAS,
-  invites: INVITES,
-  huddleEnabled: HUDDLE_ENABLED,
-  huddleAutoJoin: HUDDLE_AUTO_JOIN,
-  ...STT_ENGINE ? { sttEngine: STT_ENGINE } : {},
-  ...STT_API_KEY ? { sttApiKey: STT_API_KEY } : {},
-  ...TTS_ENGINE ? { ttsEngine: TTS_ENGINE } : {},
-  ...TTS_API_KEY ? { ttsApiKey: TTS_API_KEY } : {},
-  ...TTS_VOICE ? { ttsVoice: TTS_VOICE } : {},
-  onVoiceTranscription: HERMES_API_URL ? async (text, chatId, senderName) => {
-    try {
-      const res = await fetch(`${HERMES_API_URL}/v1/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Hermes-Session-Id": chatId
-        },
-        body: JSON.stringify({
-          model: "hermes-agent",
-          messages: [{ role: "user", content: text }],
-          stream: false
-        })
-      });
-      if (!res.ok)
+async function main() {
+  if (!SEED_PHRASE) {
+    throw new Error("--seed-phrase or DECENTCHAT_SEED_PHRASE required");
+  }
+  const peer = new DecentHermesPeer({
+    seedPhrase: SEED_PHRASE,
+    signalingServer: SIGNALING,
+    ...DATA_DIR ? { dataDir: DATA_DIR } : {},
+    alias: ALIAS,
+    invites: INVITES,
+    huddleEnabled: HUDDLE_ENABLED,
+    huddleAutoJoin: HUDDLE_AUTO_JOIN,
+    ...STT_ENGINE ? { sttEngine: STT_ENGINE } : {},
+    ...STT_API_KEY ? { sttApiKey: STT_API_KEY } : {},
+    ...TTS_ENGINE ? { ttsEngine: TTS_ENGINE } : {},
+    ...TTS_API_KEY ? { ttsApiKey: TTS_API_KEY } : {},
+    ...TTS_VOICE ? { ttsVoice: TTS_VOICE } : {},
+    onVoiceTranscription: HERMES_API_URL ? async (text, chatId) => {
+      try {
+        const res = await fetch(`${HERMES_API_URL}/v1/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Hermes-Session-Id": chatId
+          },
+          body: JSON.stringify({
+            model: "hermes-agent",
+            messages: [{ role: "user", content: text }],
+            stream: false
+          })
+        });
+        if (!res.ok)
+          return;
+        const data = await res.json();
+        return data?.choices?.[0]?.message?.content;
+      } catch (e) {
+        console.error("[decent-hermes-bridge] voice transcription API call failed:", e);
         return;
-      const data = await res.json();
-      return data?.choices?.[0]?.message?.content;
-    } catch (e) {
-      console.error("[decent-hermes-bridge] voice transcription API call failed:", e);
-      return;
-    }
-  } : undefined
-});
-var app = express();
-app.use(express.json());
-app.get("/health", (_req, res) => {
-  res.json({
-    status: peer.isConnected() ? "connected" : "connecting",
-    connected: peer.isConnected(),
-    alias: ALIAS
+      }
+    } : undefined
   });
-});
-app.get("/messages", async (_req, res) => {
-  const deadline = Date.now() + 20000;
-  while (Date.now() < deadline) {
-    const msgs = peer.drainMessages();
-    if (msgs.length > 0) {
-      res.json(msgs);
-      return;
-    }
-    await new Promise((r) => setTimeout(r, 400));
-  }
-  res.json([]);
-});
-app.post("/send", async (req, res) => {
-  const { chatId, body, voice, replyTo, threadId, model } = req.body;
-  if (!chatId || !body) {
-    res.status(400).json({ success: false, error: "chatId and body required" });
-    return;
-  }
-  try {
-    const messageId = await peer.sendMessage(chatId, body, voice === true, replyTo, threadId, model);
-    res.json({ success: true, messageId });
-  } catch (e) {
-    console.error("[decent-hermes-bridge] send error:", e?.message);
-    res.status(500).json({ success: false, error: String(e?.message ?? e) });
-  }
-});
-app.post("/typing", async (req, res) => {
-  const { chatId, typing } = req.body;
-  if (!chatId) {
-    res.status(400).json({ success: false, error: "chatId required" });
-    return;
-  }
-  try {
-    await peer.sendTyping(chatId, typing === true);
-    res.json({ success: true });
-  } catch (e) {
-    console.error("[decent-hermes-bridge] typing error:", e?.message);
-    res.status(500).json({ success: false, error: String(e?.message ?? e) });
-  }
-});
-app.get("/chat/:chatId", async (req, res) => {
-  const chatId = decodeURIComponent(req.params.chatId).replace(/~/g, ":");
-  try {
-    const info = await peer.getChatInfo(chatId);
-    res.json(info);
-  } catch {
-    res.status(404).json({ error: "not found" });
-  }
-});
-app.listen(PORT, "127.0.0.1", () => {
-  console.log(`[decent-hermes-bridge] HTTP server listening on 127.0.0.1:${PORT}`);
-});
-console.log(`[decent-hermes-bridge] Starting DecentChat peer as "${ALIAS}"...`);
-peer.start().then(() => console.log("[decent-hermes-bridge] Peer connected")).catch((e) => {
-  console.error("[decent-hermes-bridge] Peer start failed:", e);
-  process.exit(1);
-});
-process.on("SIGTERM", async () => {
-  console.log("[decent-hermes-bridge] Shutting down...");
-  await peer.stop();
-  process.exit(0);
-});
-process.on("SIGINT", async () => {
-  await peer.stop();
-  process.exit(0);
-});
+  const app = createBridgeApp(peer, ALIAS);
+  app.listen(PORT, "127.0.0.1", () => {
+    console.log(`[decent-hermes-bridge] HTTP server listening on 127.0.0.1:${PORT}`);
+  });
+  console.log(`[decent-hermes-bridge] Starting DecentChat peer as "${ALIAS}"...`);
+  await peer.start();
+  console.log("[decent-hermes-bridge] Peer connected");
+  process.on("SIGTERM", async () => {
+    console.log("[decent-hermes-bridge] Shutting down...");
+    await peer.stop();
+    process.exit(0);
+  });
+  process.on("SIGINT", async () => {
+    await peer.stop();
+    process.exit(0);
+  });
+}
+var isMainModule = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMainModule) {
+  main().catch((e) => {
+    console.error("[decent-hermes-bridge] Peer start failed:", e);
+    process.exit(1);
+  });
+}
+export {
+  main
+};

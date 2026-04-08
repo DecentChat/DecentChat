@@ -172,6 +172,16 @@ export class PeerTransport implements Transport {
   private static readonly SIGNALING_RECONNECT_DELAYS = [3000, 5000, 10000, 30000, 60000];
   private static readonly SIGNALING_MAX_RETRIES = 50; // ~30 min of retrying
 
+  // Periodic safety-net probe that revives the event-driven signaling
+  // reconnect chain. The chain is normally driven by `peer.on('disconnected')`,
+  // but PeerJS does NOT re-fire `disconnected` after a failed `peer.reconnect()`
+  // — so a single failed retry can leave the chain permanently dead. The
+  // browser path patches this with `window.online` / `visibilitychange`
+  // listeners (see `_setupNetworkListeners`), but Node has no such events,
+  // so the bridge must self-probe on a timer.
+  private _signalingProbeInterval: ReturnType<typeof setInterval> | null = null;
+  private static readonly SIGNALING_PROBE_INTERVAL_MS = 30_000;
+
   // ── DEP-004: Heartbeat state ────────────────────────────────────────────
   private static readonly PING_INTERVAL_MS = 30_000;
   private static readonly PONG_TIMEOUT_MS = 20_000;
@@ -249,6 +259,7 @@ export class PeerTransport implements Transport {
     transportLog.info(`Connected to ${connected}/${total} signaling servers as ${assignedId}`);
 
     this._setupNetworkListeners();
+    this._startSignalingProbe();
     return assignedId;
   }
 
@@ -453,6 +464,7 @@ export class PeerTransport implements Transport {
     this._signalingReconnectTimers.forEach(t => clearTimeout(t));
     this._signalingReconnectTimers.clear();
     this._signalingReconnectAttempts.clear();
+    this._stopSignalingProbe();
 
     // DEP-004: Clean up heartbeat timers
     this._pingTimers.forEach(t => clearInterval(t));
@@ -748,6 +760,82 @@ export class PeerTransport implements Transport {
     }
   }
 
+  /**
+   * Start a periodic safety-net probe that revives the signaling reconnect
+   * chain. The event-driven `_scheduleSignalingReconnect` chain (kicked off
+   * by `peer.on('disconnected')`) can die silently:
+   *
+   *   1. PeerJS does NOT re-fire `disconnected` after a failed `peer.reconnect()`.
+   *      The peer is already in disconnected state, so a failed retry only
+   *      surfaces an `error` event — never re-arms the chain.
+   *   2. The chain also gives up permanently after `SIGNALING_MAX_RETRIES`,
+   *      with no second-wind path.
+   *
+   * In the browser this is masked by `window.online` / `visibilitychange`
+   * listeners (see `_setupNetworkListeners`) that re-trigger probing on
+   * network state changes. Node has no such events, so without this timer
+   * the bridge can sit zombie indefinitely with `/health` lying about being
+   * connected. The interval is `unref()`'d so it doesn't keep the process
+   * alive on its own.
+   */
+  private _startSignalingProbe(): void {
+    if (this._signalingProbeInterval) return;
+    if (this._destroyed) return;
+    this._signalingProbeInterval = setInterval(() => {
+      this._periodicSignalingProbe();
+    }, PeerTransport.SIGNALING_PROBE_INTERVAL_MS);
+    // Don't keep the event loop alive solely for this safety-net timer.
+    if (typeof (this._signalingProbeInterval as any).unref === 'function') {
+      (this._signalingProbeInterval as any).unref();
+    }
+  }
+
+  private _stopSignalingProbe(): void {
+    if (this._signalingProbeInterval) {
+      clearInterval(this._signalingProbeInterval);
+      this._signalingProbeInterval = null;
+    }
+  }
+
+  /**
+   * One tick of the periodic probe. For each instance that should be
+   * connected but isn't:
+   *
+   *   - Reset its stale retry counter so we don't permanently honour the
+   *     `SIGNALING_MAX_RETRIES` give-up.
+   *   - If no reconnect timer is currently armed (chain went silent),
+   *     re-arm it via `_scheduleSignalingReconnect`.
+   *   - Also fire an immediate idempotent `peer.reconnect()` so we don't
+   *     wait the full backoff delay on the first kick.
+   *
+   * This is a public-by-test method only via the `_periodicSignalingProbe`
+   * name in tests; outside of tests it's invoked solely from the interval.
+   */
+  private _periodicSignalingProbe(): void {
+    if (this._destroyed) return;
+    for (const instance of this.signalingInstances) {
+      if (instance.peer.destroyed) continue;
+      if (instance.connected) continue;
+
+      // Second-wind: clear the retry counter so the chain isn't stuck at
+      // SIGNALING_MAX_RETRIES forever.
+      this._signalingReconnectAttempts.delete(instance.url);
+
+      // If the event-driven chain has gone silent, re-arm it.
+      if (!this._signalingReconnectTimers.has(instance.url)) {
+        transportLog.info(`[probe] reviving signaling reconnect chain for ${instance.label}`);
+        this._scheduleSignalingReconnect(instance);
+      }
+
+      // Immediate idempotent kick so we don't wait the full backoff delay.
+      try {
+        instance.peer.reconnect();
+      } catch {
+        // Ignore — `_scheduleSignalingReconnect` will retry on backoff.
+      }
+    }
+  }
+
   // ── Public helpers ────────────────────────────────────────────────────────
 
   getMyPeerId(): string | null {
@@ -916,6 +1004,7 @@ export class PeerTransport implements Transport {
         this.signalingInstances.push(instance);
         this._setupPeerEvents(instance);
         this._setupNetworkListeners();
+        this._startSignalingProbe();
         resolve(id);
       });
     });

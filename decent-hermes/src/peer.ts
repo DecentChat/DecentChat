@@ -72,6 +72,25 @@ export interface IncomingMessage {
   }>;
 }
 
+type StreamModelMeta = {
+  modelId?: string;
+  modelName?: string;
+  modelAlias?: string;
+  modelLabel?: string;
+};
+
+type ActiveStreamState = {
+  chatId: string;
+  isDirect: boolean;
+  peerId?: string;
+  channelId: string;
+  workspaceId: string;
+  threadId?: string;
+  replyToId?: string;
+  model?: StreamModelMeta;
+  chunks: string[];
+};
+
 export class DecentHermesPeer {
   private peer: DecentChatNodePeer | null = null;
   private config: BridgeConfig;
@@ -79,6 +98,27 @@ export class DecentHermesPeer {
   private connected = false;
   private alias: string;
   private dataDir: string;
+  private activeStreams = new Map<string, ActiveStreamState>();
+
+  // ── Signaling-state tracking ─────────────────────────────────────────────
+  // We mirror the underlying PeerTransport's signaling state here so that
+  // `isConnected()` (and therefore the bridge's `/health` endpoint) reports
+  // the *actual* transport state instead of the bridge process's "I once
+  // managed to call start() successfully" liveness. Without this, a stuck
+  // PeerJS signaling drop in Node leaves /health forever returning
+  // {"connected": true} while no peers can actually reach us.
+  private hasSignalingState = false;
+  private anySignalingConnected = false;
+  private signalingDownSince: number | null = null;
+  private signalingStuckLastLogAt = 0;
+  private signalingWatchdog: ReturnType<typeof setInterval> | null = null;
+  // After signaling has been fully down for this long with no recovery, the
+  // bridge logs a loud SOS once per minute. We deliberately do NOT call
+  // `process.exit` here: the bridge is not currently supervised by anything
+  // that would respawn it, so dying would be worse than zombieing.
+  private static readonly SIGNALING_STUCK_THRESHOLD_MS = 10 * 60 * 1000;
+  private static readonly SIGNALING_WATCHDOG_INTERVAL_MS = 30_000;
+  private static readonly SIGNALING_STUCK_LOG_INTERVAL_MS = 60_000;
 
   constructor(config: BridgeConfig) {
     this.config = config;
@@ -98,7 +138,7 @@ export class DecentHermesPeer {
       invites: this.config.invites ?? [],
       alias: this.alias,
       dataDir: this.dataDir,
-      streamEnabled: false,
+      streamEnabled: true,
       replyToMode: 'all',
       replyToModeByChatType: {},
       thread: { historyScope: 'thread', inheritParent: false, initialHistoryLimit: 20 },
@@ -174,6 +214,42 @@ export class DecentHermesPeer {
     await this.peer.start();
     this.connected = true;
 
+    // Hook the underlying PeerTransport's signaling-state changes so we can
+    // make `isConnected()` honest. The first event flips `hasSignalingState`
+    // to true; from then on `isConnected()` reports the live state. Until
+    // then we trust the successful start() above (the start path requires
+    // at least one signaling server to come up).
+    const transportForState = (this.peer as any).transport;
+    if (transportForState && typeof transportForState === 'object') {
+      // Seed initial state from a snapshot if the transport exposes one.
+      try {
+        if (typeof transportForState.getSignalingStatus === 'function') {
+          const initialStatus = transportForState.getSignalingStatus() as Array<{ connected: boolean }>;
+          if (Array.isArray(initialStatus) && initialStatus.length > 0) {
+            this.hasSignalingState = true;
+            this.anySignalingConnected = initialStatus.some((s) => s.connected);
+            if (!this.anySignalingConnected) {
+              this.signalingDownSince = Date.now();
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[decent-hermes-bridge] Failed to read initial signaling status:', err);
+      }
+
+      // Live updates.
+      transportForState.onSignalingStateChange = (status: Array<{ url: string; label: string; connected: boolean }>) => {
+        this.handleSignalingStateChange(status);
+      };
+    } else {
+      // Transport not exposed — leave isConnected() trusting the connected flag.
+      console.warn('[decent-hermes-bridge] Underlying PeerTransport not accessible — /health will not reflect live signaling state');
+    }
+
+    // Start the SOS watchdog now that the peer is up. It is `unref()`'d so
+    // it doesn't block process exit on its own.
+    this.startSignalingWatchdog();
+
     // Optionally attach additional signaling servers (comma-separated via
     // DECENTCHAT_EXTRA_SIGNALING env var). This lets a single Xena instance
     // be reachable via BOTH public 0.peerjs.com and a local PeerJS server,
@@ -197,13 +273,116 @@ export class DecentHermesPeer {
   }
 
   async stop(): Promise<void> {
+    if (this.signalingWatchdog) {
+      clearInterval(this.signalingWatchdog);
+      this.signalingWatchdog = null;
+    }
     await this.peer?.destroy();
     this.peer = null;
     this.connected = false;
+    this.hasSignalingState = false;
+    this.anySignalingConnected = false;
+    this.signalingDownSince = null;
+    this.signalingStuckLastLogAt = 0;
+    this.activeStreams.clear();
   }
 
+  /**
+   * Live connectivity check exposed via the bridge's `/health` endpoint.
+   *
+   * Returns false when:
+   *   - the peer has been stopped (or never started)
+   *   - we have observed at least one signaling-state event AND no signaling
+   *     server is currently connected
+   *
+   * Until the first signaling-state event arrives we trust the successful
+   * `start()` path: that path itself requires at least one signaling server
+   * to come up, so the brief pre-event window is safe.
+   */
   isConnected(): boolean {
-    return this.connected && this.peer !== null;
+    if (!this.connected || !this.peer) return false;
+    if (!this.hasSignalingState) return true;
+    return this.anySignalingConnected;
+  }
+
+  /**
+   * Diagnostic helper exposed for tests / future health endpoints. Returns a
+   * snapshot of the bridge's view of signaling: number of connected servers,
+   * number of total instances seen, and how long signaling has been down (if
+   * down). Returns null when the bridge has not yet observed any state.
+   */
+  getSignalingState(): {
+    hasState: boolean;
+    anyConnected: boolean;
+    downForMs: number | null;
+  } {
+    return {
+      hasState: this.hasSignalingState,
+      anyConnected: this.anySignalingConnected,
+      downForMs: this.signalingDownSince ? Date.now() - this.signalingDownSince : null,
+    };
+  }
+
+  /**
+   * Handler invoked from the underlying PeerTransport whenever any signaling
+   * server flips connection state. Pure state-tracking — never throws and
+   * never reaches the network. The transport's own reconnect logic (and the
+   * periodic safety-net probe added in this fix) handles actual recovery.
+   */
+  private handleSignalingStateChange(
+    status: Array<{ url: string; label: string; connected: boolean }>,
+  ): void {
+    this.hasSignalingState = true;
+    const previouslyAnyConnected = this.anySignalingConnected;
+    this.anySignalingConnected = status.some((s) => s.connected);
+
+    if (this.anySignalingConnected) {
+      if (this.signalingDownSince) {
+        const downMs = Date.now() - this.signalingDownSince;
+        console.log(
+          `[decent-hermes-bridge] Signaling recovered after ${(downMs / 1000).toFixed(1)}s`,
+        );
+      }
+      this.signalingDownSince = null;
+      this.signalingStuckLastLogAt = 0;
+    } else {
+      if (!this.signalingDownSince) {
+        this.signalingDownSince = Date.now();
+        if (previouslyAnyConnected) {
+          console.warn(
+            '[decent-hermes-bridge] All signaling servers disconnected — relying on transport probe to recover',
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Periodic SOS watchdog. After signaling has been fully down for
+   * `SIGNALING_STUCK_THRESHOLD_MS`, log a loud warning every
+   * `SIGNALING_STUCK_LOG_INTERVAL_MS` so an operator can grep for it. We
+   * deliberately do NOT call `process.exit` — the bridge is not currently
+   * supervised, so dying would leave Xena permanently offline. The
+   * transport-side periodic probe is responsible for actual recovery.
+   */
+  private startSignalingWatchdog(): void {
+    if (this.signalingWatchdog) return;
+    this.signalingWatchdog = setInterval(() => {
+      if (!this.signalingDownSince) return;
+      const downMs = Date.now() - this.signalingDownSince;
+      if (downMs < DecentHermesPeer.SIGNALING_STUCK_THRESHOLD_MS) return;
+      const sinceLastLog = Date.now() - this.signalingStuckLastLogAt;
+      if (sinceLastLog < DecentHermesPeer.SIGNALING_STUCK_LOG_INTERVAL_MS) return;
+      this.signalingStuckLastLogAt = Date.now();
+      console.error(
+        `[decent-hermes-bridge] SOS: signaling has been down for ${(downMs / 1000).toFixed(0)}s — ` +
+          `transport probe is still trying to reconnect, but you are effectively offline. ` +
+          `Consider restarting the bridge if this persists.`,
+      );
+    }, DecentHermesPeer.SIGNALING_WATCHDOG_INTERVAL_MS);
+    if (typeof (this.signalingWatchdog as any).unref === 'function') {
+      (this.signalingWatchdog as any).unref();
+    }
   }
 
   private shouldForwardIncomingMessage(params: {
@@ -293,18 +472,153 @@ export class DecentHermesPeer {
     // Parse chatId: "workspaceId:channelId" or "dm:peerId" or "voice:channelId"
     if (chatId.startsWith('dm:')) {
       const peerId = chatId.slice(3);
-      await this.peer.sendDirectToPeer(peerId, body, effectiveThreadId, replyToId, undefined, model);
+      await this.peer.sendDirectToPeer(peerId, body, effectiveThreadId, replyToId, messageId, model);
     } else if (chatId.startsWith('voice:')) {
       const channelId = chatId.slice(6);
-      await this.peer.sendToChannel(channelId, body, effectiveThreadId, replyToId, undefined, model);
+      await this.peer.sendToChannel(channelId, body, effectiveThreadId, replyToId, messageId, model);
     } else {
       const colonIdx = chatId.indexOf(':');
       if (colonIdx < 0) throw new Error(`Invalid chatId: ${chatId}`);
       // chatId is "workspaceId:channelId"; sendToChannel resolves the workspace itself
       const channelId = chatId.slice(colonIdx + 1);
-      await this.peer.sendToChannel(channelId, body, effectiveThreadId, replyToId, undefined, model);
+      await this.peer.sendToChannel(channelId, body, effectiveThreadId, replyToId, messageId, model);
     }
     return messageId;
+  }
+
+  async startStream(
+    chatId: string,
+    options: {
+      replyTo?: string;
+      threadId?: string;
+      model?: StreamModelMeta;
+      messageId?: string;
+    } = {},
+  ): Promise<string> {
+    if (!this.peer) throw new Error('Peer not started');
+    const messageId = options.messageId ?? randomUUID();
+    const effectiveThreadId = options.threadId ?? options.replyTo;
+
+    await this.waitForRecipientConnectivity(chatId, 5000);
+
+    if (chatId.startsWith('dm:')) {
+      const peerId = chatId.slice(3);
+      await this.peer.startDirectStream({
+        peerId,
+        messageId,
+        ...(options.model ? { model: options.model } : {}),
+      });
+      this.activeStreams.set(messageId, {
+        chatId,
+        isDirect: true,
+        peerId,
+        channelId: peerId,
+        workspaceId: 'direct',
+        threadId: effectiveThreadId,
+        replyToId: options.replyTo,
+        model: options.model,
+        chunks: [],
+      });
+      return messageId;
+    }
+
+    const colonIdx = chatId.indexOf(':');
+    const isVoice = chatId.startsWith('voice:');
+    const channelId = isVoice ? chatId.slice(6) : colonIdx >= 0 ? chatId.slice(colonIdx + 1) : '';
+    if (!channelId) throw new Error(`Invalid chatId: ${chatId}`);
+    const workspaceId = isVoice
+      ? (this.resolveWorkspaceForChannel(channelId) ?? '')
+      : chatId.slice(0, colonIdx);
+
+    await this.peer.startStream({
+      channelId,
+      workspaceId,
+      messageId,
+      ...(effectiveThreadId ? { threadId: effectiveThreadId } : {}),
+      ...(options.replyTo ? { replyToId: options.replyTo } : {}),
+      ...(options.model ? { model: options.model } : {}),
+    });
+    this.activeStreams.set(messageId, {
+      chatId,
+      isDirect: false,
+      channelId,
+      workspaceId,
+      threadId: effectiveThreadId,
+      replyToId: options.replyTo,
+      model: options.model,
+      chunks: [],
+    });
+    return messageId;
+  }
+
+  async appendStream(chatId: string, messageId: string, content: string): Promise<void> {
+    if (!this.peer) throw new Error('Peer not started');
+    if (!messageId) throw new Error('messageId required');
+    if (!content) return;
+
+    let state = this.activeStreams.get(messageId);
+    if (!state) {
+      await this.startStream(chatId, { messageId });
+      state = this.activeStreams.get(messageId);
+      if (!state) throw new Error(`Failed to initialize stream: ${messageId}`);
+    }
+
+    state.chunks.push(content);
+    if (state.isDirect) {
+      await this.peer.sendDirectStreamDelta({
+        peerId: state.peerId!,
+        messageId,
+        content,
+      });
+      return;
+    }
+
+    await this.peer.sendStreamDelta({
+      channelId: state.channelId,
+      workspaceId: state.workspaceId,
+      messageId,
+      content,
+    });
+  }
+
+  async finishStream(chatId: string, messageId: string): Promise<void> {
+    if (!this.peer) throw new Error('Peer not started');
+    if (!messageId) throw new Error('messageId required');
+
+    let state = this.activeStreams.get(messageId);
+    if (!state) {
+      await this.startStream(chatId, { messageId });
+      state = this.activeStreams.get(messageId);
+      if (!state) throw new Error(`Failed to initialize stream: ${messageId}`);
+    }
+
+    if (state.isDirect) {
+      await this.peer.sendDirectStreamDone({
+        peerId: state.peerId!,
+        messageId,
+      });
+    } else {
+      await this.peer.sendStreamDone({
+        channelId: state.channelId,
+        workspaceId: state.workspaceId,
+        messageId,
+      });
+    }
+
+    const fullContent = state.chunks.join('').trim();
+    if (fullContent) {
+      await this.peer.persistMessageLocally(
+        state.channelId,
+        state.workspaceId,
+        fullContent,
+        state.threadId,
+        state.replyToId,
+        messageId,
+        state.model,
+      );
+    }
+
+    this.activeStreams.delete(messageId);
   }
 
   /**
