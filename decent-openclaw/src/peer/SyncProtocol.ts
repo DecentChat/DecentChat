@@ -151,7 +151,7 @@ export class SyncProtocol {
         this.handleJoinRequest(fromPeerId, msg);
         break;
       case 'join-accepted':
-        await this.handleJoinAccepted(msg);
+        await this.handleJoinAccepted(fromPeerId, msg);
         break;
       case 'join-rejected':
         this.onEvent({ type: 'join-rejected', reason: msg.reason });
@@ -582,7 +582,7 @@ export class SyncProtocol {
     this.onEvent({ type: 'member-joined', workspaceId: workspace.id, member: msg.member });
   }
 
-  private async handleJoinAccepted(msg: Extract<SyncMessage, { type: 'join-accepted' }>): Promise<void> {
+  private async handleJoinAccepted(fromPeerId: string, msg: Extract<SyncMessage, { type: 'join-accepted' }>): Promise<void> {
     if (msg.pexServers && this.serverDiscovery) {
       this.serverDiscovery.mergeReceivedServers(msg.pexServers);
     }
@@ -598,6 +598,8 @@ export class SyncProtocol {
       workspace: msg.workspace,
       messageHistory: msg.messageHistory,
     });
+
+    this.startNegentropySyncSafely(fromPeerId, msg.workspace.id);
   }
 
   private handleMemberJoined(msg: Extract<SyncMessage, { type: 'member-joined' }> & { workspaceId?: string }): void {
