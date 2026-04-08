@@ -20567,6 +20567,20 @@ class DecentChatNodePeer {
   get peerId() {
     return this.myPeerId;
   }
+  hasMyMessageInChannelThread(channelId, threadId) {
+    if (!threadId || !channelId)
+      return false;
+    const msgs = this.messageStore.getMessages(channelId);
+    for (const m of msgs) {
+      if (m.senderId !== this.myPeerId)
+        continue;
+      if (m.id === threadId)
+        return true;
+      if (m.threadId === threadId)
+        return true;
+    }
+    return false;
+  }
   async start() {
     const seedPhrase = this.opts.account.seedPhrase;
     if (!seedPhrase) {
@@ -24225,11 +24239,17 @@ class DecentHermesPeer {
     this.peer = new DecentChatNodePeer({
       account,
       onIncomingMessage: async (params) => {
-        const forwarded = this.shouldForwardIncomingMessage(params);
+        const decision = this.shouldForwardIncomingMessage({
+          chatType: params.chatType,
+          content: params.content,
+          channelId: params.channelId,
+          threadId: params.threadId
+        });
         const previewLen = Math.min(params.content.length, 80);
         const preview = params.content.slice(0, previewLen).replace(/\s+/g, " ");
-        console.log(`[decent-hermes-peer] inbound message ` + `chatType=${params.chatType} ` + `from=${(params.senderName || params.senderId).slice(0, 24)} ` + `chan=${(params.channelId || "").slice(0, 8)} ` + `ws=${(params.workspaceId || "").slice(0, 8)} ` + `len=${params.content.length} ` + `forward=${forwarded}` + (!forwarded ? ` reason=channel_post_without_mention (mention @${this.alias || "Xena"} to get a reply)` : "") + ` text="${preview}${params.content.length > previewLen ? "…" : ""}"`);
-        if (!forwarded) {
+        const forwardTag = decision.reason ? `${decision.forward}(${decision.reason})` : String(decision.forward);
+        console.log(`[decent-hermes-peer] inbound message ` + `chatType=${params.chatType} ` + `from=${(params.senderName || params.senderId).slice(0, 24)} ` + `chan=${(params.channelId || "").slice(0, 8)} ` + `ws=${(params.workspaceId || "").slice(0, 8)} ` + `thread=${(params.threadId || "").slice(0, 8)} ` + `len=${params.content.length} ` + `forward=${forwardTag}` + (!decision.forward ? ` reason=channel_post_without_mention (mention @${this.alias || "Xena"} to get a reply, or reply inside a thread she's in)` : "") + ` text="${preview}${params.content.length > previewLen ? "…" : ""}"`);
+        if (!decision.forward) {
           return;
         }
         const chatId = params.chatType === "direct" ? `dm:${params.senderId}` : `${params.workspaceId}:${params.channelId}`;
@@ -24381,14 +24401,34 @@ class DecentHermesPeer {
   }
   shouldForwardIncomingMessage(params) {
     if (params.chatType === "direct")
-      return true;
-    return this.messageMentionsBot(params.content);
+      return { forward: true };
+    if (this.messageMentionsBot(params.content)) {
+      return { forward: true };
+    }
+    if (params.threadId && params.channelId && this.peer?.hasMyMessageInChannelThread(params.channelId, params.threadId)) {
+      return { forward: true, reason: "active_thread" };
+    }
+    return { forward: false };
   }
   messageMentionsBot(content) {
-    if (!content || !content.includes("@"))
+    if (!content)
+      return false;
+    const alias = this.alias.trim();
+    if (alias) {
+      const escapedAlias = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const hyphenated = alias.replace(/\s+/g, "-").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const aliasPatterns = [`\\b${escapedAlias}\\b`];
+      if (hyphenated !== escapedAlias) {
+        aliasPatterns.push(`\\b${hyphenated}\\b`);
+      }
+      const aliasRegex = new RegExp(aliasPatterns.join("|"), "i");
+      if (aliasRegex.test(content)) {
+        return true;
+      }
+    }
+    if (!content.includes("@"))
       return false;
     const normalizedContent = this.normalizeMentionValue(content);
-    const alias = this.alias.trim();
     if (alias) {
       const normalizedAlias = this.normalizeMentionValue(alias);
       const hyphenatedAlias = this.normalizeMentionValue(alias.replace(/\s+/g, "-"));

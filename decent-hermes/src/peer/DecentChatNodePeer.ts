@@ -346,6 +346,31 @@ export class DecentChatNodePeer {
     return this.myPeerId;
   }
 
+  /**
+   * Returns true if this bridge (Xena) has already posted in the given
+   * channel thread. Used by the incoming-message forward gate so a user
+   * replying inside a thread Xena is already participating in doesn't
+   * have to repeat `@Xena` on every message — the thread context is
+   * itself a clear directed-at-bot signal.
+   *
+   * Semantics: a message is "in the thread T" when either
+   *   - its id equals T (the root message IS the thread), or
+   *   - its threadId equals T (it's a reply inside the thread).
+   *
+   * Passing a null/empty threadId returns false (no thread → no
+   * implicit mention).
+   */
+  hasMyMessageInChannelThread(channelId: string, threadId: string | undefined | null): boolean {
+    if (!threadId || !channelId) return false;
+    const msgs = this.messageStore.getMessages(channelId);
+    for (const m of msgs) {
+      if ((m as any).senderId !== this.myPeerId) continue;
+      if ((m as any).id === threadId) return true;
+      if ((m as any).threadId === threadId) return true;
+    }
+    return false;
+  }
+
   async start(): Promise<void> {
     const seedPhrase = this.opts.account.seedPhrase;
     if (!seedPhrase) {

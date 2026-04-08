@@ -167,23 +167,32 @@ export class DecentHermesPeer {
         // post with no @mention was silently dropped here, making it
         // impossible to tell the bridge and the agent apart when debugging
         // "I sent a message and got no reply" reports.
-        const forwarded = this.shouldForwardIncomingMessage(params);
+        const decision = this.shouldForwardIncomingMessage({
+          chatType: params.chatType,
+          content: params.content,
+          channelId: params.channelId,
+          threadId: params.threadId,
+        });
         const previewLen = Math.min(params.content.length, 80);
         const preview = params.content.slice(0, previewLen).replace(/\s+/g, ' ');
+        const forwardTag = decision.reason
+          ? `${decision.forward}(${decision.reason})`
+          : String(decision.forward);
         console.log(
           `[decent-hermes-peer] inbound message ` +
           `chatType=${params.chatType} ` +
           `from=${(params.senderName || params.senderId).slice(0, 24)} ` +
           `chan=${(params.channelId || '').slice(0, 8)} ` +
           `ws=${(params.workspaceId || '').slice(0, 8)} ` +
+          `thread=${(params.threadId || '').slice(0, 8)} ` +
           `len=${params.content.length} ` +
-          `forward=${forwarded}` +
-          (!forwarded
-            ? ` reason=channel_post_without_mention (mention @${this.alias || 'Xena'} to get a reply)`
+          `forward=${forwardTag}` +
+          (!decision.forward
+            ? ` reason=channel_post_without_mention (mention @${this.alias || 'Xena'} to get a reply, or reply inside a thread she's in)`
             : '') +
           ` text="${preview}${params.content.length > previewLen ? '…' : ''}"`
         );
-        if (!forwarded) {
+        if (!decision.forward) {
           return;
         }
         const chatId = params.chatType === 'direct'
@@ -415,16 +424,64 @@ export class DecentHermesPeer {
   private shouldForwardIncomingMessage(params: {
     chatType: 'direct' | 'channel';
     content: string;
-  }): boolean {
-    if (params.chatType === 'direct') return true;
-    return this.messageMentionsBot(params.content);
+    channelId?: string;
+    threadId?: string;
+  }): { forward: boolean; reason?: string } {
+    if (params.chatType === 'direct') return { forward: true };
+
+    // 1) Explicit mention (either @alias or bare "Xena" as a word).
+    if (this.messageMentionsBot(params.content)) {
+      return { forward: true };
+    }
+
+    // 2) Implicit mention via thread context: if we've already posted in
+    //    this thread, any follow-up there is clearly directed at us.
+    //    Users shouldn't have to re-`@Xena` on every turn inside a
+    //    thread the bot is already participating in.
+    if (
+      params.threadId &&
+      params.channelId &&
+      this.peer?.hasMyMessageInChannelThread(params.channelId, params.threadId)
+    ) {
+      return { forward: true, reason: 'active_thread' };
+    }
+
+    return { forward: false };
   }
 
   private messageMentionsBot(content: string): boolean {
-    if (!content || !content.includes('@')) return false;
+    if (!content) return false;
+
+    // 1) Bare alias as a whole word (case-insensitive). A channel post
+    //    like "hi Xena how are ya" should wake the bot — users shouldn't
+    //    have to remember the @ prefix to talk to a bot that's named in
+    //    the sentence. `\b...\b` anchors on word boundaries so we don't
+    //    match the bot name inside unrelated words (e.g. "Xenakis",
+    //    "xenomorph"). Regex metacharacters in the alias are escaped so
+    //    an alias like "Xena.bot" doesn't accidentally behave as a
+    //    regex pattern.
+    const alias = this.alias.trim();
+    if (alias) {
+      const escapedAlias = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // Hyphenated form: "Xena Agent" → also match "Xena-Agent"
+      const hyphenated = alias.replace(/\s+/g, '-')
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const aliasPatterns: string[] = [`\\b${escapedAlias}\\b`];
+      if (hyphenated !== escapedAlias) {
+        aliasPatterns.push(`\\b${hyphenated}\\b`);
+      }
+      const aliasRegex = new RegExp(aliasPatterns.join('|'), 'i');
+      if (aliasRegex.test(content)) {
+        return true;
+      }
+    }
+
+    // 2) Explicit `@alias` / `@peerId` mention token parsing. This is the
+    //    original path — still valuable for strict matching and for
+    //    peer-id mentions that wouldn't match as a bare-word alias.
+    if (!content.includes('@')) return false;
 
     const normalizedContent = this.normalizeMentionValue(content);
-    const alias = this.alias.trim();
     if (alias) {
       const normalizedAlias = this.normalizeMentionValue(alias);
       const hyphenatedAlias = this.normalizeMentionValue(alias.replace(/\s+/g, '-'));
