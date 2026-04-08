@@ -20,7 +20,8 @@
     "src"
   ],
   "scripts": {
-    "test": "bun test",
+    "test": "bun run tests/run-parallel.ts",
+    "test:sequential": "bun test",
     "test:coverage": "bun test --coverage",
     "test:watch": "bun test --watch",
     "typecheck": "tsc --noEmit",
