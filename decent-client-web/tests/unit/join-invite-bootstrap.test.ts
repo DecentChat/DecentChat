@@ -2,6 +2,66 @@ import { describe, expect, mock, test } from 'bun:test';
 import { ChatController } from '../../src/app/ChatController';
 
 describe('ChatController join invite bootstrap', () => {
+  test('persists joiner allowWorkspaceDMs preference from join options', async () => {
+    const ws: any = {
+      id: 'ws-join-pref',
+      inviteCode: 'JOIN1234',
+      createdBy: 'me-peer',
+      channels: [{ id: 'ch-1', name: 'general' }],
+      members: [{ peerId: 'me-peer', alias: 'Joiner', publicKey: 'joiner-pk', role: 'owner', joinedAt: Date.now() }],
+    };
+
+    const persistWorkspace = mock(async () => {});
+    const ctrl = Object.create(ChatController.prototype) as any;
+    ctrl.state = {
+      myPeerId: 'me-peer',
+      myAlias: 'Joiner',
+      activeWorkspaceId: null,
+      activeChannelId: null,
+    };
+    ctrl.myPublicKey = 'joiner-pk';
+    ctrl.ui = { renderApp: mock(() => {}), showToast: mock(() => {}) };
+    ctrl.workspaceManager = {
+      getWorkspace: mock(() => null),
+      validateInviteCode: mock(() => null),
+      isInviteRevoked: mock(() => false),
+      createWorkspace: mock(() => ws),
+      addMember: mock((_wsId: string, member: any) => { ws.members.push(member); }),
+    };
+    ctrl.getServerDiscovery = mock(() => ({ mergeReceivedServers: mock(() => {}) }));
+    ctrl.saveServerDiscovery = mock(() => {});
+    ctrl.startPEXBroadcasts = mock(() => {});
+    ctrl.startPeerMaintenance = mock(() => {});
+    ctrl.startQuotaChecks = mock(() => {});
+    ctrl.startGossipCleanup = mock(() => {});
+    ctrl.onWorkspaceActivated = mock(async () => {});
+    ctrl.persistWorkspace = persistWorkspace;
+    ctrl.schedulePendingJoinValidation = mock(() => {});
+    ctrl.registerWorkspacePeer = mock(async () => {});
+    ctrl.connectToMultiplePeers = mock(async () => {});
+
+    await ctrl.joinWorkspace(
+      'JOIN1234',
+      'Joiner',
+      'inviter-peer',
+      {
+        host: '0.peerjs.com',
+        port: 443,
+        inviteCode: 'JOIN1234',
+        secure: true,
+        path: '/',
+        fallbackServers: [],
+        turnServers: [],
+        peerId: 'inviter-peer',
+      },
+      { allowWorkspaceDMs: false },
+    );
+
+    const me = ws.members.find((m: any) => m.peerId === 'me-peer');
+    expect(me?.allowWorkspaceDMs).toBe(false);
+    expect(persistWorkspace).toHaveBeenCalledWith('ws-join-pref');
+  });
+
   test('seeds inviter transport key and alias from signed invite metadata', async () => {
     const ws: any = {
       id: 'ws-1',
