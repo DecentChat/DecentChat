@@ -221,14 +221,23 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
        ${workspaceName ? `<p style="color: var(--text-muted); margin-bottom: 16px; font-size: 15px;">You've been invited to <strong>${escapeHtml(workspaceName)}</strong></p>` : ''}
        <div class="form-group"><label>Your name in this workspace</label><input type="text" name="alias" placeholder="Enter your name" required autofocus /></div>
        <div class="form-group"><label style="display:flex; align-items:center; gap:8px; cursor:pointer;"><input type="checkbox" name="allowWorkspaceDMs" checked /> <span>Allow direct messages from workspace members</span></label></div>`,
-      (form) => {
+      async (form) => {
         const alias = (form.elements.namedItem('alias') as HTMLInputElement).value.trim();
         const allowWorkspaceDMs = (form.elements.namedItem('allowWorkspaceDMs') as HTMLInputElement | null)?.checked ?? true;
-        if (!alias) return;
+        if (!alias) return false;
+        if (inviteData && InviteURI.isExpired(inviteData)) {
+          showToast('This invite link has expired', 'error');
+          return false;
+        }
         state.myAlias = alias;
-        callbacks.persistSetting('myAlias', alias);
-        callbacks.joinWorkspace(workspaceName || inviteCode, alias, peerId, inviteData, { allowWorkspaceDMs });
-        showToast(`Joining ${workspaceName || 'workspace'}...`);
+        await callbacks.persistSetting('myAlias', alias);
+        try {
+          await callbacks.joinWorkspace(workspaceName || inviteCode, alias, peerId, inviteData, { allowWorkspaceDMs });
+          return true;
+        } catch (err) {
+          showToast((err as Error)?.message || 'Could not join workspace', 'error');
+          return false;
+        }
       },
     );
   }
@@ -237,6 +246,9 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
     if (invite.includes('://') || invite.includes('/')) {
       try {
         const data = InviteURI.decode(invite);
+        if (InviteURI.isExpired(data)) {
+          return { code: '', error: 'This invite link has expired' };
+        }
         if (data.host && data.port) {
           console.log(`[DecentChat] Invite points to signaling: ${data.host}:${data.port}`);
         }
@@ -259,9 +271,13 @@ export function createModalActions(ctx: ModalActionContext): ModalActions {
         options?: { allowWorkspaceDMs?: boolean },
       ) => {
         state.myAlias = alias;
-        callbacks.persistSetting('myAlias', alias);
-        callbacks.joinWorkspace(wsName, alias, peerId, inviteDataParam, options);
-        showToast(`Joining workspace... connecting to ${peerId.slice(0, 8)}`);
+        return callbacks.persistSetting('myAlias', alias)
+          .then(() => callbacks.joinWorkspace(wsName, alias, peerId, inviteDataParam, options))
+          .then(() => true)
+          .catch((err) => {
+            showToast((err as Error)?.message || 'Could not join workspace', 'error');
+            return false;
+          });
       },
       onToast: (msg: string, type?: string) => showToast(msg, type as any),
     });

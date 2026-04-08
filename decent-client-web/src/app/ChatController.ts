@@ -6683,6 +6683,9 @@ export class ChatController {
   ): Promise<void> {
     chatLog.info('[DecentChat] joinWorkspace called:', { code, alias, peerId, hasUI: !!this.ui });
 
+    const existingWorkspace = (inviteData?.workspaceId ? this.workspaceManager.getWorkspace(inviteData.workspaceId) : null)
+      || this.workspaceManager.validateInviteCode(inviteData?.inviteCode || code);
+
     // ── Invite security validation ──────────────────────────────────────
     if (inviteData) {
       // Check expiration
@@ -6690,17 +6693,18 @@ export class ChatController {
         const msg = 'This invite link has expired';
         console.warn(`[DecentChat] ${msg}`);
         this.ui?.showToast(msg, 'error');
-        return;
+        throw new Error(msg);
       }
 
       // Check revocation (when we already know this workspace locally)
-      const knownWorkspace = (inviteData.workspaceId ? this.workspaceManager.getWorkspace(inviteData.workspaceId) : null)
+      const knownWorkspace = existingWorkspace
+        || (inviteData.workspaceId ? this.workspaceManager.getWorkspace(inviteData.workspaceId) : null)
         || this.workspaceManager.validateInviteCode(inviteData.inviteCode);
       if (inviteData.inviteId && knownWorkspace && this.workspaceManager.isInviteRevoked(knownWorkspace.id, inviteData.inviteId)) {
         const msg = 'This invite link has been revoked by an admin';
         console.warn(`[DecentChat] ${msg}`);
         this.ui?.showToast(msg, 'error');
-        return;
+        throw new Error(msg);
       }
 
       // Check max uses (tracked in localStorage per invite code)
@@ -6711,7 +6715,7 @@ export class ChatController {
           const msg = 'This invite has reached its maximum uses';
           console.warn(`[DecentChat] ${msg}`);
           this.ui?.showToast(msg, 'error');
-          return;
+          throw new Error(msg);
         }
         // Increment usage
         localStorage.setItem(usageKey, String(currentUses + 1));
@@ -6719,21 +6723,34 @@ export class ChatController {
 
       // Verify signature if present (optional — unsigned invites still work for backward compat)
       if (inviteData.signature && inviteData.publicKey) {
+        const invalidSignatureMessage = 'This invite link has an invalid signature — it may have been tampered with';
         try {
           const { verifyInviteSignature } = await import('@decentchat/protocol');
           const valid = await verifyInviteSignature(inviteData.publicKey, inviteData);
           if (!valid) {
-            const msg = 'This invite link has an invalid signature — it may have been tampered with';
-            console.warn(`[DecentChat] ${msg}`);
-            this.ui?.showToast(msg, 'error');
-            return;
+            console.warn(`[DecentChat] ${invalidSignatureMessage}`);
+            this.ui?.showToast(invalidSignatureMessage, 'error');
+            throw new Error(invalidSignatureMessage);
           }
           chatLog.info('[DecentChat] Invite signature verified ✓');
         } catch (err) {
+          if ((err as Error)?.message === invalidSignatureMessage) {
+            throw err;
+          }
           console.warn('[DecentChat] Failed to verify invite signature:', err);
           // Don't block join — verification failure is non-fatal for backward compat
         }
       }
+    }
+
+    // Dedup guard: if we've already joined this workspace, do not create/re-join again.
+    if (existingWorkspace && existingWorkspace.members.some((member: any) => member.peerId === this.state.myPeerId)) {
+      this.state.activeWorkspaceId = existingWorkspace.id;
+      this.state.activeChannelId = existingWorkspace.channels[0]?.id || null;
+      void this.onWorkspaceActivated(existingWorkspace.id);
+      this.ui?.renderApp();
+      this.ui?.showToast('You already joined this workspace', 'info');
+      return;
     }
 
     // Create the workspace locally for the joining user

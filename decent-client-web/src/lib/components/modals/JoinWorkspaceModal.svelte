@@ -13,7 +13,7 @@
       peerId: string,
       inviteData?: any,
       options?: { allowWorkspaceDMs?: boolean },
-    ) => void;
+    ) => boolean | void | Promise<boolean | void>;
     onToast: (message: string, type?: string) => void;
   }
 
@@ -45,7 +45,7 @@
       peerId: string,
       inviteData?: any,
       options?: { allowWorkspaceDMs?: boolean },
-    ) => void;
+    ) => boolean | void | Promise<boolean | void>;
     onToast: (message: string, type?: string) => void;
     onClose: () => void;
   }
@@ -128,7 +128,7 @@
     updatePreview();
   }
 
-  function handleSubmit(e: SubmitEvent) {
+  async function handleSubmit(e: SubmitEvent) {
     e.preventDefault();
     if (!invite.trim() || !alias.trim()) return;
 
@@ -151,8 +151,10 @@
     }
 
     const wsName = parsed.inviteData?.workspaceName || parsed.code;
-    onJoin(wsName, alias.trim(), peerId, parsed.inviteData, { allowWorkspaceDMs });
-    onClose();
+    const shouldClose = await onJoin(wsName, alias.trim(), peerId, parsed.inviteData, { allowWorkspaceDMs });
+    if (shouldClose !== false) {
+      onClose();
+    }
   }
 </script>
 
