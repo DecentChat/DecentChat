@@ -12,6 +12,7 @@ import {
   OfflineQueue,
   CustodyStore,
   ManifestStore,
+  PeerAuth,
   SeedPhraseManager,
   WorkspaceManager,
   Negentropy,
@@ -167,12 +168,6 @@ type PendingPreKeyBundleFetch = {
   timer: ReturnType<typeof setTimeout>;
 };
 
-type PendingHandshakeAck = {
-  peerId: string;
-  resolve: (value: boolean) => void;
-  timer: ReturnType<typeof setTimeout>;
-};
-
 type DirectoryEntry = {
   kind: 'user' | 'group';
   id: string;
@@ -191,8 +186,6 @@ export class DecentChatNodePeer {
   // multiple handshakes within 30s, the peer auto-bans us. 60s cooldown
   // gives plenty of headroom while still allowing legitimate reconnects.
   private static readonly CONNECT_HANDSHAKE_COOLDOWN_MS = 60_000;
-  private static readonly HANDSHAKE_ACK_TIMEOUT_MS = 7_500;
-  private static readonly HANDSHAKE_MAX_ATTEMPTS = 2;
   private static readonly INBOUND_HANDSHAKE_COOLDOWN_MS = 5_000;
   private static readonly PEER_MAINTENANCE_RETRY_BASE_MS = 30_000;
   private static readonly PEER_MAINTENANCE_RETRY_MAX_MS = 60 * 60_000; // 1 hour (was 10 min)
@@ -222,7 +215,6 @@ export class DecentChatNodePeer {
   private readonly opts: DecentChatNodePeerOptions;
   private readonly pendingMediaRequests = new Map<string, PendingMediaRequest>();
   private readonly pendingPreKeyBundleFetches = new Map<string, PendingPreKeyBundleFetch>();
-  private readonly pendingHandshakeAcks = new Map<string, PendingHandshakeAck>();
   private readonly publishedPreKeyVersionByWorkspace = new Map<string, string>();
   private readonly decryptRecoveryAtByPeer = new Map<string, number>();
   private readonly connectHandshakeAtByPeer = new Map<string, number>();
@@ -230,6 +222,18 @@ export class DecentChatNodePeer {
   private readonly peerMaintenanceRetryAtByPeer = new Map<string, number>();
   private readonly peerMaintenanceAttemptsByPeer = new Map<string, number>();
   private readonly throttledTransportErrors = new Map<string, { windowStart: number; suppressed: number }>();
+  /**
+   * Persistent de-dupe for "sync import failed" warnings. Keyed by
+   * `${peerId}:${channelId}`. Value = timestamp of last emission. A
+   * sync-partner who cannot send us a clean chain (e.g. legacy workspace
+   * with `prevHash: undefined` messages) will resend the SAME unverifiable
+   * batch on every sync cycle — that used to emit one warn per
+   * channel per sync-response, which piled up into hundreds of spurious
+   * lines per minute. This map collapses those to once per peer/channel
+   * per 10 minutes.
+   */
+  private readonly syncImportFailLastLogAt = new Map<string, number>();
+  private static readonly SYNC_IMPORT_FAIL_LOG_INTERVAL_MS = 10 * 60_000;
   private readonly _gossipSeen = new Map<string, number>();
   private _gossipCleanupInterval: ReturnType<typeof setInterval> | null = null;
   private readonly mediaChunkTimeout = 30000;
@@ -413,7 +417,6 @@ export class DecentChatNodePeer {
       this.transport.onDisconnect = (peerId) => {
         this.opts.log?.info(`[decentchat-peer] peer disconnected: ${peerId}`);
         this.messageProtocol?.clearSharedSecret(peerId);
-        this.failHandshakeAcksForPeer(peerId);
         // DO NOT clear connectHandshakeAtByPeer on disconnect — the cooldown
         // MUST persist across reconnects to avoid handshake-storm bans on the
         // remote peer's MessageGuard (handshake bucket = 3 burst, 1/10s).
@@ -1006,7 +1009,6 @@ export class DecentChatNodePeer {
       pending.resolve(false);
     }
     this.pendingPreKeyBundleFetches.clear();
-    this.failAllHandshakeAcks();
     this.botHuddle?.destroy();
     this.botHuddle = null;
     this.signingKeyPair = null;
@@ -1157,10 +1159,47 @@ export class DecentChatNodePeer {
       return;
     }
 
-    if (msg?.type === 'handshake-ack') {
-      const handshakeId = typeof msg?.handshakeId === 'string' ? msg.handshakeId : '';
-      if (!handshakeId) return;
-      this.resolveHandshakeAck(fromPeerId, handshakeId);
+    // Peer-auth challenge-response (see decent-protocol/src/security/PeerAuth.ts).
+    //
+    // The web client sends this right after processing our handshake: it wants
+    // us to prove we own the signing key advertised in that handshake, so it
+    // knows our peerId really belongs to us and isn't a replay. If we don't
+    // respond within `ChatController.AUTH_TIMEOUT_MS`, the client logs
+    // `[Auth] Peer ... did not respond to auth challenge — TOFU fallback`
+    // and stops trusting our authenticated-peers set — still functional via
+    // TOFU, but noisy and defeats the purpose of the challenge.
+    //
+    // Previously the bridge had no handler for `auth-challenge`, so the
+    // message was silently dropped and the client always fell back to TOFU.
+    // This handler signs `nonce + challengerPeerId` with our ECDSA signing
+    // private key (same key pair we use everywhere else in the protocol) and
+    // sends `auth-response` back.
+    if (msg?.type === 'auth-challenge' && typeof msg.nonce === 'string') {
+      if (!this.signingKeyPair?.privateKey) {
+        this.opts.log?.warn?.(
+          `[decentchat-peer] auth-challenge from ${fromPeerId.slice(0, 8)} ` +
+          `but no signing key available — challenger will fall back to TOFU`,
+        );
+        return;
+      }
+      try {
+        const response = await PeerAuth.respondToChallenge(
+          msg.nonce,
+          fromPeerId,
+          this.signingKeyPair.privateKey,
+        );
+        const accepted = this.transport.send(fromPeerId, {
+          type: 'auth-response',
+          signature: response.signature,
+        });
+        this.opts.log?.info?.(
+          `[decentchat-peer] auth-response sent to ${fromPeerId.slice(0, 8)} accepted=${accepted}`,
+        );
+      } catch (err) {
+        this.opts.log?.warn?.(
+          `[decentchat-peer] failed to respond to auth-challenge from ${fromPeerId.slice(0, 8)}: ${String(err)}`,
+        );
+      }
       return;
     }
 
@@ -1182,16 +1221,18 @@ export class DecentChatNodePeer {
         });
       }
       await this.publishPreKeyBundle(fromPeerId);
-      const inboundHandshakeId = typeof msg?.handshakeId === 'string' ? msg.handshakeId : '';
-      if (inboundHandshakeId) {
-        const accepted = this.transport.send(fromPeerId, {
-          type: 'handshake-ack',
-          handshakeId: inboundHandshakeId,
-        });
-        this.opts.log?.debug?.(
-          `[decentchat-peer] handshake-ack sent to ${fromPeerId.slice(0, 8)} handshakeId=${inboundHandshakeId.slice(0, 8)} accepted=${accepted}`,
-        );
-      }
+      // (Historical note: we used to reply to inbound handshakes with a
+      // bridge-invented `handshake-ack` message and track it via
+      // `waitForHandshakeAck` on the sender side. Nothing else in the
+      // DecentChat ecosystem speaks that message — neither the web client
+      // nor the shared `@decentchat/protocol` package references it — so
+      // EVERY bridge→web handshake ended up emitting a spurious
+      // `handshake not acknowledged by ... (timeout 7500ms)` warning even
+      // on perfectly healthy connections. The tracking had no retry
+      // behaviour wired to it, so it was pure log noise. Removed in favour
+      // of trusting the rate-limited outbound cooldown + the concrete
+      // sync/peer-auth signals that already tell us whether the peer is
+      // actually talking to us.)
       const knownKeys = this.store.get<Record<string, string>>('peer-public-keys', {});
       knownKeys[fromPeerId] = msg.publicKey;
       this.store.set('peer-public-keys', knownKeys);
@@ -1206,12 +1247,43 @@ export class DecentChatNodePeer {
           publicKey: typeof msg.publicKey === 'string' ? msg.publicKey : undefined,
         });
       }
-      // Always reply with our own handshake so the remote peer can complete
-      // crypto setup.  Without this, a peer that hard-refreshed (lost its
-      // shared secret) sends us a handshake, we process it on our side, but
-      // never reply — the remote peer never enters readyPeers and sees us
-      // as permanently offline.
-      await this.sendHandshake(fromPeerId);
+      // Reply with our own handshake so the remote peer can complete
+      // crypto setup.  Without ANY reply, a peer that hard-refreshed (lost
+      // its shared secret) sends us a handshake, we process it on our side,
+      // but never reply — the remote peer never enters readyPeers and sees
+      // us as permanently offline.
+      //
+      // BUT: re-sending unconditionally on every inbound handshake breaks
+      // the peer-auth challenge-response on the web client. The web client's
+      // handshake handler in ChatController sends an `auth-challenge` and
+      // stashes its nonce in `pendingAuthChallenges[peerId]`. If we re-send
+      // a handshake right after the web client just sent us one, the web
+      // client processes our reply, OVERWRITES `pendingAuthChallenges[peerId]`
+      // with a fresh nonce, and then our `auth-response` for the original
+      // nonce arrives — verification against the new nonce fails with
+      // `[Auth] Peer ... FAILED authentication — bad signature`, followed
+      // by the next response logging `[Auth] Unexpected auth-response ...
+      // (no pending challenge)`. The whole pair authenticates via TOFU and
+      // the round-trip we just added is wasted.
+      //
+      // Skip the re-send if we already sent our own handshake to this peer
+      // very recently. The 5-second window comfortably covers the auth
+      // round-trip plus a few ratchet retries while still re-handshaking
+      // for any peer that's been quiet long enough to plausibly be in the
+      // hard-refresh recovery scenario the original code was guarding.
+      const HANDSHAKE_RESEND_SUPPRESS_MS = 5_000;
+      const lastSentAt = this.connectHandshakeAtByPeer.get(fromPeerId) ?? 0;
+      const recentlySentToPeer = lastSentAt > 0 &&
+        Date.now() - lastSentAt < HANDSHAKE_RESEND_SUPPRESS_MS;
+      if (!recentlySentToPeer) {
+        await this.sendHandshake(fromPeerId);
+      } else {
+        this.opts.log?.debug?.(
+          `[decentchat-peer] suppressing handshake re-send to ${fromPeerId.slice(0, 8)} ` +
+          `(sent ${Date.now() - lastSentAt}ms ago, < ${HANDSHAKE_RESEND_SUPPRESS_MS}ms) — ` +
+          `prevents auth-challenge nonce overwrite race`,
+        );
+      }
       await this.resumePeerSession(fromPeerId);
       return;
     }
@@ -1684,13 +1756,37 @@ export class DecentChatNodePeer {
       const importResult = await this.messageStore.importMessages(channelId, [...existing, storedMsg as any]);
       if (!importResult?.success) {
         importFailedCount++;
-        // Log the first failure per channel with full detail; suppress the
-        // rest to avoid log spam (we'll summarize totals at the end).
-        if (!importFailedChannels.has(channelId)) {
+        // Cross-sync persistent suppression. The previous in-function set was
+        // local to a single sync-response, so a peer stuck on an
+        // unverifiable legacy workspace (e.g. `prevHash: undefined`) would
+        // log one warning per channel per sync-response — hundreds of lines
+        // per minute in steady-state. Now we log at most once per
+        // (peer, channel) per SYNC_IMPORT_FAIL_LOG_INTERVAL_MS and group
+        // ongoing failures into the summary line at the end.
+        const suppressionKey = `${fromPeerId}:${channelId}`;
+        const lastLoggedAt = this.syncImportFailLastLogAt.get(suppressionKey) ?? 0;
+        const now = Date.now();
+        const shouldLog = !importFailedChannels.has(channelId) &&
+          now - lastLoggedAt >= DecentChatNodePeer.SYNC_IMPORT_FAIL_LOG_INTERVAL_MS;
+        if (shouldLog) {
           importFailedChannels.add(channelId);
-          this.opts.log?.warn?.(
-            `[decentchat-peer] sync import failed for msg ${id.slice(0, 8)} in channel ${channelId.slice(0, 8)}: ${importResult?.error ?? 'unknown error'} — skipping ACK (further failures in this channel suppressed until sync summary)`,
-          );
+          this.syncImportFailLastLogAt.set(suppressionKey, now);
+          const errMsg = importResult?.error ?? 'unknown error';
+          // Structurally unverifiable chains (e.g. legacy `prevHash: undefined`)
+          // aren't tampering — they're just unsyncable. Downgrade those to
+          // info so the real warn stream stays meaningful.
+          const isStructurallyUnverifiable = errMsg.includes('got undefined') ||
+            errMsg.includes('invalid genesis hash');
+          const line =
+            `[decentchat-peer] sync import failed for msg ${id.slice(0, 8)} in channel ${channelId.slice(0, 8)}: ${errMsg} — skipping ACK ` +
+            `(further failures for this peer/channel suppressed for ${Math.round(DecentChatNodePeer.SYNC_IMPORT_FAIL_LOG_INTERVAL_MS / 60_000)}min)`;
+          if (isStructurallyUnverifiable) {
+            this.opts.log?.info?.(line);
+          } else {
+            this.opts.log?.warn?.(line);
+          }
+        } else {
+          importFailedChannels.add(channelId);
         }
         continue;
       }
@@ -1742,10 +1838,19 @@ export class DecentChatNodePeer {
 
     // Summary: if any imports failed, emit a single info-level log line so
     // operators can see the total without the per-message warning flood.
+    // Also throttled per-peer on the same SYNC_IMPORT_FAIL_LOG_INTERVAL_MS
+    // cadence so a peer stuck on an unverifiable chain doesn't produce one
+    // summary line per sync cycle forever.
     if (importFailedCount > 0) {
-      this.opts.log?.info?.(
-        `[decentchat-peer] sync import summary from ${fromPeerId.slice(0, 8)}: ${importFailedCount}/${messages.length} messages failed verification across ${importFailedChannels.size} channel(s)`,
-      );
+      const summaryKey = `${fromPeerId}:__summary__`;
+      const lastSummaryAt = this.syncImportFailLastLogAt.get(summaryKey) ?? 0;
+      const now = Date.now();
+      if (now - lastSummaryAt >= DecentChatNodePeer.SYNC_IMPORT_FAIL_LOG_INTERVAL_MS) {
+        this.syncImportFailLastLogAt.set(summaryKey, now);
+        this.opts.log?.info?.(
+          `[decentchat-peer] sync import summary from ${fromPeerId.slice(0, 8)}: ${importFailedCount}/${messages.length} messages failed verification across ${importFailedChannels.size} channel(s)`,
+        );
+      }
     }
   }
 
@@ -2448,105 +2553,75 @@ export class DecentChatNodePeer {
     return false;
   }
 
-  private handshakeAckTimeoutMs(): number {
-    return DecentChatNodePeer.HANDSHAKE_ACK_TIMEOUT_MS;
-  }
-
-  private handshakeMaxAttempts(): number {
-    return DecentChatNodePeer.HANDSHAKE_MAX_ATTEMPTS;
-  }
-
-  private waitForHandshakeAck(peerId: string, handshakeId: string, timeoutMs: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        const pending = this.pendingHandshakeAcks.get(handshakeId);
-        if (!pending || pending.peerId !== peerId) return;
-        this.pendingHandshakeAcks.delete(handshakeId);
-        pending.resolve(false);
-      }, timeoutMs);
-      this.pendingHandshakeAcks.set(handshakeId, {
-        peerId,
-        timer,
-        resolve: (value: boolean) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-      });
-    });
-  }
-
-  private resolveHandshakeAck(peerId: string, handshakeId: string): void {
-    const pending = this.pendingHandshakeAcks.get(handshakeId);
-    if (!pending || pending.peerId !== peerId) return;
-    this.pendingHandshakeAcks.delete(handshakeId);
-    pending.resolve(true);
-  }
-
-  private failHandshakeAcksForPeer(peerId: string): void {
-    for (const [handshakeId, pending] of this.pendingHandshakeAcks.entries()) {
-      if (pending.peerId !== peerId) continue;
-      this.pendingHandshakeAcks.delete(handshakeId);
-      pending.resolve(false);
-    }
-  }
-
-  private failAllHandshakeAcks(): void {
-    for (const [handshakeId, pending] of this.pendingHandshakeAcks.entries()) {
-      this.pendingHandshakeAcks.delete(handshakeId);
-      pending.resolve(false);
-    }
-  }
-
   private async sendHandshake(peerId: string, recovery: boolean = false): Promise<void> {
     if (!this.transport || !this.messageProtocol) return;
     try {
-      const maxAttempts = Math.max(1, this.handshakeMaxAttempts());
-      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        const handshake = await this.messageProtocol.createHandshake();
-        const capabilities = ['negentropy-sync-v1'];
-        const handshakeId = randomUUID();
-        const payload: any = { type: 'handshake', handshakeId, ...handshake, capabilities };
-        if (recovery) payload.recovery = true;
-        const accepted = this.transport.send(peerId, payload);
-        this.opts.log?.debug?.(
-          `[decentchat-peer] handshake sent to ${peerId.slice(0, 8)} attempt ${attempt}/${maxAttempts} accepted=${accepted}`,
-        );
+      // SINGLE send per call. Do NOT loop-retry inside sendHandshake.
+      //
+      // Background (post-mortem of the in-loop retry version of this code):
+      // The previous implementation looped up to `handshakeMaxAttempts()` times
+      // with NO backoff between attempts and ALSO cleared `connectHandshakeAtByPeer`
+      // on final failure so the next `handlePeerConnect` would burn through another
+      // burst of handshakes immediately. Across 2-3 reconnect cycles this trips
+      // the receiver's MessageGuard handshake bucket (3 burst, 1/10s refill),
+      // escalates warning → soft → hard violation → permanent ban for the
+      // sending peer, after which ALL message types from us are blocked
+      // ([Guard] Blocked message ... peer is banned). The user observed exactly
+      // this — Xena got auto-banned by Alex's web client and the only recovery
+      // was a hard refresh on the receiving side.
+      //
+      // The CORRECT retry path is via the existing 60s cooldown in
+      // `handlePeerConnect`: if the peer disconnects and reconnects more than
+      // CONNECT_HANDSHAKE_COOLDOWN_MS after our last handshake send, the next
+      // `handlePeerConnect` will naturally fire a fresh handshake. Failures
+      // inside the cooldown window are just dropped — that's what the cooldown
+      // exists for. Aggressive retry inside this function violates the receiver's
+      // rate-limit invariant and gets us banned.
+      //
+      // The handshake-ack tracking (added in the same commit as the broken loop)
+      // is still useful as a SIGNAL that the handshake didn't land, so we still
+      // wait briefly and log the outcome. The logging is the entire "retry"
+      // mechanism now — operators can grep for repeated warnings and decide
+      // whether to take action.
+      //
+      // We also no longer reset the cooldown on failure. handlePeerConnect set
+      // the cooldown timestamp BEFORE calling us, so the cooldown stays in
+      // effect regardless of whether the ack arrives.
 
-        await this.publishPreKeyBundle(peerId);
-        // Announce display name (separate unencrypted message — same pattern as the web client)
-        // Include workspaceId so the peer can deterministically add us to the correct workspace
-        // (critical when the peer has multiple workspaces — without this, we'd only update
-        // existing members, never add new ones)
-        const announceWorkspaceId = this.resolveNameAnnounceWorkspaceId(peerId);
-        this.transport.send(peerId, {
-          type: 'name-announce',
-          alias: this.opts.account.alias,
-          isBot: true,
-          ...(announceWorkspaceId ? { workspaceId: announceWorkspaceId } : {}),
-        });
+      const handshake = await this.messageProtocol.createHandshake();
+      const capabilities = ['negentropy-sync-v1'];
+      const payload: any = { type: 'handshake', ...handshake, capabilities };
+      if (recovery) payload.recovery = true;
+      const accepted = this.transport.send(peerId, payload);
+      // Stamp the time we sent so the cooldown check in handlePeerConnect AND
+      // the inbound-resend suppression in handlePeerMessage actually work.
+      // Without this write, `connectHandshakeAtByPeer.get(peerId)` always
+      // returns undefined → 0 → cooldown never active → unbounded re-sends.
+      this.connectHandshakeAtByPeer.set(peerId, Date.now());
+      this.opts.log?.debug?.(
+        `[decentchat-peer] handshake sent to ${peerId.slice(0, 8)} accepted=${accepted}`,
+      );
 
-        const acknowledged = await this.waitForHandshakeAck(
-          peerId,
-          handshakeId,
-          this.handshakeAckTimeoutMs(),
-        );
-        if (acknowledged) {
-          this.connectHandshakeAtByPeer.set(peerId, Date.now());
-          return;
-        }
+      await this.publishPreKeyBundle(peerId);
+      // Announce display name (separate unencrypted message — same pattern as the web client)
+      // Include workspaceId so the peer can deterministically add us to the correct workspace
+      // (critical when the peer has multiple workspaces — without this, we'd only update
+      // existing members, never add new ones)
+      const announceWorkspaceId = this.resolveNameAnnounceWorkspaceId(peerId);
+      this.transport.send(peerId, {
+        type: 'name-announce',
+        alias: this.opts.account.alias,
+        isBot: true,
+        ...(announceWorkspaceId ? { workspaceId: announceWorkspaceId } : {}),
+      });
 
-        if (attempt < maxAttempts) {
-          this.opts.log?.warn?.(
-            `[decentchat-peer] handshake not acknowledged by ${peerId.slice(0, 8)} (attempt ${attempt}/${maxAttempts}) — will retry`,
-          );
-          continue;
-        }
-
-        this.connectHandshakeAtByPeer.delete(peerId);
-        this.opts.log?.warn?.(
-          `[decentchat-peer] handshake not acknowledged by ${peerId.slice(0, 8)} — clearing cooldown for retry on next connect`,
-        );
-      }
+      // Historical note: this used to `await waitForHandshakeAck(...)` and
+      // emit `handshake not acknowledged by ... (timeout 7500ms)` on expiry.
+      // The `handshake-ack` message type is bridge-local — the web client
+      // and shared protocol package do not speak it — so the timeout
+      // fired on every single healthy bridge→web handshake. The tracking
+      // had no retry behaviour attached, so it was pure log noise.
+      // Removed along with the ack sender/receiver and the pending-ack map.
     } catch (err) {
       this.opts.log?.error?.(`[decentchat-peer] handshake failed for ${peerId}: ${String(err)}`);
     }

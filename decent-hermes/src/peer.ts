@@ -161,7 +161,29 @@ export class DecentHermesPeer {
     this.peer = new DecentChatNodePeer({
       account,
       onIncomingMessage: async (params) => {
-        if (!this.shouldForwardIncomingMessage(params)) {
+        // Always log the arrival at the bridge→agent seam so operators can
+        // distinguish "message never reached the bridge" from "message
+        // reached the bridge but was filtered out". Previously a channel
+        // post with no @mention was silently dropped here, making it
+        // impossible to tell the bridge and the agent apart when debugging
+        // "I sent a message and got no reply" reports.
+        const forwarded = this.shouldForwardIncomingMessage(params);
+        const previewLen = Math.min(params.content.length, 80);
+        const preview = params.content.slice(0, previewLen).replace(/\s+/g, ' ');
+        console.log(
+          `[decent-hermes-peer] inbound message ` +
+          `chatType=${params.chatType} ` +
+          `from=${(params.senderName || params.senderId).slice(0, 24)} ` +
+          `chan=${(params.channelId || '').slice(0, 8)} ` +
+          `ws=${(params.workspaceId || '').slice(0, 8)} ` +
+          `len=${params.content.length} ` +
+          `forward=${forwarded}` +
+          (!forwarded
+            ? ` reason=channel_post_without_mention (mention @${this.alias || 'Xena'} to get a reply)`
+            : '') +
+          ` text="${preview}${params.content.length > previewLen ? '…' : ''}"`
+        );
+        if (!forwarded) {
           return;
         }
         const chatId = params.chatType === 'direct'
@@ -206,6 +228,11 @@ export class DecentHermesPeer {
         : undefined,
       log: {
         info: (s) => console.log('[decent-hermes-peer]', s),
+        // Wire debug → console too so subsystems that log via opts.log?.debug?.()
+        // (e.g. the peer-auth challenge handler in DecentChatNodePeer) actually
+        // surface in bridge.log. Without this, every `log?.debug?.()` is a
+        // silent no-op and we lose all visibility into the auth round-trip.
+        debug: (s) => console.log('[decent-hermes-peer:debug]', s),
         warn: (s) => console.warn('[decent-hermes-peer]', s),
         error: (s) => console.error('[decent-hermes-peer]', s),
       },

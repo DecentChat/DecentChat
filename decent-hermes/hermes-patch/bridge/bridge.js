@@ -16330,6 +16330,38 @@ var DEFAULT_SIZE_LIMITS = {
   maxAttachmentsPerMessage: 10,
   maxMessageFields: 50
 };
+// ../decent-protocol/dist/security/PeerAuth.js
+var ECDSA_SIGN_PARAMS2 = { name: "ECDSA", hash: "SHA-256" };
+
+class PeerAuth {
+  static createChallenge() {
+    const nonceBytes = new Uint8Array(32);
+    crypto.getRandomValues(nonceBytes);
+    const nonce = btoa(String.fromCharCode(...nonceBytes));
+    return { nonce, timestamp: Date.now() };
+  }
+  static isChallengeExpired(challenge, maxAgeMs = 30000) {
+    return Date.now() - challenge.timestamp > maxAgeMs;
+  }
+  static async respondToChallenge(nonce, challengerPeerId, signingKey) {
+    const payload = buildPayload(nonce, challengerPeerId);
+    const signatureBuffer = await crypto.subtle.sign(ECDSA_SIGN_PARAMS2, signingKey, payload);
+    const signature = btoa(String.fromCharCode(...new Uint8Array(signatureBuffer)));
+    return { signature };
+  }
+  static async verifyResponse(nonce, ourPeerId, signature, peerSigningKey) {
+    try {
+      const payload = buildPayload(nonce, ourPeerId);
+      const sigBytes = Uint8Array.from(atob(signature), (c) => c.charCodeAt(0));
+      return await crypto.subtle.verify(ECDSA_SIGN_PARAMS2, peerSigningKey, sigBytes, payload);
+    } catch {
+      return false;
+    }
+  }
+}
+function buildPayload(nonce, peerId) {
+  return new TextEncoder().encode(nonce + peerId);
+}
 // ../decent-protocol/dist/crypto/DoubleRatchet.js
 var MAX_SKIP = 100;
 var ROOT_KDF_INFO = "decent-root-kdf-v1";
@@ -20416,8 +20448,6 @@ class DecentChatNodePeer {
   static PRE_KEY_FETCH_TIMEOUT_MS = 2500;
   static DECRYPT_RECOVERY_HANDSHAKE_COOLDOWN_MS = 5000;
   static CONNECT_HANDSHAKE_COOLDOWN_MS = 60000;
-  static HANDSHAKE_ACK_TIMEOUT_MS = 7500;
-  static HANDSHAKE_MAX_ATTEMPTS = 2;
   static INBOUND_HANDSHAKE_COOLDOWN_MS = 5000;
   static PEER_MAINTENANCE_RETRY_BASE_MS = 30000;
   static PEER_MAINTENANCE_RETRY_MAX_MS = 60 * 60000;
@@ -20445,7 +20475,6 @@ class DecentChatNodePeer {
   opts;
   pendingMediaRequests = new Map;
   pendingPreKeyBundleFetches = new Map;
-  pendingHandshakeAcks = new Map;
   publishedPreKeyVersionByWorkspace = new Map;
   decryptRecoveryAtByPeer = new Map;
   connectHandshakeAtByPeer = new Map;
@@ -20453,6 +20482,8 @@ class DecentChatNodePeer {
   peerMaintenanceRetryAtByPeer = new Map;
   peerMaintenanceAttemptsByPeer = new Map;
   throttledTransportErrors = new Map;
+  syncImportFailLastLogAt = new Map;
+  static SYNC_IMPORT_FAIL_LOG_INTERVAL_MS = 10 * 60000;
   _gossipSeen = new Map;
   _gossipCleanupInterval = null;
   mediaChunkTimeout = 30000;
@@ -20602,7 +20633,6 @@ class DecentChatNodePeer {
       this.transport.onDisconnect = (peerId2) => {
         this.opts.log?.info(`[decentchat-peer] peer disconnected: ${peerId2}`);
         this.messageProtocol?.clearSharedSecret(peerId2);
-        this.failHandshakeAcksForPeer(peerId2);
         this.inboundHandshakeAtByPeer.delete(peerId2);
         this.decryptRecoveryAtByPeer.delete(peerId2);
       };
@@ -21047,7 +21077,6 @@ class DecentChatNodePeer {
       pending.resolve(false);
     }
     this.pendingPreKeyBundleFetches.clear();
-    this.failAllHandshakeAcks();
     this.botHuddle?.destroy();
     this.botHuddle = null;
     this.signingKeyPair = null;
@@ -21171,11 +21200,21 @@ class DecentChatNodePeer {
       await this.handleInboundReceipt(fromPeerId, msg, "read");
       return;
     }
-    if (msg?.type === "handshake-ack") {
-      const handshakeId = typeof msg?.handshakeId === "string" ? msg.handshakeId : "";
-      if (!handshakeId)
+    if (msg?.type === "auth-challenge" && typeof msg.nonce === "string") {
+      if (!this.signingKeyPair?.privateKey) {
+        this.opts.log?.warn?.(`[decentchat-peer] auth-challenge from ${fromPeerId.slice(0, 8)} ` + `but no signing key available — challenger will fall back to TOFU`);
         return;
-      this.resolveHandshakeAck(fromPeerId, handshakeId);
+      }
+      try {
+        const response = await PeerAuth.respondToChallenge(msg.nonce, fromPeerId, this.signingKeyPair.privateKey);
+        const accepted = this.transport.send(fromPeerId, {
+          type: "auth-response",
+          signature: response.signature
+        });
+        this.opts.log?.info?.(`[decentchat-peer] auth-response sent to ${fromPeerId.slice(0, 8)} accepted=${accepted}`);
+      } catch (err) {
+        this.opts.log?.warn?.(`[decentchat-peer] failed to respond to auth-challenge from ${fromPeerId.slice(0, 8)}: ${String(err)}`);
+      }
       return;
     }
     if (await this.handlePreKeyControl(fromPeerId, msg)) {
@@ -21195,14 +21234,6 @@ class DecentChatNodePeer {
         });
       }
       await this.publishPreKeyBundle(fromPeerId);
-      const inboundHandshakeId = typeof msg?.handshakeId === "string" ? msg.handshakeId : "";
-      if (inboundHandshakeId) {
-        const accepted = this.transport.send(fromPeerId, {
-          type: "handshake-ack",
-          handshakeId: inboundHandshakeId
-        });
-        this.opts.log?.debug?.(`[decentchat-peer] handshake-ack sent to ${fromPeerId.slice(0, 8)} handshakeId=${inboundHandshakeId.slice(0, 8)} accepted=${accepted}`);
-      }
       const knownKeys = this.store.get("peer-public-keys", {});
       knownKeys[fromPeerId] = msg.publicKey;
       this.store.set("peer-public-keys", knownKeys);
@@ -21216,7 +21247,14 @@ class DecentChatNodePeer {
           publicKey: typeof msg.publicKey === "string" ? msg.publicKey : undefined
         });
       }
-      await this.sendHandshake(fromPeerId);
+      const HANDSHAKE_RESEND_SUPPRESS_MS = 5000;
+      const lastSentAt = this.connectHandshakeAtByPeer.get(fromPeerId) ?? 0;
+      const recentlySentToPeer = lastSentAt > 0 && Date.now() - lastSentAt < HANDSHAKE_RESEND_SUPPRESS_MS;
+      if (!recentlySentToPeer) {
+        await this.sendHandshake(fromPeerId);
+      } else {
+        this.opts.log?.debug?.(`[decentchat-peer] suppressing handshake re-send to ${fromPeerId.slice(0, 8)} ` + `(sent ${Date.now() - lastSentAt}ms ago, < ${HANDSHAKE_RESEND_SUPPRESS_MS}ms) — ` + `prevents auth-challenge nonce overwrite race`);
+      }
       await this.resumePeerSession(fromPeerId);
       return;
     }
@@ -21579,9 +21617,23 @@ class DecentChatNodePeer {
       const importResult = await this.messageStore.importMessages(channelId, [...existing, storedMsg]);
       if (!importResult?.success) {
         importFailedCount++;
-        if (!importFailedChannels.has(channelId)) {
+        const suppressionKey = `${fromPeerId}:${channelId}`;
+        const lastLoggedAt = this.syncImportFailLastLogAt.get(suppressionKey) ?? 0;
+        const now = Date.now();
+        const shouldLog = !importFailedChannels.has(channelId) && now - lastLoggedAt >= DecentChatNodePeer.SYNC_IMPORT_FAIL_LOG_INTERVAL_MS;
+        if (shouldLog) {
           importFailedChannels.add(channelId);
-          this.opts.log?.warn?.(`[decentchat-peer] sync import failed for msg ${id.slice(0, 8)} in channel ${channelId.slice(0, 8)}: ${importResult?.error ?? "unknown error"} — skipping ACK (further failures in this channel suppressed until sync summary)`);
+          this.syncImportFailLastLogAt.set(suppressionKey, now);
+          const errMsg = importResult?.error ?? "unknown error";
+          const isStructurallyUnverifiable = errMsg.includes("got undefined") || errMsg.includes("invalid genesis hash");
+          const line = `[decentchat-peer] sync import failed for msg ${id.slice(0, 8)} in channel ${channelId.slice(0, 8)}: ${errMsg} — skipping ACK ` + `(further failures for this peer/channel suppressed for ${Math.round(DecentChatNodePeer.SYNC_IMPORT_FAIL_LOG_INTERVAL_MS / 60000)}min)`;
+          if (isStructurallyUnverifiable) {
+            this.opts.log?.info?.(line);
+          } else {
+            this.opts.log?.warn?.(line);
+          }
+        } else {
+          importFailedChannels.add(channelId);
         }
         continue;
       }
@@ -21627,7 +21679,13 @@ class DecentChatNodePeer {
       });
     }
     if (importFailedCount > 0) {
-      this.opts.log?.info?.(`[decentchat-peer] sync import summary from ${fromPeerId.slice(0, 8)}: ${importFailedCount}/${messages.length} messages failed verification across ${importFailedChannels.size} channel(s)`);
+      const summaryKey = `${fromPeerId}:__summary__`;
+      const lastSummaryAt = this.syncImportFailLastLogAt.get(summaryKey) ?? 0;
+      const now = Date.now();
+      if (now - lastSummaryAt >= DecentChatNodePeer.SYNC_IMPORT_FAIL_LOG_INTERVAL_MS) {
+        this.syncImportFailLastLogAt.set(summaryKey, now);
+        this.opts.log?.info?.(`[decentchat-peer] sync import summary from ${fromPeerId.slice(0, 8)}: ${importFailedCount}/${messages.length} messages failed verification across ${importFailedChannels.size} channel(s)`);
+      }
     }
   }
   sendMessageSyncRequest(peerId, workspaceId, channelTimestamps = {}) {
@@ -22190,86 +22248,26 @@ class DecentChatNodePeer {
     this.inboundHandshakeAtByPeer.set(peerId, now);
     return false;
   }
-  handshakeAckTimeoutMs() {
-    return DecentChatNodePeer.HANDSHAKE_ACK_TIMEOUT_MS;
-  }
-  handshakeMaxAttempts() {
-    return DecentChatNodePeer.HANDSHAKE_MAX_ATTEMPTS;
-  }
-  waitForHandshakeAck(peerId, handshakeId, timeoutMs) {
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        const pending = this.pendingHandshakeAcks.get(handshakeId);
-        if (!pending || pending.peerId !== peerId)
-          return;
-        this.pendingHandshakeAcks.delete(handshakeId);
-        pending.resolve(false);
-      }, timeoutMs);
-      this.pendingHandshakeAcks.set(handshakeId, {
-        peerId,
-        timer,
-        resolve: (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        }
-      });
-    });
-  }
-  resolveHandshakeAck(peerId, handshakeId) {
-    const pending = this.pendingHandshakeAcks.get(handshakeId);
-    if (!pending || pending.peerId !== peerId)
-      return;
-    this.pendingHandshakeAcks.delete(handshakeId);
-    pending.resolve(true);
-  }
-  failHandshakeAcksForPeer(peerId) {
-    for (const [handshakeId, pending] of this.pendingHandshakeAcks.entries()) {
-      if (pending.peerId !== peerId)
-        continue;
-      this.pendingHandshakeAcks.delete(handshakeId);
-      pending.resolve(false);
-    }
-  }
-  failAllHandshakeAcks() {
-    for (const [handshakeId, pending] of this.pendingHandshakeAcks.entries()) {
-      this.pendingHandshakeAcks.delete(handshakeId);
-      pending.resolve(false);
-    }
-  }
   async sendHandshake(peerId, recovery = false) {
     if (!this.transport || !this.messageProtocol)
       return;
     try {
-      const maxAttempts = Math.max(1, this.handshakeMaxAttempts());
-      for (let attempt = 1;attempt <= maxAttempts; attempt += 1) {
-        const handshake = await this.messageProtocol.createHandshake();
-        const capabilities = ["negentropy-sync-v1"];
-        const handshakeId = randomUUID();
-        const payload = { type: "handshake", handshakeId, ...handshake, capabilities };
-        if (recovery)
-          payload.recovery = true;
-        const accepted = this.transport.send(peerId, payload);
-        this.opts.log?.debug?.(`[decentchat-peer] handshake sent to ${peerId.slice(0, 8)} attempt ${attempt}/${maxAttempts} accepted=${accepted}`);
-        await this.publishPreKeyBundle(peerId);
-        const announceWorkspaceId = this.resolveNameAnnounceWorkspaceId(peerId);
-        this.transport.send(peerId, {
-          type: "name-announce",
-          alias: this.opts.account.alias,
-          isBot: true,
-          ...announceWorkspaceId ? { workspaceId: announceWorkspaceId } : {}
-        });
-        const acknowledged = await this.waitForHandshakeAck(peerId, handshakeId, this.handshakeAckTimeoutMs());
-        if (acknowledged) {
-          this.connectHandshakeAtByPeer.set(peerId, Date.now());
-          return;
-        }
-        if (attempt < maxAttempts) {
-          this.opts.log?.warn?.(`[decentchat-peer] handshake not acknowledged by ${peerId.slice(0, 8)} (attempt ${attempt}/${maxAttempts}) — will retry`);
-          continue;
-        }
-        this.connectHandshakeAtByPeer.delete(peerId);
-        this.opts.log?.warn?.(`[decentchat-peer] handshake not acknowledged by ${peerId.slice(0, 8)} — clearing cooldown for retry on next connect`);
-      }
+      const handshake = await this.messageProtocol.createHandshake();
+      const capabilities = ["negentropy-sync-v1"];
+      const payload = { type: "handshake", ...handshake, capabilities };
+      if (recovery)
+        payload.recovery = true;
+      const accepted = this.transport.send(peerId, payload);
+      this.connectHandshakeAtByPeer.set(peerId, Date.now());
+      this.opts.log?.debug?.(`[decentchat-peer] handshake sent to ${peerId.slice(0, 8)} accepted=${accepted}`);
+      await this.publishPreKeyBundle(peerId);
+      const announceWorkspaceId = this.resolveNameAnnounceWorkspaceId(peerId);
+      this.transport.send(peerId, {
+        type: "name-announce",
+        alias: this.opts.account.alias,
+        isBot: true,
+        ...announceWorkspaceId ? { workspaceId: announceWorkspaceId } : {}
+      });
     } catch (err) {
       this.opts.log?.error?.(`[decentchat-peer] handshake failed for ${peerId}: ${String(err)}`);
     }
@@ -24121,7 +24119,11 @@ class DecentHermesPeer {
     this.peer = new DecentChatNodePeer({
       account,
       onIncomingMessage: async (params) => {
-        if (!this.shouldForwardIncomingMessage(params)) {
+        const forwarded = this.shouldForwardIncomingMessage(params);
+        const previewLen = Math.min(params.content.length, 80);
+        const preview = params.content.slice(0, previewLen).replace(/\s+/g, " ");
+        console.log(`[decent-hermes-peer] inbound message ` + `chatType=${params.chatType} ` + `from=${(params.senderName || params.senderId).slice(0, 24)} ` + `chan=${(params.channelId || "").slice(0, 8)} ` + `ws=${(params.workspaceId || "").slice(0, 8)} ` + `len=${params.content.length} ` + `forward=${forwarded}` + (!forwarded ? ` reason=channel_post_without_mention (mention @${this.alias || "Xena"} to get a reply)` : "") + ` text="${preview}${params.content.length > previewLen ? "…" : ""}"`);
+        if (!forwarded) {
           return;
         }
         const chatId = params.chatType === "direct" ? `dm:${params.senderId}` : `${params.workspaceId}:${params.channelId}`;
@@ -24159,6 +24161,7 @@ class DecentHermesPeer {
       } : undefined,
       log: {
         info: (s) => console.log("[decent-hermes-peer]", s),
+        debug: (s) => console.log("[decent-hermes-peer:debug]", s),
         warn: (s) => console.warn("[decent-hermes-peer]", s),
         error: (s) => console.error("[decent-hermes-peer]", s)
       }
