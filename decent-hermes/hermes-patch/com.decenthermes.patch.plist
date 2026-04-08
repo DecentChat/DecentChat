@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  decent-hermes patch watcher — re-applies the DecentChat adapter patch
+  to hermes-agent after any git update.
+
+  This file is a TEMPLATE. The postinstall.cjs script substitutes
+  __HOME__ → $HOME when writing the resolved copy to ~/Library/LaunchAgents/.
+-->
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -8,13 +15,13 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/claw/.hermes/decent-hermes-patch/apply.sh</string>
+        <string>__HOME__/.hermes/decent-hermes-patch/apply.sh</string>
     </array>
 
-    <!-- Fire when hermes-agent's main branch ref changes (i.e. git pull landed) -->
+    <!-- Fire when hermes-agent's main branch ref changes (git pull landed new commits) -->
     <key>WatchPaths</key>
     <array>
-        <string>/Users/claw/.hermes/hermes-agent/.git/refs/heads/main</string>
+        <string>__HOME__/.hermes/hermes-agent/.git/refs/heads/main</string>
     </array>
 
     <!-- Also run once at login, in case an update happened while machine was off -->
@@ -22,10 +29,10 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>/Users/claw/.hermes/logs/decentchat-patch.log</string>
+    <string>__HOME__/.hermes/logs/decentchat-patch.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/claw/.hermes/logs/decentchat-patch.log</string>
+    <string>__HOME__/.hermes/logs/decentchat-patch.log</string>
 
     <!-- Throttle: don't re-run more than once per 30s -->
     <key>ThrottleInterval</key>

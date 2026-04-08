@@ -10,16 +10,23 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: '(\.snap$|\.cpuprofile$|\.tsbuildinfo$|/dist/|profile-output/|^docs/)'
+        # hermes-patch/ contains byte-exact distribution artifacts: .patch
+        # files where context-line whitespace must be preserved, and a
+        # compiled bridge.js bundle that must not be reformatted.
+        exclude: '(\.snap$|\.cpuprofile$|\.tsbuildinfo$|/dist/|profile-output/|^docs/|decent-hermes/hermes-patch/)'
       - id: end-of-file-fixer
-        exclude: '(\.snap$|\.cpuprofile$|\.tsbuildinfo$|/dist/|profile-output/|artifacts/|^docs/)'
+        exclude: '(\.snap$|\.cpuprofile$|\.tsbuildinfo$|/dist/|profile-output/|artifacts/|^docs/|decent-hermes/hermes-patch/)'
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: check-added-large-files
+        # bridge.js in hermes-patch/bridge/ is an intentionally-bundled
+        # compiled distribution artifact (~820 KB). Exclude hermes-patch/
+        # from the size limit.
         args: [--maxkb=500]
+        exclude: '(decent-hermes/hermes-patch/)'
       - id: check-merge-conflict
       - id: detect-private-key
-        exclude: '(^|/)(\.secrets\.baseline$|\.detect-secrets\.cfg$|\.pre-commit-config\.yaml$|.*\.test\.ts$)'
+        exclude: '(^|/)(\.secrets\.baseline$|\.detect-secrets\.cfg$|\.pre-commit-config\.yaml$|.*\.test\.ts$|decent-hermes/hermes-patch/)'
 
   # Secret detection (same check runs in deploy.sh)
   - repo: https://github.com/Yelp/detect-secrets
@@ -30,7 +37,7 @@ repos:
           - --baseline
           - .secrets.baseline
           - --exclude-files
-          - '(node_modules/|dist/|\.tmp/|bun\.lock$|\.detect-secrets\.cfg$|test-results/|playwright-report/|blob-report/|\.git/|ios/|\.worktrees/|profile-output/)'
+          - '(node_modules/|dist/|\.tmp/|bun\.lock$|\.detect-secrets\.cfg$|test-results/|playwright-report/|blob-report/|\.git/|ios/|\.worktrees/|profile-output/|decent-hermes/hermes-patch/)'
 
   # Dependency vulnerability audit.
   # Bun does not yet have a built-in `audit` command (bun pm scan requires
