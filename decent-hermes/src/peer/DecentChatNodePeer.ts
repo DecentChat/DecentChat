@@ -234,6 +234,31 @@ export class DecentChatNodePeer {
    */
   private readonly syncImportFailLastLogAt = new Map<string, number>();
   private static readonly SYNC_IMPORT_FAIL_LOG_INTERVAL_MS = 10 * 60_000;
+  /**
+   * Message IDs that we surfaced to the agent despite an import-verification
+   * failure. Keeps us from re-delivering the same message on every sync
+   * cycle (which would cause the agent to reply to the same user input
+   * over and over). Persisted to the FileStore so it survives bridge
+   * restarts — otherwise every restart would re-surface every in-window
+   * legacy message.
+   */
+  private unverifiedSurfacedIds = new Set<string>();
+  private static readonly UNVERIFIED_SURFACED_MAX = 5_000;
+  private static readonly UNVERIFIED_SURFACED_STORE_KEY = 'unverified-surfaced-msg-ids';
+  /**
+   * Per-channel high-water timestamp for "unverified messages that we've
+   * already decided not to surface". Seeded on the bridge's FIRST
+   * encounter with a failing channel (max ts of that first batch), then
+   * updated every time we surface a newer unverified message. Persisted
+   * so that on restart we don't re-surface everything we already saw.
+   *
+   * This matters because without a seed, a fresh bridge start with an
+   * empty `unverifiedSurfacedIds` set would happily re-surface every
+   * legacy message in a broken channel as if they were fresh user input,
+   * burning tens of agent turns replying to years-old context.
+   */
+  private unverifiedSurfacedTsByChannel = new Map<string, number>();
+  private static readonly UNVERIFIED_SURFACED_TS_STORE_KEY = 'unverified-surfaced-ts-by-channel';
   private readonly _gossipSeen = new Map<string, number>();
   private _gossipCleanupInterval: ReturnType<typeof setInterval> | null = null;
   private readonly mediaChunkTimeout = 30000;
@@ -362,6 +387,35 @@ export class DecentChatNodePeer {
       this.restoreMessages();
       this.restoreManifestState();
       this.restoreCustodianInbox();
+      // Restore the "ever-surfaced unverified message ids" dedupe set and
+      // the per-channel high-water timestamp so a bridge restart doesn't
+      // cause us to re-deliver every legacy message to the agent.
+      try {
+        const persistedIds = this.store.get<string[]>(
+          DecentChatNodePeer.UNVERIFIED_SURFACED_STORE_KEY,
+          [],
+        );
+        if (Array.isArray(persistedIds)) {
+          this.unverifiedSurfacedIds = new Set<string>(persistedIds);
+        }
+      } catch (err) {
+        this.opts.log?.warn?.(
+          `[decentchat-peer] failed to restore unverified-surfaced-msg-ids: ${String(err)}`,
+        );
+      }
+      try {
+        const persistedTs = this.store.get<Record<string, number>>(
+          DecentChatNodePeer.UNVERIFIED_SURFACED_TS_STORE_KEY,
+          {},
+        );
+        if (persistedTs && typeof persistedTs === 'object') {
+          this.unverifiedSurfacedTsByChannel = new Map(Object.entries(persistedTs));
+        }
+      } catch (err) {
+        this.opts.log?.warn?.(
+          `[decentchat-peer] failed to restore unverified-surfaced-ts-by-channel: ${String(err)}`,
+        );
+      }
 
       const configServer = this.opts.account.signalingServer ?? 'https://0.peerjs.com/';
       const allServers: string[] = [configServer];
@@ -1112,6 +1166,10 @@ export class DecentChatNodePeer {
     if (this.destroyed || !this.transport) return;
     const connectedPeers = new Set(this.transport.getConnectedPeers());
     const seen = new Set<string>();
+    const attempted: string[] = [];
+    const skipped: string[] = [];
+    const connected: string[] = [];
+    const quarantineErrors: string[] = [];
     for (const workspace of this.workspaceManager.getAllWorkspaces()) {
       for (const member of workspace.members) {
         const peerId = member.peerId;
@@ -1120,6 +1178,7 @@ export class DecentChatNodePeer {
         seen.add(peerId);
         if (connectedPeers.has(peerId)) {
           this.clearPeerMaintenanceFailure(peerId);
+          connected.push(peerId.slice(0, 8));
           continue;
         }
         // Skip peers that have failed too many times consecutively.
@@ -1127,16 +1186,45 @@ export class DecentChatNodePeer {
         // clearPeerMaintenanceFailure(), re-enabling maintenance.
         const attempts = this.peerMaintenanceAttemptsByPeer.get(peerId) ?? 0;
         if (attempts >= DecentChatNodePeer.PEER_MAINTENANCE_MAX_CONSECUTIVE_FAILURES) {
+          skipped.push(`${peerId.slice(0, 8)}:max-attempts(${attempts})`);
           continue;
         }
         const retryAt = this.peerMaintenanceRetryAtByPeer.get(peerId) ?? 0;
-        if (retryAt > now) continue;
+        if (retryAt > now) {
+          skipped.push(`${peerId.slice(0, 8)}:backoff(${Math.round((retryAt - now) / 1000)}s)`);
+          continue;
+        }
+        attempted.push(peerId.slice(0, 8));
         try {
           await this.transport.connect(peerId);
-        } catch {
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // Quarantine errors from the transport layer (separate from our
+          // own maintenance backoff) are worth surfacing — otherwise a
+          // quarantined peer looks identical to an unreachable one, and
+          // the bridge log appears frozen.
+          if (/quarantined/i.test(msg)) {
+            quarantineErrors.push(
+              `${peerId.slice(0, 8)}:${msg.replace(/.*quarantined for /, 'Q').replace(/ after.*/, '')}`,
+            );
+          }
           this.notePeerMaintenanceFailure(peerId, now);
         }
       }
+    }
+    // Emit one structured info line per pass so operators can see the
+    // reconnect loop actually running, which peers are in backoff, and
+    // whether the transport is refusing connect attempts due to its own
+    // quarantine. Silent passes were the root cause of a "Xena is
+    // offline" incident that looked like a frozen bridge.
+    if (attempted.length || skipped.length || quarantineErrors.length) {
+      this.opts.log?.info?.(
+        `[decentchat-peer] maintenance pass: ` +
+        `connected=[${connected.join(',')}] ` +
+        `attempted=[${attempted.join(',')}] ` +
+        `skipped=[${skipped.join(',')}]` +
+        (quarantineErrors.length ? ` quarantine=[${quarantineErrors.join(',')}]` : ''),
+      );
     }
   }
 
@@ -1684,6 +1772,49 @@ export class DecentChatNodePeer {
     if (wsId && !ws) return;
     if (ws && !ws.members.some((m: any) => m.peerId === fromPeerId)) return;
 
+    // SEEDING PASS: for any channel we've never observed before, find the
+    // max incoming timestamp and pre-populate the high-water mark WITHOUT
+    // surfacing anything. This is the "suck in the legacy history without
+    // flooding the agent" step.
+    //
+    // We only seed channels that (a) have no existing high-water mark and
+    // (b) have messages in this batch. The actual import/verify happens in
+    // the main loop below; we just need to know the ceiling so we don't
+    // treat historical messages as fresh input on bridge first-start.
+    let seededAnyChannel = false;
+    const channelTimestamps = new Map<string, number>();
+    for (const m of messages) {
+      const cid = typeof m.channelId === 'string' ? m.channelId : null;
+      const ts = typeof m.timestamp === 'number' ? m.timestamp : 0;
+      if (!cid || !ts) continue;
+      const prev = channelTimestamps.get(cid) ?? 0;
+      if (ts > prev) channelTimestamps.set(cid, ts);
+    }
+    for (const [cid, maxTs] of channelTimestamps) {
+      if (!this.unverifiedSurfacedTsByChannel.has(cid)) {
+        // Seed to maxTs - 1 so the single newest message in the batch
+        // still passes the surfacing gate. If the newest happens to be a
+        // legacy message rather than Alex's just-sent one, worst case is
+        // ONE wasted agent turn on first run per broken channel. If it's
+        // actually Alex's new message, we correctly surface it.
+        const seedTs = Math.max(0, maxTs - 1);
+        this.unverifiedSurfacedTsByChannel.set(cid, seedTs);
+        seededAnyChannel = true;
+        this.opts.log?.info?.(
+          `[decentchat-peer] seeded unverified high-water for channel ${cid.slice(0, 8)} = ${seedTs} ` +
+          `(batchMax=${maxTs}, legacy backfill, newest message still eligible to surface)`,
+        );
+      }
+    }
+    if (seededAnyChannel) {
+      try {
+        this.store.set(
+          DecentChatNodePeer.UNVERIFIED_SURFACED_TS_STORE_KEY,
+          Object.fromEntries(this.unverifiedSurfacedTsByChannel),
+        );
+      } catch (_) { /* best-effort */ }
+    }
+
     this.opts.log?.info?.(`[decentchat-peer] message-sync-response from ${fromPeerId.slice(0, 8)}: ${messages.length} messages`);
 
     // Only SURFACE-to-agent messages that arrived after this bridge started.
@@ -1756,11 +1887,19 @@ export class DecentChatNodePeer {
       const importResult = await this.messageStore.importMessages(channelId, [...existing, storedMsg as any]);
       if (!importResult?.success) {
         importFailedCount++;
-        // Cross-sync persistent suppression. The previous in-function set was
-        // local to a single sync-response, so a peer stuck on an
-        // unverifiable legacy workspace (e.g. `prevHash: undefined`) would
-        // log one warning per channel per sync-response — hundreds of lines
-        // per minute in steady-state. Now we log at most once per
+        const errMsg = importResult?.error ?? 'unknown error';
+        // Structurally unverifiable chains (legacy workspace with
+        // `prevHash: undefined` somewhere) aren't tampering — they're just
+        // unsyncable for hash-chain reasons. For genuine tampering
+        // (mismatched hashes, wrong sender) we still drop the message.
+        const isStructurallyUnverifiable = errMsg.includes('got undefined') ||
+          errMsg.includes('invalid genesis hash');
+
+        // Cross-sync persistent suppression for the warn/info line. The
+        // previous in-function set was local to a single sync-response, so
+        // a peer stuck on an unverifiable legacy workspace would log one
+        // warning per channel per sync-response — hundreds of lines per
+        // minute in steady-state. Now we log at most once per
         // (peer, channel) per SYNC_IMPORT_FAIL_LOG_INTERVAL_MS and group
         // ongoing failures into the summary line at the end.
         const suppressionKey = `${fromPeerId}:${channelId}`;
@@ -1768,26 +1907,101 @@ export class DecentChatNodePeer {
         const now = Date.now();
         const shouldLog = !importFailedChannels.has(channelId) &&
           now - lastLoggedAt >= DecentChatNodePeer.SYNC_IMPORT_FAIL_LOG_INTERVAL_MS;
+        importFailedChannels.add(channelId);
         if (shouldLog) {
-          importFailedChannels.add(channelId);
           this.syncImportFailLastLogAt.set(suppressionKey, now);
-          const errMsg = importResult?.error ?? 'unknown error';
-          // Structurally unverifiable chains (e.g. legacy `prevHash: undefined`)
-          // aren't tampering — they're just unsyncable. Downgrade those to
-          // info so the real warn stream stays meaningful.
-          const isStructurallyUnverifiable = errMsg.includes('got undefined') ||
-            errMsg.includes('invalid genesis hash');
           const line =
-            `[decentchat-peer] sync import failed for msg ${id.slice(0, 8)} in channel ${channelId.slice(0, 8)}: ${errMsg} — skipping ACK ` +
+            `[decentchat-peer] sync import failed for msg ${id.slice(0, 8)} in channel ${channelId.slice(0, 8)}: ${errMsg} — skipping ACK/persist ` +
+            (isStructurallyUnverifiable
+              ? '(will still surface to agent once — legacy chain) '
+              : '') +
             `(further failures for this peer/channel suppressed for ${Math.round(DecentChatNodePeer.SYNC_IMPORT_FAIL_LOG_INTERVAL_MS / 60_000)}min)`;
           if (isStructurallyUnverifiable) {
             this.opts.log?.info?.(line);
           } else {
             this.opts.log?.warn?.(line);
           }
-        } else {
-          importFailedChannels.add(channelId);
         }
+
+        // For genuine tampering, stop here — don't surface to the agent.
+        if (!isStructurallyUnverifiable) {
+          continue;
+        }
+
+        // Structurally unverifiable + id never surfaced + timestamp past
+        // the per-channel high-water ⇒ forward to the agent ONCE so the
+        // user still gets a reply. We can't persist it in MessageStore
+        // (the chain check would reject it forever), so we dedupe locally
+        // on two axes:
+        //   - `unverifiedSurfacedIds` — exact message-id set, for perfect
+        //     idempotency across sync cycles and restarts
+        //   - `unverifiedSurfacedTsByChannel` — per-channel timestamp
+        //     ceiling, seeded from the first observed batch so legacy
+        //     backfills never trigger agent turns on first-start
+        if (this.unverifiedSurfacedIds.has(id)) {
+          continue;
+        }
+        const channelHighWater = this.unverifiedSurfacedTsByChannel.get(channelId) ?? 0;
+        if (ts <= channelHighWater) {
+          continue; // older than or equal to what we've already seeded — not new input
+        }
+        this.unverifiedSurfacedIds.add(id);
+        this.unverifiedSurfacedTsByChannel.set(channelId, ts);
+        // Cap unbounded growth. The bridge lives for days, this set could
+        // balloon if a chain stays broken forever. 5k is ~several weeks
+        // of chatty traffic — plenty.
+        if (this.unverifiedSurfacedIds.size > DecentChatNodePeer.UNVERIFIED_SURFACED_MAX) {
+          const first = this.unverifiedSurfacedIds.values().next().value;
+          if (first !== undefined) this.unverifiedSurfacedIds.delete(first);
+        }
+        // Persist so a bridge restart doesn't re-deliver in-window msgs.
+        try {
+          this.store.set(
+            DecentChatNodePeer.UNVERIFIED_SURFACED_STORE_KEY,
+            Array.from(this.unverifiedSurfacedIds),
+          );
+          this.store.set(
+            DecentChatNodePeer.UNVERIFIED_SURFACED_TS_STORE_KEY,
+            Object.fromEntries(this.unverifiedSurfacedTsByChannel),
+          );
+        } catch (_) {
+          // Non-fatal: worst case a restart re-surfaces this msg id once.
+        }
+        this.opts.log?.info?.(
+          `[decentchat-peer] surfacing unverified msg ${id.slice(0, 8)} to agent ` +
+          `(legacy chain in ${channelId.slice(0, 8)}) — will not persist`,
+        );
+        // ACK the unverified message on a best-effort basis so the sender's
+        // UI moves from "delivered" to "read". Counts against the ACK
+        // budget so we can't accidentally drain the receiver's rate-limit
+        // bucket on a flood of legacy-chain messages.
+        if (acksSent < MAX_ACKS_PER_SYNC_RESPONSE) {
+          try {
+            if (this.transport) {
+              const accepted = this.transport.send(fromPeerId, {
+                type: 'ack' as const,
+                messageId: id,
+                channelId,
+              });
+              console.log(`[decentchat-peer] ACK→${fromPeerId.slice(0,8)} msgId=${id.slice(0,8)} accepted=${accepted} (unverified-surface)`);
+              acksSent++;
+            }
+          } catch (_) {
+            // best-effort
+          }
+        }
+        await this.opts.onIncomingMessage({
+          channelId,
+          workspaceId: resolvedWsId,
+          content,
+          senderId,
+          senderName: storedMsg.senderName,
+          messageId: id,
+          chatType: 'channel',
+          timestamp: ts,
+          replyToId: typeof m.replyToId === 'string' ? m.replyToId : undefined,
+          threadId: typeof m.threadId === 'string' ? m.threadId : undefined,
+        });
         continue;
       }
       this.persistMessagesForChannel(channelId);

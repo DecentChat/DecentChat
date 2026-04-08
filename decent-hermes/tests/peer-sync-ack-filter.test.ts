@@ -30,6 +30,12 @@ describe('DecentChatNodePeer sync ACK gating', () => {
     const peer = Object.create((DecentChatNodePeer as any).prototype) as any;
     peer.startedAt = Date.now();
     peer.myPeerId = 'peer-self';
+    // Initialize the private maps that instance-field declarations would
+    // normally populate but Object.create() bypasses.
+    peer.syncImportFailLastLogAt = new Map();
+    peer.unverifiedSurfacedIds = new Set();
+    peer.unverifiedSurfacedTsByChannel = new Map();
+    peer.store = { get: () => undefined, set: () => {} };
     peer.transport = {
       send: (_peerId: string, payload: any) => {
         harness.sentPayloads.push(payload);

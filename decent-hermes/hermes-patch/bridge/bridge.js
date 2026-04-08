@@ -20484,6 +20484,11 @@ class DecentChatNodePeer {
   throttledTransportErrors = new Map;
   syncImportFailLastLogAt = new Map;
   static SYNC_IMPORT_FAIL_LOG_INTERVAL_MS = 10 * 60000;
+  unverifiedSurfacedIds = new Set;
+  static UNVERIFIED_SURFACED_MAX = 5000;
+  static UNVERIFIED_SURFACED_STORE_KEY = "unverified-surfaced-msg-ids";
+  unverifiedSurfacedTsByChannel = new Map;
+  static UNVERIFIED_SURFACED_TS_STORE_KEY = "unverified-surfaced-ts-by-channel";
   _gossipSeen = new Map;
   _gossipCleanupInterval = null;
   mediaChunkTimeout = 30000;
@@ -20595,6 +20600,22 @@ class DecentChatNodePeer {
       this.restoreMessages();
       this.restoreManifestState();
       this.restoreCustodianInbox();
+      try {
+        const persistedIds = this.store.get(DecentChatNodePeer.UNVERIFIED_SURFACED_STORE_KEY, []);
+        if (Array.isArray(persistedIds)) {
+          this.unverifiedSurfacedIds = new Set(persistedIds);
+        }
+      } catch (err) {
+        this.opts.log?.warn?.(`[decentchat-peer] failed to restore unverified-surfaced-msg-ids: ${String(err)}`);
+      }
+      try {
+        const persistedTs = this.store.get(DecentChatNodePeer.UNVERIFIED_SURFACED_TS_STORE_KEY, {});
+        if (persistedTs && typeof persistedTs === "object") {
+          this.unverifiedSurfacedTsByChannel = new Map(Object.entries(persistedTs));
+        }
+      } catch (err) {
+        this.opts.log?.warn?.(`[decentchat-peer] failed to restore unverified-surfaced-ts-by-channel: ${String(err)}`);
+      }
       const configServer = this.opts.account.signalingServer ?? "https://0.peerjs.com/";
       const allServers = [configServer];
       const normalizeUrl = (url) => {
@@ -21160,6 +21181,10 @@ class DecentChatNodePeer {
       return;
     const connectedPeers = new Set(this.transport.getConnectedPeers());
     const seen = new Set;
+    const attempted = [];
+    const skipped = [];
+    const connected = [];
+    const quarantineErrors = [];
     for (const workspace of this.workspaceManager.getAllWorkspaces()) {
       for (const member of workspace.members) {
         const peerId = member.peerId;
@@ -21170,21 +21195,33 @@ class DecentChatNodePeer {
         seen.add(peerId);
         if (connectedPeers.has(peerId)) {
           this.clearPeerMaintenanceFailure(peerId);
+          connected.push(peerId.slice(0, 8));
           continue;
         }
         const attempts = this.peerMaintenanceAttemptsByPeer.get(peerId) ?? 0;
         if (attempts >= DecentChatNodePeer.PEER_MAINTENANCE_MAX_CONSECUTIVE_FAILURES) {
+          skipped.push(`${peerId.slice(0, 8)}:max-attempts(${attempts})`);
           continue;
         }
         const retryAt = this.peerMaintenanceRetryAtByPeer.get(peerId) ?? 0;
-        if (retryAt > now)
+        if (retryAt > now) {
+          skipped.push(`${peerId.slice(0, 8)}:backoff(${Math.round((retryAt - now) / 1000)}s)`);
           continue;
+        }
+        attempted.push(peerId.slice(0, 8));
         try {
           await this.transport.connect(peerId);
-        } catch {
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/quarantined/i.test(msg)) {
+            quarantineErrors.push(`${peerId.slice(0, 8)}:${msg.replace(/.*quarantined for /, "Q").replace(/ after.*/, "")}`);
+          }
           this.notePeerMaintenanceFailure(peerId, now);
         }
       }
+    }
+    if (attempted.length || skipped.length || quarantineErrors.length) {
+      this.opts.log?.info?.(`[decentchat-peer] maintenance pass: ` + `connected=[${connected.join(",")}] ` + `attempted=[${attempted.join(",")}] ` + `skipped=[${skipped.join(",")}]` + (quarantineErrors.length ? ` quarantine=[${quarantineErrors.join(",")}]` : ""));
     }
   }
   async handlePeerMessage(fromPeerId, rawData, trustedSenderId) {
@@ -21579,6 +21616,30 @@ class DecentChatNodePeer {
       return;
     if (ws && !ws.members.some((m) => m.peerId === fromPeerId))
       return;
+    let seededAnyChannel = false;
+    const channelTimestamps = new Map;
+    for (const m of messages) {
+      const cid = typeof m.channelId === "string" ? m.channelId : null;
+      const ts = typeof m.timestamp === "number" ? m.timestamp : 0;
+      if (!cid || !ts)
+        continue;
+      const prev = channelTimestamps.get(cid) ?? 0;
+      if (ts > prev)
+        channelTimestamps.set(cid, ts);
+    }
+    for (const [cid, maxTs] of channelTimestamps) {
+      if (!this.unverifiedSurfacedTsByChannel.has(cid)) {
+        const seedTs = Math.max(0, maxTs - 1);
+        this.unverifiedSurfacedTsByChannel.set(cid, seedTs);
+        seededAnyChannel = true;
+        this.opts.log?.info?.(`[decentchat-peer] seeded unverified high-water for channel ${cid.slice(0, 8)} = ${seedTs} ` + `(batchMax=${maxTs}, legacy backfill, newest message still eligible to surface)`);
+      }
+    }
+    if (seededAnyChannel) {
+      try {
+        this.store.set(DecentChatNodePeer.UNVERIFIED_SURFACED_TS_STORE_KEY, Object.fromEntries(this.unverifiedSurfacedTsByChannel));
+      } catch (_) {}
+    }
     this.opts.log?.info?.(`[decentchat-peer] message-sync-response from ${fromPeerId.slice(0, 8)}: ${messages.length} messages`);
     const RECENT_CUTOFF_MS = this.startedAt - 60000;
     const MAX_ACKS_PER_SYNC_RESPONSE = 5;
@@ -21617,24 +21678,69 @@ class DecentChatNodePeer {
       const importResult = await this.messageStore.importMessages(channelId, [...existing, storedMsg]);
       if (!importResult?.success) {
         importFailedCount++;
+        const errMsg = importResult?.error ?? "unknown error";
+        const isStructurallyUnverifiable = errMsg.includes("got undefined") || errMsg.includes("invalid genesis hash");
         const suppressionKey = `${fromPeerId}:${channelId}`;
         const lastLoggedAt = this.syncImportFailLastLogAt.get(suppressionKey) ?? 0;
         const now = Date.now();
         const shouldLog = !importFailedChannels.has(channelId) && now - lastLoggedAt >= DecentChatNodePeer.SYNC_IMPORT_FAIL_LOG_INTERVAL_MS;
+        importFailedChannels.add(channelId);
         if (shouldLog) {
-          importFailedChannels.add(channelId);
           this.syncImportFailLastLogAt.set(suppressionKey, now);
-          const errMsg = importResult?.error ?? "unknown error";
-          const isStructurallyUnverifiable = errMsg.includes("got undefined") || errMsg.includes("invalid genesis hash");
-          const line = `[decentchat-peer] sync import failed for msg ${id.slice(0, 8)} in channel ${channelId.slice(0, 8)}: ${errMsg} — skipping ACK ` + `(further failures for this peer/channel suppressed for ${Math.round(DecentChatNodePeer.SYNC_IMPORT_FAIL_LOG_INTERVAL_MS / 60000)}min)`;
+          const line = `[decentchat-peer] sync import failed for msg ${id.slice(0, 8)} in channel ${channelId.slice(0, 8)}: ${errMsg} — skipping ACK/persist ` + (isStructurallyUnverifiable ? "(will still surface to agent once — legacy chain) " : "") + `(further failures for this peer/channel suppressed for ${Math.round(DecentChatNodePeer.SYNC_IMPORT_FAIL_LOG_INTERVAL_MS / 60000)}min)`;
           if (isStructurallyUnverifiable) {
             this.opts.log?.info?.(line);
           } else {
             this.opts.log?.warn?.(line);
           }
-        } else {
-          importFailedChannels.add(channelId);
         }
+        if (!isStructurallyUnverifiable) {
+          continue;
+        }
+        if (this.unverifiedSurfacedIds.has(id)) {
+          continue;
+        }
+        const channelHighWater = this.unverifiedSurfacedTsByChannel.get(channelId) ?? 0;
+        if (ts <= channelHighWater) {
+          continue;
+        }
+        this.unverifiedSurfacedIds.add(id);
+        this.unverifiedSurfacedTsByChannel.set(channelId, ts);
+        if (this.unverifiedSurfacedIds.size > DecentChatNodePeer.UNVERIFIED_SURFACED_MAX) {
+          const first = this.unverifiedSurfacedIds.values().next().value;
+          if (first !== undefined)
+            this.unverifiedSurfacedIds.delete(first);
+        }
+        try {
+          this.store.set(DecentChatNodePeer.UNVERIFIED_SURFACED_STORE_KEY, Array.from(this.unverifiedSurfacedIds));
+          this.store.set(DecentChatNodePeer.UNVERIFIED_SURFACED_TS_STORE_KEY, Object.fromEntries(this.unverifiedSurfacedTsByChannel));
+        } catch (_) {}
+        this.opts.log?.info?.(`[decentchat-peer] surfacing unverified msg ${id.slice(0, 8)} to agent ` + `(legacy chain in ${channelId.slice(0, 8)}) — will not persist`);
+        if (acksSent < MAX_ACKS_PER_SYNC_RESPONSE) {
+          try {
+            if (this.transport) {
+              const accepted = this.transport.send(fromPeerId, {
+                type: "ack",
+                messageId: id,
+                channelId
+              });
+              console.log(`[decentchat-peer] ACK→${fromPeerId.slice(0, 8)} msgId=${id.slice(0, 8)} accepted=${accepted} (unverified-surface)`);
+              acksSent++;
+            }
+          } catch (_) {}
+        }
+        await this.opts.onIncomingMessage({
+          channelId,
+          workspaceId: resolvedWsId,
+          content,
+          senderId,
+          senderName: storedMsg.senderName,
+          messageId: id,
+          chatType: "channel",
+          timestamp: ts,
+          replyToId: typeof m.replyToId === "string" ? m.replyToId : undefined,
+          threadId: typeof m.threadId === "string" ? m.threadId : undefined
+        });
         continue;
       }
       this.persistMessagesForChannel(channelId);
