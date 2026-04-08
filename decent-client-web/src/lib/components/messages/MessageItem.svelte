@@ -6,6 +6,7 @@
   import { onDestroy } from 'svelte';
   import { peerColor, escapeHtml } from '$lib/utils/peer';
   import { formatFileSize, formatTime } from '$lib/utils/format';
+  import { formatDeliveryTooltip } from '$lib/utils/deliveryReceiptTooltip';
   import { renderMarkdown } from '../../../ui/renderMarkdown';
   import { shouldCollapseMessage } from '$lib/utils/messageDisplay';
   import { showEmojiPicker } from '../shared/EmojiPicker.svelte';
@@ -135,15 +136,12 @@
     statusClass === 'read' ? '✓✓' : statusClass === 'delivered' ? '✓✓' : statusClass === 'sent' ? '✓' : '⏳'
   );
   let deliveryTitle = $derived(
-    statusClass === 'read'
-      ? (receiptTotal > 0 ? `Read by ${effectiveRead}/${receiptTotal}` : 'Read')
-      : statusClass === 'delivered'
-        ? (receiptTotal > 0 ? `Delivered to ${effectiveDelivered}/${receiptTotal} • Read by ${effectiveRead}/${receiptTotal}` : 'Delivered')
-        : statusClass === 'sent'
-          ? (receiptTotal > 0 ? 'Sent • Waiting for delivery receipt' : 'Sent')
-          : (receiptTotal > 0 && (effectiveDelivered > 0 || effectiveRead > 0)
-              ? `Syncing status… Delivered to ${effectiveDelivered}/${receiptTotal} • Read by ${effectiveRead}/${receiptTotal}`
-              : 'Sending…')
+    formatDeliveryTooltip({
+      status: statusClass,
+      total: receiptTotal,
+      delivered: effectiveDelivered,
+      read: effectiveRead,
+    })
   );
 
   let renderedContent = $derived(renderMarkdown(content));

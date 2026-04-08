@@ -15,6 +15,7 @@ export type { UIService } from './uiService.types';
 import { MessageSearch } from './MessageSearch';
 import { ReactionTracker } from './ReactionTracker';
 import { peerColor as peerColorUtil, escapeHtml as escapeHtmlUtil } from '../lib/utils/peer';
+import { formatDeliveryTooltip } from '../lib/utils/deliveryReceiptTooltip';
 import { toast } from '../lib/components/shared/Toast.svelte';
 import { createQRFlow } from '../lib/components/modals/QRFlowModal.svelte';
 import type { UICallbacks } from './types';
@@ -489,15 +490,12 @@ export function createUIService(
     const effectiveDelivered = (status === 'delivered' || status === 'read') ? Math.max(acked, total) : acked;
     const effectiveRead = status === 'read' ? Math.max(read, total) : read;
     const symbol = status === 'read' || status === 'delivered' ? '✓✓' : status === 'sent' ? '✓' : '⏳';
-    const tooltip = status === 'read'
-      ? (total > 0 ? `Read by ${effectiveRead}/${total}` : 'Read')
-      : status === 'delivered'
-        ? (total > 0 ? `Delivered to ${effectiveDelivered}/${total} • Read by ${effectiveRead}/${total}` : 'Delivered')
-        : status === 'sent'
-          ? (total > 0 ? 'Sent • Waiting for delivery receipt' : 'Sent')
-          : (total > 0 && (effectiveDelivered > 0 || effectiveRead > 0)
-              ? `Syncing status… Delivered to ${effectiveDelivered}/${total} • Read by ${effectiveRead}/${total}`
-              : 'Sending…');
+    const tooltip = formatDeliveryTooltip({
+      status,
+      total,
+      delivered: effectiveDelivered,
+      read: effectiveRead,
+    });
 
     const statusNodes = document.querySelectorAll(`.msg-delivery-status[data-message-id="${messageId}"]`);
     statusNodes.forEach((node) => {
