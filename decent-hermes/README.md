@@ -29,6 +29,16 @@ The agent will walk through each step below, ask you for the things it needs (se
 
 ## Install
 
+Fastest path for other users:
+
+```bash
+npm install -g @decentchat/hermes-bridge
+```
+
+That gives you the `decent-hermes-bridge` binary plus the bundled `hermes-patch/` files needed to install the Hermes adapter.
+
+If you're developing from the monorepo instead, use the local workspace version as described below.
+
 ### Step 1 — Generate a seed phrase
 
 Your agent's DecentChat identity is a 12-word seed phrase. Generate one:
@@ -47,8 +57,14 @@ bun -e "import { SeedPhraseManager } from './decent-protocol/src/index.ts'; cons
 The DecentChat adapter for Hermes ships as a patch that installs into hermes-agent and auto-reapplies after Hermes updates.
 
 ```bash
+# If installed from npm:
+BRIDGE_PKG_DIR="$(npm root -g)/@decentchat/hermes-bridge"
+
 # One-time setup — copies the patch, bridge bundle, and installs a launchd watcher
-bash ~/Projects/decent-chat/decent-hermes/hermes-patch/apply.sh
+bash "$BRIDGE_PKG_DIR/hermes-patch/apply.sh"
+
+# If developing from the monorepo instead, use:
+# bash ~/Projects/decent-chat/decent-hermes/hermes-patch/apply.sh
 ```
 
 This script:
@@ -59,7 +75,7 @@ This script:
 To survive Hermes auto-updates, also install the launchd watcher (macOS):
 
 ```bash
-cp ~/Projects/decent-chat/decent-hermes/hermes-patch/com.decenthermes.patch.plist \
+cp "$BRIDGE_PKG_DIR/hermes-patch/com.decenthermes.patch.plist" \
    ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.decenthermes.patch.plist
 ```
