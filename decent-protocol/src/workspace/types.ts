@@ -147,6 +147,25 @@ export interface PEXServer {
   latency?: number;
 }
 
+export interface WorkspaceSnapshotChannelSummary {
+  id: string;
+  name: string;
+  type: 'channel' | 'dm';
+  messageCount: number;
+  headHash: string;
+  negentropyFingerprint: string;
+  lastMessageAt: number;
+}
+
+export interface WorkspaceSnapshot {
+  type: 'workspace-snapshot';
+  workspaceId: string;
+  snapshotVersion: 1;
+  channels: WorkspaceSnapshotChannelSummary[];
+  members: WorkspaceMember[];
+  snapshotAt: number;
+}
+
 // P2P sync messages
 export interface WorkspaceDeltaOp {
   op: 'upsert-channel' | 'remove-channel' | 'upsert-member' | 'remove-member' | 'update-shell';
@@ -176,10 +195,13 @@ export type SyncMessage =
       historyCapabilities?: HistorySyncCapabilities;
     }
   // `messageHistory` intentionally omits plaintext message content during sync.
+  // Newer peers SHOULD send `snapshot` and keep `messageHistory` empty.
   | {
       type: 'join-accepted';
       workspace: Workspace;
-      messageHistory: Record<string, any[]>;
+      snapshot?: WorkspaceSnapshot;
+      /** @deprecated kept for backward compatibility with older peers */
+      messageHistory?: Record<string, any[]>;
       pexServers?: PEXServer[];
       historyReplicaHints?: HistoryReplicaHint[];
       historyCapabilities?: HistorySyncCapabilities;

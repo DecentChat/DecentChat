@@ -9,6 +9,7 @@ import {
   type PlaintextMessage,
   type SyncMessage,
   type Workspace,
+  type WorkspaceSnapshot,
   type WorkspaceMember,
   MessageStore,
   WorkspaceManager,
@@ -73,7 +74,7 @@ export type SyncEvent =
   | { type: 'channel-created'; workspaceId: string; channel: Channel }
   | { type: 'channel-removed'; workspaceId: string; channelId: string }
   | { type: 'workspace-deleted'; workspaceId: string; deletedBy: string }
-  | { type: 'workspace-joined'; workspace: Workspace; messageHistory: Record<string, SyncedHistoryMessage[]> }
+  | { type: 'workspace-joined'; workspace: Workspace; messageHistory: Record<string, SyncedHistoryMessage[]>; snapshot?: WorkspaceSnapshot }
   | { type: 'join-rejected'; reason: string }
   | { type: 'message-received'; channelId: string; message: PlaintextMessage }
   | { type: 'sync-complete'; workspaceId: string };
@@ -86,6 +87,7 @@ interface SyncProtocolOptions {
 
 const DEFAULT_CAPABILITY_WAIT_MS = 800;
 const DEFAULT_NEGENTROPY_BATCH_SIZE = 50;
+const EMPTY_NEGENTROPY_FINGERPRINT = '0'.repeat(64);
 
 export class SyncProtocol {
   private workspaceManager: WorkspaceManager;
@@ -148,7 +150,7 @@ export class SyncProtocol {
         this.handleNegentropyMessageBatch(fromPeerId, msg);
         break;
       case 'join-request':
-        this.handleJoinRequest(fromPeerId, msg);
+        await this.handleJoinRequest(fromPeerId, msg);
         break;
       case 'join-accepted':
         await this.handleJoinAccepted(fromPeerId, msg);
@@ -527,7 +529,7 @@ export class SyncProtocol {
     this.sendFn(targetPeerId, { type: 'workspace-sync', sync: msg });
   }
 
-  private handleJoinRequest(fromPeerId: string, msg: Extract<SyncMessage, { type: 'join-request' }>): void {
+  private async handleJoinRequest(fromPeerId: string, msg: Extract<SyncMessage, { type: 'join-request' }>): Promise<void> {
     if (msg.pexServers && this.serverDiscovery) {
       this.serverDiscovery.mergeReceivedServers(msg.pexServers);
     }
@@ -560,21 +562,14 @@ export class SyncProtocol {
       return;
     }
 
-    const messageHistory: Record<string, SyncedHistoryMessage[]> = {};
-    for (const channel of workspace.channels) {
-      const msgs = this.messageStore.getMessages(channel.id);
-      if (msgs.length > 0) {
-        messageHistory[channel.id] = msgs.map((message) => {
-          const { content, ...safeMsg } = message;
-          return safeMsg;
-        });
-      }
-    }
+    const exportedWorkspace = this.workspaceManager.exportWorkspace(workspace.id)!;
+    const snapshot = await this.buildWorkspaceSnapshot(exportedWorkspace);
 
     const acceptMsg: SyncMessage = {
       type: 'join-accepted',
-      workspace: this.workspaceManager.exportWorkspace(workspace.id)!,
-      messageHistory,
+      workspace: exportedWorkspace,
+      snapshot,
+      messageHistory: {},
       pexServers: this.serverDiscovery?.getHandshakeServers(),
     };
 
@@ -589,14 +584,16 @@ export class SyncProtocol {
 
     this.workspaceManager.importWorkspace(msg.workspace);
 
-    for (const [channelId, messages] of Object.entries(msg.messageHistory)) {
+    const history = msg.messageHistory ?? {};
+    for (const [channelId, messages] of Object.entries(history)) {
       await this.messageStore.importMessages(channelId, messages as SyncedHistoryMessage[]);
     }
 
     this.onEvent({
       type: 'workspace-joined',
       workspace: msg.workspace,
-      messageHistory: msg.messageHistory,
+      messageHistory: history,
+      snapshot: msg.snapshot,
     });
 
     this.startNegentropySyncSafely(fromPeerId, msg.workspace.id);
@@ -699,5 +696,35 @@ export class SyncProtocol {
     if (this.serverDiscovery && msg.servers) {
       this.serverDiscovery.mergeReceivedServers(msg.servers);
     }
+  }
+
+  private async buildWorkspaceSnapshot(workspace: Workspace): Promise<WorkspaceSnapshot> {
+    const channels: WorkspaceSnapshot['channels'] = [];
+
+    for (const channel of workspace.channels) {
+      const messages = this.messageStore.getMessages(channel.id);
+      const negentropy = new Negentropy();
+      await negentropy.build(messages.map((message) => ({ id: message.id, timestamp: message.timestamp })));
+      const query = await negentropy.createQuery();
+
+      channels.push({
+        id: channel.id,
+        name: channel.name,
+        type: channel.type,
+        messageCount: messages.length,
+        headHash: await this.messageStore.getLastHash(channel.id),
+        negentropyFingerprint: query.ranges[0]?.fingerprint ?? EMPTY_NEGENTROPY_FINGERPRINT,
+        lastMessageAt: messages[messages.length - 1]?.timestamp ?? 0,
+      });
+    }
+
+    return {
+      type: 'workspace-snapshot',
+      workspaceId: workspace.id,
+      snapshotVersion: 1,
+      channels,
+      members: workspace.members.map((member) => ({ ...member })),
+      snapshotAt: Date.now(),
+    };
   }
 }

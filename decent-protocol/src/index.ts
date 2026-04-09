@@ -154,6 +154,8 @@ export type {
   WorkspaceDelta,
   WorkspaceDeltaOp,
   PEXServer,
+  WorkspaceSnapshot,
+  WorkspaceSnapshotChannelSummary,
   WorkspaceShell,
   MemberSummary,
   MemberDirectoryPage,
