@@ -6,7 +6,7 @@
   import { onDestroy } from 'svelte';
   import { peerColor, escapeHtml } from '$lib/utils/peer';
   import { formatFileSize, formatTime } from '$lib/utils/format';
-  import { formatDeliveryTooltip } from '$lib/utils/deliveryReceiptTooltip';
+  import { formatDeliveryTooltipWithPeers } from '$lib/utils/deliveryReceiptTooltip';
   import { renderMarkdown } from '../../../ui/renderMarkdown';
   import { shouldCollapseMessage } from '$lib/utils/messageDisplay';
   import { showEmojiPicker } from '../shared/EmojiPicker.svelte';
@@ -53,6 +53,9 @@
     recipientCount?: number;
     ackedCount?: number;
     readCount?: number;
+    recipientPeerIds?: string[];
+    ackedBy?: string[];
+    readBy?: string[];
     frequentReactions: string[];
     animate?: boolean;
     // Callbacks
@@ -85,6 +88,9 @@
     recipientCount = 0,
     ackedCount = 0,
     readCount = 0,
+    recipientPeerIds = [],
+    ackedBy = [],
+    readBy = [],
     frequentReactions,
     animate = false,
     getPeerAlias,
@@ -136,11 +142,15 @@
     statusClass === 'read' ? '✓✓' : statusClass === 'delivered' ? '✓✓' : statusClass === 'sent' ? '✓' : '⏳'
   );
   let deliveryTitle = $derived(
-    formatDeliveryTooltip({
+    formatDeliveryTooltipWithPeers({
       status: statusClass,
       total: receiptTotal,
       delivered: effectiveDelivered,
       read: effectiveRead,
+      recipientPeerIds,
+      ackedBy,
+      readBy,
+      getPeerLabel: getPeerAlias,
     })
   );
 
@@ -238,7 +248,12 @@
         {#if modelLabel}<span class="msg-model-badge">{modelLabel}</span>{/if}
         <span class="message-time">{time}</span>
         {#if isMine}
-          <span class="msg-delivery-status {statusClass}" data-message-id={id} data-tooltip={deliveryTitle} data-tooltip-pos="top">
+          <span
+            class="msg-delivery-status {statusClass}"
+            data-message-id={id}
+            data-tooltip={receiptTotal > 0 ? deliveryTitle : undefined}
+            data-tooltip-pos="top"
+          >
             {statusSymbol}
           </span>
           {#if recipientCount > 0}

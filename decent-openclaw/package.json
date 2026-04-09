@@ -38,7 +38,7 @@
   },
   "scripts": {
     "postinstall": "node postinstall.cjs",
-    "test": "bun test tests/unit/",
+    "test": "bun test tests/unit/ --concurrent",
     "test:integration": "bun test tests/integration/plugin-configure-join.test.ts",
     "test:all": "bun test tests/unit/ && bun test tests/integration/plugin-configure-join.test.ts"
   },

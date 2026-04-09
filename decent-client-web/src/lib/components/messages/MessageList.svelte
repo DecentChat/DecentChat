@@ -891,6 +891,9 @@
           recipientCount={(threadRoot as any).recipientPeerIds?.length ?? 0}
           ackedCount={(threadRoot as any).ackedBy?.length ?? 0}
           readCount={(threadRoot as any).readBy?.length ?? 0}
+          recipientPeerIds={(threadRoot as any).recipientPeerIds ?? []}
+          ackedBy={(threadRoot as any).ackedBy ?? []}
+          readBy={(threadRoot as any).readBy ?? []}
           {frequentReactions}
           {getPeerAlias}
           {onOpenThread}
@@ -947,6 +950,9 @@
           recipientCount={(msg as any).recipientPeerIds?.length ?? 0}
           ackedCount={(msg as any).ackedBy?.length ?? 0}
           readCount={(msg as any).readBy?.length ?? 0}
+          recipientPeerIds={(msg as any).recipientPeerIds ?? []}
+          ackedBy={(msg as any).ackedBy ?? []}
+          readBy={(msg as any).readBy ?? []}
           {frequentReactions}
           {getPeerAlias}
           {onOpenThread}

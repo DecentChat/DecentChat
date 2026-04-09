@@ -15,7 +15,7 @@ export type { UIService } from './uiService.types';
 import { MessageSearch } from './MessageSearch';
 import { ReactionTracker } from './ReactionTracker';
 import { peerColor as peerColorUtil, escapeHtml as escapeHtmlUtil } from '../lib/utils/peer';
-import { formatDeliveryTooltip } from '../lib/utils/deliveryReceiptTooltip';
+import { formatDeliveryTooltipWithPeers } from '../lib/utils/deliveryReceiptTooltip';
 import { toast } from '../lib/components/shared/Toast.svelte';
 import { createQRFlow } from '../lib/components/modals/QRFlowModal.svelte';
 import type { UICallbacks } from './types';
@@ -484,24 +484,33 @@ export function createUIService(
       renderThreadMessages();
     }
 
+    const statusMessage = getStatusMessage(messageId);
     const total = Math.max(0, detail?.total ?? 0);
     const acked = Math.max(0, Math.min(detail?.acked ?? 0, total));
     const read = Math.max(0, Math.min(detail?.read ?? 0, total));
     const effectiveDelivered = (status === 'delivered' || status === 'read') ? Math.max(acked, total) : acked;
     const effectiveRead = status === 'read' ? Math.max(read, total) : read;
     const symbol = status === 'read' || status === 'delivered' ? '✓✓' : status === 'sent' ? '✓' : '⏳';
-    const tooltip = formatDeliveryTooltip({
+    const tooltip = formatDeliveryTooltipWithPeers({
       status,
       total,
       delivered: effectiveDelivered,
       read: effectiveRead,
+      recipientPeerIds: Array.isArray(statusMessage?.recipientPeerIds) ? statusMessage.recipientPeerIds : [],
+      ackedBy: Array.isArray(statusMessage?.ackedBy) ? statusMessage.ackedBy : [],
+      readBy: Array.isArray(statusMessage?.readBy) ? statusMessage.readBy : [],
+      getPeerLabel: getPeerAlias,
     });
 
     const statusNodes = document.querySelectorAll(`.msg-delivery-status[data-message-id="${messageId}"]`);
     statusNodes.forEach((node) => {
       const el = node as HTMLElement;
       el.textContent = symbol;
-      el.setAttribute('data-tooltip', tooltip);
+      if (total > 0) {
+        el.setAttribute('data-tooltip', tooltip);
+      } else {
+        el.removeAttribute('data-tooltip');
+      }
       el.classList.remove('pending', 'sent', 'delivered', 'read');
       el.classList.add(status);
     });
@@ -513,6 +522,18 @@ export function createUIService(
         (node as HTMLElement).textContent = detailText;
       });
     }
+  }
+
+  function getStatusMessage(messageId: string): any | null {
+    const fromMain = shellData.messages.messages.find((msg: any) => msg?.id === messageId);
+    if (fromMain) return fromMain;
+
+    if (shellData.thread.parentMessage?.id === messageId) {
+      return shellData.thread.parentMessage;
+    }
+
+    const fromThread = shellData.thread.replies.find((msg: any) => msg?.id === messageId);
+    return fromThread ?? null;
   }
 
   function updateStreamingMessage(_messageId: string, _content: string): void {

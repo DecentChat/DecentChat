@@ -7,6 +7,13 @@ export interface DeliveryTooltipInput {
   read: number;
 }
 
+export interface DeliveryPeerTooltipInput extends DeliveryTooltipInput {
+  recipientPeerIds?: string[];
+  ackedBy?: string[];
+  readBy?: string[];
+  getPeerLabel?: (peerId: string) => string;
+}
+
 export function formatDeliveryTooltip(input: DeliveryTooltipInput): string {
   const status = normalizeStatus(input.status);
   const total = Math.max(0, input.total || 0);
@@ -29,9 +36,40 @@ export function formatDeliveryTooltip(input: DeliveryTooltipInput): string {
   return 'Sending…';
 }
 
+export function formatDeliveryTooltipWithPeers(input: DeliveryPeerTooltipInput): string {
+  const summary = formatDeliveryTooltip(input);
+  const recipients = toPeerList(input.recipientPeerIds);
+  if (recipients.length === 0) return summary;
+
+  const acked = new Set(toPeerList(input.ackedBy));
+  const read = new Set(toPeerList(input.readBy));
+
+  const perPeerStates = recipients.map((peerId) => {
+    const label = resolvePeerLabel(peerId, input.getPeerLabel);
+    if (read.has(peerId)) return `${label}: read`;
+    if (acked.has(peerId)) return `${label}: acked`;
+    return `${label}: pending`;
+  });
+
+  return `${summary} • ${perPeerStates.join(', ')}`;
+}
+
 function normalizeStatus(status: string): DeliveryStatus {
   if (status === 'read' || status === 'delivered' || status === 'sent' || status === 'pending') {
     return status;
   }
   return 'pending';
+}
+
+function toPeerList(input?: string[]): string[] {
+  if (!Array.isArray(input)) return [];
+  return Array.from(
+    new Set(input.filter((peerId): peerId is string => typeof peerId === 'string' && peerId.length > 0)),
+  );
+}
+
+function resolvePeerLabel(peerId: string, getPeerLabel?: (peerId: string) => string): string {
+  if (typeof getPeerLabel !== 'function') return peerId.slice(0, 8);
+  const label = getPeerLabel(peerId);
+  return typeof label === 'string' && label.trim().length > 0 ? label.trim() : peerId.slice(0, 8);
 }

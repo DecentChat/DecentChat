@@ -145,7 +145,7 @@ describe('NodeMessageProtocol pre-key bootstrap', () => {
 describe('NodeMessageProtocol pre-key lifecycle policy', () => {
   test('reuses unchanged local pre-key bundle snapshots and invalidates after one-time key consumption', async () => {
     const originalDateNow = Date.now;
-    let now = 1_000_000;
+    let now = Date.now();
     Date.now = () => now++;
 
     try {

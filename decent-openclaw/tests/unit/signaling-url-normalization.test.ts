@@ -1,11 +1,10 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SeedPhraseManager } from '@decentchat/protocol';
 
 class MockPeerTransport {
-  static instances: MockPeerTransport[] = [];
   signalingServers: string[];
   onConnect?: (peerId: string) => void;
   onDisconnect?: (peerId: string) => void;
@@ -14,7 +13,6 @@ class MockPeerTransport {
 
   constructor(opts: { signalingServers: string[] }) {
     this.signalingServers = opts.signalingServers;
-    MockPeerTransport.instances.push(this);
   }
 
   async init(peerId: string): Promise<string> {
@@ -58,10 +56,6 @@ function makeAccount(overrides: Partial<any> = {}): any {
 }
 
 describe('DecentChatNodePeer signaling URL normalization', () => {
-  beforeEach(() => {
-    MockPeerTransport.instances = [];
-  });
-
   test('startup lock is a pass-through — tasks run concurrently', async () => {
     resetDecentChatNodePeerStartupLockForTests();
 
@@ -102,9 +96,10 @@ describe('DecentChatNodePeer signaling URL normalization', () => {
     });
 
     await peer.start();
+    const transport = (peer as any).transport as MockPeerTransport | undefined;
     peer.destroy();
 
-    const servers = MockPeerTransport.instances[0]?.signalingServers ?? [];
+    const servers = transport?.signalingServers ?? [];
     expect(servers).toEqual(['https://0.peerjs.com/']);
   });
 
@@ -119,9 +114,10 @@ describe('DecentChatNodePeer signaling URL normalization', () => {
     });
 
     await peer.start();
+    const transport = (peer as any).transport as MockPeerTransport | undefined;
     peer.destroy();
 
-    const servers = MockPeerTransport.instances[0]?.signalingServers ?? [];
+    const servers = transport?.signalingServers ?? [];
     expect(servers).toEqual(['http://localhost:9000']);
   });
 
@@ -136,9 +132,10 @@ describe('DecentChatNodePeer signaling URL normalization', () => {
     });
 
     await peer.start();
+    const transport = (peer as any).transport as MockPeerTransport | undefined;
     peer.destroy();
 
-    const servers = MockPeerTransport.instances[0]?.signalingServers ?? [];
+    const servers = transport?.signalingServers ?? [];
     expect(servers).toEqual(['https://0.peerjs.com:8443/', 'https://0.peerjs.com:443/']);
   });
 
@@ -238,7 +235,7 @@ describe('DecentChatNodePeer signaling URL normalization', () => {
     ];
 
     await peer.start();
-    const transport = MockPeerTransport.instances[0];
+    const transport = (peer as any).transport as MockPeerTransport | undefined;
     expect(transport?.connect).toHaveBeenCalledTimes(0);
     peer.destroy();
   });

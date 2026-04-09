@@ -101,6 +101,8 @@ test.describe('delivery tooltip regression', () => {
 
       const status = user.page.locator(`.msg-delivery-status[data-message-id="${messageId}"]`);
       await expect(status).toBeVisible();
+      await expect.poll(async () => await status.getAttribute('data-tooltip'), { timeout: 3000 })
+        .toBeNull();
 
       const apiInfo = await user.page.evaluate(() => {
         const ctrl = (window as any).__ctrl;

@@ -1213,6 +1213,87 @@ export class ChatController {
     return false;
   }
 
+  private initiatePeerAuthChallenge(peerId: string, hasSigningPublicKey: boolean): void {
+    if (!hasSigningPublicKey) {
+      // Legacy peer with no signing key support; keep TOFU behavior.
+      this.authenticatedPeers.add(peerId);
+      return;
+    }
+
+    const challenge = PeerAuth.createChallenge();
+    this.pendingAuthChallenges.set(peerId, challenge);
+    this.sendControlWithRetry(peerId, {
+      type: 'auth-challenge',
+      nonce: challenge.nonce,
+      peerId: this.state.myPeerId,
+    }, { label: 'auth-challenge' });
+
+    // TOFU fallback timeout: if peer doesn't respond, accept without auth.
+    setTimeout(() => {
+      const pending = this.pendingAuthChallenges.get(peerId);
+      if (
+        pending?.nonce === challenge.nonce
+        && !this.authenticatedPeers.has(peerId)
+        && this.state.connectedPeers.has(peerId)
+      ) {
+        console.warn(`[Auth] Peer ${peerId.slice(0, 8)} did not respond to auth challenge — TOFU fallback`);
+        this.authenticatedPeers.add(peerId);
+        this.pendingAuthChallenges.delete(peerId);
+      }
+    }, ChatController.AUTH_TIMEOUT_MS);
+  }
+
+  private async handlePeerAuthChallenge(peerId: string, nonce: string): Promise<void> {
+    if (!this.signingKeyPair?.privateKey) return;
+
+    try {
+      const response = await PeerAuth.respondToChallenge(
+        nonce,
+        peerId,
+        this.signingKeyPair.privateKey,
+      );
+      this.sendControlWithRetry(peerId, {
+        type: 'auth-response',
+        signature: response.signature,
+      }, { label: 'auth-response' });
+    } catch (err) {
+      console.error(`[Auth] Failed to respond to challenge from ${peerId.slice(0, 8)}:`, err);
+    }
+  }
+
+  private async handlePeerAuthResponse(peerId: string, signature: string): Promise<void> {
+    const pending = this.pendingAuthChallenges.get(peerId);
+    if (!pending) {
+      console.warn(`[Auth] Unexpected auth-response from ${peerId.slice(0, 8)} (no pending challenge)`);
+      return;
+    }
+
+    const peerSigningKey = this.messageProtocol?.getSigningPublicKey(peerId);
+    this.pendingAuthChallenges.delete(peerId);
+    if (!peerSigningKey) {
+      console.error(`[Auth] No signing key for ${peerId.slice(0, 8)} — disconnecting`);
+      this.authenticatedPeers.delete(peerId);
+      this.transport.disconnect(peerId);
+      return;
+    }
+
+    const valid = await PeerAuth.verifyResponse(
+      pending.nonce,
+      this.state.myPeerId,
+      signature,
+      peerSigningKey,
+    );
+    if (valid) {
+      this.authenticatedPeers.add(peerId);
+      chatLog.info(`[Auth] Peer ${peerId.slice(0, 8)} authenticated ✓`);
+      return;
+    }
+
+    console.error(`[Auth] Peer ${peerId.slice(0, 8)} FAILED authentication — disconnecting`);
+    this.authenticatedPeers.delete(peerId);
+    this.transport.disconnect(peerId);
+  }
+
   setupTransportHandlers(): void {
     this.transport.onSignalingStateChange = () => {
       this.ui?.updateSidebar({ refreshContacts: false });
@@ -1706,28 +1787,8 @@ export class ChatController {
           const _ht3 = performance.now();
 
           // --- Initiate challenge-response auth ---
-          // Send a challenge; peer must prove they own the signing key.
-          // If they don't respond within AUTH_TIMEOUT_MS, fall back to TOFU.
-          if (data.signingPublicKey) {
-            const challenge = PeerAuth.createChallenge();
-            this.pendingAuthChallenges.set(peerId, challenge);
-            this.sendControlWithRetry(peerId, {
-              type: 'auth-challenge',
-              nonce: challenge.nonce,
-            }, { label: 'auth-challenge' });
-
-            // TOFU fallback timeout: if peer doesn't respond, accept without auth
-            setTimeout(() => {
-              if (!this.authenticatedPeers.has(peerId) && this.state.connectedPeers.has(peerId)) {
-                console.warn(`[Auth] Peer ${peerId.slice(0, 8)} did not respond to auth challenge — TOFU fallback`);
-                this.authenticatedPeers.add(peerId);
-                this.pendingAuthChallenges.delete(peerId);
-              }
-            }, ChatController.AUTH_TIMEOUT_MS);
-          } else {
-            // Old client without signing key — mark as authenticated via TOFU
-            this.authenticatedPeers.add(peerId);
-          }
+          // Send a challenge immediately after handshake exchange.
+          this.initiatePeerAuthChallenge(peerId, Boolean(data.signingPublicKey));
 
           // Protocol version check (DEP-004)
           if (data.protocolVersion != null && data.protocolVersion > PROTOCOL_VERSION) {
@@ -1849,55 +1910,14 @@ export class ChatController {
 
         // --- Auth challenge-response ---
         if (data?.type === 'auth-challenge' && data.nonce) {
-          // Peer is challenging us: prove we own our signing key
-          if (this.signingKeyPair?.privateKey) {
-            try {
-              const response = await PeerAuth.respondToChallenge(
-                data.nonce,
-                peerId, // challenger's peerId goes into the signed payload
-                this.signingKeyPair.privateKey,
-              );
-              this.sendControlWithRetry(peerId, {
-                type: 'auth-response',
-                signature: response.signature,
-              }, { label: 'auth-response' });
-            } catch (err) {
-              console.error(`[Auth] Failed to respond to challenge from ${peerId.slice(0, 8)}:`, err);
-            }
-          }
+          // Peer is challenging us: prove we own our signing key.
+          await this.handlePeerAuthChallenge(peerId, data.nonce);
           return;
         }
 
         if (data?.type === 'auth-response' && data.signature) {
-          // Peer responded to our challenge — verify their signature
-          const pending = this.pendingAuthChallenges.get(peerId);
-          if (!pending) {
-            console.warn(`[Auth] Unexpected auth-response from ${peerId.slice(0, 8)} (no pending challenge)`);
-            return;
-          }
-          // Get the peer's signing public key
-          const peerSigningKey = this.messageProtocol?.getSigningPublicKey(peerId);
-          if (!peerSigningKey) {
-            console.warn(`[Auth] No signing key for ${peerId.slice(0, 8)} — TOFU fallback`);
-            this.authenticatedPeers.add(peerId);
-            this.pendingAuthChallenges.delete(peerId);
-            return;
-          }
-          const valid = await PeerAuth.verifyResponse(
-            pending.nonce,
-            this.state.myPeerId,
-            data.signature,
-            peerSigningKey,
-          );
-          this.pendingAuthChallenges.delete(peerId);
-          if (valid) {
-            this.authenticatedPeers.add(peerId);
-            chatLog.info(`[Auth] Peer ${peerId.slice(0, 8)} authenticated ✓`);
-          } else {
-            console.error(`[Auth] Peer ${peerId.slice(0, 8)} FAILED authentication — bad signature`);
-            // Don't disconnect — TOFU fallback; log the failure for observability
-            this.authenticatedPeers.add(peerId);
-          }
+          // Peer responded to our challenge — verify and disconnect on failure.
+          await this.handlePeerAuthResponse(peerId, data.signature);
           return;
         }
 
