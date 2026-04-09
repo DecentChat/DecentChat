@@ -1,6 +1,6 @@
 /**
  * SyncProtocol tests — P2P workspace synchronization
- * 
+ *
  * Simulates two peers exchanging sync messages without any network.
  * Each peer has their own WorkspaceManager + MessageStore + SyncProtocol.
  */
@@ -93,9 +93,8 @@ describe('SyncProtocol - Join Flow', () => {
     // Deliver Alice's acceptance to Bob
     await deliver(alice, bob);
 
-    // Bob should have the workspace now
-    expect(bob.events).toHaveLength(1);
-    expect(bob.events[0].type).toBe('workspace-joined');
+    // Bob should have processed the join payload.
+    expect(bob.events.some((event) => event.type === 'workspace-joined')).toBe(true);
 
     const bobWS = bob.wm.getWorkspace(ws.id);
     expect(bobWS).toBeDefined();
@@ -125,6 +124,35 @@ describe('SyncProtocol - Join Flow', () => {
     expect(bobWS).toBeDefined();
     const channelNames = (bobWS?.channels ?? []).map((channel) => channel.name).sort();
     expect(channelNames).toEqual(['backend', 'frontend', 'general']);
+  });
+
+  test('join-accepted sends DEP-007 compact snapshot and omits full message history payload', async () => {
+    const ws = alice.wm.createWorkspace('Snapshot Team', 'alice', 'Alice', 'alice-key');
+    const channelId = ws.channels[0].id;
+    const seeded = await alice.ms.createMessage(channelId, 'alice', 'seed message');
+    const addResult = await alice.ms.addMessage(seeded);
+    expect(addResult.success).toBe(true);
+
+    bob.sync.requestJoin('alice', ws.inviteCode, {
+      peerId: 'bob', alias: 'Bob', publicKey: 'bob-key',
+      joinedAt: Date.now(), role: 'member',
+    });
+
+    await deliver(bob, alice);
+
+    const joinAccepted = alice.outbox.find((packet) => packet.to === 'bob' && packet.data.sync?.type === 'join-accepted')?.data.sync;
+    expect(joinAccepted).toBeDefined();
+    expect(joinAccepted.snapshot).toBeDefined();
+    expect(joinAccepted.snapshot.type).toBe('workspace-snapshot');
+    expect(joinAccepted.snapshot.workspaceId).toBe(ws.id);
+    expect(joinAccepted.snapshot.snapshotVersion).toBe(1);
+    expect(joinAccepted.snapshot.channels).toHaveLength(1);
+    expect(joinAccepted.snapshot.channels[0].id).toBe(channelId);
+    expect(joinAccepted.snapshot.channels[0].messageCount).toBe(1);
+    expect(joinAccepted.snapshot.channels[0].headHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(joinAccepted.snapshot.channels[0].negentropyFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(joinAccepted.snapshot.channels[0].lastMessageAt).toBeGreaterThan(0);
+    expect(joinAccepted.messageHistory ?? {}).toEqual({});
   });
 
   test('join with invalid invite code is rejected', async () => {
@@ -184,7 +212,15 @@ describe('SyncProtocol - Join Flow', () => {
     await deliver(bob, alice);
     await deliver(alice, bob);
 
-    // Bob should have the messages
+    // Bob should request a bootstrap history page when join-accepted omits full history.
+    expect(
+      bob.outbox.some((packet) => packet.to === 'alice' && packet.data.sync?.type === 'history-page-request'),
+    ).toBe(true);
+
+    await deliver(bob, alice);
+    await deliver(alice, bob);
+
+    // Bob should have the messages after history bootstrap.
     const bobMessages = bob.ms.getMessages(channelId);
     expect(bobMessages).toHaveLength(3);
     // Sync history intentionally omits plaintext content.
@@ -451,6 +487,8 @@ describe('SyncProtocol - Three Peers', () => {
       peerId: 'charlie', alias: 'Charlie', publicKey: 'charlie-key',
       joinedAt: Date.now(), role: 'member',
     });
+    await deliver(charlie, bob);
+    await deliver(bob, charlie);
     await deliver(charlie, bob);
     await deliver(bob, charlie);
 

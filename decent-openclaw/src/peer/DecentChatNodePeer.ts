@@ -1656,8 +1656,16 @@ export class DecentChatNodePeer {
     this.decryptRecoveryAtByPeer.delete(fromPeerId);
 
     const isDirect = msg.isDirect === true;
+    const envelopeWorkspaceId = typeof msg.workspaceId === 'string' && msg.workspaceId.length > 0
+      ? msg.workspaceId
+      : undefined;
     const channelId = (msg.channelId as string | undefined) ?? (isDirect ? fromPeerId : undefined);
-    if (!channelId) return;
+    if (!channelId) {
+      this.opts.log?.warn?.(
+        `[decentchat-peer] route-drop from ${fromPeerId.slice(0, 8)}: missing channelId for isDirect=${isDirect} workspaceId=${envelopeWorkspaceId ?? 'none'}`,
+      );
+      return;
+    }
     const envelopeMessageId = typeof msg.messageId === 'string' && msg.messageId.length > 0
       ? msg.messageId
       : (gossipOrigId ?? '');
@@ -1707,7 +1715,7 @@ export class DecentChatNodePeer {
 
     this.persistMessagesForChannel(channelId);
 
-    const workspaceId = (msg.workspaceId as string | undefined) ?? (isDirect ? 'direct' : '');
+    const workspaceId = envelopeWorkspaceId ?? (isDirect ? 'direct' : '');
     this.recordManifestDomain('channel-message', workspaceId || this.findWorkspaceIdForChannel(channelId), {
       channelId,
       itemCount: this.messageStore.getMessages(channelId).length,
@@ -1745,6 +1753,11 @@ export class DecentChatNodePeer {
       }>)
       : undefined;
 
+    const chatType: 'direct' | 'channel' = isDirect ? 'direct' : 'channel';
+    this.opts.log?.info?.(
+      `[decentchat-peer] inbound-route from ${fromPeerId.slice(0, 8)}: chatType=${chatType} channelId=${channelId.slice(0, 8)} workspaceId=${workspaceId ? workspaceId.slice(0, 8) : 'none'}`,
+    );
+
     await this.opts.onIncomingMessage({
       channelId,
       workspaceId,
@@ -1752,7 +1765,7 @@ export class DecentChatNodePeer {
       senderId: actualSenderId,
       senderName,
       messageId: created.id,
-      chatType: msg.isDirect ? 'direct' : 'channel',
+      chatType,
       timestamp: created.timestamp,
       replyToId: msg.replyToId as string | undefined,
       threadId: msg.threadId as string | undefined,

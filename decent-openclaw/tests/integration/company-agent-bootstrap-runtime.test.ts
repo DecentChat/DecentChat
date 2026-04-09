@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SeedPhraseManager } from '@decentchat/protocol';
@@ -35,7 +35,19 @@ afterAll(() => {
 });
 
 function readWorkspaces(dataDir: string): any[] {
-  return JSON.parse(readFileSync(join(dataDir, 'workspaces.json'), 'utf8'));
+  const { Database } = require('bun:sqlite') as any;
+  const dbPath = join(dataDir, 'store.db');
+  let db: any;
+  try {
+    db = new Database(dbPath);
+    const row = db.prepare('SELECT value FROM kv WHERE key = ?').get('workspaces') as { value: string } | undefined;
+    if (!row) return [];
+    return JSON.parse(row.value) as any[];
+  } catch {
+    return [];
+  } finally {
+    try { db?.close(); } catch { /* ignore */ }
+  }
 }
 
 function makeConfig(root: string, seeds: Record<string, string>): any {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { InviteURI, SeedPhraseManager } from '@decentchat/protocol';
@@ -174,12 +174,18 @@ function parseInviteWorkspaceContext(inviteUri: string): { workspaceId: string; 
   }
 }
 
-function resolveWorkspaceBootstrapTarget(plan: CompanyBootstrapPlan): WorkspaceBootstrapTarget {
+function resolveWorkspaceBootstrapTarget(
+  plan: CompanyBootstrapPlan,
+  overrides?: { targetWorkspaceId?: string; targetInviteCode?: string },
+): WorkspaceBootstrapTarget {
   const configuredTargets = uniqueStrings(
     plan.employees
       .map((employee) => readNonEmptyString(employee.account.companySimBootstrap?.targetWorkspaceId) ?? '')
       .filter(Boolean),
   );
+
+  // Fall back to caller-provided override (e.g. channel-level config) when accounts lack per-account bootstrap config.
+  const effectiveTargetWorkspaceId = configuredTargets[0] ?? readNonEmptyString(overrides?.targetWorkspaceId);
 
   if (configuredTargets.length > 1) {
     throw new Error(
@@ -187,14 +193,14 @@ function resolveWorkspaceBootstrapTarget(plan: CompanyBootstrapPlan): WorkspaceB
     );
   }
 
-  if (configuredTargets.length === 1) {
-    const configuredWorkspaceId = configuredTargets[0] as string;
+  if (effectiveTargetWorkspaceId) {
     const configuredInviteCode = plan.employees
       .map((employee) => readNonEmptyString(employee.account.companySimBootstrap?.targetInviteCode))
-      .find((value): value is string => Boolean(value));
+      .find((value): value is string => Boolean(value))
+      ?? readNonEmptyString(overrides?.targetInviteCode);
 
     return {
-      workspaceId: configuredWorkspaceId,
+      workspaceId: effectiveTargetWorkspaceId,
       ...(configuredInviteCode ? { inviteCode: configuredInviteCode } : {}),
       source: 'config',
     };
@@ -252,20 +258,64 @@ function resolveAccountDataDir(account: ResolvedDecentChatAccount): string {
   return resolve(workspaceRootDir ?? process.cwd(), trimmed);
 }
 
+function openStoreDb(dataDir: string, readonly = false): any {
+  // Use bun:sqlite when running under Bun (tests), better-sqlite3 otherwise (Node.js production).
+  const isBun = typeof globalThis !== 'undefined' && 'Bun' in globalThis;
+  const dbPath = join(dataDir, 'store.db');
+  let db: any;
+  if (isBun) {
+    const { Database } = require('bun:sqlite') as any;
+    // bun:sqlite { readonly: true } requires the file to already exist; always open read-write.
+    db = new Database(dbPath);
+  } else {
+    const BetterSqlite3 = require('better-sqlite3') as any;
+    db = new BetterSqlite3(dbPath);
+  }
+  if (!readonly) {
+    db.exec('PRAGMA journal_mode = WAL');
+    db.exec('PRAGMA synchronous = NORMAL');
+  }
+  return db;
+}
+
 function readWorkspaces(dataDir: string): any[] {
-  const filePath = join(dataDir, 'workspaces.json');
-  if (!existsSync(filePath)) return [];
+  const dbPath = join(dataDir, 'store.db');
+  // Fall back to workspaces.json for compatibility with legacy data directories.
+  if (!existsSync(dbPath)) {
+    const legacyPath = join(dataDir, 'workspaces.json');
+    if (!existsSync(legacyPath)) return [];
+    try {
+      const parsed = JSON.parse(require('node:fs').readFileSync(legacyPath, 'utf8'));
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  let db: any;
   try {
-    const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+    db = openStoreDb(dataDir, true);
+    db.exec('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    const row = db.prepare('SELECT value FROM kv WHERE key = ?').get('workspaces') as { value: string } | undefined;
+    if (!row) return [];
+    const parsed = JSON.parse(row.value);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
+  } finally {
+    try { db?.close(); } catch { /* ignore */ }
   }
 }
 
 function writeWorkspaces(dataDir: string, workspaces: any[]): void {
   mkdirSync(dataDir, { recursive: true });
-  writeFileSync(join(dataDir, 'workspaces.json'), JSON.stringify(workspaces, null, 2), 'utf8');
+  let db: any;
+  try {
+    db = openStoreDb(dataDir, false);
+    db.exec('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    db.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)').run('workspaces', JSON.stringify(workspaces));
+  } finally {
+    try { db?.close(); } catch { /* ignore */ }
+  }
 }
 
 export function buildCompanyBootstrapPlan(params: {
@@ -320,6 +370,9 @@ export async function ensureCompanyBootstrapRuntime(params: {
   resolveAccount: (accountId: string) => ResolvedDecentChatAccount;
   accountIds?: string[];
   log?: { info?: (message: string) => void };
+  /** Override targetWorkspaceId/targetInviteCode (e.g. from channel-level config) when accounts lack per-account bootstrap config. */
+  targetWorkspaceId?: string;
+  targetInviteCode?: string;
 }): Promise<CompanyBootstrapRuntimeResult> {
   const manifestPath = resolveCompanyManifestPath(params.manifestPath);
   const plan = buildCompanyBootstrapPlan({
@@ -328,7 +381,10 @@ export async function ensureCompanyBootstrapRuntime(params: {
     accountIds: params.accountIds,
   });
 
-  const workspaceTarget = resolveWorkspaceBootstrapTarget(plan);
+  const workspaceTarget = resolveWorkspaceBootstrapTarget(plan, {
+    targetWorkspaceId: params.targetWorkspaceId,
+    targetInviteCode: params.targetInviteCode,
+  });
   const workspaceId = workspaceTarget.workspaceId;
   const derivedWorkspaceId = stableId('ws', plan.companyId, plan.workspaceName);
   const staleSyntheticWorkspaceId = workspaceTarget.source !== 'derived' && derivedWorkspaceId !== workspaceId

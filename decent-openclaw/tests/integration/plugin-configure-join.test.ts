@@ -20,7 +20,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import type http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -56,14 +56,21 @@ async function waitFor(
   throw new Error(`waitFor timed out after ${timeoutMs}ms`);
 }
 
-/** Read workspaces.json from a peer's data directory (returns [] if missing). */
+/** Read workspaces from a peer's SQLite store.db (returns [] if missing). */
 function readWorkspaces(dataDir: string): any[] {
-  const p = join(dataDir, 'workspaces.json');
-  if (!existsSync(p)) return [];
+  const { Database } = require('bun:sqlite') as any;
+  const dbPath = join(dataDir, 'store.db');
+  if (!existsSync(dbPath)) return [];
+  let db: any;
   try {
-    return JSON.parse(readFileSync(p, 'utf-8'));
+    db = new Database(dbPath);
+    const row = db.prepare('SELECT value FROM kv WHERE key = ?').get('workspaces') as { value: string } | undefined;
+    if (!row) return [];
+    return JSON.parse(row.value) as any[];
   } catch {
     return [];
+  } finally {
+    try { db?.close(); } catch { /* ignore */ }
   }
 }
 
@@ -168,7 +175,15 @@ describe('plugin configure → peer start → workspace join', () => {
     workspaceId = ws.id;
     inviteCode = ws.inviteCode;
 
-    writeFileSync(join(dataDirA, 'workspaces.json'), JSON.stringify([ws], null, 2), 'utf-8');
+    // Write workspace to SQLite store.db (FileStore format) so Peer A can load it on start.
+    {
+      const { Database } = require('bun:sqlite') as any;
+      mkdirSync(dataDirA, { recursive: true });
+      const db = new Database(join(dataDirA, 'store.db'));
+      db.exec('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+      db.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)').run('workspaces', JSON.stringify([ws]));
+      db.close();
+    }
 
     // Build the invite URI pointing at our local signaling server
     inviteUri = InviteURI.create({

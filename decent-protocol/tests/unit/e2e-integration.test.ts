@@ -31,7 +31,7 @@ describe('E2E - Full Identity + Workspace + Messaging Flow', () => {
     // 2. Alice creates workspace
     const wm = new WorkspaceManager();
     const alicePeerId = aliceId.identityId.slice(0, 16);
-    const ws = wm.createWorkspace('Test Team', alicePeerId, 'Alice', 
+    const ws = wm.createWorkspace('Test Team', alicePeerId, 'Alice',
       await crypto.exportPublicKey(aliceKeys.ecdhKeyPair.publicKey));
 
     // 3. Bob generates identity
@@ -259,7 +259,7 @@ describe('E2E - SyncProtocol Full Join Flow', () => {
     );
 
     // Bob sends join request
-    aliceSync.handleMessage('bob', {
+    await aliceSync.handleMessage('bob', {
       type: 'join-request',
       inviteCode: ws.inviteCode,
       member: { peerId: 'bob', alias: 'Bob', publicKey: 'bob-key', joinedAt: Date.now(), role: 'member' },

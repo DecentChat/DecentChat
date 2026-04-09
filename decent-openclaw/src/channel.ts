@@ -168,6 +168,15 @@ function normalizeStringList(values: string[]): string[] {
 }
 
 function buildCompanyBootstrapRuntimeScope(cfg: any, manifestPath: string): string {
+  const channelCfg = getDecentChatChannelConfig(cfg);
+  // Include channel-level target workspace config in scope so the key changes when a migration is triggered.
+  const channelTargetWorkspaceId = typeof (channelCfg as any).companySimBootstrapTargetWorkspaceId === 'string'
+    ? ((channelCfg as any).companySimBootstrapTargetWorkspaceId as string).trim()
+    : '';
+  const channelTargetInviteCode = typeof (channelCfg as any).companySimBootstrapTargetInviteCode === 'string'
+    ? ((channelCfg as any).companySimBootstrapTargetInviteCode as string).trim()
+    : '';
+
   const accounts = listDecentChatAccountIds(cfg).map((accountId) => {
     const account = resolveDecentChatAccount(cfg, accountId);
     const bootstrap = account.companySimBootstrap;
@@ -190,7 +199,7 @@ function buildCompanyBootstrapRuntimeScope(cfg: any, manifestPath: string): stri
   });
 
   return createHash('sha256')
-    .update(JSON.stringify({ manifestPath, accounts }))
+    .update(JSON.stringify({ manifestPath, channelTargetWorkspaceId, channelTargetInviteCode, accounts }))
     .digest('hex')
     .slice(0, 20);
 }
@@ -295,6 +304,28 @@ type DecentChatResolvedTarget = {
   source: "normalized" | "directory";
 };
 
+type DecentChatTargetResolutionCode = "no_match" | "ambiguous" | "kind_mismatch";
+
+class DecentChatTargetResolutionError extends Error {
+  readonly code: DecentChatTargetResolutionCode;
+
+  constructor(code: DecentChatTargetResolutionCode, message: string) {
+    super(message);
+    this.name = "DecentChatTargetResolutionError";
+    this.code = code;
+  }
+}
+
+type DecentChatTargetMatch =
+  | { status: "none" }
+  | { status: "unique"; candidate: DecentChatTargetCandidate }
+  | { status: "ambiguous"; candidates: DecentChatTargetCandidate[] };
+
+type DecentChatDirectoryResolution = {
+  user: DecentChatTargetMatch;
+  group: DecentChatTargetMatch;
+};
+
 function looksLikeBareDecentChatPeerId(value: string): boolean {
   return DECENTCHAT_PEER_ID_RE.test(value) || DECENTCHAT_TEST_PEER_ID_RE.test(value);
 }
@@ -322,17 +353,81 @@ function scoreDecentChatTargetCandidate(candidate: DecentChatTargetCandidate, qu
   return best;
 }
 
-function pickUniqueDecentChatCandidate(candidates: DecentChatTargetCandidate[], query: string): DecentChatTargetCandidate | null {
+function rankDecentChatTargetCandidates(candidates: DecentChatTargetCandidate[], query: string): DecentChatTargetCandidate[] {
   const scored = candidates
     .map((candidate) => ({ candidate, score: scoreDecentChatTargetCandidate(candidate, query) }))
     .filter((item) => item.score >= 0)
     .sort((a, b) => b.score - a.score || (b.candidate.rank ?? 0) - (a.candidate.rank ?? 0) || (a.candidate.name ?? a.candidate.id).localeCompare(b.candidate.name ?? b.candidate.id));
 
-  if (scored.length === 0) return null;
+  if (scored.length === 0) return [];
   const bestScore = scored[0]?.score ?? -1;
-  const best = scored.filter((item) => item.score == bestScore);
-  if (best.length !== 1) return null;
-  return best[0]?.candidate ?? null;
+  return scored.filter((item) => item.score === bestScore).map((item) => item.candidate);
+}
+
+function classifyDecentChatTargetMatches(candidates: DecentChatTargetCandidate[], query: string): DecentChatTargetMatch {
+  const topMatches = rankDecentChatTargetCandidates(candidates, query);
+  if (topMatches.length === 0) return { status: "none" };
+  if (topMatches.length === 1) {
+    return { status: "unique", candidate: topMatches[0] };
+  }
+  return { status: "ambiguous", candidates: topMatches };
+}
+
+function hasDecentChatMatches(match: DecentChatTargetMatch): boolean {
+  return match.status !== "none";
+}
+
+function formatDecentChatTargetCandidate(candidate: DecentChatTargetCandidate): string {
+  const kindLabel = candidate.kind === "group" ? "channel" : "user";
+  const display = (candidate.name ?? candidate.handle ?? candidate.id).trim();
+  const canonicalId = candidate.kind === "group"
+    ? (candidate.id.startsWith("decentchat:channel:") ? candidate.id : `decentchat:channel:${candidate.id}`)
+    : (candidate.id.startsWith("decentchat:") ? candidate.id : `decentchat:${candidate.id}`);
+  return `${display} (${kindLabel}: ${canonicalId})`;
+}
+
+function formatDecentChatTargetCandidates(candidates: DecentChatTargetCandidate[]): string {
+  return candidates.map((candidate) => formatDecentChatTargetCandidate(candidate)).join(", ");
+}
+
+function normalizePreferredDecentChatKind(preferredKind?: "user" | "group" | "channel"): "user" | "group" | null {
+  if (preferredKind === "user") return "user";
+  if (preferredKind === "group" || preferredKind === "channel") return "group";
+  return null;
+}
+
+function assertDecentChatPreferredKind(params: {
+  input: string;
+  resolved: DecentChatResolvedTarget;
+  preferredKind?: "user" | "group" | "channel";
+}): void {
+  const expectedKind = normalizePreferredDecentChatKind(params.preferredKind);
+  if (!expectedKind) return;
+  const actualKind = params.resolved.kind === "user" ? "user" : "group";
+  if (expectedKind === actualKind) return;
+
+  const expectedLabel = expectedKind === "group" ? "channel/group" : "user/direct";
+  const actualLabel = actualKind === "group" ? "channel/group" : "user/direct";
+  throw new DecentChatTargetResolutionError(
+    "kind_mismatch",
+    `DecentChat target kind mismatch for "${params.input}": expected ${expectedLabel}, got ${actualLabel}.`,
+  );
+}
+
+function resolveDecentChatTargetFromDirectory(raw: string, accountId?: string | null): DecentChatDirectoryResolution | null {
+  const query = normalizeDecentChatLookupValue(raw);
+  if (!query) return null;
+
+  const peer = getActivePeer(accountId?.trim() || DEFAULT_ACCOUNT_ID);
+  if (!peer) return null;
+
+  const peerMatches = peer.listDirectoryPeersLive({ query, limit: 50 }) as DecentChatTargetCandidate[];
+  const groupMatches = peer.listDirectoryGroupsLive({ query, limit: 50 }) as DecentChatTargetCandidate[];
+
+  return {
+    user: classifyDecentChatTargetMatches(peerMatches, query),
+    group: classifyDecentChatTargetMatches(groupMatches, query),
+  };
 }
 
 function buildDecentChatResolvedTarget(candidate: DecentChatTargetCandidate): DecentChatResolvedTarget {
@@ -347,24 +442,22 @@ function buildDecentChatResolvedTarget(candidate: DecentChatTargetCandidate): De
 }
 
 function resolveDecentChatTargetFromActivePeer(raw: string, accountId?: string | null, preferredKind?: "user" | "group" | "channel"): DecentChatResolvedTarget | null {
-  const query = normalizeDecentChatLookupValue(raw);
-  if (!query) return null;
+  const resolution = resolveDecentChatTargetFromDirectory(raw, accountId);
+  if (!resolution) return null;
 
-  const peer = getActivePeer(accountId?.trim() || DEFAULT_ACCOUNT_ID);
-  if (!peer) return null;
+  if (preferredKind === "user") {
+    return resolution.user.status === "unique" ? buildDecentChatResolvedTarget(resolution.user.candidate) : null;
+  }
+  if (preferredKind === "group" || preferredKind === "channel") {
+    return resolution.group.status === "unique" ? buildDecentChatResolvedTarget(resolution.group.candidate) : null;
+  }
 
-  const peerMatches = peer.listDirectoryPeersLive({ query, limit: 50 }) as DecentChatTargetCandidate[];
-  const groupMatches = peer.listDirectoryGroupsLive({ query, limit: 50 }) as DecentChatTargetCandidate[];
-
-  const userCandidate = pickUniqueDecentChatCandidate(peerMatches, query);
-  const groupCandidate = pickUniqueDecentChatCandidate(groupMatches, query);
-
-  if (preferredKind === "user") return userCandidate ? buildDecentChatResolvedTarget(userCandidate) : null;
-  if (preferredKind === "group" || preferredKind === "channel") return groupCandidate ? buildDecentChatResolvedTarget(groupCandidate) : null;
-
-  if (userCandidate && !groupCandidate) return buildDecentChatResolvedTarget(userCandidate);
-  if (groupCandidate && !userCandidate) return buildDecentChatResolvedTarget(groupCandidate);
-  if (userCandidate && groupCandidate) return buildDecentChatResolvedTarget(userCandidate);
+  if (resolution.user.status === "unique" && resolution.group.status === "none") {
+    return buildDecentChatResolvedTarget(resolution.user.candidate);
+  }
+  if (resolution.group.status === "unique" && resolution.user.status === "none") {
+    return buildDecentChatResolvedTarget(resolution.group.candidate);
+  }
   return null;
 }
 
@@ -379,12 +472,18 @@ async function resolveDecentChatTarget(params: {
 
   if (rawValue.startsWith("channel:")) {
     const channelId = rawValue.slice("channel:".length).trim();
-    return channelId ? { to: `decentchat:channel:${channelId}`, kind: "group", display: channelId, source: "normalized" } : null;
+    if (!channelId) return null;
+    const resolved = { to: `decentchat:channel:${channelId}`, kind: "group", display: channelId, source: "normalized" } as const;
+    assertDecentChatPreferredKind({ input: rawValue, resolved, preferredKind: params.preferredKind });
+    return resolved;
   }
 
   if (rawValue.startsWith("decentchat:channel:")) {
     const channelId = rawValue.slice("decentchat:channel:".length).trim();
-    return channelId ? { to: `decentchat:channel:${channelId}`, kind: "group", display: channelId, source: "normalized" } : null;
+    if (!channelId) return null;
+    const resolved = { to: `decentchat:channel:${channelId}`, kind: "group", display: channelId, source: "normalized" } as const;
+    assertDecentChatPreferredKind({ input: rawValue, resolved, preferredKind: params.preferredKind });
+    return resolved;
   }
 
   if (rawValue.startsWith("decentchat:")) {
@@ -392,20 +491,115 @@ async function resolveDecentChatTarget(params: {
     if (!rest) return null;
     if (rest.startsWith("channel:")) {
       const channelId = rest.slice("channel:".length).trim();
-      return channelId ? { to: `decentchat:channel:${channelId}`, kind: "group", display: channelId, source: "normalized" } : null;
+      if (!channelId) return null;
+      const resolved = { to: `decentchat:channel:${channelId}`, kind: "group", display: channelId, source: "normalized" } as const;
+      assertDecentChatPreferredKind({ input: rawValue, resolved, preferredKind: params.preferredKind });
+      return resolved;
     }
-    return { to: `decentchat:${rest}`, kind: "user", display: rest, source: "normalized" };
+    const resolved = { to: `decentchat:${rest}`, kind: "user", display: rest, source: "normalized" } as const;
+    assertDecentChatPreferredKind({ input: rawValue, resolved, preferredKind: params.preferredKind });
+    return resolved;
   }
 
   if (DECENTCHAT_CHANNEL_ID_RE.test(rawValue)) {
-    return { to: `decentchat:channel:${rawValue}`, kind: "group", display: rawValue, source: "normalized" };
+    const resolved = { to: `decentchat:channel:${rawValue}`, kind: "group", display: rawValue, source: "normalized" } as const;
+    assertDecentChatPreferredKind({ input: rawValue, resolved, preferredKind: params.preferredKind });
+    return resolved;
   }
 
   if (looksLikeBareDecentChatPeerId(rawValue)) {
-    return { to: `decentchat:${rawValue}`, kind: "user", display: rawValue, source: "normalized" };
+    const resolved = { to: `decentchat:${rawValue}`, kind: "user", display: rawValue, source: "normalized" } as const;
+    assertDecentChatPreferredKind({ input: rawValue, resolved, preferredKind: params.preferredKind });
+    return resolved;
   }
 
-  return resolveDecentChatTargetFromActivePeer(rawValue, params.accountId, params.preferredKind);
+  const resolution = resolveDecentChatTargetFromDirectory(rawValue, params.accountId);
+  const expectedKind = normalizePreferredDecentChatKind(params.preferredKind);
+
+  const throwNoMatch = () => {
+    throw new DecentChatTargetResolutionError(
+      "no_match",
+      `DecentChat target resolution failed for "${rawValue}": no matching target found.`,
+    );
+  };
+
+  if (!resolution) {
+    throwNoMatch();
+  }
+
+  if (expectedKind === "user") {
+    if (resolution.user.status === "unique") return buildDecentChatResolvedTarget(resolution.user.candidate);
+    if (resolution.user.status === "ambiguous") {
+      throw new DecentChatTargetResolutionError(
+        "ambiguous",
+        `DecentChat target "${rawValue}" is ambiguous across users: ${formatDecentChatTargetCandidates(resolution.user.candidates)}.`,
+      );
+    }
+    if (hasDecentChatMatches(resolution.group)) {
+      const detail = resolution.group.status === "unique"
+        ? formatDecentChatTargetCandidate(resolution.group.candidate)
+        : formatDecentChatTargetCandidates(resolution.group.candidates);
+      throw new DecentChatTargetResolutionError(
+        "kind_mismatch",
+        `DecentChat target kind mismatch for "${rawValue}": expected user/direct target, matched channel/group target(s): ${detail}.`,
+      );
+    }
+    throwNoMatch();
+  }
+
+  if (expectedKind === "group") {
+    if (resolution.group.status === "unique") return buildDecentChatResolvedTarget(resolution.group.candidate);
+    if (resolution.group.status === "ambiguous") {
+      throw new DecentChatTargetResolutionError(
+        "ambiguous",
+        `DecentChat target "${rawValue}" is ambiguous across channel/group targets: ${formatDecentChatTargetCandidates(resolution.group.candidates)}.`,
+      );
+    }
+    if (hasDecentChatMatches(resolution.user)) {
+      const detail = resolution.user.status === "unique"
+        ? formatDecentChatTargetCandidate(resolution.user.candidate)
+        : formatDecentChatTargetCandidates(resolution.user.candidates);
+      throw new DecentChatTargetResolutionError(
+        "kind_mismatch",
+        `DecentChat target kind mismatch for "${rawValue}": expected channel/group target, matched user/direct target(s): ${detail}.`,
+      );
+    }
+    throwNoMatch();
+  }
+
+  if (resolution.user.status === "unique" && resolution.group.status === "none") {
+    return buildDecentChatResolvedTarget(resolution.user.candidate);
+  }
+  if (resolution.group.status === "unique" && resolution.user.status === "none") {
+    return buildDecentChatResolvedTarget(resolution.group.candidate);
+  }
+
+  if (resolution.user.status === "ambiguous" && resolution.group.status === "none") {
+    throw new DecentChatTargetResolutionError(
+      "ambiguous",
+      `DecentChat target "${rawValue}" is ambiguous across users: ${formatDecentChatTargetCandidates(resolution.user.candidates)}.`,
+    );
+  }
+  if (resolution.group.status === "ambiguous" && resolution.user.status === "none") {
+    throw new DecentChatTargetResolutionError(
+      "ambiguous",
+      `DecentChat target "${rawValue}" is ambiguous across channel/group targets: ${formatDecentChatTargetCandidates(resolution.group.candidates)}.`,
+    );
+  }
+  if (hasDecentChatMatches(resolution.user) && hasDecentChatMatches(resolution.group)) {
+    const userDetail = resolution.user.status === "unique"
+      ? formatDecentChatTargetCandidate(resolution.user.candidate)
+      : formatDecentChatTargetCandidates(resolution.user.candidates);
+    const groupDetail = resolution.group.status === "unique"
+      ? formatDecentChatTargetCandidate(resolution.group.candidate)
+      : formatDecentChatTargetCandidates(resolution.group.candidates);
+    throw new DecentChatTargetResolutionError(
+      "ambiguous",
+      `DecentChat target "${rawValue}" matched both users and channel/groups. Users: ${userDetail}. Channels: ${groupDetail}.`,
+    );
+  }
+
+  throwNoMatch();
 }
 
 export function looksLikeDecentChatTargetId(raw: string, normalized?: string): boolean {
@@ -511,8 +705,27 @@ export async function bootstrapDecentChatCompanySimForStartup(params: {
   account: ResolvedDecentChatAccount;
   log?: { info?: (message: string) => void; warn?: (message: string) => void; error?: (message: string) => void };
 }): Promise<void> {
-  const bootstrap = params.account.companySimBootstrap;
-  if (!bootstrap?.enabled || bootstrap.mode === "off") return;
+  // Account-level bootstrap config is preferred. For named accounts that don't inherit root-level
+  // channel config (see resolveRawDecentChatAccountConfig), also check the raw channel config so
+  // that channel-wide companySimBootstrap* settings (set at channels.decentchat.* root) are
+  // honoured when bootstrapDecentChatCompanySimForStartup is called for any named account.
+  const channelCfg = getDecentChatChannelConfig(params.cfg);
+  const bootstrap = params.account.companySimBootstrap ?? (() => {
+    const enabledRaw = (channelCfg as any).companySimBootstrapEnabled;
+    const modeRaw = (channelCfg as any).companySimBootstrapMode;
+    const manifestPathRaw = (channelCfg as any).companySimBootstrapManifestPath;
+    if (!enabledRaw && manifestPathRaw === undefined) return undefined;
+    return {
+      enabled: enabledRaw !== false,
+      mode: modeRaw === 'off' ? ('off' as const) : ('runtime' as const),
+      manifestPath: typeof manifestPathRaw === 'string' ? manifestPathRaw : undefined,
+      targetWorkspaceId: typeof (channelCfg as any).companySimBootstrapTargetWorkspaceId === 'string'
+        ? (channelCfg as any).companySimBootstrapTargetWorkspaceId : undefined,
+      targetInviteCode: typeof (channelCfg as any).companySimBootstrapTargetInviteCode === 'string'
+        ? (channelCfg as any).companySimBootstrapTargetInviteCode : undefined,
+    };
+  })();
+  if (!bootstrap?.enabled || bootstrap.mode === 'off') return;
 
   const manifestPath = bootstrap.manifestPath?.trim();
   if (!manifestPath) {
@@ -533,6 +746,10 @@ export async function bootstrapDecentChatCompanySimForStartup(params: {
       accountIds: listDecentChatAccountIds(params.cfg),
       resolveAccount: (accountId) => resolveDecentChatAccount(params.cfg, accountId),
       log: params.log,
+      // Forward channel-level target workspace config for bootstraps where accounts don't have
+      // per-account bootstrap config (named accounts don't inherit channel root config).
+      targetWorkspaceId: bootstrap.targetWorkspaceId ?? undefined,
+      targetInviteCode: bootstrap.targetInviteCode ?? undefined,
     });
   });
 }
@@ -943,11 +1160,37 @@ export const decentChatPlugin: ChannelPlugin<ResolvedDecentChatAccount> = {
         : (replyToId != null ? String(replyToId) : undefined);
 
       try {
-        if (to.startsWith("decentchat:channel:")) {
-          const channelId = to.slice("decentchat:channel:".length);
+        const resolvedTarget = await resolveDecentChatTarget({
+          accountId: ctx.accountId,
+          input: to,
+          normalized: normalizeDecentChatMessagingTarget(to) ?? to,
+        });
+        if (!resolvedTarget?.to) {
+          throw new DecentChatTargetResolutionError(
+            "no_match",
+            `DecentChat target resolution failed for "${to}": no matching target found.`,
+          );
+        }
+
+        if (resolvedTarget.to.startsWith("decentchat:channel:")) {
+          const channelId = resolvedTarget.to.slice("decentchat:channel:".length).trim();
+          if (!channelId) {
+            throw new DecentChatTargetResolutionError(
+              "no_match",
+              `DecentChat target resolution failed for "${to}": no matching target found.`,
+            );
+          }
           await peer.sendToChannel(channelId, text, threadIdStr, replyToId ?? undefined);
         } else {
-          const peerId = to.startsWith("decentchat:") ? to.slice("decentchat:".length) : to;
+          const peerId = resolvedTarget.to.startsWith("decentchat:")
+            ? resolvedTarget.to.slice("decentchat:".length).trim()
+            : resolvedTarget.to.trim();
+          if (!peerId) {
+            throw new DecentChatTargetResolutionError(
+              "no_match",
+              `DecentChat target resolution failed for "${to}": no matching target found.`,
+            );
+          }
           await peer.sendDirectToPeer(peerId, text, threadIdStr, replyToId ?? undefined);
         }
         return { ok: true };

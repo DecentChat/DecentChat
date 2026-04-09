@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,10 +16,22 @@ import {
 const bundledTemplatesRoot = fileURLToPath(new URL('../../../company-sims/templates', import.meta.url));
 
 function readWorkspace(dataDir: string): any {
-  const parsed = JSON.parse(readFileSync(join(dataDir, 'workspaces.json'), 'utf8'));
-  expect(Array.isArray(parsed)).toBeTrue();
-  expect(parsed).toHaveLength(1);
-  return parsed[0];
+  const { Database } = require('bun:sqlite') as any;
+  const dbPath = join(dataDir, 'store.db');
+  let db: any;
+  let workspaces: any[];
+  try {
+    db = new Database(dbPath);
+    const row = db.prepare('SELECT value FROM kv WHERE key = ?').get('workspaces') as { value: string } | undefined;
+    workspaces = row ? JSON.parse(row.value) as any[] : [];
+  } catch {
+    workspaces = [];
+  } finally {
+    try { db?.close(); } catch { /* ignore */ }
+  }
+  expect(Array.isArray(workspaces)).toBeTrue();
+  expect(workspaces).toHaveLength(1);
+  return workspaces[0];
 }
 
 describe('company template operator install flow', () => {

@@ -1,6 +1,6 @@
 /**
  * SyncProtocol - P2P workspace synchronization
- * 
+ *
  * Handles: join requests, workspace state exchange,
  * member announcements, channel creation broadcast,
  * and message history sync.
@@ -8,6 +8,7 @@
 
 import type {
   Workspace,
+  WorkspaceSnapshot,
   WorkspaceMember,
   Channel,
   SyncMessage,
@@ -22,12 +23,14 @@ import type {
 import { WorkspaceDeltaProtocol } from './WorkspaceDeltaProtocol';
 import { DirectoryProtocol } from './DirectoryProtocol';
 import { HistoryPageProtocol } from '../history/HistoryPageProtocol';
+import { Negentropy } from '../crdt/Negentropy';
 import type { PlaintextMessage } from '../messages/types';
 import { WorkspaceManager } from './WorkspaceManager';
 import { MessageStore } from '../messages/MessageStore';
 import type { ServerDiscovery } from './ServerDiscovery';
 
 type SyncedHistoryMessage = Omit<PlaintextMessage, 'content'> & { content?: string };
+const EMPTY_NEGENTROPY_FINGERPRINT = '0'.repeat(64);
 
 export type SendFn = (peerId: string, data: any) => boolean;
 export type OnEvent = (event: SyncEvent) => void;
@@ -47,6 +50,7 @@ export type SyncEvent =
       type: 'workspace-joined';
       workspace: Workspace;
       messageHistory: Record<string, SyncedHistoryMessage[]>;
+      snapshot?: WorkspaceSnapshot;
       historyReplicaHints?: HistoryReplicaHint[];
     }
   | { type: 'join-rejected'; reason: string }
@@ -95,7 +99,7 @@ export class SyncProtocol {
   async handleMessage(fromPeerId: string, msg: SyncMessage): Promise<void> {
     switch (msg.type) {
       case 'join-request':
-        this.handleJoinRequest(fromPeerId, msg);
+        await this.handleJoinRequest(fromPeerId, msg);
         break;
       case 'join-accepted':
         await this.handleJoinAccepted(fromPeerId, msg);
@@ -367,7 +371,7 @@ export class SyncProtocol {
 
   // === Incoming Handlers ===
 
-  private handleJoinRequest(fromPeerId: string, msg: Extract<SyncMessage, { type: 'join-request' }>): void {
+  private async handleJoinRequest(fromPeerId: string, msg: Extract<SyncMessage, { type: 'join-request' }>): Promise<void> {
     // DEP-002: Merge received PEX servers
     if (msg.pexServers && this.serverDiscovery) {
       this.serverDiscovery.mergeReceivedServers(msg.pexServers);
@@ -404,20 +408,24 @@ export class SyncProtocol {
       return;
     }
 
-    const historySyncMode = this.resolveHistorySyncMode(msg, workspace);
-    const shouldUsePagedHistory = historySyncMode === 'paged';
+    const historySyncMode = msg.historySyncMode;
+    const shouldUsePagedHistory = historySyncMode === 'legacy'
+      ? false
+      : historySyncMode === 'paged'
+        ? true
+        : msg.historyCapabilities?.supportsPaged === true;
 
-    // Legacy clients still receive metadata-only full history during join.
-    // Paged-capable clients fetch history windows on demand via history-page-request.
+    const exportedWorkspace = this.workspaceManager.exportWorkspace(workspace.id)!;
+    const snapshot = await this.buildWorkspaceSnapshot(exportedWorkspace);
     const messageHistory = shouldUsePagedHistory ? {} : this.buildLegacyMessageHistory(workspace.id);
-
     const historyReplicaHints = shouldUsePagedHistory
       ? this.historyPageProtocol.buildReplicaHints(workspace.id)
       : undefined;
 
     const acceptMsg: SyncMessage = {
       type: 'join-accepted',
-      workspace: this.workspaceManager.exportWorkspace(workspace.id)!,
+      workspace: exportedWorkspace,
+      snapshot,
       messageHistory,
       pexServers: this.serverDiscovery?.getHandshakeServers(),
       historyReplicaHints,
@@ -461,6 +469,7 @@ export class SyncProtocol {
       type: 'workspace-joined',
       workspace: msg.workspace,
       messageHistory: msg.messageHistory || {},
+      snapshot: msg.snapshot,
       historyReplicaHints: msg.historyReplicaHints,
     });
 
@@ -812,7 +821,7 @@ export class SyncProtocol {
     for (const channel of channels) {
       if (!this.markPendingHistoryBootstrap(workspace.id, channel.id)) continue;
 
-      const selectedPeer = this.selectHistoryPageSource(workspace.id, channel.id, 'recent');
+      const selectedPeer = this.selectHistoryPageSource(workspace.id, channel.id, 'recent', [fromPeerId]);
       const targetPeerId = selectedPeer && selectedPeer !== this.myPeerId
         ? selectedPeer
         : fromPeerId !== this.myPeerId
@@ -1006,6 +1015,36 @@ export class SyncProtocol {
     }
 
     return messageHistory;
+  }
+
+  private async buildWorkspaceSnapshot(workspace: Workspace): Promise<WorkspaceSnapshot> {
+    const channels: WorkspaceSnapshot['channels'] = [];
+
+    for (const channel of workspace.channels) {
+      const messages = this.messageStore.getMessages(channel.id);
+      const negentropy = new Negentropy();
+      await negentropy.build(messages.map((message) => ({ id: message.id, timestamp: message.timestamp })));
+      const query = await negentropy.createQuery();
+
+      channels.push({
+        id: channel.id,
+        name: channel.name,
+        type: channel.type,
+        messageCount: messages.length,
+        headHash: await this.messageStore.getLastHash(channel.id),
+        negentropyFingerprint: query.ranges[0]?.fingerprint ?? EMPTY_NEGENTROPY_FINGERPRINT,
+        lastMessageAt: messages[messages.length - 1]?.timestamp ?? 0,
+      });
+    }
+
+    return {
+      type: 'workspace-snapshot',
+      workspaceId: workspace.id,
+      snapshotVersion: 1,
+      channels,
+      members: workspace.members.map((member) => ({ ...member })),
+      snapshotAt: Date.now(),
+    };
   }
 
   /**
